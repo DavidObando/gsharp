@@ -23,16 +23,12 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// data-flow framework before the state machine itself works.
 /// </summary>
 /// <remarks>
-/// <para>The walker explicitly excludes:</para>
-/// <list type="bullet">
-/// <item><description>Spill-temp locals introduced by the spill spiller
-/// (spec §7) — they are managed in a separate hoist set keyed by the spill
-/// expression they represent and registered by the spiller, not here.</description></item>
-/// </list>
+/// <para>Spill temps are collected into a separate, ordered field group.
+/// Rectangular-array dimensions and indices can be captured before a later
+/// suspension, so these synthesized values must survive like user locals.</para>
 /// <para>Spill-temp detection is by name prefix (<see cref="GeneratedNames.SpillTempPrefix"/>)
 /// because GSharp does not (yet) carry a synthesized-kind tag on
-/// <see cref="LocalVariableSymbol"/>. The spill spiller will use the same
-/// prefix when it emits its locals.</para>
+/// <see cref="LocalVariableSymbol"/>.</para>
 /// <para>For <c>this</c> capture: the bound tree does not currently
 /// distinguish instance-member field access from local access at the rewriter
 /// level, so the rewriter treats every instance method as capturing
@@ -57,14 +53,10 @@ public static class AsyncCaptureWalker
         collector.Visit(body);
 
         var orderedLocals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+        var orderedSpillLocals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
         foreach (var local in collector.Locals)
         {
             if (local is ParameterSymbol)
-            {
-                continue;
-            }
-
-            if (local.Name.StartsWith(GeneratedNames.SpillTempPrefix, System.StringComparison.Ordinal))
             {
                 continue;
             }
@@ -98,10 +90,20 @@ public static class AsyncCaptureWalker
                 continue;
             }
 
-            orderedLocals.Add(local);
+            if (local.Name.StartsWith(GeneratedNames.SpillTempPrefix, System.StringComparison.Ordinal))
+            {
+                orderedSpillLocals.Add(local);
+            }
+            else
+            {
+                orderedLocals.Add(local);
+            }
         }
 
-        return new HoistResult(parameters, orderedLocals.ToImmutable());
+        return new HoistResult(
+            parameters,
+            orderedLocals.ToImmutable(),
+            orderedSpillLocals.ToImmutable());
     }
 
     /// <summary>
@@ -113,10 +115,15 @@ public static class AsyncCaptureWalker
         /// <summary>Initializes a new instance of the <see cref="HoistResult"/> class.</summary>
         /// <param name="parameters">Parameters to hoist (always all of them in V1).</param>
         /// <param name="locals">User-declared locals to hoist.</param>
-        public HoistResult(ImmutableArray<ParameterSymbol> parameters, ImmutableArray<LocalVariableSymbol> locals)
+        /// <param name="spillLocals">Synthesized spill locals to hoist.</param>
+        public HoistResult(
+            ImmutableArray<ParameterSymbol> parameters,
+            ImmutableArray<LocalVariableSymbol> locals,
+            ImmutableArray<LocalVariableSymbol> spillLocals)
         {
             Parameters = parameters;
             Locals = locals;
+            SpillLocals = spillLocals;
         }
 
         /// <summary>Gets the parameters to hoist.</summary>
@@ -124,6 +131,9 @@ public static class AsyncCaptureWalker
 
         /// <summary>Gets the user-declared locals to hoist, in first-encounter order.</summary>
         public ImmutableArray<LocalVariableSymbol> Locals { get; }
+
+        /// <summary>Gets synthesized spill locals that must survive suspension.</summary>
+        public ImmutableArray<LocalVariableSymbol> SpillLocals { get; }
     }
 
     private sealed class ReferenceCollector : BoundTreeRewriter

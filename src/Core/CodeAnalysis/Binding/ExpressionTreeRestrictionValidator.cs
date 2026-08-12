@@ -212,7 +212,11 @@ internal static class ExpressionTreeRestrictionValidator
 
             case BoundIndexExpression index:
                 ValidateExpression(index.Target, diagnostics);
-                ValidateExpression(index.Index, diagnostics);
+                foreach (var indexExpression in index.Indices)
+                {
+                    ValidateExpression(indexExpression, diagnostics);
+                }
+
                 return;
 
             case BoundClrIndexExpression clrIndex:
@@ -225,7 +229,25 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundArrayCreationExpression array:
-                ValidateExpression(array.LengthExpression, diagnostics);
+                if (!array.DimensionExpressions.IsDefaultOrEmpty)
+                {
+                    foreach (var dimension in array.DimensionExpressions)
+                    {
+                        ValidateExpression(dimension, diagnostics);
+                    }
+                }
+                else
+                {
+                    ValidateExpression(array.LengthExpression, diagnostics);
+                }
+
+                if (array.Type is RectangularArrayTypeSymbol && !array.Elements.IsDefaultOrEmpty)
+                {
+                    diagnostics.ReportExpressionTreeUnsupported(
+                        LocationOf(array.Syntax),
+                        "a rectangular-array initializer");
+                }
+
                 foreach (var element in array.Elements)
                 {
                     ValidateExpression(element, diagnostics);

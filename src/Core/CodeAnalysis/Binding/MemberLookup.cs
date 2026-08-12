@@ -1089,6 +1089,17 @@ internal sealed class MemberLookup
             return TypeSymbol.FromClrType(openClr);
         }
 
+        if (openClr.IsArray && openClr.GetArrayRank() > 1)
+        {
+            var mappedElement = MapOpenClrTypeToSymbolic(
+                openClr.GetElementType(),
+                openDefinition,
+                typeArguments,
+                openMethodDefinition,
+                methodTypeArguments);
+            return RectangularArrayTypeSymbol.Get(mappedElement, openClr.GetArrayRank());
+        }
+
         // Issue #794: an open generic type's instance member can return an
         // array of an open parameter (e.g. `List<T>.ToArray()` → `T[]`). The
         // CLR `Type` reports `IsArray` for those, not `IsGenericType`. Recurse
@@ -1765,6 +1776,16 @@ internal sealed class MemberLookup
                     && IsErasureOnlyEnumMatch(openParameterType.GetElementType(), symbolicElement);
             }
 
+            if (openParameterType.IsArray
+                && openParameterType.GetArrayRank() > 1
+                && symbolicArgumentType is RectangularArrayTypeSymbol rectangular
+                && rectangular.Rank == openParameterType.GetArrayRank())
+            {
+                return IsErasureOnlyEnumMatch(
+                    openParameterType.GetElementType(),
+                    rectangular.ElementType);
+            }
+
             if (openParameterType.IsGenericType)
             {
                 var openArguments = openParameterType.GetGenericArguments();
@@ -1903,6 +1924,15 @@ internal sealed class MemberLookup
                     && arrayElement != null)
                 {
                     erased = arrayElement.MakeArrayType();
+                    return true;
+                }
+
+                return false;
+            case RectangularArrayTypeSymbol array:
+                if (TryProjectErasedClrType(array.ElementType, out var rectangularElement)
+                    && rectangularElement != null)
+                {
+                    erased = rectangularElement.MakeArrayType(array.Rank);
                     return true;
                 }
 
@@ -3142,6 +3172,8 @@ internal sealed class MemberLookup
                 return true;
             case ArrayTypeSymbol arr:
                 return IsSymbolicTypeArgument(arr.ElementType);
+            case RectangularArrayTypeSymbol rectangular:
+                return IsSymbolicTypeArgument(rectangular.ElementType);
             case SliceTypeSymbol slice:
                 return IsSymbolicTypeArgument(slice.ElementType);
             case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
@@ -3937,6 +3969,15 @@ internal sealed class MemberLookup
         {
             return SliceTypeSymbol.Get(
                 SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!));
+        }
+
+        if (openType.IsArray && openType.GetArrayRank() > 1
+            && closedType.IsArray
+            && closedType.GetArrayRank() == openType.GetArrayRank())
+        {
+            return RectangularArrayTypeSymbol.Get(
+                SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!),
+                openType.GetArrayRank());
         }
 
         if (openType.IsGenericType && closedType.IsGenericType)
@@ -5036,9 +5077,29 @@ internal sealed class MemberLookup
             actual = annotatedActual.BaseType;
         }
 
+        if (openClr.IsArray && openClr.GetArrayRank() > 1)
+        {
+            if (actual is RectangularArrayTypeSymbol actualRectangular
+                && actualRectangular.Rank == openClr.GetArrayRank())
+            {
+                UnifyForMethodTypeArgs(
+                    openClr.GetElementType(),
+                    actualRectangular.ElementType,
+                    openMethod,
+                    result);
+            }
+
+            return;
+        }
+
         // T[] / []T (open array element).
         if (openClr.IsArray && openClr.GetArrayRank() == 1)
         {
+            if (actual is RectangularArrayTypeSymbol)
+            {
+                return;
+            }
+
             var openElement = openClr.GetElementType();
             var actualElement = TryGetElementType(actual);
             if (actualElement != null)
@@ -5389,6 +5450,22 @@ internal sealed class MemberLookup
                 existingArray.Length);
         }
 
+        if (existing is RectangularArrayTypeSymbol existingRectangular
+            && incoming is RectangularArrayTypeSymbol incomingRectangular
+            && existingRectangular.Rank == incomingRectangular.Rank
+            && DeclarationBinder.TypeSignaturesEquivalent(
+                existingRectangular.ElementType,
+                incomingRectangular.ElementType))
+        {
+            return RectangularArrayTypeSymbol.Get(
+                Invariant.Required(
+                    MergeRecoveredTypeArgument(
+                        existingRectangular.ElementType,
+                        incomingRectangular.ElementType),
+                    "equivalent rectangular-array type arguments merge to an element type"),
+                existingRectangular.Rank);
+        }
+
         if (existing is TupleTypeSymbol existingTuple
             && incoming is TupleTypeSymbol incomingTuple
             && existingTuple.ElementTypes.Length == incomingTuple.ElementTypes.Length)
@@ -5430,6 +5507,7 @@ internal sealed class MemberLookup
         {
             SliceTypeSymbol s => s.ElementType,
             ArrayTypeSymbol a => a.ElementType,
+            RectangularArrayTypeSymbol a => a.ElementType,
             SequenceTypeSymbol seq => seq.ElementType,
             AsyncSequenceTypeSymbol aseq => aseq.ElementType,
             _ => null,
@@ -5724,14 +5802,16 @@ internal sealed class MemberLookup
         if (openType.IsArray)
         {
             var openElementType = openType.GetElementType();
-            var candidateElementType = candidate switch
+            var (candidateElementType, candidateRank) = candidate switch
             {
-                ArrayTypeSymbol arr => arr.ElementType,
-                SliceTypeSymbol slice => slice.ElementType,
-                _ => null,
+                ArrayTypeSymbol arr => (arr.ElementType, 1),
+                SliceTypeSymbol slice => (slice.ElementType, 1),
+                RectangularArrayTypeSymbol rectangular => (rectangular.ElementType, rectangular.Rank),
+                _ => (null, 0),
             };
 
             return candidateElementType != null
+                && candidateRank == openType.GetArrayRank()
                 && ClrParamTypeMatchesGenericMethodParam(candidateElementType, openElementType, methodGenericParams, candidateTypeParams);
         }
 

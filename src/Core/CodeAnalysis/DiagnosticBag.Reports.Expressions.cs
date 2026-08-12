@@ -80,6 +80,31 @@ public sealed partial class DiagnosticBag
     public void ReportTypeNotIndexable(TextLocation location, TypeSymbol type)
     => Report(location, DiagnosticDescriptors.TypeNotIndexable, type);
 
+    /// <summary>Reports rectangular-array index arity mismatch.</summary>
+    /// <param name="location">Diagnostic location.</param>
+    /// <param name="rank">Declared array rank.</param>
+    /// <param name="indexCount">Supplied index count.</param>
+    public void ReportRectangularArrayIndexRankMismatch(TextLocation location, int rank, int indexCount)
+    => Report(location, DiagnosticDescriptors.RectangularArrayIndexRankMismatch, rank, indexCount);
+
+    /// <summary>Reports a rectangular-array rank beyond the CLR limit.</summary>
+    /// <param name="location">Diagnostic location.</param>
+    /// <param name="rank">Requested array rank.</param>
+    public void ReportRectangularArrayRankTooLarge(TextLocation location, int rank)
+    => Report(location, DiagnosticDescriptors.RectangularArrayRankTooLarge, rank);
+
+    /// <summary>Reports non-constant rectangular-array initializer dimensions.</summary>
+    /// <param name="location">Diagnostic location.</param>
+    public void ReportRectangularArrayInitializerRequiresConstantDimensions(TextLocation location)
+    => Report(location, DiagnosticDescriptors.RectangularArrayInitializerRequiresConstantDimensions);
+
+    /// <summary>Reports rectangular-array initializer element-count mismatch.</summary>
+    /// <param name="location">Diagnostic location.</param>
+    /// <param name="expected">Required element count.</param>
+    /// <param name="actual">Supplied element count.</param>
+    public void ReportRectangularArrayInitializerLengthMismatch(TextLocation location, long expected, int actual)
+    => Report(location, DiagnosticDescriptors.RectangularArrayInitializerLengthMismatch, expected, actual);
+
     /// <summary>
     /// Reports that a built-in intrinsic was applied to an unsupported argument type.
     /// </summary>

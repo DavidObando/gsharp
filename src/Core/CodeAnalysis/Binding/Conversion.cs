@@ -1205,7 +1205,8 @@ public sealed class Conversion
         // element-invariance guard to that metadata path.
         if (from is ImportedTypeSymbol { ClrType: { IsArray: true } importedArray }
             && importedArray.GetArrayRank() == 1
-            && (to is SliceTypeSymbol or ArrayTypeSymbol || to?.ClrType?.IsArray == true))
+            && (to is SliceTypeSymbol or ArrayTypeSymbol
+                || (to?.ClrType is { IsArray: true } targetClrArray && targetClrArray.GetArrayRank() == 1)))
         {
             var sourceElement = TypeSymbol.FromClrType(importedArray.GetElementType());
             TypeSymbol importedTargetElement = to switch
@@ -1219,6 +1220,38 @@ public sealed class Conversion
             return AreTypeArgumentsEquivalent(sourceElement, importedTargetElement)
                 ? Conversion.Implicit
                 : Conversion.None;
+        }
+
+        if (from is RectangularArrayTypeSymbol rectangularSource
+            && to is RectangularArrayTypeSymbol rectangularTarget)
+        {
+            if (rectangularSource.Rank != rectangularTarget.Rank)
+            {
+                return Conversion.None;
+            }
+
+            if (AreTypeArgumentsEquivalent(rectangularSource.ElementType, rectangularTarget.ElementType))
+            {
+                return Conversion.Implicit;
+            }
+
+            var elementConversion = ClassifyNonStructural(
+                rectangularSource.ElementType,
+                rectangularTarget.ElementType);
+            return IsReferenceLikeTarget(rectangularSource.ElementType)
+                && IsReferenceLikeTarget(rectangularTarget.ElementType)
+                && elementConversion.Exists
+                && elementConversion.IsImplicit
+                    ? Conversion.Implicit
+                    : Conversion.None;
+        }
+
+        if (from is RectangularArrayTypeSymbol { ClrType: null } symbolicRectangular
+            && to?.ClrType != null
+            && MemberLookup.TryProjectErasedClrType(symbolicRectangular, out var erasedRectangular)
+            && ClrTypeUtilities.IsAssignableByName(to.ClrType, erasedRectangular))
+        {
+            return Conversion.Implicit;
         }
 
         // Issue #2140: a G# slice `[]T` is backed at runtime by a CLR
@@ -1549,7 +1582,7 @@ public sealed class Conversion
 
         // Slices/fixed arrays are CLR array references even while a
         // same-compilation element leaves their ClrType unavailable.
-        if (type is SliceTypeSymbol or ArrayTypeSymbol)
+        if (type is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol)
         {
             return true;
         }
@@ -2503,6 +2536,9 @@ public sealed class Conversion
                 return IsCrossContextIdenticalElement(fromAsync.ElementType, toAsync.ElementType);
             case ArrayTypeSymbol fromArray when to is ArrayTypeSymbol toArray:
                 return fromArray.Length == toArray.Length
+                    && IsCrossContextIdenticalElement(fromArray.ElementType, toArray.ElementType);
+            case RectangularArrayTypeSymbol fromArray when to is RectangularArrayTypeSymbol toArray:
+                return fromArray.Rank == toArray.Rank
                     && IsCrossContextIdenticalElement(fromArray.ElementType, toArray.ElementType);
             case MapTypeSymbol fromMap when to is MapTypeSymbol toMap:
                 return IsCrossContextIdenticalElement(fromMap.KeyType, toMap.KeyType)

@@ -90,6 +90,11 @@ public sealed class AsyncStateMachineFieldMap
             map.localFields.Add(local, RequireField(fields, fieldIndex++, null));
         }
 
+        foreach (var spillLocal in hoist.SpillLocals)
+        {
+            map.localFields.Add(spillLocal, RequireField(fields, fieldIndex++, spillLocal.Name));
+        }
+
         return map;
     }
 

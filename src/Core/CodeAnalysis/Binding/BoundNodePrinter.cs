@@ -1165,11 +1165,25 @@ public static class BoundNodePrinter
     {
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
 
+        if (node.DimensionExpressions.Length > 1)
+        {
+            for (var i = 0; i < node.DimensionExpressions.Length; i++)
+            {
+                if (i > 0)
+                {
+                    writer.WritePunctuation(SyntaxKind.CommaToken);
+                    writer.WriteSpace();
+                }
+
+                node.DimensionExpressions[i].WriteTo(writer);
+            }
+        }
+
         // #611 intentional asymmetry: only ArrayTypeSymbol carries a Length
         // to print inside the brackets. SliceTypeSymbol renders as `[]T`
         // (no number) because slices are variable-length. This is correct
         // GSharp syntax — NOT a missing SliceTypeSymbol case.
-        if (node.ContainerType is GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol arr)
+        else if (node.ContainerType is GSharp.Core.CodeAnalysis.Symbols.ArrayTypeSymbol arr)
         {
             writer.WriteNumber(arr.Length.ToString());
         }
@@ -1178,11 +1192,17 @@ public static class BoundNodePrinter
         writer.WriteIdentifier(node.ElementType.Name);
 
         // Issue #1016: runtime-length form prints as `[]T(length)`.
-        if (node.LengthExpression != null)
+        if (node.LengthExpression != null && node.DimensionExpressions.Length <= 1)
         {
             writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
             node.LengthExpression.WriteTo(writer);
             writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+            return;
+        }
+
+        if (node.ContainerType is GSharp.Core.CodeAnalysis.Symbols.RectangularArrayTypeSymbol
+            && node.Elements.IsDefaultOrEmpty)
+        {
             return;
         }
 
@@ -1211,7 +1231,17 @@ public static class BoundNodePrinter
     {
         node.Target.WriteTo(writer);
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
-        node.Index.WriteTo(writer);
+        for (var i = 0; i < node.Indices.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Indices[i].WriteTo(writer);
+        }
+
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
     }
 
@@ -1227,7 +1257,17 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
-        node.Index.WriteTo(writer);
+        for (var i = 0; i < node.Indices.Length; i++)
+        {
+            if (i > 0)
+            {
+                writer.WritePunctuation(SyntaxKind.CommaToken);
+                writer.WriteSpace();
+            }
+
+            node.Indices[i].WriteTo(writer);
+        }
+
         writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
         writer.WriteSpace();
         writer.WritePunctuation(SyntaxKind.EqualsToken);
@@ -1764,7 +1804,17 @@ public static class BoundNodePrinter
             && ReferenceEquals(idxRecv.Variable, node.Capture))
         {
             writer.WritePunctuation(SyntaxKind.QuestionOpenBracketToken);
-            idx.Index.WriteTo(writer);
+            for (var i = 0; i < idx.Indices.Length; i++)
+            {
+                if (i > 0)
+                {
+                    writer.WritePunctuation(SyntaxKind.CommaToken);
+                    writer.WriteSpace();
+                }
+
+                idx.Indices[i].WriteTo(writer);
+            }
+
             writer.WritePunctuation(SyntaxKind.CloseSquareBracketToken);
             return;
         }

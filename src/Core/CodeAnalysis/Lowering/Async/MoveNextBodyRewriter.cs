@@ -498,7 +498,10 @@ public static class MoveNextBodyRewriter
 
             protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
             {
-                var rewrittenIndex = RewriteExpression(node.Index);
+                var rewrittenTargetExpression = node.TargetExpression != null
+                    ? RewriteExpression(node.TargetExpression)
+                    : null;
+                var rewrittenIndices = node.Indices.Select(RewriteExpression).ToImmutableArray();
                 var rewrittenValue = RewriteExpression(node.Value);
 
                 // If the target (array/slice/map) is hoisted into a state-machine
@@ -517,7 +520,7 @@ public static class MoveNextBodyRewriter
                     var newAssign = new BoundIndexAssignmentExpression(
                         null,
                         aliasLocal,
-                        rewrittenIndex,
+                        rewrittenIndices,
                         rewrittenValue,
                         node.Type);
                     return new BoundBlockExpression(
@@ -526,15 +529,23 @@ public static class MoveNextBodyRewriter
                         newAssign);
                 }
 
-                if (rewrittenIndex != node.Index || rewrittenValue != node.Value)
+                if (rewrittenTargetExpression != node.TargetExpression
+                    || !rewrittenIndices.SequenceEqual(node.Indices)
+                    || rewrittenValue != node.Value)
                 {
                     // Preserve the node's form (see #3333): the expression-target
                     // form carries no Target.
                     return node.TargetExpression != null
                         ? BoundIndexAssignmentExpression.WithExpressionTarget(
-                            null, node.TargetExpression, rewrittenIndex, rewrittenValue, node.Type)
+                            null,
+                            Invariant.Required(
+                                rewrittenTargetExpression,
+                                "an expression-target index assignment retains its target"),
+                            rewrittenIndices,
+                            rewrittenValue,
+                            node.Type)
                         : new BoundIndexAssignmentExpression(
-                            null, BoundNodeForm.VariableTarget(node), rewrittenIndex, rewrittenValue, node.Type);
+                            null, BoundNodeForm.VariableTarget(node), rewrittenIndices, rewrittenValue, node.Type);
                 }
 
                 return node;

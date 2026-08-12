@@ -43,23 +43,6 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     initializer = null;
                 }
-                else if (declarator.Initializer.Value is ArrayCreationExpressionSyntax multiDimCreation &&
-                    multiDimCreation.Type.RankSpecifiers.Count > 0 &&
-                    multiDimCreation.Type.RankSpecifiers[0].Sizes.Count > 1)
-                {
-                    // Issue #1893: `T[,] grid = new T[d0, d1, ...]` / `= new
-                    // T[,]{{...}}` — flat-lower to a tracked backing array (see
-                    // TranslateMultiDimArrayCreationForLocal) rather than the
-                    // general single-dim initializer path below, which would
-                    // silently drop every dimension past the first.
-                    var multiDimPrologue = new List<GStatement>();
-                    initializer = this.TranslateMultiDimArrayCreationForLocal(
-                        multiDimCreation,
-                        SanitizeIdentifier(declarator.Identifier.Text),
-                        this.context.GetDeclaredSymbol(declarator),
-                        multiDimPrologue);
-                    results.AddRange(multiDimPrologue);
-                }
                 else
                 {
                     // `int y = (x = 5) + 1;` — a value-position assignment nested in
@@ -104,25 +87,6 @@ public sealed partial class CSharpToGSharpTranslator
                         initializer,
                         localTarget.Type,
                         localTarget);
-                }
-
-                // Issue #1954: `var g2 = grid;` — a simple `var` local initialized
-                // directly from another local/parameter/field that is ITSELF a
-                // tracked flat-lowered multi-dim array (see `multiDimArrays`)
-                // aliases the SAME flat backing array, so `g2` is registered under
-                // the SAME `MultiDimArrayInfo` (any rank) rather than losing
-                // tracking and reporting the loud gap on its first `g2[i, j]`
-                // access. An explicitly-typed declaration, or a RHS that is
-                // anything other than a bare name/member reference to a tracked
-                // symbol (a method call, a conditional, ...), is not "simple
-                // aliasing" and is left to report the gap as before.
-                if (!hasExplicitType &&
-                    declarator.Initializer?.Value is IdentifierNameSyntax or MemberAccessExpressionSyntax &&
-                    this.context.GetSymbolInfo(declarator.Initializer.Value).Symbol is { } rhsAliasSymbol &&
-                    this.state.MultiDimArrays.TryGetValue(rhsAliasSymbol, out MultiDimArrayInfo aliasedInfo) &&
-                    this.context.GetDeclaredSymbol(declarator) is { } declaredAliasSymbol)
-                {
-                    this.state.MultiDimArrays[declaredAliasSymbol] = aliasedInfo;
                 }
 
                 // Issue #1894: a local's declared type normally only reaches
@@ -732,16 +696,9 @@ public sealed partial class CSharpToGSharpTranslator
             return index;
         }
 
-        // Issue #1954: a multi-index access's flat index is rebuilt with real
-        // arithmetic (`i0*dim1 + i1`, each `dim` an int32 hoisted `let`/
-        // literal — see `TranslateMultiDimElementAccess`), unlike the
-        // single-index path above where the index is handed unmodified to
-        // gsc's own indexer, which itself accepts any integer kind (#1279).
-        // Mixing a wide index (`long`/`ulong`/`nint`/`nuint`) into that int32
-        // arithmetic needs the same widening-coercion rule `CoerceIndexToInt32`
-        // applies, so this mirrors its tail check directly against the index
-        // syntax rather than re-deriving it from an `ElementAccessExpression`
-        // argument-count/indexer-target shape that does not apply here.
+        // CLR rectangular-array Get/Set pseudo-methods take int32 indices.
+        // Preserve C#'s unchecked integral narrowing for wide index kinds
+        // (`long`/`ulong`/`nint`/`nuint`) with an explicit G# int32 conversion.
         private GExpression CoerceMultiDimIndexToInt32(ExpressionSyntax indexSyntax, GExpression index)
         {
             ITypeSymbol indexType = this.context.GetTypeInfo(indexSyntax).Type;

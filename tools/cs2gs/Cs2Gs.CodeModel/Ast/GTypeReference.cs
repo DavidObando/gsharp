@@ -56,13 +56,18 @@ public sealed class ArrayTypeReference : GTypeReference
     /// Initializes a new instance of the <see cref="ArrayTypeReference"/> class.
     /// </summary>
     /// <param name="elementType">The element type.</param>
-    public ArrayTypeReference(GTypeReference elementType)
+    /// <param name="rank">Array rank.</param>
+    public ArrayTypeReference(GTypeReference elementType, int rank = 1)
     {
         ElementType = elementType;
+        Rank = rank;
     }
 
     /// <summary>Gets the element type.</summary>
     public GTypeReference ElementType { get; }
+
+    /// <summary>Gets array rank.</summary>
+    public int Rank { get; }
 }
 
 /// <summary>

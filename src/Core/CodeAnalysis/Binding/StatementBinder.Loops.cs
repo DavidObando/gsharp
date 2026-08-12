@@ -245,6 +245,11 @@ internal sealed partial class StatementBinder
                 keyType = TypeSymbol.Int32;
                 valueType = slice.ElementType;
                 break;
+            case RectangularArrayTypeSymbol rectangular:
+                iterationKind = ForRangeKind.PatternEnumerator;
+                keyType = TypeSymbol.Int32;
+                valueType = rectangular.ElementType;
+                break;
 
             // Issue #209: NullabilityAnnotatedTypeSymbol carries inner-position nullable
             // flags; extract element/key/value types using those flags so that

@@ -2,7 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
+
+#pragma warning disable SA1611
+#pragma warning disable SA1642
 
 /// <summary>
 /// Represents an index expression <c>target[index]</c> or the
@@ -27,11 +32,35 @@ public sealed class IndexExpressionSyntax : ExpressionSyntax
         SyntaxToken openBracketToken,
         ExpressionSyntax index,
         SyntaxToken closeBracketToken)
+        : this(
+            syntaxTree,
+            target,
+            openBracketToken,
+            new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray.Create<SyntaxNode>(index)),
+            closeBracketToken)
+    {
+    }
+
+    #pragma warning restore SA1642
+    #pragma warning restore SA1611
+
+    /// <summary>Initializes a new instance of the <see cref="IndexExpressionSyntax"/> class.</summary>
+    /// <param name="syntaxTree">Parent syntax tree.</param>
+    /// <param name="target">Indexed target.</param>
+    /// <param name="openBracketToken">Opening bracket.</param>
+    /// <param name="indices">Index expressions.</param>
+    /// <param name="closeBracketToken">Closing bracket.</param>
+    public IndexExpressionSyntax(
+        SyntaxTree syntaxTree,
+        ExpressionSyntax target,
+        SyntaxToken openBracketToken,
+        SeparatedSyntaxList<ExpressionSyntax> indices,
+        SyntaxToken closeBracketToken)
         : base(syntaxTree)
     {
         Target = target;
         OpenBracketToken = openBracketToken;
-        Index = index;
+        Indices = indices;
         CloseBracketToken = closeBracketToken;
         IsNullConditional = openBracketToken.Kind == SyntaxKind.QuestionOpenBracketToken;
     }
@@ -46,7 +75,11 @@ public sealed class IndexExpressionSyntax : ExpressionSyntax
     public SyntaxToken OpenBracketToken { get; }
 
     /// <summary>Gets the index expression.</summary>
-    public ExpressionSyntax Index { get; }
+    [SyntaxChildIgnore]
+    public ExpressionSyntax Index => Indices[0];
+
+    /// <summary>Gets index expressions.</summary>
+    public SeparatedSyntaxList<ExpressionSyntax> Indices { get; }
 
     /// <summary>Gets the closing bracket token.</summary>
     public SyntaxToken CloseBracketToken { get; }

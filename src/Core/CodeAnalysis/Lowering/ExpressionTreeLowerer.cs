@@ -174,6 +174,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         nameof(System.Linq.Expressions.Expression.ArrayIndex),
         typeof(System.Linq.Expressions.Expression),
         typeof(System.Linq.Expressions.Expression));
+    private static readonly MethodInfo ExpressionArrayAccessMethod = GetRequiredMethod(
+        typeof(System.Linq.Expressions.Expression),
+        nameof(System.Linq.Expressions.Expression.ArrayAccess),
+        typeof(System.Linq.Expressions.Expression),
+        typeof(System.Linq.Expressions.Expression[]));
     private static readonly MethodInfo ExpressionDefaultMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
         nameof(System.Linq.Expressions.Expression.Default),
@@ -338,6 +343,17 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             case BoundClrPropertyAccessExpression clrProperty:
                 return BuildClrPropertyAccessExpression(clrProperty, parameterMap);
             case BoundIndexExpression index:
+                if (index.Indices.Length > 1)
+                {
+                    return new BoundClrStaticCallExpression(
+                        expression.Syntax,
+                        ExpressionArrayAccessMethod,
+                        TypeSymbol.FromClrType(typeof(System.Linq.Expressions.IndexExpression)),
+                        ImmutableArray.Create<BoundExpression>(
+                            UpcastToExpression(this.TranslateExpression(index.Target, parameterMap)),
+                            BuildExpressionArray(index.Indices.Select(i => this.TranslateExpression(i, parameterMap)))));
+                }
+
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionArrayIndexMethod,
@@ -631,7 +647,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundArrayCreationExpression array,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
-        if (array.LengthExpression != null)
+        if (!array.DimensionExpressions.IsDefaultOrEmpty)
         {
             return new BoundClrStaticCallExpression(
                 array.Syntax,
@@ -639,7 +655,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewArrayExpression)),
                 ImmutableArray.Create<BoundExpression>(
                     CreateTypeOf(array.ElementType),
-                    BuildExpressionArray(new[] { this.TranslateExpression(array.LengthExpression, parameterMap) })));
+                    BuildExpressionArray(array.DimensionExpressions.Select(
+                        dimension => this.TranslateExpression(dimension, parameterMap)))));
         }
 
         var elements = new List<BoundExpression>(array.Elements.Length);

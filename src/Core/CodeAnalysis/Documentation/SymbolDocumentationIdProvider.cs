@@ -276,6 +276,21 @@ internal static class SymbolDocumentationIdProvider
                 AppendTypeReference(builder, arrayType.ElementType, ownerType, function);
                 builder.Append("[]");
                 return;
+            case RectangularArrayTypeSymbol rectangularArrayType:
+                AppendTypeReference(builder, rectangularArrayType.ElementType, ownerType, function);
+                builder.Append('[');
+                for (var i = 0; i < rectangularArrayType.Rank; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    builder.Append("0:");
+                }
+
+                builder.Append(']');
+                return;
             case SliceTypeSymbol sliceType:
                 // #611: a slice `[]T` is backed by CLR `T[]`, so its
                 // documentation ID uses the same array encoding.

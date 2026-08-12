@@ -999,6 +999,12 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
+        if (type is RectangularArrayTypeSymbol rectangular)
+        {
+            CheckVariancePosition(rectangular.ElementType, isOutput, location);
+            return;
+        }
+
         if (type is NullableTypeSymbol n)
         {
             CheckVariancePosition(n.UnderlyingType, isOutput, location);

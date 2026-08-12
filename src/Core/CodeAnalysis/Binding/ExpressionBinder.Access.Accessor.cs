@@ -1149,7 +1149,7 @@ internal sealed partial class ExpressionBinder
             case IndexExpressionSyntax index when !index.IsNullConditional:
                 if (index.Target is NameExpressionSyntax indexTargetName)
                 {
-                    if (!TryBindTypeArgumentExpressions(index.Index, out var rootArgs))
+                    if (!TryBindTypeArgumentExpressions(index.Indices, out var rootArgs))
                     {
                         return false;
                     }
@@ -1169,7 +1169,7 @@ internal sealed partial class ExpressionBinder
                     return false;
                 }
 
-                if (!TryBindTypeArgumentExpressions(index.Index, out var lastArgs))
+                if (!TryBindTypeArgumentExpressions(index.Indices, out var lastArgs))
                 {
                     return false;
                 }
@@ -1566,7 +1566,7 @@ internal sealed partial class ExpressionBinder
         {
             case IndexExpressionSyntax index when !index.IsNullConditional && index.Target is NameExpressionSyntax indexName:
                 name = indexName.IdentifierToken.Text;
-                arity = 1;
+                arity = index.Indices.Count;
                 return true;
 
             case GenericNameExpressionSyntax generic:
@@ -1592,7 +1592,7 @@ internal sealed partial class ExpressionBinder
         switch (segment)
         {
             case IndexExpressionSyntax index:
-                return TryBindTypeArgumentExpressions(index.Index, out typeArgs) && typeArgs.Length == arity;
+                return TryBindTypeArgumentExpressions(index.Indices, out typeArgs) && typeArgs.Length == arity;
 
             case GenericNameExpressionSyntax generic:
                 return TryBindGenericSegmentArguments(generic, out typeArgs) && typeArgs.Length == arity;
@@ -2061,7 +2061,9 @@ internal sealed partial class ExpressionBinder
                     return BindNullConditionalIndexFromBoundTarget(indexTarget, ix);
                 }
 
-                return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
+                return ix.Indices.Count > 1 || IsRectangularArrayType(indexTarget.Type)
+                    ? BindRectangularIndexAgainstTarget(indexTarget, ix.Indices, ix.Target.Location)
+                    : BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
 
             default:
                 return new BoundErrorExpression(null);
@@ -2393,7 +2395,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!TryBindTypeArgumentExpressions(index.Index, out var typeArgs)
+        if (!TryBindTypeArgumentExpressions(index.Indices, out var typeArgs)
             || typeArgs.Length != ifaceDef.TypeParameters.Length)
         {
             return false;
@@ -2454,7 +2456,7 @@ internal sealed partial class ExpressionBinder
         // Gate on the name actually naming a generic type definition before
         // binding the bracket contents as type arguments, so that we never emit
         // spurious type diagnostics for a non-generic-type target.
-        var arity = FlattenCommaList(index.Index).Count();
+        var arity = index.Indices.Count;
 
         // Issue #1395: when a non-generic (arity-0) type and a generic type
         // share the same simple name (arity overloading, e.g. `Box` and
@@ -2473,7 +2475,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!TryBindTypeArgumentExpressions(index.Index, out var typeArgs)
+        if (!TryBindTypeArgumentExpressions(index.Indices, out var typeArgs)
             || typeArgs.Length != arity)
         {
             return false;
@@ -2801,6 +2803,26 @@ internal sealed partial class ExpressionBinder
 
         typeArgs = builder.ToImmutable();
         return true;
+    }
+
+    private bool TryBindTypeArgumentExpressions(
+        SeparatedSyntaxList<ExpressionSyntax> argumentSyntaxes,
+        out ImmutableArray<TypeSymbol> typeArgs)
+    {
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(argumentSyntaxes.Count);
+        foreach (var argumentSyntax in argumentSyntaxes)
+        {
+            if (!TryBindTypeArgumentExpressions(argumentSyntax, out var argumentTypes))
+            {
+                typeArgs = default;
+                return false;
+            }
+
+            builder.AddRange(argumentTypes);
+        }
+
+        typeArgs = builder.MoveToImmutable();
+        return typeArgs.Length > 0;
     }
 
     private static IEnumerable<ExpressionSyntax> FlattenCommaList(ExpressionSyntax expr)

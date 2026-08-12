@@ -50,7 +50,7 @@ public partial class Parser
             // Issue #2465: use the same index-context parser as ordinary and
             // compound element access so a leading `^` is a from-end marker,
             // not the one's-complement unary operator.
-            var index = ParseIndexArgument();
+            var indices = ParseIndexArguments();
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
             var equalsToken = MatchToken(SyntaxKind.EqualsToken);
             var value = ParseAssignmentExpression();
@@ -59,7 +59,7 @@ public partial class Parser
                 syntaxTree,
                 identifierToken,
                 openBracket,
-                index,
+                indices,
                 closeBracket,
                 equalsToken,
                 value);
@@ -789,10 +789,10 @@ public partial class Parser
                 suppressTrailingObjectInitializer = 0;
                 var savedStructLiteral = suppressStructLiteral;
                 suppressStructLiteral = 0;
-                ExpressionSyntax index;
+                SeparatedSyntaxList<ExpressionSyntax> indices;
                 try
                 {
-                    index = ParseIndexArgument();
+                    indices = ParseIndexArguments();
                 }
                 finally
                 {
@@ -801,7 +801,7 @@ public partial class Parser
                 }
 
                 var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-                current = new IndexExpressionSyntax(syntaxTree, current, openBracket, index, closeBracket);
+                current = new IndexExpressionSyntax(syntaxTree, current, openBracket, indices, closeBracket);
             }
             else if (Current.Kind == SyntaxKind.OpenParenthesisToken
                 && !IsCurrentOnNewLineAfter(current))
@@ -939,6 +939,19 @@ public partial class Parser
         }
 
         return new RangeExpressionSyntax(syntaxTree, lower, dotDotToken, upper);
+    }
+
+    private SeparatedSyntaxList<ExpressionSyntax> ParseIndexArguments()
+    {
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        nodesAndSeparators.Add(ParseIndexArgument());
+        while (Current.Kind == SyntaxKind.CommaToken)
+        {
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            nodesAndSeparators.Add(ParseIndexArgument());
+        }
+
+        return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
     }
 
     // Issue #1022: parse a single index/range bound, recognising a leading `^`

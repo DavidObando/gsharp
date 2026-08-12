@@ -125,7 +125,7 @@ func Main() {
 
 ## Arrays and slices
 
-Fixed-size literals use `[N]T{...}`. Slice literals use `[]T{...}`. The 0.3 runtime allocation form `[n]T` creates a zero-initialized `[]T` of length `n`.
+Fixed-size literals use `[N]T{...}`. Slice literals use `[]T{...}`. The runtime allocation form `[n]T` creates a zero-initialized `[]T` of length `n`. Native rectangular arrays use `[,]T` types, `[rows, columns]T` allocation, and `grid[row, column]` indexing.
 
 ```gsharp title="ArraysAndSlices.gs"
 package GSharp.Example.ArraysAndSlices
@@ -140,11 +140,15 @@ func Main() {
     let fixed = [3]int32{10, 20, 30}
     let slice = []int32{1, 2, 3}
     let runtime = zeros(4)
+    let matrix = [2, 3]int32{1, 2, 3, 4, 5, 6}
+    matrix[1, 2] = 42
 
     Console.WriteLine(fixed[0])
     Console.WriteLine(slice.Length)
     Console.WriteLine(runtime.Length)
     Console.WriteLine(runtime[0])
+    Console.WriteLine(matrix[1, 2])
+    Console.WriteLine(matrix.GetLength(1))
 }
 ```
 

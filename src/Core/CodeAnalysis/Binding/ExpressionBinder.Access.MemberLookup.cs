@@ -225,7 +225,9 @@ internal sealed partial class ExpressionBinder
                     return BindNullConditionalIndexFromBoundTarget(indexTarget, ix);
                 }
 
-                return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
+                return ix.Indices.Count > 1 || IsRectangularArrayType(indexTarget.Type)
+                    ? BindRectangularIndexAgainstTarget(indexTarget, ix.Indices, ix.Target.Location)
+                    : BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
 
             case NameExpressionSyntax ne:
                 if (ne.IdentifierToken.IsMissing)
@@ -697,7 +699,7 @@ internal sealed partial class ExpressionBinder
                     return BindExtensionMethodGroupOrError(receiver, ne);
                 }
                 else if (receiver != null
-                    && receiver.Type is SliceTypeSymbol or ArrayTypeSymbol
+                    && receiver.Type is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol
                     && receiver.Type.ClrType == null)
                 {
                     // Issue #1162: a slice/array whose element is a
@@ -716,6 +718,16 @@ internal sealed partial class ExpressionBinder
                     if (arrayProp != null && arrayProp.GetIndexParameters().Length == 0 && arrayProp.CanRead)
                     {
                         return new BoundClrPropertyAccessExpression(null, receiver, arrayProp, ClrNullability.GetPropertyTypeSymbol(arrayProp));
+                    }
+
+                    if (TryBindClrMethodGroup(
+                        receiver,
+                        typeof(Array),
+                        wantStatic: false,
+                        arrayMemberName,
+                        out var arrayMethodGroup))
+                    {
+                        return arrayMethodGroup;
                     }
 
                     return BindExtensionMethodGroupOrError(receiver, ne);
@@ -929,7 +941,65 @@ internal sealed partial class ExpressionBinder
         }
 
         var target = BindExpression(syntax.Target);
+        if (syntax.Indices.Count > 1 || IsRectangularArrayType(target.Type))
+        {
+            return BindRectangularIndexAgainstTarget(target, syntax.Indices, syntax.Target.Location);
+        }
+
         return BindIndexAgainstTarget(target, syntax.Index, syntax.Target.Location);
+    }
+
+    private BoundExpression BindRectangularIndexAgainstTarget(
+        BoundExpression target,
+        SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
+        TextLocation targetLocation)
+    {
+        var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+        if (rectangular == null)
+        {
+            Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        if (indexSyntaxes.Count != rectangular.Rank)
+        {
+            Diagnostics.ReportRectangularArrayIndexRankMismatch(
+                targetLocation,
+                rectangular.Rank,
+                indexSyntaxes.Count);
+            return new BoundErrorExpression(null);
+        }
+
+        var indices = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+        foreach (var indexSyntax in indexSyntaxes)
+        {
+            indices.Add(BindRectangularArrayElementIndex(indexSyntax));
+        }
+
+        return new BoundIndexExpression(null, target, indices.MoveToImmutable(), rectangular.ElementType);
+    }
+
+    private static bool IsRectangularArrayType(TypeSymbol type)
+        => GetRectangularArrayTypeForBinding(type) != null;
+
+    private static RectangularArrayTypeSymbol? GetRectangularArrayTypeForBinding(TypeSymbol type)
+    {
+        if (type is RectangularArrayTypeSymbol rectangular)
+        {
+            return rectangular;
+        }
+
+        if (type is NullableTypeSymbol)
+        {
+            return null;
+        }
+
+        return type.ClrType is { IsArray: true } clr && clr.GetArrayRank() > 1
+            ? RectangularArrayTypeSymbol.Get(
+                TypeSymbol.FromClrType(clr.GetElementType()),
+                clr.GetArrayRank())
+            : null;
     }
 
     // ADR-0073 / issue #710: bind `target?[index]`. The receiver is evaluated
@@ -984,7 +1054,9 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(capture);
 
         var captureRef = new BoundVariableExpression(null, capture);
-        var whenNotNull = BindIndexAgainstTarget(captureRef, syntax.Index, syntax.Target.Location);
+        var whenNotNull = syntax.Indices.Count > 1 || IsRectangularArrayType(captureRef.Type)
+            ? BindRectangularIndexAgainstTarget(captureRef, syntax.Indices, syntax.Target.Location)
+            : BindIndexAgainstTarget(captureRef, syntax.Index, syntax.Target.Location);
 
         scope = scope.Pop();
 
@@ -1455,6 +1527,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (GetRectangularArrayTypeForBinding(boundReceiver.Type) is { } rectangularReceiver)
+        {
+            Diagnostics.ReportRectangularArrayIndexRankMismatch(
+                diagnosticLocation,
+                rectangularReceiver.Rank,
+                indexCount: 1);
+            return new BoundErrorExpression(outerSyntax);
+        }
+
         var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type);
         if (!scope.TryDeclareVariable(tempVar))
@@ -1716,6 +1797,15 @@ internal sealed partial class ExpressionBinder
         var targetType = target.Type;
         var hasNarrowedTarget = target is not BoundVariableExpression targetVariable
             || targetVariable.NarrowedType != null;
+
+        if (GetRectangularArrayTypeForBinding(targetType) is { } rectangularTarget)
+        {
+            Diagnostics.ReportRectangularArrayIndexRankMismatch(
+                diagnosticLocation,
+                rectangularTarget.Rank,
+                indexCount: 1);
+            return new BoundErrorExpression(indexSyntax);
+        }
 
         BoundExpression MakeIndexAssignment(BoundExpression index, BoundExpression value, TypeSymbol elementType)
         {
@@ -3314,6 +3404,26 @@ internal sealed partial class ExpressionBinder
         return ConvertArrayElementIndex(indexSyntax.Location, boundIndex);
     }
 
+    private BoundExpression BindRectangularArrayElementIndex(ExpressionSyntax indexSyntax)
+    {
+        if (indexSyntax is DefaultExpressionSyntax || indexSyntax is InterpolatedStringExpressionSyntax)
+        {
+            return conversions.BindConversion(indexSyntax, TypeSymbol.Int32);
+        }
+
+        var boundIndex = BindExpression(indexSyntax);
+        if (boundIndex is BoundErrorExpression)
+        {
+            return boundIndex;
+        }
+
+        return conversions.BindConversion(
+            indexSyntax.Location,
+            boundIndex,
+            TypeSymbol.Int32,
+            allowExplicit: IsWideIntegerIndexType(boundIndex.Type));
+    }
+
     private static TypeSymbol? GetIndexElementType(TypeSymbol type)
     {
         return type switch
@@ -3541,7 +3651,9 @@ internal sealed partial class ExpressionBinder
                     return BindNullConditionalIndexFromBoundTarget(indexTarget, ix);
                 }
 
-                return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
+                return ix.Indices.Count > 1 || IsRectangularArrayType(indexTarget.Type)
+                    ? BindRectangularIndexAgainstTarget(indexTarget, ix.Indices, ix.Target.Location)
+                    : BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
 
             case CallExpressionSyntax callSyntax:
                 {

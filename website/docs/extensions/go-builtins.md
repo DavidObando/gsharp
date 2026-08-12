@@ -7,8 +7,8 @@ draft: false
 # Go-style built-ins
 
 `Gsharp.Extensions.Go` also surfaces the small set of Go-style built-in
-functions — `len`, `cap`, `append`, and `delete` — that work uniformly
-across arrays, slices, strings, and maps. Outside this extension namespace
+functions — `len`, `cap`, `append`, and `delete` — that cover fixed,
+rectangular, and slice arrays plus strings and maps. Outside this extension namespace
 the .NET-idiomatic spelling is preferred (`.Length`, `.Count`,
 `List[T].Add`, `Dictionary[K,V].Remove`); the built-ins are available
 when a Go-shaped codebase wants them.
@@ -31,14 +31,17 @@ import System
 import Gsharp.Extensions.Go
 
 var nums = []int32{10, 20, 30}
+var matrix = [2, 3]int32
 Console.WriteLine(len(nums))   // 3
 Console.WriteLine(cap(nums))   // 3
+Console.WriteLine(len(matrix)) // 6 (total rectangular element count)
 Console.WriteLine(len("hello")) // 5
 ```
 
 The .NET-idiomatic spelling without the extension import is
-`nums.Length`, `"hello".Length`, and so on. Maps spell their count as
-`.Count`.
+`nums.Length`, `matrix.Length`, `"hello".Length`, and so on. Rectangular
+arrays also expose `.Rank` and `.GetLength(d)`. `cap` and `append` do not
+apply to rectangular arrays. Maps spell their count as `.Count`.
 
 ## Append — `append`
 

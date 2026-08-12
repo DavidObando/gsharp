@@ -81,6 +81,7 @@ public sealed class NullableTypeSymbol : TypeSymbol
         {
             SliceTypeSymbol slice => $"[]?{slice.ElementType.Name}",
             ArrayTypeSymbol array => $"[{array.Length}]?{array.ElementType.Name}",
+            RectangularArrayTypeSymbol array => $"[{new string(',', array.Rank - 1)}]?{array.ElementType.Name}",
             FunctionTypeSymbol function => $"({function.Name})?",
             _ => underlyingType.Name + "?",
         };

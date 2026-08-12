@@ -1256,57 +1256,36 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillIndexAssignment(BoundIndexAssignmentExpression assign)
         {
-            // Target is a VariableSymbol — already a stable local read.
-            // Index and Value can each contain an await.
-            var indexHasAwait = HasAwait(assign.Index);
-            var valueHasAwait = HasAwait(assign.Value);
-
-            if (!indexHasAwait && !valueHasAwait)
+            var combined = ImmutableArray.CreateBuilder<BoundExpression>(assign.Indices.Length + 2);
+            var targetExpression = assign.TargetExpression
+                ?? new BoundVariableExpression(null, BoundNodeForm.VariableTarget(assign));
+            combined.Add(targetExpression);
+            combined.AddRange(assign.Indices);
+            combined.Add(assign.Value);
+            var (locals, sideEffects, spilled) = SpillArgumentList(
+                combined.MoveToImmutable(),
+                spillEveryPreAwaitOperand: IsRectangularArrayType(targetExpression.Type));
+            if (locals.Count == 0 && sideEffects.Count == 0)
             {
                 return Trivial(assign);
             }
 
-            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
-            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+            var target = spilled[0];
+            var offset = 1;
 
-            BoundExpression index;
-            if (indexHasAwait)
+            var indices = ImmutableArray.CreateBuilder<BoundExpression>(assign.Indices.Length);
+            for (var i = 0; i < assign.Indices.Length; i++)
             {
-                var spilledIndex = SpillExpression(assign.Index);
-                locals.AddRange(spilledIndex.Locals);
-                sideEffects.AddRange(spilledIndex.SideEffects);
-                index = spilledIndex.Value;
-            }
-            else
-            {
-                index = assign.Index;
+                indices.Add(spilled[offset++]);
             }
 
-            // If the RHS has an await, the index must be stable across that suspension.
-            if (valueHasAwait && !IsPureOrConstant(index))
-            {
-                var indexTemp = MakeSpillTemp(index.Type);
-                locals.Add(indexTemp);
-                sideEffects.Add(new BoundVariableDeclaration(null, indexTemp, index));
-                index = new BoundVariableExpression(null, indexTemp);
-            }
-
-            BoundExpression rhs;
-            if (valueHasAwait)
-            {
-                var spilledValue = SpillExpression(assign.Value);
-                locals.AddRange(spilledValue.Locals);
-                sideEffects.AddRange(spilledValue.SideEffects);
-                rhs = spilledValue.Value;
-            }
-            else
-            {
-                rhs = assign.Value;
-            }
-
-            var value = assign.TargetExpression != null
-                ? BoundIndexAssignmentExpression.WithExpressionTarget(null, assign.TargetExpression, index, rhs, assign.Type)
-                : new BoundIndexAssignmentExpression(null, BoundNodeForm.VariableTarget(assign), index, rhs, assign.Type);
+            var rhs = spilled[offset];
+            var value = BoundIndexAssignmentExpression.WithExpressionTarget(
+                null,
+                target,
+                indices.MoveToImmutable(),
+                rhs,
+                assign.Type);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),
@@ -1865,11 +1844,28 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillIndex(BoundIndexExpression index)
         {
-            return SpillTwoOperand(
-                index,
-                index.Target,
-                index.Index,
-                (target, idx) => new BoundIndexExpression(null, target, idx, index.Type));
+            var combined = ImmutableArray.CreateBuilder<BoundExpression>(index.Indices.Length + 1);
+            combined.Add(index.Target);
+            combined.AddRange(index.Indices);
+            var (locals, sideEffects, spilled) = SpillArgumentList(
+                combined.MoveToImmutable(),
+                spillEveryPreAwaitOperand: IsRectangularArrayType(index.Target.Type));
+            if (locals.Count == 0 && sideEffects.Count == 0)
+            {
+                return Trivial(index);
+            }
+
+            var indices = ImmutableArray.CreateBuilder<BoundExpression>(index.Indices.Length);
+            for (var i = 1; i < spilled.Count; i++)
+            {
+                indices.Add(spilled[i]);
+            }
+
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                new BoundIndexExpression(null, spilled[0], indices.MoveToImmutable(), index.Type));
         }
 
         private BoundSpillSequenceExpression SpillClrStaticCall(BoundClrStaticCallExpression call)
@@ -2105,6 +2101,101 @@ public static class SpillSequenceSpiller
 
         private BoundSpillSequenceExpression SpillArrayCreation(BoundArrayCreationExpression arrayCreation)
         {
+            if (arrayCreation.DimensionExpressions.Length > 1
+                && arrayCreation.ContainerType is RectangularArrayTypeSymbol rectangular)
+            {
+                if (!arrayCreation.Elements.IsDefaultOrEmpty
+                    && arrayCreation.RectangularLengths.Length == rectangular.Rank)
+                {
+                    var (initializerLocals, initializerSideEffects, spilledDimensions) = SpillArgumentList(
+                        arrayCreation.DimensionExpressions,
+                        spillEveryPreAwaitOperand: true);
+                    var arrayTemp = MakeSpillTemp(rectangular);
+                    initializerLocals.Add(arrayTemp);
+                    initializerSideEffects.Add(
+                        new BoundVariableDeclaration(
+                            null,
+                            arrayTemp,
+                            BoundArrayCreationExpression.CreateRectangular(
+                                null,
+                                rectangular,
+                                spilledDimensions.MoveToImmutable())));
+                    var arrayReference = new BoundVariableExpression(null, arrayTemp);
+
+                    for (var flatIndex = 0; flatIndex < arrayCreation.Elements.Length; flatIndex++)
+                    {
+                        var element = arrayCreation.Elements[flatIndex];
+                        if (HasAwait(element))
+                        {
+                            var spilledElement = SpillExpression(element);
+                            initializerLocals.AddRange(spilledElement.Locals);
+                            initializerSideEffects.AddRange(spilledElement.SideEffects);
+                            element = spilledElement.Value;
+                        }
+
+                        var indices = ImmutableArray.CreateBuilder<BoundExpression>(rectangular.Rank);
+                        var remainder = flatIndex;
+                        for (var dimension = 0; dimension < rectangular.Rank; dimension++)
+                        {
+                            var stride = 1;
+                            for (var trailing = dimension + 1; trailing < rectangular.Rank; trailing++)
+                            {
+                                stride *= arrayCreation.RectangularLengths[trailing];
+                            }
+
+                            var index = stride == 0 ? 0 : remainder / stride;
+                            remainder = stride == 0 ? 0 : remainder % stride;
+                            indices.Add(new BoundLiteralExpression(null, index, TypeSymbol.Int32));
+                        }
+
+                        initializerSideEffects.Add(
+                            new BoundExpressionStatement(
+                                null,
+                                BoundIndexAssignmentExpression.WithExpressionTarget(
+                                    null,
+                                    arrayReference,
+                                    indices.MoveToImmutable(),
+                                    element,
+                                    rectangular.ElementType)));
+                    }
+
+                    return new BoundSpillSequenceExpression(
+                        null,
+                        initializerLocals.ToImmutable(),
+                        initializerSideEffects.ToImmutable(),
+                        arrayReference);
+                }
+
+                var operands = ImmutableArray.CreateBuilder<BoundExpression>(
+                    arrayCreation.DimensionExpressions.Length + arrayCreation.Elements.Length);
+                operands.AddRange(arrayCreation.DimensionExpressions);
+                operands.AddRange(arrayCreation.Elements);
+                var (rectangularLocals, rectangularSideEffects, spilled) = SpillArgumentList(
+                    operands.MoveToImmutable(),
+                    spillEveryPreAwaitOperand: true);
+                if (rectangularLocals.Count == 0 && rectangularSideEffects.Count == 0)
+                {
+                    return Trivial(arrayCreation);
+                }
+
+                var dimensions = spilled
+                    .Take(arrayCreation.DimensionExpressions.Length)
+                    .ToImmutableArray();
+                var rectangularElements = spilled
+                    .Skip(arrayCreation.DimensionExpressions.Length)
+                    .ToImmutableArray();
+                return new BoundSpillSequenceExpression(
+                    null,
+                    rectangularLocals.ToImmutable(),
+                    rectangularSideEffects.ToImmutable(),
+                    BoundArrayCreationExpression.CreateRectangular(
+                        null,
+                        rectangular,
+                        dimensions,
+                        rectangularElements,
+                        arrayCreation.RectangularLengths));
+            }
+
             if (arrayCreation.LengthExpression != null)
             {
                 return SpillOneOperand(
@@ -2284,7 +2375,8 @@ public static class SpillSequenceSpiller
         private (ImmutableArray<LocalVariableSymbol>.Builder Locals,
                  ImmutableArray<BoundStatement>.Builder SideEffects,
                  ImmutableArray<BoundExpression>.Builder Args) SpillArgumentList(
-            ImmutableArray<BoundExpression> arguments)
+            ImmutableArray<BoundExpression> arguments,
+            bool spillEveryPreAwaitOperand = false)
         {
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -2328,9 +2420,21 @@ public static class SpillSequenceSpiller
                     var spilledArg = SpillExpression(arg);
                     locals.AddRange(spilledArg.Locals);
                     sideEffects.AddRange(spilledArg.SideEffects);
-                    args.Add(spilledArg.Value);
+                    if (awaitIndices.Any(awaitIndex => awaitIndex > i)
+                        && !IsPureOrConstant(spilledArg.Value))
+                    {
+                        var temp = MakeSpillTemp(arg.Type);
+                        locals.Add(temp);
+                        sideEffects.Add(new BoundVariableDeclaration(null, temp, spilledArg.Value));
+                        args.Add(new BoundVariableExpression(null, temp));
+                    }
+                    else
+                    {
+                        args.Add(spilledArg.Value);
+                    }
                 }
-                else if (i < firstAwaitIdx && !IsPureOrConstant(arg))
+                else if (i < firstAwaitIdx
+                    && (spillEveryPreAwaitOperand || !IsPureOrConstant(arg)))
                 {
                     // This arg precedes an await — spill to temp.
                     var temp = MakeSpillTemp(arg.Type);
@@ -2338,7 +2442,8 @@ public static class SpillSequenceSpiller
                     sideEffects.Add(new BoundVariableDeclaration(null, temp, arg));
                     args.Add(new BoundVariableExpression(null, temp));
                 }
-                else if (i > firstAwaitIdx && !IsPureOrConstant(arg))
+                else if (i > firstAwaitIdx
+                    && (spillEveryPreAwaitOperand || !IsPureOrConstant(arg)))
                 {
                     // Between awaits, we also need to check if there's a
                     // later await that would require this to be spilled.
@@ -2372,6 +2477,10 @@ public static class SpillSequenceSpiller
 
             return (locals, sideEffects, args);
         }
+
+        private static bool IsRectangularArrayType(TypeSymbol type)
+            => type is RectangularArrayTypeSymbol
+                || (type.ClrType is { IsArray: true } clrArray && clrArray.GetArrayRank() > 1);
 
         private LocalVariableSymbol MakeSpillTemp(TypeSymbol type)
         {

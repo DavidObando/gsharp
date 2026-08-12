@@ -6,6 +6,9 @@ using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
+#pragma warning disable SA1611
+#pragma warning disable SA1642
+
 /// <summary>
 /// Represents a type clause in the language.
 /// </summary>
@@ -34,6 +37,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
         : this(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, identifier, questionToken: null)
     {
     }
+
+    #pragma warning restore SA1642
+    #pragma warning restore SA1611
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TypeClauseSyntax"/> class, optionally
@@ -92,10 +98,47 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SeparatedSyntaxList<TypeClauseSyntax>? typeArguments,
         SyntaxToken? typeArgumentCloseBracketToken,
         SyntaxToken? questionToken)
+        : this(
+            syntaxTree,
+            openBracketToken,
+            lengthToken,
+            closeBracketToken,
+            identifier,
+            typeArgumentOpenBracketToken,
+            typeArguments,
+            typeArgumentCloseBracketToken,
+            questionToken,
+            ImmutableArray<SyntaxToken>.Empty)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class.</summary>
+    /// <param name="syntaxTree">Parent syntax tree.</param>
+    /// <param name="openBracketToken">Optional opening bracket.</param>
+    /// <param name="lengthToken">Optional fixed length.</param>
+    /// <param name="closeBracketToken">Optional closing bracket.</param>
+    /// <param name="identifier">Type identifier.</param>
+    /// <param name="typeArgumentOpenBracketToken">Optional generic opening bracket.</param>
+    /// <param name="typeArguments">Optional type arguments.</param>
+    /// <param name="typeArgumentCloseBracketToken">Optional generic closing bracket.</param>
+    /// <param name="questionToken">Optional nullable marker.</param>
+    /// <param name="arrayCommaTokens">Rectangular rank commas.</param>
+    public TypeClauseSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
+        SyntaxToken identifier,
+        SyntaxToken? typeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? typeArguments,
+        SyntaxToken? typeArgumentCloseBracketToken,
+        SyntaxToken? questionToken,
+        ImmutableArray<SyntaxToken> arrayCommaTokens)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
         LengthToken = lengthToken;
+        ArrayCommaTokens = arrayCommaTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : arrayCommaTokens;
         CloseBracketToken = closeBracketToken;
         Identifier = identifier;
         TypeArgumentOpenBracketToken = typeArgumentOpenBracketToken;
@@ -122,6 +165,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="outerSegmentTypeArgumentOpenBracketTokens">Issue #1506: the opening <c>[</c> of the type-argument list carried by each <em>outer</em> (non-last) segment, aligned to the segment sequence (index 0 = <see cref="Identifier"/>; index <c>i</c> = qualifier segment <c>i</c>). A <c>null</c> entry means that segment carries no type-argument list. Empty when no outer segment is generic.</param>
     /// <param name="outerSegmentTypeArgumentLists">Issue #1506: the type-argument list carried by each outer (non-last) segment, aligned identically to <paramref name="outerSegmentTypeArgumentOpenBracketTokens"/>. A <c>null</c> entry means that segment carries no type-argument list.</param>
     /// <param name="outerSegmentTypeArgumentCloseBracketTokens">Issue #1506: the closing <c>]</c> of the type-argument list carried by each outer (non-last) segment, aligned identically to <paramref name="outerSegmentTypeArgumentOpenBracketTokens"/>.</param>
+    /// <param name="arrayCommaTokens">Commas forming a rectangular-array rank specifier.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken? openBracketToken,
@@ -137,11 +181,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken? arrayQuestionToken = null,
         ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentOpenBracketTokens = default,
         ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?> outerSegmentTypeArgumentLists = default,
-        ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentCloseBracketTokens = default)
+        ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentCloseBracketTokens = default,
+        ImmutableArray<SyntaxToken> arrayCommaTokens = default)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
         LengthToken = lengthToken;
+        ArrayCommaTokens = arrayCommaTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : arrayCommaTokens;
         CloseBracketToken = closeBracketToken;
         Identifier = identifier;
         QualifierDotTokens = qualifierDotTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : qualifierDotTokens;
@@ -268,11 +314,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeClauseSyntax arrayElementType,
         SyntaxToken? questionToken,
         bool isNestedArray,
-        SyntaxToken? arrayQuestionToken = null)
+        SyntaxToken? arrayQuestionToken = null,
+        ImmutableArray<SyntaxToken> arrayCommaTokens = default)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
         LengthToken = lengthToken;
+        ArrayCommaTokens = arrayCommaTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : arrayCommaTokens;
         CloseBracketToken = closeBracketToken;
         ArrayElementType = arrayElementType;
         QuestionToken = questionToken;
@@ -448,6 +496,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the numeric length token, or <c>null</c> for non-array types.</summary>
     public SyntaxToken? LengthToken { get; }
 
+    /// <summary>Gets commas in a rectangular-array rank specifier.</summary>
+    public ImmutableArray<SyntaxToken> ArrayCommaTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
+
+    /// <summary>Gets rectangular-array rank, or zero for other type clauses.</summary>
+    public int RectangularRank => ArrayCommaTokens.IsDefaultOrEmpty ? 0 : ArrayCommaTokens.Length + 1;
+
     /// <summary>Gets the closing bracket token, or <c>null</c> for non-array types.</summary>
     public SyntaxToken? CloseBracketToken { get; }
 
@@ -503,7 +557,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public bool HasNestedArrayElement => ArrayElementType != null;
 
     /// <summary>Gets a value indicating whether this clause denotes a variable-length slice type <c>[]T</c>.</summary>
-    public bool IsSlice => OpenBracketToken != null && LengthToken == null;
+    public bool IsSlice => OpenBracketToken != null && LengthToken == null && ArrayCommaTokens.IsDefaultOrEmpty;
 
     /// <summary>Gets the optional trailing <c>?</c> token marking the type as nullable (Phase 3.C.1 / ADR-0001).</summary>
     public SyntaxToken? QuestionToken { get; }
@@ -835,6 +889,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="elementType">The nested element type clause.</param>
     /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
     /// <param name="arrayQuestionToken">The optional <c>?</c> placed immediately after <c>]</c>, marking the whole array nullable (<c>[]?T</c>, issue #1212).</param>
+    /// <param name="arrayCommaTokens">Commas forming a rectangular-array rank specifier.</param>
     /// <returns>An array/slice type clause carrying a nested element type clause.</returns>
     public static TypeClauseSyntax CreateArray(
         SyntaxTree syntaxTree,
@@ -843,9 +898,19 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken? closeBracketToken,
         TypeClauseSyntax elementType,
         SyntaxToken? questionToken,
-        SyntaxToken? arrayQuestionToken = null)
+        SyntaxToken? arrayQuestionToken = null,
+        ImmutableArray<SyntaxToken> arrayCommaTokens = default)
     {
-        return new TypeClauseSyntax(syntaxTree, openBracketToken, lengthToken, closeBracketToken, elementType, questionToken, isNestedArray: true, arrayQuestionToken);
+        return new TypeClauseSyntax(
+            syntaxTree,
+            openBracketToken,
+            lengthToken,
+            closeBracketToken,
+            elementType,
+            questionToken,
+            isNestedArray: true,
+            arrayQuestionToken,
+            arrayCommaTokens);
     }
 
     /// <summary>Creates a sequence type clause <c>sequence[T]</c> (ADR-0040).</summary>

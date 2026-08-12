@@ -161,6 +161,11 @@ public static class AsyncStateMachineTypeBuilder
             sm.AddField(new FieldSymbol(fieldName, local.Type, Accessibility.Public));
         }
 
+        foreach (var spillLocal in hoist.SpillLocals)
+        {
+            sm.AddField(new FieldSymbol(spillLocal.Name, spillLocal.Type, Accessibility.Public));
+        }
+
         // Awaiter pool fields: one per distinct awaiter type. Reference-typed
         // awaiters collapse to a single System.Object field.
         var awaiterFields = CollectAwaiterPoolFields(loweredBody);

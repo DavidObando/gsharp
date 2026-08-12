@@ -2,7 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
+
+#pragma warning disable SA1611
+#pragma warning disable SA1642
 
 /// <summary>
 /// Represents an array creation expression <c>[N]T{e1, e2, …}</c>.
@@ -47,6 +52,9 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
         Elements = elements;
         CloseBraceToken = closeBraceToken;
     }
+
+    #pragma warning restore SA1642
+    #pragma warning restore SA1611
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ArrayCreationExpressionSyntax"/> class
@@ -109,8 +117,70 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     {
         OpenBracketToken = openBracketToken;
         LengthExpression = lengthExpression;
+        Dimensions = new SeparatedSyntaxList<ExpressionSyntax>(
+            ImmutableArray.Create<SyntaxNode>(lengthExpression));
         CloseBracketToken = closeBracketToken;
         ElementTypeIdentifier = elementTypeIdentifier;
+        OpenBraceToken = openBraceToken;
+        Elements = elements;
+        CloseBraceToken = closeBraceToken;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ArrayCreationExpressionSyntax"/> class.</summary>
+    /// <param name="syntaxTree">Parent syntax tree.</param>
+    /// <param name="openBracketToken">Opening bracket.</param>
+    /// <param name="dimensions">Dimension expressions.</param>
+    /// <param name="closeBracketToken">Closing bracket.</param>
+    /// <param name="elementTypeIdentifier">Element type identifier.</param>
+    /// <param name="openBraceToken">Optional initializer brace.</param>
+    /// <param name="elements">Optional initializer elements.</param>
+    /// <param name="closeBraceToken">Optional closing brace.</param>
+    public ArrayCreationExpressionSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken openBracketToken,
+        SeparatedSyntaxList<ExpressionSyntax> dimensions,
+        SyntaxToken closeBracketToken,
+        SyntaxToken elementTypeIdentifier,
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
+        : base(syntaxTree)
+    {
+        OpenBracketToken = openBracketToken;
+        Dimensions = dimensions;
+        LengthExpression = dimensions.Count > 0 ? dimensions[0] : null;
+        CloseBracketToken = closeBracketToken;
+        ElementTypeIdentifier = elementTypeIdentifier;
+        OpenBraceToken = openBraceToken;
+        Elements = elements;
+        CloseBraceToken = closeBraceToken;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ArrayCreationExpressionSyntax"/> class.</summary>
+    /// <param name="syntaxTree">Parent syntax tree.</param>
+    /// <param name="openBracketToken">Opening bracket.</param>
+    /// <param name="dimensions">Dimension expressions.</param>
+    /// <param name="closeBracketToken">Closing bracket.</param>
+    /// <param name="elementTypeClause">Element type clause.</param>
+    /// <param name="openBraceToken">Optional initializer brace.</param>
+    /// <param name="elements">Optional initializer elements.</param>
+    /// <param name="closeBraceToken">Optional closing brace.</param>
+    public ArrayCreationExpressionSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken openBracketToken,
+        SeparatedSyntaxList<ExpressionSyntax> dimensions,
+        SyntaxToken closeBracketToken,
+        TypeClauseSyntax elementTypeClause,
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
+        : base(syntaxTree)
+    {
+        OpenBracketToken = openBracketToken;
+        Dimensions = dimensions;
+        LengthExpression = dimensions.Count > 0 ? dimensions[0] : null;
+        CloseBracketToken = closeBracketToken;
+        ElementTypeClause = elementTypeClause;
         OpenBraceToken = openBraceToken;
         Elements = elements;
         CloseBraceToken = closeBraceToken;
@@ -144,6 +214,8 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     {
         OpenBracketToken = openBracketToken;
         LengthExpression = lengthExpression;
+        Dimensions = new SeparatedSyntaxList<ExpressionSyntax>(
+            ImmutableArray.Create<SyntaxNode>(lengthExpression));
         CloseBracketToken = closeBracketToken;
         ElementTypeClause = elementTypeClause;
         OpenBraceToken = openBraceToken;
@@ -161,7 +233,14 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     public SyntaxToken? LengthToken { get; }
 
     /// <summary>Gets the runtime length expression for the zero-initialised allocation form <c>[n]T</c> (issue #1272), or <c>null</c> when the length is a literal (see <see cref="LengthToken"/>) or absent (slice form).</summary>
+    [SyntaxChildIgnore]
     public ExpressionSyntax? LengthExpression { get; }
+
+    /// <summary>Gets rectangular allocation dimensions.</summary>
+    public SeparatedSyntaxList<ExpressionSyntax>? Dimensions { get; }
+
+    /// <summary>Gets allocation rank.</summary>
+    public int Rank => Dimensions?.Count ?? 1;
 
     /// <summary>Gets the closing bracket token.</summary>
     public SyntaxToken CloseBracketToken { get; }

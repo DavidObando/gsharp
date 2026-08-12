@@ -2401,7 +2401,7 @@ internal sealed class LambdaBinder
             return new BoundIndexAssignmentExpression(
                 indexAssignment.Syntax,
                 replacement,
-                indexAssignment.Index,
+                indexAssignment.Indices,
                 indexAssignment.Value,
                 indexAssignment.Type);
         }

@@ -188,16 +188,29 @@ public sealed class IndexExpression : GExpression
     /// <param name="target">The indexed expression.</param>
     /// <param name="index">The index expression.</param>
     public IndexExpression(GExpression target, GExpression index)
+        : this(target, new List<GExpression> { index })
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IndexExpression"/> class.
+    /// </summary>
+    /// <param name="target">Indexed expression.</param>
+    /// <param name="indices">Index expressions.</param>
+    public IndexExpression(GExpression target, IReadOnlyList<GExpression> indices)
     {
         Target = target;
-        Index = index;
+        Indices = indices ?? new List<GExpression>();
     }
 
     /// <summary>Gets the indexed expression.</summary>
     public GExpression Target { get; }
 
     /// <summary>Gets the index expression.</summary>
-    public GExpression Index { get; }
+    public GExpression Index => Indices[0];
+
+    /// <summary>Gets index expressions.</summary>
+    public IReadOnlyList<GExpression> Indices { get; }
 }
 
 /// <summary>
@@ -535,16 +548,37 @@ public sealed class ArrayAllocationExpression : GExpression
     /// <param name="elementType">The element type.</param>
     /// <param name="length">The length expression.</param>
     public ArrayAllocationExpression(GTypeReference elementType, GExpression length)
+        : this(elementType, new List<GExpression> { length })
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ArrayAllocationExpression"/> class.
+    /// </summary>
+    /// <param name="elementType">Element type.</param>
+    /// <param name="dimensions">Dimension expressions.</param>
+    /// <param name="elements">Optional flat row-major initializer elements.</param>
+    public ArrayAllocationExpression(
+        GTypeReference elementType,
+        IReadOnlyList<GExpression> dimensions,
+        IReadOnlyList<GExpression> elements = null)
     {
         ElementType = elementType;
-        Length = length;
+        Dimensions = dimensions ?? new List<GExpression>();
+        Elements = elements ?? new List<GExpression>();
     }
 
     /// <summary>Gets the element type.</summary>
     public GTypeReference ElementType { get; }
 
     /// <summary>Gets the length expression.</summary>
-    public GExpression Length { get; }
+    public GExpression Length => Dimensions[0];
+
+    /// <summary>Gets dimension expressions.</summary>
+    public IReadOnlyList<GExpression> Dimensions { get; }
+
+    /// <summary>Gets flat row-major initializer elements.</summary>
+    public IReadOnlyList<GExpression> Elements { get; }
 }
 
 /// <summary>

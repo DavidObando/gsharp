@@ -170,6 +170,13 @@ public class TypeSymbol : Symbol
             return PointerTypeSymbol.Get(FromClrType(clrType.GetElementType()));
         }
 
+        if (clrType.IsArray && clrType.GetArrayRank() > 1)
+        {
+            return RectangularArrayTypeSymbol.Get(
+                FromClrType(clrType.GetElementType()),
+                clrType.GetArrayRank());
+        }
+
         // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
         // reaching here (e.g. the element type of `for x in list` over an
         // imported `List[(T1, T2)]`, resolved via reflection rather than
@@ -363,6 +370,8 @@ public class TypeSymbol : Symbol
                 return AnyTypeParameter(s.ElementType, match);
             case ArrayTypeSymbol a:
                 return AnyTypeParameter(a.ElementType, match);
+            case RectangularArrayTypeSymbol a:
+                return AnyTypeParameter(a.ElementType, match);
             case SequenceTypeSymbol seq:
                 return AnyTypeParameter(seq.ElementType, match);
             case AsyncSequenceTypeSymbol aseq:
@@ -529,6 +538,9 @@ public class TypeSymbol : Symbol
                 CollectReferencedTypeParameters(s.ElementType, sink);
                 return;
             case ArrayTypeSymbol a:
+                CollectReferencedTypeParameters(a.ElementType, sink);
+                return;
+            case RectangularArrayTypeSymbol a:
                 CollectReferencedTypeParameters(a.ElementType, sink);
                 return;
             case SequenceTypeSymbol sq:
@@ -828,6 +840,13 @@ public class TypeSymbol : Symbol
             return false;
         }
 
+        if (left is RectangularArrayTypeSymbol leftRectangular
+            && right is RectangularArrayTypeSymbol rightRectangular
+            && leftRectangular.Rank != rightRectangular.Rank)
+        {
+            return false;
+        }
+
         if (left is FunctionTypeSymbol leftFunction
             && right is FunctionTypeSymbol rightFunction
             && !leftFunction.IsVariadic.SequenceEqual(rightFunction.IsVariadic))
@@ -930,6 +949,8 @@ public class TypeSymbol : Symbol
                 return IsSameCompilationUserTypeTopLevel(s.ElementType);
             case ArrayTypeSymbol a:
                 return IsSameCompilationUserTypeTopLevel(a.ElementType);
+            case RectangularArrayTypeSymbol a:
+                return IsSameCompilationUserTypeTopLevel(a.ElementType);
             case StructSymbol:
             case EnumSymbol:
             case InterfaceSymbol:
@@ -968,6 +989,9 @@ public class TypeSymbol : Symbol
                 yield return s.ElementType;
                 break;
             case ArrayTypeSymbol a:
+                yield return a.ElementType;
+                break;
+            case RectangularArrayTypeSymbol a:
                 yield return a.ElementType;
                 break;
             case PinnedTypeSymbol p:

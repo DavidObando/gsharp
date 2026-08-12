@@ -475,7 +475,8 @@ internal sealed class BinderContext
                     return ".Count";
                 }
 
-                if (receiverType is ArrayTypeSymbol || receiverType is SliceTypeSymbol || receiverType == TypeSymbol.String)
+                if (receiverType is ArrayTypeSymbol or SliceTypeSymbol or RectangularArrayTypeSymbol
+                    || receiverType == TypeSymbol.String)
                 {
                     return ".Length";
                 }

@@ -181,6 +181,32 @@ public class ClrNullabilityTests
     }
 
     [Fact]
+    public void RectangularArray_NullableElementAndOuterAnnotations_RoundTrip()
+    {
+        var nonNullMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableElementGrid));
+        var nonNullSymbol = Assert.IsType<RectangularArrayTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(nonNullMethod!));
+        Assert.Equal(2, nonNullSymbol.Rank);
+        var nullableElement = Assert.IsType<NullableTypeSymbol>(nonNullSymbol.ElementType);
+        Assert.Same(TypeSymbol.String, nullableElement.UnderlyingType);
+
+        var nullableMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableGrid));
+        var nullableOuter = Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(nullableMethod!));
+        var nullableGrid = Assert.IsType<RectangularArrayTypeSymbol>(nullableOuter.UnderlyingType);
+        Assert.Equal(2, nullableGrid.Rank);
+        nullableElement = Assert.IsType<NullableTypeSymbol>(nullableGrid.ElementType);
+        Assert.Same(TypeSymbol.String, nullableElement.UnderlyingType);
+    }
+
+    [Fact]
+    public void CountNullabilityBytes_RectangularArray_IncludesElement()
+    {
+        Assert.Equal(2, ClrNullability.CountNullabilityBytes(typeof(string[,])));
+        Assert.Equal(1, ClrNullability.CountNullabilityBytes(typeof(int[,,])));
+    }
+
+    [Fact]
     public void Oblivious_Reference_NoAnnotation_SurfacesAsNullable()
     {
         // Issue #1354: a genuinely oblivious (pre-nullable, `#nullable disable`)
@@ -375,6 +401,16 @@ public class ClrNullabilityTests
         public int AcceptFunc(Func<string?, int> f)
         {
             return f(null);
+        }
+
+        public string?[,] GetNullableElementGrid()
+        {
+            return new string?[1, 1];
+        }
+
+        public string?[,]? GetNullableGrid()
+        {
+            return null;
         }
     }
 

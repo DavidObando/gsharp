@@ -930,12 +930,22 @@ internal sealed partial class StatementBinder
 
             case BoundIndexExpression idx:
             {
-                // Spill both the target collection and the index expression
-                // so neither is re-evaluated.
-                var target = CaptureReceiver(syntax, idx.Target, preStatements);
-                var index = CaptureReceiver(syntax, idx.Index, preStatements);
-                var read = new BoundIndexExpression(syntax, target, index, idx.Type);
-                var write = new BoundIndexAssignmentExpression(syntax, target.Variable, index, boundRhs, idx.Type);
+                // Spill target and every index so none is re-evaluated.
+                var target = CaptureReceiver(syntax, idx.Target, preStatements, forceCapture: true);
+                var indices = ImmutableArray.CreateBuilder<BoundExpression>(idx.Indices.Length);
+                foreach (var index in idx.Indices)
+                {
+                    indices.Add(CaptureReceiver(syntax, index, preStatements, forceCapture: true));
+                }
+
+                var capturedIndices = indices.MoveToImmutable();
+                var read = new BoundIndexExpression(syntax, target, capturedIndices, idx.Type);
+                var write = new BoundIndexAssignmentExpression(
+                    syntax,
+                    target.Variable,
+                    capturedIndices,
+                    boundRhs,
+                    idx.Type);
                 return (read, write);
             }
 
@@ -980,9 +990,10 @@ internal sealed partial class StatementBinder
     private BoundVariableExpression CaptureReceiver(
         NullCoalescingAssignmentStatementSyntax syntax,
         BoundExpression receiver,
-        ImmutableArray<BoundStatement>.Builder preStatements)
+        ImmutableArray<BoundStatement>.Builder preStatements,
+        bool forceCapture = false)
     {
-        if (receiver is BoundVariableExpression bve)
+        if (!forceCapture && receiver is BoundVariableExpression bve)
         {
             return bve;
         }

@@ -171,11 +171,11 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Object and nil
 
-`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, and `chan T` — with or without a `?` annotation ([ADR-0159](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0159-magic-collection-zero-values-and-nil-comparison.md); comparison is the interop-boundary observation tool). The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract (#3216). `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match.
+`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, `[,]T` (and higher ranks), and `chan T` — with or without a `?` annotation ([ADR-0159](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0159-magic-collection-zero-values-and-nil-comparison.md); comparison is the interop-boundary observation tool). The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract (#3216). `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match.
 
 ### Arrays and slices
 
-Fixed arrays are written `[N]T`, and slices are written `[]T`. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) are allowed, as are arrays of pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan T`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
+Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan T`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
 
 ```gsharp
 let xs = []int32{1, 2, 3}
@@ -193,6 +193,30 @@ func zeros(n int32) []int32 {
 let buffer = [8]int32     // length-8, all elements 0
 ```
 
+Rectangular allocation supplies one expression per dimension, and indexing supplies exactly one expression per rank:
+
+```gsharp
+let matrix = [2, 3]int32
+matrix[1, 2] = 42
+
+let cube = [2, 3, 4]string
+cube[1, 2, 3] = "last"
+```
+
+Dimensions and indices convert to `int32`, evaluate once from left to right, and preserve CLR exceptions: a negative dimension throws `OverflowException`, an invalid index throws `IndexOutOfRangeException`, and a nil receiver throws `NullReferenceException`. CLR storage is zero-initialized and row-major. A flat rectangular initializer lists elements in that same row-major order:
+
+```gsharp
+let matrix = [2, 3]int32{1, 2, 3, 4, 5, 6}
+```
+
+A non-empty rectangular initializer requires non-negative constant dimensions whose product equals the element count. Empty/no-initializer forms allow runtime dimensions. Reads, writes, compound assignments, increments/decrements, `??=`, address-taking, multi-target assignment, and async operands preserve receiver/dimension/index/value evaluation order.
+
+Rectangular arrays expose the ordinary `System.Array` surface: `.Length` is total element count, `.Rank` is dimension count, and `.GetLength(d)`, `.GetLowerBound(d)`, and `.GetUpperBound(d)` inspect a dimension. `for … in` enumerates elements in row-major order; a two-variable loop uses a flat zero-based enumeration index. `len(rectangular)` also returns total element count when the Go built-ins import is present. Rectangular arrays are not slices: `cap` and `append` do not apply.
+
+Source and imported CLR rectangular arrays retain rank in fields, properties, parameters, returns, generic substitutions, nullable metadata, and reflection. G# emits the CLR `T[,]`/`T[,,]` shape directly rather than flattening it.
+
+Like other bare magic collection types, an uninitialized non-null rectangular slot receives a sound empty instance: every dimension has length zero. A nullable rectangular slot (`[,]?T`) retains `nil` as its zero value.
+
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go`; see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
 
 #### Nullable arrays vs arrays of nullable elements
@@ -204,8 +228,10 @@ The position of a nullable `?` in an array/slice type clause selects **what** is
 | `[]T?`   | a (non-nil) array of **nullable elements** | yes — `a[i]` yields `T?` |
 | `[]?T`   | a **nullable array** reference (the whole array may be nil) | no — null-forgive (`!!`) or use `a?[i]` first |
 | `[]?T?`  | a nullable array of nullable elements | no — `!!` first, then `a[i]` yields `T?` |
+| `[,]T?`  | a non-nil rectangular array of nullable elements | yes — `a[i, j]` yields `T?` |
+| `[,]?T`  | a nullable rectangular-array reference | no — null-forgive (`!!`) or use `a?[i, j]` first |
 
-The same rule applies to fixed arrays: `[N]T?` is a fixed array of nullable elements, `[N]?T` is a nullable fixed array, and `[N]?T?` is both. In a jagged type the trailing `?` binds to the innermost element, so `[][]T?` is a slice of slices of `T?`, and `[]*T?` is a slice of nullable pointers. An element-nullable value array (`[]int32?`) is backed by `Nullable<int32>[]` and round-trips nil elements; a nullable array (`[]?T`) is a nullable reference to a slice and stays non-indexable until null-forgiven (`GS0116` otherwise), preserving the prior nullable-array semantics under the new spelling. A nullable array whose element is itself a slice (`[]?[]T`) is not spellable, because `?[` lexes as the null-conditional index token.
+The same rule applies to fixed and rectangular arrays: `[N]T?` / `[,]T?` mark nullable elements, while `[N]?T` / `[,]?T` mark the whole array reference nullable. In a jagged type the trailing `?` binds to the innermost element, so `[][]T?` is a slice of slices of `T?`, and `[]*T?` is a slice of nullable pointers. An element-nullable value array (`[]int32?`) is backed by `Nullable<int32>[]` and round-trips nil elements; a nullable array (`[]?T`) is a nullable reference to a slice and stays non-indexable until null-forgiven (`GS0116` otherwise), preserving the prior nullable-array semantics under the new spelling. A nullable array whose element is itself a slice (`[]?[]T`) is not spellable, because `?[` lexes as the null-conditional index token.
 
 ```gsharp
 var elems []int32? = []int32?{nil, 7}   // array of nullable elements
@@ -218,7 +244,7 @@ var first = maybe?[0]                     // null-conditional index, first : int
 
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation.
 
-Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule: `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
+Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule: `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. Rectangular indices use CLR `Get`/`Set`/`Address` pseudo-methods and therefore convert every integer index to `int32`. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
 
 ### Maps
 
@@ -379,9 +405,11 @@ The implementation emits **reified CLR generic metadata** for user-declared and 
 ### Type syntax
 
 ```ebnf
+ArrayTypePrefix = "[" number? "]"
+                | "[" "," { "," } "]" .
 TypeClause = identifier TypeArgList? "?"?
-           | "[" number? "]" "?"? identifier TypeArgList? "?"?
-           | "[" number? "]" "?"? TypeClause "?"?
+           | ArrayTypePrefix "?"? identifier TypeArgList? "?"?
+           | ArrayTypePrefix "?"? TypeClause "?"?
            | "(" TypeClause { "," TypeClause } ")" "?"?
            | "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?
@@ -1628,8 +1656,9 @@ InterfaceSharedBlock ::= 'shared' '{' InterfaceSharedMember* '}'           (* st
 InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parameters? ')' TypeClause? (Block | ';')
                       | 'prop' identifier TypeClause ( '{' PropertyAccessor* '}' | ';' )   (* static-virtual interface property,  /  *)
 
+ArrayTypePrefix   ::= '[' Number? ']' | '[' ',' (',')* ']'
 TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
-                    | '[' Number? ']' identifier ('.' identifier)* '?'?
+                    | ArrayTypePrefix '?'? identifier ('.' identifier)* '?'?
                     | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
                                                                                              the WHOLE inner type nullable, e.g. '(chan int32)?',  *)
                     | '(' TypeClause (',' TypeClause)+ ')' '?'?                          (* tuple type *)
@@ -1745,9 +1774,9 @@ ChannelSendStmt   ::= Expression '<-' Expression
 Expression        ::= Assignment
 Assignment        ::= identifier '=' Assignment
                     | identifier CompoundAssign Assignment
-                    | identifier '[' Expression ']' '=' Assignment
+                    | identifier '[' IndexArgumentList ']' '=' Assignment
                     | identifier '.' identifier '=' Assignment
-                    | PostfixExpression '[' Expression ']' ('=' | CompoundAssign) Assignment
+                    | PostfixExpression '[' IndexArgumentList ']' ('=' | CompoundAssign) Assignment
                     | PostfixExpression '.' identifier '=' Assignment
                     | '*' PrefixExpression '=' Assignment                (* indirect (pointer) assignment,  *)
                     | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
@@ -1769,7 +1798,8 @@ BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '>>>' | '&' | '&^'
                     | '||'
 PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
 PostfixExpression ::= PrimaryExpression PostfixOp*
-PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgument ']'
+PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgumentList ']'
+IndexArgumentList ::= IndexArgument (',' IndexArgument)*
 IndexArgument     ::= IndexBound | IndexBound? '..' IndexBound?   (* range/slice form, ; from-end via  *)
 IndexBound        ::= '^'? Expression                            (* leading '^' marks a from-end index,  *)
 NameOrCall        ::= identifier | Call | GenericCall
@@ -1801,7 +1831,9 @@ StructLiteral     ::= identifier '{' FieldInitList? '}'
 GenericStructLiteral ::= identifier TypeArgList '{' FieldInitList? '}'
 FieldInitList     ::= identifier ':' Expression (',' identifier ':' Expression)* ','?
 FieldEqualsList   ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
-ArrayLiteral      ::= '[' Number? ']' identifier '{' ExpressionList? '}'
+ArrayLiteral      ::= '[' Number? ']' TypeClause '{' ExpressionList? '}'
+                    | '[' Expression ']' TypeClause ('{' ExpressionList? '}')?
+                    | '[' Expression (',' Expression)+ ']' TypeClause ('{' ExpressionList? '}')?
 MapLiteral        ::= 'map' '[' TypeClause ',' TypeClause ']' '{' MapEntryList? '}'
                     | 'map' '[' TypeClause ']' TypeClause '{' MapEntryList? '}'    (* legacy; GS0366 *)
 MapEntry          ::= Expression ':' Expression

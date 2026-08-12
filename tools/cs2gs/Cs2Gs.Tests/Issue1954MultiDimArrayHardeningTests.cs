@@ -12,23 +12,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1954: follow-ups from the #1893/#1952 flat-lowering review.
-/// <list type="number">
-/// <item>Per-dimension bounds are now enforced on every tracked multi-dim
-/// access: <c>grid[r, c]</c> with <c>r</c> in range but <c>c</c> out of range
-/// used to still land inside the flat backing array's overall bounds (a
-/// silent wrong-cell read/write); it now throws
-/// <c>IndexOutOfRangeException</c> like C# does per-dimension.</item>
-/// <item>A simple `var` local-to-local alias of a tracked multi-dim local
-/// (<c>var g2 = grid;</c>) now keeps the SAME tracking instead of losing it.</item>
-/// <item>A wide (`long`/`byte`) index expression is coerced the same way the
-/// single-index path coerces it (via `CoerceIndexToInt32`'s widening rule).</item>
-/// </list>
+/// Issue #1954/#3354: native rectangular arrays replace flat lowering while
+/// preserving all ranks, CLR bounds behavior, aliases, fields, parameters,
+/// writes, and index conversions.
 /// </summary>
 public class Issue1954MultiDimArrayHardeningTests
 {
     [Fact]
-    public void Rank3Access_FlatLowersAllThreeIndicesWithPerDimensionBoundsChecks()
+    public void Rank3Access_PreservesAllDimensionsAndIndices()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1954
@@ -45,25 +36,47 @@ namespace Corpus.Issue1954
 }
 ");
 
-        Assert.Contains("let cubeDim0", rendered, StringComparison.Ordinal);
-        Assert.Contains("let cubeDim1", rendered, StringComparison.Ordinal);
-        Assert.Contains("let cubeDim2", rendered, StringComparison.Ordinal);
-        Assert.Contains(
-            "let cube = [cubeDim0 * cubeDim1 * cubeDim2]int32", rendered, StringComparison.Ordinal);
-
-        // All three indices participate in both the row-major flat index and
-        // the per-dimension bounds check (issue #1954).
-        Assert.Contains(
-            "cube[if 1 >= 0 && 1 < cubeDim0 && (2 >= 0 && 2 < cubeDim1) && (3 >= 0 && 3 < cubeDim2) " +
-                "{ (1 * cubeDim1 + 2) * cubeDim2 + 3 } else { throw IndexOutOfRangeException()",
-            rendered,
-            StringComparison.Ordinal);
+        Assert.Contains("let cube = [2, 3, 4]int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("cube[1, 2, 3] = 42", rendered, StringComparison.Ordinal);
+        Assert.Contains("return cube[1, 2, 3]", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("cubeDim", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("IndexOutOfRangeException", rendered, StringComparison.Ordinal);
 
         AssertRoundTripParses(rendered);
+        var result = GSharp.Tests.EmittedOracle.Evaluate(rendered + Environment.NewLine + "Cube.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]
-    public void CrossDimensionOutOfRangeIndex_ThrowsInsteadOfSilentlyReadingWrongCell()
+    public void ImplicitAndTargetTypedRectangularInitializers_UseNativeShapesAndRun()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue3354
+{
+    public class Grid
+    {
+        public static int Run()
+        {
+            var implicitRect = new[,] { { 1, 2 }, { 3, 4 } };
+            int[,] targetTyped = { { 5, 6 }, { 7, 8 } };
+            return (implicitRect[1, 0] * 100) + (targetTyped[0, 1] * 10) + targetTyped[1, 1];
+        }
+    }
+}
+");
+
+        Assert.Contains("[2, 2]int32{1, 2, 3, 4}", rendered, StringComparison.Ordinal);
+        Assert.Contains("[2, 2]int32{5, 6, 7, 8}", rendered, StringComparison.Ordinal);
+        var result = GSharp.Tests.EmittedOracle.Evaluate(rendered + Environment.NewLine + "Grid.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(368, result.Value);
+    }
+
+    [Fact]
+    public void CrossDimensionOutOfRangeIndex_DelegatesBoundsToClrArray()
     {
         // grid[r, c] with r < rows but c >= cols used to still compute a flat
         // index r*cols + c that is < rows*cols, silently landing on a
@@ -82,24 +95,17 @@ namespace Corpus.Issue1954
 }
 ");
 
-        // The read is guarded by a per-dimension bounds check that throws
-        // rather than silently computing a wrong-but-in-range flat index.
-        Assert.Contains(
-            "grid[if 0 >= 0 && 0 < gridDim0 && (5 >= 0 && 5 < gridDim1) { 0 * gridDim1 + 5 } " +
-                "else { throw IndexOutOfRangeException()",
-            rendered,
-            StringComparison.Ordinal);
+        Assert.Contains("grid[0, 5]", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("IndexOutOfRangeException", rendered, StringComparison.Ordinal);
 
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void VarAliasOfTrackedMultiDimLocal_PropagatesTrackingInsteadOfGapping()
+    public void VarAliasOfMultiDimLocal_PreservesNativeType()
     {
-        // `var g2 = grid;` used to lose multi-dim tracking entirely, so
-        // `g2[r, c]` reported the loud "no tracked per-dimension sizes" gap.
-        // A simple local-to-local `var` alias of an already-tracked multi-dim
-        // local now keeps the SAME tracking.
+        // Native rectangular type identity follows the value through aliases;
+        // no per-local dimension tracking is needed.
         string rendered = Render(@"
 namespace Corpus.Issue1954
 {
@@ -115,14 +121,8 @@ namespace Corpus.Issue1954
 }
 ");
 
-        // `g2[1, 2]` flattens against grid's OWN hoisted dimensions (g2 has no
-        // dimensions of its own — it is the same flat array), proving the
-        // alias kept the original MultiDimArrayInfo rather than gapping.
-        Assert.Contains(
-            "g2[if 1 >= 0 && 1 < gridDim0 && (2 >= 0 && 2 < gridDim1) { 1 * gridDim1 + 2 } " +
-                "else { throw IndexOutOfRangeException()",
-            rendered,
-            StringComparison.Ordinal);
+        Assert.Contains("g2[1, 2]", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("gridDim", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("no tracked per-dimension sizes", rendered, StringComparison.Ordinal);
 
         AssertRoundTripParses(rendered);
@@ -163,11 +163,8 @@ namespace Corpus.Issue1954
     }
 
     [Fact]
-    public void FieldTypedMultiDimParameter_ElementRead_StaysLoudGap()
+    public void MultiDimParameter_ElementRead_UsesNativeRank()
     {
-        // A multi-dim array reached through a PARAMETER (not a direct
-        // declaration-with-initializer local) has no symbol for the
-        // translator to hang per-dimension sizes on.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 namespace Corpus.Issue1954
@@ -185,19 +182,18 @@ namespace Corpus.Issue1954
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("no tracked per-dimension sizes", StringComparison.Ordinal));
+        Cs2Gs.CodeModel.Ast.CompilationUnit unit =
+            new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string rendered = GSharpPrinter.Print(unit);
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("[,]int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("grid[r, c]", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void FieldTargetMultiDimElementAssignment_StaysLoudGap()
+    public void FieldTargetMultiDimElementAssignment_UsesNativeRank()
     {
-        // `Grid[r, c] = v;` where `Grid` is a FIELD (not a tracked local) has
-        // no per-dimension sizes to flatten the WRITE against either — the
-        // assignment-target path routes through the same
-        // `TranslateMultiDimElementAccess` and must report the same gap.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 namespace Corpus.Issue1954
@@ -217,10 +213,13 @@ namespace Corpus.Issue1954
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Message.Contains("no tracked per-dimension sizes", StringComparison.Ordinal));
+        Cs2Gs.CodeModel.Ast.CompilationUnit unit =
+            new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string rendered = GSharpPrinter.Print(unit);
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("[,]int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("Grid[r, c] = v", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     private static void AssertRoundTripParses(string rendered)

@@ -1838,6 +1838,18 @@ internal sealed partial class MethodBodyEmitter
     private void EmitElementAddress(BoundIndexExpression element)
     {
         this.EmitExpression(element.Target);
+        if (GetRectangularArrayType(element.Target.Type) is { } rectangular)
+        {
+            foreach (var index in element.Indices)
+            {
+                this.EmitExpression(index);
+            }
+
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Address"));
+            return;
+        }
+
         this.EmitExpression(element.Index);
         this.EmitLoadElementAddress(element.Type);
     }

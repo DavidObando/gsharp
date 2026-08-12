@@ -265,6 +265,7 @@ public sealed class ReferenceResolver : IDisposable
         PointerTypeSymbol.ClearCache();
         ByRefTypeSymbol.ClearCache();
         ArrayTypeSymbol.ClearCache();
+        RectangularArrayTypeSymbol.ClearCache();
         SequenceTypeSymbol.ClearCache();
         AsyncSequenceTypeSymbol.ClearCache();
         ChannelTypeSymbol.ClearCache();

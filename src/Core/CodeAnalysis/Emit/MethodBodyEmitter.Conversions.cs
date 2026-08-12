@@ -518,7 +518,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         if (from.ClrType?.IsSameAs(typeof(object)) == true
-            && to.ClrType?.IsSameAs(typeof(object)) == false
+            && (to.ClrType == null || !to.ClrType.IsSameAs(typeof(object)))
             && to is not TypeParameterSymbol
             && !ReflectionMetadataEmitter.IsValueTypeSymbol(to))
         {

@@ -135,22 +135,6 @@ internal sealed class DocumentTranslationState
     public Dictionary<(ISymbol Symbol, SyntaxNode Scope), bool> UsedAsNullableCache { get; } =
         new Dictionary<(ISymbol, SyntaxNode), bool>(SymbolScopeKeyComparer.Instance);
 
-    // Issue #1893: gsc has no rectangular multi-dimensional array type (only
-    // the fixed-length `[N]T`/slice `[]T`, both rank 1), so a C# `T[,]` local
-    // initialized directly from `new T[d0, d1, ...]` (or a rectangular
-    // initializer `new T[,]{{...}}`) is lowered to a single flat backing
-    // array of length `d0*d1*...`, with each dimension's size hoisted to its
-    // own `let` (or, for a literal initializer, kept as the constant row/
-    // column count). This map remembers, per declared local/field symbol,
-    // the ordered per-dimension size expressions so every later `grid[r, c]`
-    // access and `grid.GetLength(k)` call can rebuild the faithful
-    // row-major flat index/dimension instead of dropping indices. A
-    // multi-dim array reached through any other shape (field, parameter,
-    // return value, reassignment, ...) is not tracked here and reports a
-    // loud CS2GS-GAP rather than silently collapsing to 1-D.
-    public Dictionary<ISymbol, MultiDimArrayInfo> MultiDimArrays { get; } =
-        new Dictionary<ISymbol, MultiDimArrayInfo>(SymbolEqualityComparer.Default);
-
     // Top-level declarations synthesized while translating an aggregate
     // (receiver-clause extensions and operators) are emitted as siblings.
     public List<GMember> PendingTopLevelDeclarations { get; } = new List<GMember>();
@@ -271,25 +255,4 @@ internal sealed class SymbolScopeKeyComparer : IEqualityComparer<(ISymbol Symbol
         HashCode.Combine(
             SymbolEqualityComparer.Default.GetHashCode(obj.Symbol),
             System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj.Scope));
-}
-
-/// <summary>
-/// Issue #1893: per-declared-symbol record of a flat-lowered multi-dim array's
-/// per-dimension size expressions. See the field comment on
-/// <see cref="DocumentTranslationState.MultiDimArrays"/> for the full rationale.
-/// </summary>
-internal sealed class MultiDimArrayInfo
-{
-    public MultiDimArrayInfo(IReadOnlyList<GExpression> dimensionSizes)
-    {
-        this.DimensionSizes = dimensionSizes;
-    }
-
-    /// <summary>
-    /// Gets the per-dimension size expressions, outermost dimension
-    /// first, each safe to reference repeatedly (a hoisted `let`
-    /// identifier or a compile-time-constant literal — never a raw
-    /// expression that could re-run a side effect).
-    /// </summary>
-    public IReadOnlyList<GExpression> DimensionSizes { get; }
 }

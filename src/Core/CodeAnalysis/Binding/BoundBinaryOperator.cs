@@ -548,6 +548,7 @@ public sealed record BoundBinaryOperator
         if (nullableOrUnderlying is MapTypeSymbol
             || nullableOrUnderlying is SliceTypeSymbol
             || nullableOrUnderlying is ArrayTypeSymbol
+            || nullableOrUnderlying is RectangularArrayTypeSymbol
             || nullableOrUnderlying is ChannelTypeSymbol)
         {
             return true;

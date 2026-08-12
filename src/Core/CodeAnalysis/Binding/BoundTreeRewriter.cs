@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -1308,6 +1309,35 @@ public abstract class BoundTreeRewriter
     /// <returns>The rewritten node.</returns>
     protected virtual BoundExpression RewriteArrayCreationExpression(BoundArrayCreationExpression node)
     {
+        if (node.ContainerType is RectangularArrayTypeSymbol rectangular)
+        {
+            var changed = false;
+            var dimensions = ImmutableArray.CreateBuilder<BoundExpression>(node.DimensionExpressions.Length);
+            foreach (var dimension in node.DimensionExpressions)
+            {
+                var rewritten = RewriteExpression(dimension);
+                changed |= rewritten != dimension;
+                dimensions.Add(rewritten);
+            }
+
+            var elements = ImmutableArray.CreateBuilder<BoundExpression>(node.Elements.Length);
+            foreach (var element in node.Elements)
+            {
+                var rewritten = RewriteExpression(element);
+                changed |= rewritten != element;
+                elements.Add(rewritten);
+            }
+
+            return changed
+                ? BoundArrayCreationExpression.CreateRectangular(
+                    node.Syntax,
+                    rectangular,
+                    dimensions.MoveToImmutable(),
+                    elements.MoveToImmutable(),
+                    node.RectangularLengths)
+                : node;
+        }
+
         // Issue #1016: runtime-length form has no element initialisers; rewrite
         // the length expression instead.
         if (node.LengthExpression != null)
@@ -1420,13 +1450,21 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteIndexExpression(BoundIndexExpression node)
     {
         var target = RewriteExpression(node.Target);
-        var index = RewriteExpression(node.Index);
-        if (target == node.Target && index == node.Index)
+        var indices = ImmutableArray.CreateBuilder<BoundExpression>(node.Indices.Length);
+        var changed = target != node.Target;
+        foreach (var index in node.Indices)
+        {
+            var rewritten = RewriteExpression(index);
+            indices.Add(rewritten);
+            changed |= rewritten != index;
+        }
+
+        if (!changed)
         {
             return node;
         }
 
-        return new BoundIndexExpression(null, target, index, node.Type);
+        return new BoundIndexExpression(null, target, indices.MoveToImmutable(), node.Type);
     }
 
     /// <summary>Rewrites an index assignment expression.</summary>
@@ -1435,19 +1473,29 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
         var targetExpr = node.TargetExpression != null ? RewriteExpression(node.TargetExpression) : null;
-        var index = RewriteExpression(node.Index);
+        var indices = ImmutableArray.CreateBuilder<BoundExpression>(node.Indices.Length);
+        var changed = targetExpr != node.TargetExpression;
+        foreach (var index in node.Indices)
+        {
+            var rewritten = RewriteExpression(index);
+            indices.Add(rewritten);
+            changed |= rewritten != index;
+        }
+
         var value = RewriteExpression(node.Value);
-        if (targetExpr == node.TargetExpression && index == node.Index && value == node.Value)
+        changed |= value != node.Value;
+        if (!changed)
         {
             return node;
         }
 
+        var rewrittenIndices = indices.MoveToImmutable();
         if (targetExpr != null)
         {
-            return BoundIndexAssignmentExpression.WithExpressionTarget(null, targetExpr, index, value, node.Type);
+            return BoundIndexAssignmentExpression.WithExpressionTarget(null, targetExpr, rewrittenIndices, value, node.Type);
         }
 
-        return new BoundIndexAssignmentExpression(null, Invariant.Required(node.Target, "an index assignment without an expression target has a variable target"), index, value, node.Type);
+        return new BoundIndexAssignmentExpression(null, Invariant.Required(node.Target, "an index assignment without an expression target has a variable target"), rewrittenIndices, value, node.Type);
     }
 
     /// <summary>Rewrites a <c>len(x)</c> expression.</summary>
