@@ -54,6 +54,10 @@ meaning:
   programs therefore keep their meaning.
 - a property suffix commits the name to the type interpretation.
 
+If neither interpretation resolves in boolean position, the value-resolution
+diagnostic wins; this avoids reporting a misleading missing type/import for a
+misspelled constant or unqualified enum member.
+
 When both a value and type have the same name, `== name` forces the value
 interpretation in boolean pattern position; the legacy `_ is Type` spelling can
 force a type interpretation in a switch if a value shadows it.
@@ -70,6 +74,10 @@ successfully narrowed value.
 For `P and Q`, if `P` guarantees a type-pattern narrowing, `Q` binds and emits
 against that narrowed local. This applies in boolean `is`, switch statements,
 and switch expressions.
+
+In boolean position, `not nil` over a proven non-nullable value type is folded
+to a total pattern. Switch keeps its existing incompatible-case diagnostic for
+that spelling.
 
 ### Braces in body headers
 

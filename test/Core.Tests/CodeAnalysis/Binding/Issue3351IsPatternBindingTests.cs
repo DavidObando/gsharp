@@ -189,6 +189,74 @@ public sealed class Issue3351IsPatternBindingTests
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void ValueTypeAndNotNil_IsAcceptedOnlyInBooleanPatternPosition()
+    {
+        Assert.Empty(Bind("""
+            func Match(value object) bool {
+                return value is int32 and not nil
+            }
+            """));
+
+        var switchDiagnostic = Assert.Single(Bind("""
+            func Match(value int32) string {
+                return switch value {
+                    case not nil: "present"
+                    default: "other"
+                }
+            }
+            """));
+        Assert.Equal("GS0171", switchDiagnostic.Id);
+        Assert.Equal(
+            "Switch case value of type 'nil' is incompatible with switch expression of type 'int32'.",
+            switchDiagnostic.Message);
+        Assert.Equal(
+            "nil",
+            switchDiagnostic.Location.Text.ToString(switchDiagnostic.Location.Span));
+    }
+
+    [Theory]
+    [InlineData(
+        """
+        let value object = 1
+        let matched = value is somethingMisspelled
+        """,
+        "somethingMisspelled")]
+    [InlineData(
+        """
+        enum Color { Red, Green }
+        let color = Color.Red
+        let matched = color is Red
+        """,
+        "Red")]
+    public void UnresolvedTypeOrValueNameInIs_ReportsValueDiagnostic(
+        string source,
+        string unresolvedName)
+    {
+        var diagnostic = Assert.Single(Bind(source));
+
+        Assert.Equal("GS0125", diagnostic.Id);
+        Assert.Equal($"Variable '{unresolvedName}' doesn't exist.", diagnostic.Message);
+        Assert.Equal(
+            unresolvedName,
+            diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void QualifiedEnumConstantAndValidTypeFirstName_StillBind()
+    {
+        var diagnostics = Bind("""
+            enum Color { Red, Green }
+            const string = 5
+            let color = Color.Red
+            let value object = "hello"
+            let enumMatch = color is Color.Red
+            let typeMatch = value is string
+            """);
+
+        Assert.Empty(diagnostics);
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

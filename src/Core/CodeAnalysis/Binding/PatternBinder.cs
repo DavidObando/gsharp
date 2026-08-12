@@ -289,6 +289,15 @@ internal sealed class PatternBinder
         PatternBindingContext bindingContext,
         bool preferTypeNames)
     {
+        // Non-nullable CLR values cannot match nil, so `not nil` is a total
+        // boolean pattern. Keep switch diagnostics unchanged.
+        if (bindingContext == PatternBindingContext.IsExpression
+            && Binder.IsNonNullableValueTypeForConstraint(discriminantType)
+            && IsNilPattern(syntax.Pattern))
+        {
+            return new BoundDiscardPattern(syntax, discriminantType);
+        }
+
         var childBindingContext = bindingContext == PatternBindingContext.Allowed
             ? PatternBindingContext.OrOrNot
             : bindingContext;
@@ -298,6 +307,19 @@ internal sealed class PatternBinder
             childBindingContext,
             preferTypeNames);
         return new BoundNotPattern(syntax, discriminantType, operand);
+    }
+
+    private static bool IsNilPattern(PatternSyntax syntax)
+    {
+        while (syntax is ParenthesizedPatternSyntax parenthesized)
+        {
+            syntax = parenthesized.Pattern;
+        }
+
+        return syntax is ConstantPatternSyntax
+        {
+            Expression: LiteralExpressionSyntax { Value: null },
+        };
     }
 
     private BoundPattern BindConstantPattern(ConstantPatternSyntax syntax, TypeSymbol discriminantType)
@@ -510,13 +532,12 @@ internal sealed class PatternBinder
             }
 
             Diagnostics.TruncateTo(diagnosticMark);
-            return BindBareTypePattern(
-                syntax,
-                syntax.CandidateType,
-                propertyPattern: null,
-                discriminantType,
-                bindingContext,
-                preferTypeNames);
+
+            // Both interpretations failed. Prefer the value-resolution error
+            // over a misleading "missing type/import" diagnostic.
+            return BindConstantPattern(
+                new ConstantPatternSyntax(syntax.SyntaxTree, syntax.Expression),
+                discriminantType);
         }
 
         var valuePattern = BindConstantPatternWithResolution(

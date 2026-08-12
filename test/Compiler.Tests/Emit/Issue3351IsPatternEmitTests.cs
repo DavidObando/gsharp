@@ -14,6 +14,30 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue3351IsPatternEmitTests
 {
     [Fact]
+    public void ValueTypeAndNotNil_AfterTypeNarrowing_IsAlwaysTrue()
+    {
+        const string Source = """
+            package Issue3351.NotNil
+            import System
+
+            func Match(value object) bool {
+                return value is int32 and not nil
+            }
+
+            Console.WriteLine(Match(0))
+            Console.WriteLine(Match(42))
+            Console.WriteLine(Match("not an int"))
+            """;
+
+        var result = CompileAndRun(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(
+            $"True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}",
+            result.Stdout);
+    }
+
+    [Fact]
     public void FullPatternMatrix_AndSwitchNarrowing_VerifiesAndRuns()
     {
         const string Source = """
