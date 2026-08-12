@@ -769,6 +769,12 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | --- | --- | --- | --- |
 | GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let`, or `while let` for a loop condition. | `if value is text is string { }`, `if values is [..rest] { }` |
 
+## Invalid multi-assignment target (GS0526)
+
+| ID | Severity | Summary | Example |
+| --- | --- | --- | --- |
+| GS0526 | Error | A multi-assignment target is not writable storage. Use a variable, field, property, array element, indexer, or pointer dereference. | `GetValue(), x = 1, 2` |
+
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 
 The contract for the C# spelling `null` used

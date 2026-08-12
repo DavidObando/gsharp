@@ -140,9 +140,8 @@ public class Issue717ColonEqualsRemovedParserTests
         var diagnostics = ColonEqualsDiagnostics(source);
         var d = Assert.Single(diagnostics);
         Assert.Contains("':=' short variable declaration has been removed", d.Message);
-        // Recovery treats the operator as `=` and binds the multi-assignment;
-        // the targets `a` and `b` end up declared in scope, so the trailing
-        // `var s = a + b` finds them.
+        // Recovery treats the operator as `=` and leaves a well-formed
+        // multi-assignment tree; binding may report undefined targets separately.
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics.Where(x => x.Id != DiagnosticId));
     }

@@ -60,6 +60,109 @@ public class MultiAssignmentTests
     }
 
     [Fact]
+    public void MultiAssignment_StorageTargets_AndTupleRhs_Bind()
+    {
+        var diagnostics = Bind("""
+            package P
+
+            class Box {
+                var Field int32
+                prop Value int32 {
+                    get { return Field }
+                    set(v) { Field = v }
+                }
+            }
+
+            func Pair() (int32, int32) { return (5, 6) }
+
+            func F() {
+                var values = []int32{0, 0}
+                var box = Box{}
+                var boxes = []Box{box}
+                var local = 0
+                values[0], box.Field, box.Value, boxes[0].Field, local = 1, 2, 3, 4, 5
+                local, values[1] = Pair()
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void MultiAssignment_TupleRhsArityMismatch_ReportsExactDiagnostic()
+    {
+        var diagnostics = Bind("""
+            func Pair() (int32, int32, int32) { return (1, 2, 3) }
+            func F() {
+                var a = 0
+                var b = 0
+                a, b = Pair()
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics.Where(d => d.Id == "GS0167"));
+        Assert.Equal("Multi-assignment has 2 target(s) but 3 value(s).", diagnostic.Message);
+    }
+
+    [Fact]
+    public void MultiAssignment_InvalidTarget_ReportsExactDiagnostic()
+    {
+        var diagnostics = Bind("""
+            func Get() int32 { return 0 }
+            func F() {
+                var a = 0
+                Get(), a = 1, 2
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics.Where(d => d.Id == "GS0526"));
+        Assert.Equal(
+            "Multi-assignment target must be a writable variable, field, property, array element, indexer, or pointer dereference.",
+            diagnostic.Message);
+    }
+
+    [Theory]
+    [InlineData(
+        "func F() { let a = 0 var b = 0 a, b = 1, 2 }",
+        "GS0127",
+        "Variable 'a' is read-only and cannot be assigned to.")]
+    [InlineData(
+        "class Box { prop Value int32 { get; init; } } func F(box Box) { var b = 0 box.Value, b = 1, 2 }",
+        "GS0372",
+        "Init-only property 'Value' can only be assigned during object initialization (in a constructor, an object initializer, or an 'init' accessor).")]
+    [InlineData(
+        "class Box { private var Value int32 } func F(box Box) { var b = 0 box.Value, b = 1, 2 }",
+        "GS0472",
+        "'Box.Value' is inaccessible due to its protection level: a 'private' member is only accessible within 'Box'.")]
+    [InlineData(
+        "func F() { var a int32 var b int32 a, b = (1, \"two\") }",
+        "GS0155",
+        "Cannot convert type 'string' to 'int32'.")]
+    public void MultiAssignment_ReusesExactSingleAssignmentDiagnostics(
+        string source,
+        string id,
+        string message)
+    {
+        var diagnostic = Assert.Single(Bind(source).Where(d => d.Id == id));
+        Assert.Equal(message, diagnostic.Message);
+    }
+
+    [Fact]
+    public void MultiAssignment_MalformedExpressionTarget_RecoversWithOneTargetDiagnostic()
+    {
+        var diagnostics = Bind("""
+            func F() {
+                var a = 0
+                var b = 0
+                a + 1, b = 2, 3
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS0526", diagnostic.Id);
+    }
+
+    [Fact]
     public void MultiDecl_DifferentTypes_AsTwoVarLines_Binds()
     {
         Assert.Empty(Bind("func F() {\n var a = 1\n var b = \"two\"\n var s = b\n var n = a\n }\n"));

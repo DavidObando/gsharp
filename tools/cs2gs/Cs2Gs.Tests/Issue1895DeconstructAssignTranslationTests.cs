@@ -260,10 +260,7 @@ namespace Corpus.Issue1895
     [Fact]
     public void ElementAccessTarget_NowLowersWithoutGap()
     {
-        // `(arr[i], y) = rhs`: issue #2234 generalizes the #1895 lowering to
-        // capture `arr`/`i` into temps BEFORE the RHS is spilled (via
-        // `MakeDuplicationSafeTarget`), preserving C#'s evaluation order —
-        // no more loud gap.
+        // Issue #3353 makes storage targets native while preserving #2234 order.
         string rendered = Render(@"
 namespace Corpus.Issue1895
 {
@@ -281,14 +278,15 @@ namespace Corpus.Issue1895
 }
 ");
         AssertRoundTripParses(rendered);
-        Assert.Contains("let (__decon", rendered);
-        Assert.Contains("arr[i]", rendered);
+        Assert.Contains("arr[i], y = 2, 3", rendered);
+        Assert.DoesNotContain("__decon", rendered);
+        Assert.DoesNotContain("__spill", rendered);
     }
 
     [Fact]
     public void MemberAccessTarget_NowLowersWithoutGap()
     {
-        // `(obj.F, y) = rhs`: same generalization as the element-access case.
+        // Member storage targets use same native path.
         string rendered = Render(@"
 namespace Corpus.Issue1895
 {
@@ -310,8 +308,9 @@ namespace Corpus.Issue1895
 }
 ");
         AssertRoundTripParses(rendered);
-        Assert.Contains("let (__decon", rendered);
-        Assert.Contains("obj.F", rendered);
+        Assert.Contains("obj.F, y = 2, 3", rendered);
+        Assert.DoesNotContain("__decon", rendered);
+        Assert.DoesNotContain("__spill", rendered);
     }
 
     private static void AssertRoundTripParses(string rendered)

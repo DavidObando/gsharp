@@ -369,6 +369,10 @@ internal sealed partial class StatementBinder
                     {
                         assigned.Add(ne.IdentifierToken.Text);
                     }
+                    else
+                    {
+                        mayMutateMemberPaths = true;
+                    }
                 }
 
                 break;
@@ -1698,9 +1702,7 @@ internal sealed partial class StatementBinder
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
-            var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
-            var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tupleType);
-            scope.TryDeclareVariable(tempVar);
+            var (tempVar, elements) = CreateTupleDeconstructionPlan(syntax, tupleType);
 
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
             statements.Add(new BoundVariableDeclaration(syntax, tempVar, initializer));
@@ -1715,8 +1717,7 @@ internal sealed partial class StatementBinder
 
                 var elemType = tupleType.ElementTypes[i];
                 var elemVar = bindLocalVariable(idTok, isReadOnly: true, elemType);
-                var access = new BoundTupleElementAccessExpression(null, new BoundVariableExpression(null, tempVar), tupleType, i);
-                statements.Add(new BoundVariableDeclaration(syntax, elemVar, access));
+                statements.Add(new BoundVariableDeclaration(syntax, elemVar, elements[i]));
             }
 
             return new BoundBlockStatement(syntax, statements.ToImmutable());
@@ -1770,6 +1771,28 @@ internal sealed partial class StatementBinder
 
         Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenParenToken.Location, initializer.Type);
         return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+    }
+
+    private (LocalVariableSymbol Temp, ImmutableArray<BoundExpression> Elements) CreateTupleDeconstructionPlan(
+        SyntaxNode syntax,
+        TupleTypeSymbol tupleType)
+    {
+        var tempName = $"<tuple{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var temp = new LocalVariableSymbol(tempName, isReadOnly: true, tupleType);
+        scope.TryDeclareVariable(temp);
+
+        var receiver = new BoundVariableExpression(null, temp);
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(tupleType.Arity);
+        for (var i = 0; i < tupleType.Arity; i++)
+        {
+            elements.Add(new BoundTupleElementAccessExpression(
+                syntax,
+                receiver,
+                tupleType,
+                i));
+        }
+
+        return (temp, elements.MoveToImmutable());
     }
 
     /// <summary>

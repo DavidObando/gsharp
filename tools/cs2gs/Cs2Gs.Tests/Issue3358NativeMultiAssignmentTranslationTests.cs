@@ -9,13 +9,14 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #3358: a C# deconstruction assignment into existing variables renders
-/// as G#'s native multi-target assignment (<c>a, b = b, a</c>, ADR-0015) rather
+/// Issues #3353/#3358: a C# deconstruction assignment into existing variables
+/// or storage locations renders as G#'s native multi-target assignment rather
 /// than the <c>let (__decon0, __decon1) = …</c> plus per-target-write triple.
 /// <para>
 /// ADR-0015 evaluates every right-hand expression left-to-right into temporaries
@@ -85,12 +86,11 @@ public sealed class C
     }
 
     /// <summary>
-    /// A storage target is GS0005 in the native form (`arr[i], o.F = …`), so it
-    /// keeps the existing lowering — including the receiver/index spill that
-    /// preserves C#'s targets-then-value order (#2234).
+    /// G# now captures storage-target components before the RHS itself, so D2
+    /// receiver/index spills and deconstruction temps are redundant.
     /// </summary>
     [Fact]
-    public void StorageTargets_KeepTheDeconLowering()
+    public void StorageTargets_UseNativeMultiAssignment()
     {
         string printed = Translate(@"
 public sealed class C
@@ -101,15 +101,16 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("__decon", printed, StringComparison.Ordinal);
+        Assert.Contains("arr[i], arr[i + 1] = 1, 2", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// A bare-identifier target that is a FIELD or property is still a storage
-    /// location, not a local, and must not be mistaken for one.
+    /// Bare property target uses same native storage-target path.
     /// </summary>
     [Fact]
-    public void PropertyTarget_KeepsTheDeconLowering()
+    public void PropertyTarget_UsesNativeMultiAssignment()
     {
         string printed = Translate(@"
 public sealed class C
@@ -122,16 +123,15 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("__decon", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("P, _ = 5, 6", printed, StringComparison.Ordinal);
+        Assert.Contains("P, _ = 5, 6", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// `gsc` will not spread a single tuple-valued right-hand side across N
-    /// targets (GS0167), so a tuple-returning call keeps the decon lowering.
+    /// Tuple-valued call remains one RHS expression and is evaluated once.
     /// </summary>
     [Fact]
-    public void TupleReturningCall_KeepsTheDeconLowering()
+    public void TupleReturningCall_UsesNativeMultiAssignment()
     {
         string printed = Translate(@"
 public sealed class C
@@ -143,6 +143,60 @@ public sealed class C
         int a = 0, b = 0;
         (a, b) = Pair();
         System.Console.WriteLine(a + b);
+    }
+}");
+
+        Assert.Contains("a, b = C.Pair()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TupleReturningCall_TranslatedGSharp_BindsAndRuns()
+    {
+        string printed = Translate(@"
+public sealed class C
+{
+    private static int calls;
+
+    private static (int, int) Pair()
+    {
+        calls++;
+        return (4, 2);
+    }
+
+    public int M()
+    {
+        int a = 0, b = 0;
+        (a, b) = Pair();
+        return (calls * 100) + (a * 10) + b;
+    }
+}");
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "C().M()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(142, result.Value);
+    }
+
+    [Fact]
+    public void NonTupleDeconstructSource_KeepsRecursiveLowering()
+    {
+        string printed = Translate(@"
+public sealed class Pair
+{
+    public void Deconstruct(out int first, out int second)
+    {
+        first = 1;
+        second = 2;
+    }
+}
+
+public sealed class C
+{
+    public void M()
+    {
+        int a = 0, b = 0;
+        (a, b) = new Pair();
     }
 }");
 

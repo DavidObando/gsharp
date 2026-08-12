@@ -288,6 +288,11 @@ public sealed partial class DiagnosticBag
     public void ReportMultiAssignmentMismatch(TextLocation location, int targetCount, int valueCount)
     => Report(location, DiagnosticDescriptors.MultiAssignmentMismatch, targetCount, valueCount);
 
+    /// <summary>Reports an expression that cannot be used as a multi-assignment target.</summary>
+    /// <param name="location">The invalid target location.</param>
+    public void ReportInvalidMultiAssignmentTarget(TextLocation location)
+    => Report(location, DiagnosticDescriptors.InvalidMultiAssignmentTarget);
+
     /// <summary>
     /// Reports a use of the reserved <c>fallthrough</c> keyword (ADR-0013: GSharp
     /// does not support Go-style implicit case fallthrough).

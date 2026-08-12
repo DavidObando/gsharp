@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Text;
@@ -112,7 +111,7 @@ public partial class Parser
         // into the canonical `IndexExpression(<receiver-chain>, [k])` form before
         // wrapping in MemberIndexAssignmentExpressionSyntax.
         if (Current.Kind == SyntaxKind.EqualsToken
-            && TryLiftTrailingIndexer(expression, out var indexedLhs))
+            && AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(expression, out var indexedLhs))
         {
             var equalsToken = NextToken();
             var value = ParseAssignmentExpression();
@@ -125,7 +124,11 @@ public partial class Parser
         // FieldAssignmentExpressionSyntax; this branch handles any deeper chain
         // where the last segment is a plain member name (NameExpressionSyntax).
         if (Current.Kind == SyntaxKind.EqualsToken
-            && TryLiftTrailingMemberAccess(expression, out var memberReceiver, out var memberDot, out var memberField))
+            && AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
+                expression,
+                out var memberReceiver,
+                out var memberDot,
+                out var memberField))
         {
             var equalsToken = NextToken();
             var value = ParseAssignmentExpression();
@@ -140,7 +143,7 @@ public partial class Parser
         // bare-identifier form `id[k] op= v` also lands here (TryLift returns
         // the IndexExpression directly when the expression already IS one).
         if (SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _)
-            && TryLiftTrailingIndexer(expression, out var compoundIndexedLhs))
+            && AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(expression, out var compoundIndexedLhs))
         {
             var compoundOpToken = NextToken();
             var compoundRhs = ParseAssignmentExpression();
@@ -969,95 +972,5 @@ public partial class Parser
         {
             suppressRangeOperator--;
         }
-    }
-
-    // be reused as the LHS of an indexer assignment. Returns true and yields a
-    // canonical `IndexExpression(<receiver-chain>, [k])` when the expression's
-    // rightmost primary is an index access; returns false otherwise.
-    //
-    // Shapes handled (rebuilt accessor chain shown after `=>`):
-    //   IndexExpression(t, [k])                                 => itself
-    //   AccessorExpression(L, ., IndexExpression(t, [k]))       => IndexExpression(AccessorExpression(L, ., t), [k])
-    //   AccessorExpression(L, ., AccessorExpression(M, ., IndexExpression(t, [k])))
-    //                                                            => IndexExpression(AccessorExpression(L, ., AccessorExpression(M, ., t)), [k])
-    //
-    // Issue #507 follow-up: null-conditional accessors (`?.`) are lifted too
-    // so `obj.A?.B[k] = v` becomes a valid LHS. The binder
-    // (BindMemberIndexAssignmentExpression) splits the receiver chain at the
-    // leftmost `?.` and emits a null-conditional write that no-ops when the
-    // captured intermediate is `nil`.
-    private bool TryLiftTrailingIndexer(ExpressionSyntax expression, [NotNullWhen(true)] out IndexExpressionSyntax? canonical)
-    {
-        if (expression is IndexExpressionSyntax direct)
-        {
-            canonical = direct;
-            return true;
-        }
-
-        if (expression is AccessorExpressionSyntax accessor
-            && TryLiftTrailingIndexer(accessor.RightPart, out var inner))
-        {
-            var rebuiltReceiver = new AccessorExpressionSyntax(
-                syntaxTree,
-                accessor.LeftPart,
-                accessor.DotToken,
-                inner.Target);
-            canonical = new IndexExpressionSyntax(
-                syntaxTree,
-                rebuiltReceiver,
-                inner.OpenBracketToken,
-                inner.Index,
-                inner.CloseBracketToken);
-            return true;
-        }
-
-        canonical = null;
-        return false;
-    }
-
-    /// <summary>
-    /// Issue #648: decomposes an <see cref="AccessorExpressionSyntax"/> whose
-    /// trailing segment is a plain <see cref="NameExpressionSyntax"/> into the
-    /// receiver chain, the dot token, and the terminal field identifier. Used to
-    /// parse chained member-access assignment (<c>a.B.C = v</c>).
-    /// </summary>
-    /// <remarks>
-    /// The accessor tree right-nests: <c>a.B.C</c> parses as
-    /// <c>Accessor(a, ., Accessor(B, ., C))</c>. This method recursively peels
-    /// the last <see cref="NameExpressionSyntax"/> off the deepest right-hand
-    /// side and rebuilds the remaining chain as the receiver.
-    /// </remarks>
-    private bool TryLiftTrailingMemberAccess(
-        ExpressionSyntax expression,
-        [MaybeNullWhen(false)] out ExpressionSyntax receiver,
-        [MaybeNullWhen(false)] out SyntaxToken dotToken,
-        [MaybeNullWhen(false)] out SyntaxToken fieldIdentifier)
-    {
-        if (expression is AccessorExpressionSyntax accessor)
-        {
-            if (accessor.RightPart is NameExpressionSyntax name)
-            {
-                receiver = accessor.LeftPart;
-                dotToken = accessor.DotToken;
-                fieldIdentifier = name.IdentifierToken;
-                return true;
-            }
-
-            if (accessor.RightPart is AccessorExpressionSyntax
-                && TryLiftTrailingMemberAccess(accessor.RightPart, out var innerReceiver, out dotToken, out fieldIdentifier))
-            {
-                receiver = new AccessorExpressionSyntax(
-                    syntaxTree,
-                    accessor.LeftPart,
-                    accessor.DotToken,
-                    innerReceiver);
-                return true;
-            }
-        }
-
-        receiver = null;
-        dotToken = default;
-        fieldIdentifier = default;
-        return false;
     }
 }

@@ -968,20 +968,26 @@ internal sealed partial class StatementBinder
         var targets = syntax.Targets.ToImmutableArray();
         var values = syntax.Values.ToImmutableArray();
 
-        if (targets.Length != values.Length)
-        {
-            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
-            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
-        }
-
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var isShortDecl = syntax.OperatorToken.Kind == SyntaxKind.ColonEqualsToken;
 
         if (isShortDecl)
         {
+            if (targets.Length != values.Length)
+            {
+                Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            var declarations = ImmutableArray.CreateBuilder<BoundStatement>();
             for (var i = 0; i < targets.Length; i++)
             {
-                var nameExpr = (NameExpressionSyntax)targets[i];
+                if (targets[i] is not NameExpressionSyntax nameExpr)
+                {
+                    Diagnostics.ReportInvalidMultiAssignmentTarget(targets[i].Location);
+                    _ = bindExpression(values[i]);
+                    continue;
+                }
+
                 var initializer = bindExpression(values[i]);
                 if (IsDiscard(nameExpr.IdentifierToken))
                 {
@@ -989,53 +995,548 @@ internal sealed partial class StatementBinder
                 }
 
                 var variable = bindLocalVariable(nameExpr.IdentifierToken, isReadOnly: false, type: initializer.Type);
-                statements.Add(new BoundVariableDeclaration(syntax, variable, initializer));
+                declarations.Add(new BoundVariableDeclaration(syntax, variable, initializer));
             }
 
-            return new BoundBlockStatement(syntax, statements.ToImmutable());
+            return new BoundBlockStatement(syntax, declarations.ToImmutable());
         }
 
-        // Plain assignment: evaluate every RHS into a fresh temp, then assign each temp to its target.
-        // This is the semantics Go specifies for `a, b = b, a` and friends.
-        var temps = ImmutableArray.CreateBuilder<VariableSymbol>(targets.Length);
-        var basePos = syntax.OperatorToken.Position;
-        for (var i = 0; i < values.Length; i++)
+        if (values.Length == 1 && targets.Length > 1)
         {
-            var initializer = bindExpression(values[i]);
-            var tempName = $"<>m_{basePos}_{i}";
-            var temp = function == null
-                ? (VariableSymbol)new GlobalVariableSymbol(tempName, isReadOnly: true, initializer.Type)
-                : new LocalVariableSymbol(tempName, isReadOnly: true, initializer.Type);
-            scope.TryDeclareVariable(temp);
-            temps.Add(temp);
-            statements.Add(new BoundVariableDeclaration(syntax, temp, initializer));
+            return BindTupleValuedMultiAssignment(syntax, targets, values[0]);
         }
 
+        if (targets.Length != values.Length)
+        {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, values.Length);
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        var captures = ImmutableArray.CreateBuilder<BoundStatement>();
+        var plans = ImmutableArray.CreateBuilder<MultiAssignmentTargetPlan>(targets.Length);
         for (var i = 0; i < targets.Length; i++)
         {
-            var nameExpr = (NameExpressionSyntax)targets[i];
-            if (IsDiscard(nameExpr.IdentifierToken))
-            {
-                continue;
-            }
-
-            var name = nameExpr.IdentifierToken.Text;
-            var variable = bindVariableReference(name, nameExpr.IdentifierToken.Location);
-            if (variable == null)
-            {
-                continue;
-            }
-
-            if (variable.IsReadOnly)
-            {
-                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
-            }
-
-            var tempRef = new BoundVariableExpression(null, temps[i]);
-            var converted = conversions.BindConversion(values[i].Location, tempRef, variable.Type);
-            statements.Add(new BoundExpressionStatement(syntax, new BoundAssignmentExpression(null, variable, converted)));
+            plans.Add(IsDiscardTarget(targets[i])
+                ? new MultiAssignmentTargetPlan(bindExpression(values[i]), createWrite: null)
+                : BindMultiAssignmentTarget(
+                    targets[i],
+                    values[i],
+                    syntax.OperatorToken,
+                    captures));
         }
 
+        return BuildMultiAssignmentBlock(syntax, captures, plans);
+    }
+
+    private BoundStatement BindTupleValuedMultiAssignment(
+        MultiAssignmentStatementSyntax syntax,
+        ImmutableArray<ExpressionSyntax> targets,
+        ExpressionSyntax valueSyntax)
+    {
+        var tupleValue = bindExpression(valueSyntax);
+        if (tupleValue.Type == TypeSymbol.Error)
+        {
+            return new BoundExpressionStatement(syntax, tupleValue);
+        }
+
+        if (tupleValue.Type is not TupleTypeSymbol tupleType)
+        {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, 1);
+            return new BoundExpressionStatement(syntax, tupleValue);
+        }
+
+        if (targets.Length != tupleType.Arity)
+        {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, tupleType.Arity);
+            return new BoundExpressionStatement(syntax, tupleValue);
+        }
+
+        var (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(
+            valueSyntax,
+            tupleType);
+        var captures = ImmutableArray.CreateBuilder<BoundStatement>();
+        var plans = ImmutableArray.CreateBuilder<MultiAssignmentTargetPlan>(targets.Length);
+        for (var i = 0; i < targets.Length; i++)
+        {
+            if (IsDiscardTarget(targets[i]))
+            {
+                plans.Add(new MultiAssignmentTargetPlan(assignedValue: null, createWrite: null));
+                continue;
+            }
+
+            var source = DeclareMultiAssignmentTemp($"element{i}", tupleType.ElementTypes[i]);
+            var sourceToken = new SyntaxToken(
+                syntax.SyntaxTree,
+                SyntaxKind.IdentifierToken,
+                valueSyntax.Location.Span.Start,
+                source.Name,
+                source.Name);
+            var sourceSyntax = new NameExpressionSyntax(syntax.SyntaxTree, sourceToken);
+            var plan = BindMultiAssignmentTarget(
+                targets[i],
+                sourceSyntax,
+                syntax.OperatorToken,
+                captures);
+            if (plan.AssignedValue != null)
+            {
+                plan = plan.WithAssignedValue(
+                    new MultiAssignmentTupleElementRewriter(source, tupleElements[i])
+                        .Replace(plan.AssignedValue));
+            }
+
+            plans.Add(plan);
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.AddRange(captures);
+        statements.Add(new BoundVariableDeclaration(syntax, tupleTemp, tupleValue));
+        AppendMultiAssignmentValuesAndWrites(syntax, plans, statements);
         return new BoundBlockStatement(syntax, statements.ToImmutable());
+    }
+
+    private BoundStatement BuildMultiAssignmentBlock(
+        MultiAssignmentStatementSyntax syntax,
+        ImmutableArray<BoundStatement>.Builder captures,
+        ImmutableArray<MultiAssignmentTargetPlan>.Builder plans)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.AddRange(captures);
+        AppendMultiAssignmentValuesAndWrites(syntax, plans, statements);
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
+    }
+
+    private void AppendMultiAssignmentValuesAndWrites(
+        MultiAssignmentStatementSyntax syntax,
+        ImmutableArray<MultiAssignmentTargetPlan>.Builder plans,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        var valueTemps = new LocalVariableSymbol?[plans.Count];
+        for (var i = 0; i < plans.Count; i++)
+        {
+            var assignedValue = plans[i].AssignedValue;
+            if (assignedValue == null)
+            {
+                continue;
+            }
+
+            if (assignedValue.Type == TypeSymbol.Error)
+            {
+                statements.Add(new BoundExpressionStatement(syntax, assignedValue));
+                continue;
+            }
+
+            var valueTemp = DeclareMultiAssignmentTemp($"value{i}", assignedValue.Type);
+            valueTemps[i] = valueTemp;
+            statements.Add(new BoundVariableDeclaration(syntax, valueTemp, assignedValue));
+        }
+
+        for (var i = 0; i < plans.Count; i++)
+        {
+            var createWrite = plans[i].CreateWrite;
+            if (valueTemps[i] is not { } valueTemp || createWrite == null)
+            {
+                continue;
+            }
+
+            var write = createWrite(new BoundVariableExpression(null, valueTemp));
+            statements.Add(new BoundExpressionStatement(syntax, write));
+        }
+    }
+
+    private MultiAssignmentTargetPlan BindMultiAssignmentTarget(
+        ExpressionSyntax target,
+        ExpressionSyntax value,
+        SyntaxToken equalsToken,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        if (!AssignmentTargetSyntaxFacts.TryCreateAssignment(
+            target,
+            equalsToken,
+            value,
+            out var assignmentSyntax))
+        {
+            Diagnostics.ReportInvalidMultiAssignmentTarget(target.Location);
+            return new MultiAssignmentTargetPlan(bindExpression(value), createWrite: null);
+        }
+
+        var diagnosticCount = Diagnostics.Count;
+        var bound = bindExpression(assignmentSyntax);
+        if (TryCreateMultiAssignmentTargetPlan(bound, target, captures, out var plan))
+        {
+            return plan;
+        }
+
+        if (Diagnostics.Count == diagnosticCount)
+        {
+            Diagnostics.ReportInvalidMultiAssignmentTarget(target.Location);
+        }
+
+        return new MultiAssignmentTargetPlan(bound, createWrite: null);
+    }
+
+    private bool TryCreateMultiAssignmentTargetPlan(
+        BoundExpression bound,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures,
+        out MultiAssignmentTargetPlan plan)
+    {
+        while (bound is BoundBlockExpression block)
+        {
+            captures.AddRange(block.Statements);
+            bound = block.Expression;
+        }
+
+        switch (bound)
+        {
+            case BoundAssignmentExpression assignment:
+                plan = new MultiAssignmentTargetPlan(
+                    assignment.Expression,
+                    value => new BoundAssignmentExpression(
+                        assignment.Syntax,
+                        assignment.Variable,
+                        value,
+                        assignment.AssignedValueType));
+                return true;
+
+            case BoundFieldAssignmentExpression field:
+                var fieldReceiver = field.ReceiverExpression
+                    ?? (field.Receiver == null
+                        ? null
+                        : new BoundVariableExpression(null, field.Receiver));
+                BoundFieldAccessExpression fieldAccess;
+                if (field.InterfaceType != null)
+                {
+                    fieldAccess = new BoundFieldAccessExpression(
+                        targetSyntax,
+                        field.Field,
+                        field.InterfaceType);
+                }
+                else
+                {
+                    fieldAccess = new BoundFieldAccessExpression(
+                        targetSyntax,
+                        fieldReceiver,
+                        field.StructType,
+                        field.Field,
+                        field.ResultType);
+                }
+
+                plan = CreateAddressedMultiAssignmentTarget(
+                    field.Value,
+                    fieldAccess,
+                    targetSyntax,
+                    captures);
+                return true;
+
+            case BoundPropertyAssignmentExpression property:
+                var propertyReceiver = property.Receiver == null
+                    ? null
+                    : CaptureMultiAssignmentReceiver(property.Receiver, targetSyntax, captures);
+                plan = new MultiAssignmentTargetPlan(
+                    property.Value,
+                    value => new BoundPropertyAssignmentExpression(
+                        property.Syntax,
+                        propertyReceiver,
+                        property.StructType,
+                        property.Property,
+                        value));
+                return true;
+
+            case BoundClrPropertyAssignmentExpression clrProperty:
+                var clrPropertyReceiver = clrProperty.Receiver == null
+                    ? null
+                    : CaptureMultiAssignmentReceiver(clrProperty.Receiver, targetSyntax, captures);
+                plan = new MultiAssignmentTargetPlan(
+                    clrProperty.Value,
+                    value => new BoundClrPropertyAssignmentExpression(
+                        clrProperty.Syntax,
+                        clrPropertyReceiver,
+                        clrProperty.Member,
+                        value,
+                        clrProperty.Type,
+                        clrProperty.StaticContainerType,
+                        clrProperty.ConstrainedReceiverTypeParameter,
+                        clrProperty.ConstrainedInterfaceType));
+                return true;
+
+            case BoundIndexAssignmentExpression index:
+                var indexTarget = index.TargetExpression
+                    ?? new BoundVariableExpression(
+                        null,
+                        Invariant.Required(index.Target, "an index assignment has a target"));
+                if (indexTarget.Type is MapTypeSymbol)
+                {
+                    var capturedTarget = CaptureMultiAssignmentValue(indexTarget, targetSyntax, captures);
+                    var capturedIndex = CaptureMultiAssignmentValue(index.Index, targetSyntax, captures);
+                    plan = new MultiAssignmentTargetPlan(
+                        index.Value,
+                        value => BoundIndexAssignmentExpression.WithExpressionTarget(
+                            index.Syntax,
+                            capturedTarget,
+                            capturedIndex,
+                            value,
+                            index.Type));
+                    return true;
+                }
+
+                var element = new BoundIndexExpression(
+                    targetSyntax,
+                    indexTarget,
+                    index.Index,
+                    index.Type);
+                plan = CreateAddressedMultiAssignmentTarget(
+                    index.Value,
+                    element,
+                    targetSyntax,
+                    captures);
+                return true;
+
+            case BoundClrIndexAssignmentExpression clrIndex:
+                var clrIndexTarget = clrIndex.TargetExpression
+                    ?? new BoundVariableExpression(
+                        null,
+                        Invariant.Required(clrIndex.Target, "a CLR index assignment has a target"));
+                var capturedClrTarget = CaptureMultiAssignmentReceiver(
+                    clrIndexTarget,
+                    targetSyntax,
+                    captures);
+                var capturedArguments = ImmutableArray.CreateBuilder<BoundExpression>(
+                    clrIndex.Arguments.Length);
+                foreach (var argument in clrIndex.Arguments)
+                {
+                    capturedArguments.Add(
+                        CaptureMultiAssignmentValue(argument, targetSyntax, captures));
+                }
+
+                plan = new MultiAssignmentTargetPlan(
+                    clrIndex.Value,
+                    value => BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                        clrIndex.Syntax,
+                        capturedClrTarget,
+                        clrIndex.Indexer,
+                        capturedArguments.ToImmutable(),
+                        value,
+                        clrIndex.Type,
+                        clrIndex.ConstrainedReceiverTypeParameter,
+                        clrIndex.ConstrainedInterfaceType));
+                return true;
+
+            case BoundIndirectAssignmentExpression indirect:
+                var dereference = new BoundDereferenceExpression(
+                    targetSyntax,
+                    indirect.Pointer);
+                plan = CreateAddressedMultiAssignmentTarget(
+                    indirect.Value,
+                    dereference,
+                    targetSyntax,
+                    captures);
+                return true;
+
+            default:
+                plan = new MultiAssignmentTargetPlan(bound, createWrite: null);
+                return false;
+        }
+    }
+
+    private MultiAssignmentTargetPlan CreateAddressedMultiAssignmentTarget(
+        BoundExpression assignedValue,
+        BoundExpression storage,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        var address = CaptureMultiAssignmentAddress(storage, targetSyntax, captures);
+        return new MultiAssignmentTargetPlan(
+            assignedValue,
+            value => new BoundIndirectAssignmentExpression(
+                targetSyntax,
+                new BoundVariableExpression(null, address),
+                value));
+    }
+
+    private LocalVariableSymbol CaptureMultiAssignmentAddress(
+        BoundExpression storage,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        while (storage is BoundBlockExpression block)
+        {
+            captures.AddRange(block.Statements);
+            storage = block.Expression;
+        }
+
+        storage = PrepareMultiAssignmentStorage(storage, targetSyntax, captures);
+        var address = DeclareMultiAssignmentTemp(
+            "target",
+            ByRefTypeSymbol.Get(storage.Type));
+        captures.Add(new BoundVariableDeclaration(
+            targetSyntax,
+            address,
+            new BoundAddressOfExpression(targetSyntax, storage)));
+        return address;
+    }
+
+    private BoundExpression PrepareMultiAssignmentStorage(
+        BoundExpression storage,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        while (storage is BoundBlockExpression block)
+        {
+            captures.AddRange(block.Statements);
+            storage = block.Expression;
+        }
+
+        switch (storage)
+        {
+            case BoundFieldAccessExpression field when field.Receiver != null:
+                var receiver = PrepareMultiAssignmentStorageReceiver(
+                    field.Receiver,
+                    targetSyntax,
+                    captures);
+                return field.InterfaceType != null
+                    ? field
+                    : new BoundFieldAccessExpression(
+                        field.Syntax,
+                        receiver,
+                        field.StructType,
+                        field.Field,
+                        field.NarrowedType);
+
+            case BoundIndexExpression index:
+                return new BoundIndexExpression(
+                    index.Syntax,
+                    CaptureMultiAssignmentValue(index.Target, targetSyntax, captures),
+                    CaptureMultiAssignmentValue(index.Index, targetSyntax, captures),
+                    index.Type);
+
+            case BoundDereferenceExpression dereference:
+                return new BoundDereferenceExpression(
+                    dereference.Syntax,
+                    CaptureMultiAssignmentValue(
+                        dereference.Operand,
+                        targetSyntax,
+                        captures));
+
+            default:
+                return storage;
+        }
+    }
+
+    private BoundExpression PrepareMultiAssignmentStorageReceiver(
+        BoundExpression receiver,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        var receiverType = receiver.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : receiver.Type;
+        if (Binder.IsReferenceTypeForConstraint(receiverType))
+        {
+            return CaptureMultiAssignmentValue(receiver, targetSyntax, captures);
+        }
+
+        return isLvalue(receiver)
+            ? PrepareMultiAssignmentStorage(receiver, targetSyntax, captures)
+            : CaptureMultiAssignmentValue(receiver, targetSyntax, captures);
+    }
+
+    private BoundExpression CaptureMultiAssignmentReceiver(
+        BoundExpression receiver,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        while (receiver is BoundBlockExpression block)
+        {
+            captures.AddRange(block.Statements);
+            receiver = block.Expression;
+        }
+
+        var receiverType = receiver.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : receiver.Type;
+        if (Binder.IsReferenceTypeForConstraint(receiverType))
+        {
+            return CaptureMultiAssignmentValue(receiver, targetSyntax, captures);
+        }
+
+        if (!isLvalue(receiver))
+        {
+            return CaptureMultiAssignmentValue(receiver, targetSyntax, captures);
+        }
+
+        var address = CaptureMultiAssignmentAddress(receiver, targetSyntax, captures);
+        return new BoundDereferenceExpression(
+            targetSyntax,
+            new BoundVariableExpression(null, address));
+    }
+
+    private BoundExpression CaptureMultiAssignmentValue(
+        BoundExpression value,
+        ExpressionSyntax targetSyntax,
+        ImmutableArray<BoundStatement>.Builder captures)
+    {
+        var temp = DeclareMultiAssignmentTemp("component", value.Type);
+        captures.Add(new BoundVariableDeclaration(targetSyntax, temp, value));
+        return new BoundVariableExpression(null, temp);
+    }
+
+    private LocalVariableSymbol DeclareMultiAssignmentTemp(string role, TypeSymbol type)
+    {
+        var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var temp = new LocalVariableSymbol(
+            $"<>multi_{role}_{id}",
+            isReadOnly: true,
+            type);
+        if (!scope.TryDeclareVariable(temp))
+        {
+            throw new InvalidOperationException(
+                $"Failed to declare synthesized multi-assignment local '{temp.Name}'.");
+        }
+
+        return temp;
+    }
+
+    private static bool IsDiscardTarget(ExpressionSyntax target) =>
+        target is NameExpressionSyntax name && IsDiscard(name.IdentifierToken);
+
+    private sealed class MultiAssignmentTargetPlan
+    {
+        public MultiAssignmentTargetPlan(
+            BoundExpression? assignedValue,
+            Func<BoundExpression, BoundExpression>? createWrite)
+        {
+            AssignedValue = assignedValue;
+            CreateWrite = createWrite;
+        }
+
+        public BoundExpression? AssignedValue { get; }
+
+        public Func<BoundExpression, BoundExpression>? CreateWrite { get; }
+
+        public MultiAssignmentTargetPlan WithAssignedValue(BoundExpression assignedValue) =>
+            new(assignedValue, CreateWrite);
+    }
+
+    private sealed class MultiAssignmentTupleElementRewriter : BoundTreeRewriter
+    {
+        private readonly VariableSymbol source;
+        private readonly BoundExpression replacement;
+
+        public MultiAssignmentTupleElementRewriter(
+            VariableSymbol source,
+            BoundExpression replacement)
+        {
+            this.source = source;
+            this.replacement = replacement;
+        }
+
+        public BoundExpression Replace(BoundExpression expression) =>
+            RewriteExpression(expression);
+
+        protected override BoundExpression RewriteVariableExpression(
+            BoundVariableExpression node) =>
+            ReferenceEquals(node.Variable, source)
+                ? replacement
+                : base.RewriteVariableExpression(node);
     }
 }

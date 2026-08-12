@@ -2,34 +2,59 @@
 
 - **Status**: Accepted
 - **Date**: 2026-05-22
-- **Phase**: Phase 2 (statement form)
-- **Related**: execution plan §2.3
+- **Phase**: Phase 2 (statement form), extended by issue #3353
+- **Related**: execution plan §2.3, issues #2234 and #3353
 
 ## Context
 
-GSharp's Phase 2.3 introduces multi-target short declaration (`a, b := 1, 2`) and multi-target assignment (`a, b = b, a`). Both forms accept N right-hand expressions for N targets (the `f() returning a tuple` shape is deferred to Phase 4 alongside multi-return functions). Two questions need a single committed answer:
+GSharp's multi-target assignment began with identifier targets and one right-hand
+expression per target. Issue #3353 extends it to existing storage locations and
+to one tuple-valued RHS:
 
-1. In what order are the right-hand-side expressions evaluated?
-2. When are the writes to the left-hand targets observable?
+```gsharp
+arr[i], box.Value = 1, 2
+a, b = Pair()
+```
 
-Go's spec is unambiguous: all RHS expressions are evaluated left-to-right into temporaries _before_ any assignment happens, then writes occur left-to-right. This means `a, b = b, a` swaps correctly even when `a` and `b` alias.
+Storage targets add a third ordering question: when are receiver, index, and
+address components evaluated?
+
+The legacy `:=` multi-declaration form was removed by ADR-0077.
 
 ## Decision
 
-GSharp adopts **Go-style semantics**:
+GSharp uses this fixed three-phase order:
 
-- For `a, b, … = e1, e2, …`: each `ei` is evaluated left-to-right into a synthesized read-only temporary (`<>m_<pos>_<i>`). After all RHS evaluations complete, each target is assigned from its corresponding temporary in left-to-right order.
-- For `a, b, … := e1, e2, …`: each `ei` is evaluated left-to-right; the new locals are introduced into the current scope and initialised in the same order. No pre-existing variables with these names participate in evaluation (per short-declaration rules).
-- If any RHS expression throws, no assignment is observable. (This is a consequence of evaluating all RHS expressions before any write.)
-- A target / source count mismatch is a binder diagnostic (`ReportMultiAssignmentMismatch`).
+1. Evaluate every target's receiver, index, pointer, and storage-address
+   components left-to-right.
+2. Evaluate every RHS value left-to-right, once, into temporaries.
+3. Perform writes left-to-right.
+
+Targets may be writable locals, fields, properties, array/map/CLR-indexer
+elements, nested member targets, or pointer dereferences. Each target is checked
+by the same assignment binder used for a single `target = value`, so readonly,
+init-only, accessibility, and conversion rules stay identical.
+
+When multiple targets have one RHS, that expression must have tuple type with
+matching arity. It is evaluated once into a tuple temporary, then each element
+is converted using the corresponding target's normal assignment conversion.
+Discards consume their element without writing.
+
+If target capture or RHS evaluation throws, no write occurs. A setter or other
+write-time exception can occur after earlier left-to-right writes.
 
 ## Consequences
 
 - `a, b = b, a` swaps cleanly.
-- `i, a[i] = i+1, "x"` writes to the slot named by the original value of `i`, not the post-increment value — matching Go's well-known rule.
-- The temporaries are emitted as ordinary locals in the bound tree, so the existing emitter and interpreter need no per-multi-assignment changes.
+- `i, a[i] = i + 1, "x"` writes to the slot named by the original `i`.
+- `a[i], a[next()] = Pair()` captures both indexes before calling `Pair`.
+- Aliasing and value-type receivers retain original storage locations.
+- Existing assignment bound nodes and emit paths perform final writes; no
+  multi-assignment-specific emitter path exists.
 
 ## Alternatives considered
 
-- **C# tuple-deconstruction semantics**: similar end result (deconstruction evaluates RHS before writes) but with implicit `ValueTuple` boxing. Rejected for Phase 2 — Phase 4 will introduce tuples explicitly, at which point `let (a, b) = f()` becomes the canonical tuple-bind form and the present multi-target syntax remains a thin sugar that avoids an intermediate tuple.
 - **Right-to-left or unspecified evaluation order**: rejected; multi-target assignment is a teaching feature, and unspecified order leads to subtle bugs that a beginner-friendly language should not invite.
+- **Capture storage targets in cs2gs**: retained only for lowering shapes with no
+  native flat assignment form. Native storage-target assignment now owns the
+  ordering contract, avoiding redundant `__spillN` and `__deconN` temporaries.
