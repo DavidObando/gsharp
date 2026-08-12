@@ -25,7 +25,7 @@ public partial class Parser
     }
 
     // Issue #663: `string?(expr)` — nullable-type conversion call form.
-    // Consumes `Identifier ? ( args )` and builds a CallExpressionSyntax
+    // Consumes adjacent `Identifier?(args)` and builds a CallExpressionSyntax
     // carrying the `?` token so the binder can wrap the resolved type in
     // NullableTypeSymbol.
     private ExpressionSyntax ParseNullableTypeCallExpression()

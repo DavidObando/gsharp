@@ -832,12 +832,64 @@ internal sealed partial class OverloadResolver
         var calleeSyntax = Invariant.Required(syntax.Callee, "an indirect call has a callee expression");
         var callee = bindExpression(calleeSyntax);
         var calleeName = calleeSyntax.SyntaxTree.Text.ToString(calleeSyntax.Span);
+        if (syntax.NullableQuestionToken != null)
+        {
+            return BindNullConditionalIndirectCallExpression(
+                syntax,
+                callee,
+                calleeName,
+                calleeSyntax.Location);
+        }
+
         return BindIndirectCallExpression(
             syntax,
             callee,
             calleeName,
             calleeSyntax.Location,
-            GetNullableDelegateNullSafeInvocation(calleeSyntax));
+            GetNullableDelegateNullSafeInvocation());
+    }
+
+    internal BoundExpression BindNullConditionalIndirectCallExpression(
+        CallExpressionSyntax syntax,
+        BoundExpression callee,
+        string calleeName,
+        TextLocation calleeLocation)
+    {
+        if (callee is BoundErrorExpression)
+        {
+            return callee;
+        }
+
+        var callableType = callee.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : callee.Type;
+        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out _))
+        {
+            Diagnostics.ReportNotAFunction(calleeLocation, calleeName);
+            return new BoundErrorExpression(null);
+        }
+
+        var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: callableType);
+        var captureRef = new BoundVariableExpression(null, capture);
+        var invocation = BindIndirectCallExpression(
+            syntax,
+            captureRef,
+            calleeName,
+            calleeLocation,
+            nullSafeInvocation: null);
+        if (invocation is BoundErrorExpression)
+        {
+            return invocation;
+        }
+
+        return BuildNullConditionalDelegateResult(
+            syntax,
+            callee,
+            capture,
+            invocation,
+            invocation.Type);
     }
 
     internal BoundExpression BindIndirectCallExpression(
@@ -905,6 +957,10 @@ internal sealed partial class OverloadResolver
                 // callee's parameter delegate shape is known (mirrors the direct path).
                 deferredArrowLambdaIndices.Add(i);
                 boundArguments.Add(new BoundErrorExpression(argSyntax));
+            }
+            else if (argSyntax is RefArgumentExpressionSyntax refArgument)
+            {
+                boundArguments.Add(bindRefArgumentExpression(refArgument, null));
             }
             else
             {

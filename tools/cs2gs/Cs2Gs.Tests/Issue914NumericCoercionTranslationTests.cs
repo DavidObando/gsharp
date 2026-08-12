@@ -3,9 +3,13 @@
 // </copyright>
 
 using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -395,13 +399,12 @@ namespace Demo
     }
 
     /// <summary>
-    /// A null-conditional delegate invocation whose receiver is a call (its text ends
-    /// in <c>)</c>) cannot render <c>GetHandler()?(args)</c> — G# would parse that as
-    /// the ternary operator — nor keep <c>.Invoke</c> reliably, so the receiver is
-    /// spilled into a local that is invoked directly as <c>local?(args)</c> (issue #914).
+    /// A null-conditional delegate invocation whose receiver is a call now renders
+    /// directly as <c>GetHandler()?(args)</c>; gsc parses and single-evaluates the
+    /// complete postfix receiver (issue #3356).
     /// </summary>
     [Fact]
-    public void NullConditionalInvoke_CallReceiver_SpillsReceiverAndInvokesDirectly()
+    public void NullConditionalInvoke_CallReceiver_InvokesDirectlyWithoutSpill()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -414,8 +417,91 @@ namespace Demo
 }");
 
         Assert.DoesNotContain(".Invoke", printed);
-        Assert.Contains("__spill0 = GetHandler()", printed);
-        Assert.Contains("__spill0?(x)", printed);
+        Assert.Contains("GetHandler()?(x)", printed);
+        Assert.DoesNotContain("__spill", printed);
+    }
+
+    /// <summary>Parenthesized and coalescing receivers also stay direct.</summary>
+    [Fact]
+    public void NullConditionalInvoke_ParenthesizedAndCoalescingReceivers_StayDirect()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Holder
+    {
+        public System.Action<int> Handler;
+    }
+
+    public class C
+    {
+        private System.Action<int> Left() => null;
+        private System.Action<int> Right() => null;
+        private System.Action<int>[] Handlers() => new[] { Left() };
+        private Holder GetHolder() => new Holder();
+        private int Index() => 0;
+        public void Raise(int x)
+        {
+            (Left())?.Invoke(x);
+            (Left() ?? Right())?.Invoke(x);
+            Handlers()[Index()]?.Invoke(x);
+            GetHolder().Handler?.Invoke(x);
+        }
+    }
+}");
+
+        Assert.Contains("(Left())?(x)", printed);
+        Assert.Contains("(Left() ?? Right())?(x)", printed);
+        Assert.Contains("Handlers()[Index()]?(x)", printed);
+        Assert.Contains("GetHolder().Handler?(x)", printed);
+        Assert.DoesNotContain(".Invoke", printed);
+        Assert.DoesNotContain("__spill", printed);
+    }
+
+    /// <summary>
+    /// Direct output preserves C# receiver/argument evaluation order: receiver once,
+    /// argument only when the delegate exists.
+    /// </summary>
+    [Fact]
+    public void NullConditionalInvoke_CallReceiver_DirectOutputCompilesAndRunsOnce()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+namespace Demo
+{
+    public class C
+    {
+        private int receiverCalls;
+        private int argumentCalls;
+        private int invokeCalls;
+        private bool present;
+
+        private int Argument()
+        {
+            argumentCalls++;
+            return 5;
+        }
+
+        private Func<int, int>? GetHandler()
+        {
+            receiverCalls++;
+            return present ? value => { invokeCalls++; return value * 2; } : null;
+        }
+
+        public int Run()
+        {
+            int missing = GetHandler()?.Invoke(Argument()) ?? -1;
+            present = true;
+            int called = GetHandler()?.Invoke(Argument()) ?? -1;
+            return missing * 10000 + called * 1000 + receiverCalls * 100 + argumentCalls * 10 + invokeCalls;
+        }
+    }
+}");
+
+        Assert.Contains("GetHandler()?(Argument())", printed);
+        Assert.DoesNotContain("__spill", printed);
+        Assert.Equal("211", CompileAndRun(printed, "C().Run()").Trim());
     }
 
     /// <summary>
@@ -551,5 +637,76 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static string CompileAndRun(string printed, string callExpression)
+    {
+        string compiler = FindCompiler();
+        Assert.NotNull(compiler);
+
+        string workDir = Path.Combine(AppContext.BaseDirectory, "issue-3356-e2e", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Snippet.gs");
+            string dllPath = Path.Combine(workDir, "Snippet.dll");
+            File.WriteAllText(
+                gsPath,
+                printed + Environment.NewLine +
+                    $"Console.WriteLine({callExpression})" + Environment.NewLine);
+
+            (int compileExit, string compileOut) = RunDotnet(
+                $"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
+                "gsc must compile translated null-conditional invocation with " + compiler + ". Output:\n" + compileOut +
+                    "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "Translated snippet must run. Output:\n" + output);
+            return output;
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    private static (int Exit, string Output) RunDotnet(string arguments)
+    {
+        var startInfo = new ProcessStartInfo("dotnet", arguments)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        using var process = Process.Start(startInfo);
+        var output = new StringBuilder();
+        output.Append(process.StandardOutput.ReadToEnd());
+        output.Append(process.StandardError.ReadToEnd());
+        process.WaitForExit();
+        return (process.ExitCode, output.ToString());
+    }
+
+    private static string FindCompiler()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        foreach (string configuration in new[] { "Debug", "Release" })
+        {
+            string candidate = Path.Combine(
+                repoRoot,
+                "out",
+                "bin",
+                configuration,
+                "Compiler",
+                "gsc.dll");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 }

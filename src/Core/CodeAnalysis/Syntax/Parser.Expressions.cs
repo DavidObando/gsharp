@@ -702,7 +702,9 @@ public partial class Parser
     // work uniformly on parenthesized expressions, literals, and other primaries.
     // ADR-0073 / issue #710: the `?[` token is the prefix of a null-conditional
     // index access and is treated symmetrically to `[`, with the resulting
-    // IndexExpressionSyntax carrying IsNullConditional = true.
+    // IndexExpressionSyntax carrying IsNullConditional = true. Issue #3356:
+    // `?(` after any completed postfix receiver is the invocation counterpart,
+    // represented by an indirect CallExpressionSyntax carrying the `?` token.
     // Issue #1602: depth-guarded wrapper — the postfix loop itself is
     // iterative, but an index argument re-enters the full expression grammar
     // (`a[a[a[…`), so the chain participates in the recursion cycle and ticks
@@ -811,7 +813,11 @@ public partial class Parser
                 var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
                 current = new IndexExpressionSyntax(syntaxTree, current, openBracket, indices, closeBracket);
             }
-            else if (Current.Kind == SyntaxKind.OpenParenthesisToken
+            else if ((Current.Kind == SyntaxKind.OpenParenthesisToken
+                    || (Current.Kind == SyntaxKind.QuestionToken
+                        && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
+                        && Current.Position == current.Span.End
+                        && Peek(1).Position == Current.Span.End))
                 && !IsCurrentOnNewLineAfter(current))
             {
                 if (stopBeforeIndirectInvocation)
@@ -819,18 +825,17 @@ public partial class Parser
                     break;
                 }
 
-                // Issue #2185: a same-line `(args)` following an arbitrary
-                // postfix expression is an *indirect* invocation of that
-                // expression's (function-typed) value — e.g. `(h)(value)`,
-                // `handler!!(value)`, or a curried `f()(x)`. Bare-identifier and
-                // `.member` callees never reach here (their `(args)` is consumed
-                // by ParseNameOrCallExpression), so this handles exactly the
-                // non-name callee shapes. The newline guard preserves the
-                // pre-existing reading of a parenthesised expression on the next
-                // line as a separate statement (G# is otherwise
-                // newline-insensitive, but a leading-`(` continuation is never
-                // written). The binder validates the callee is function-typed.
-                var openParen = NextToken();
+                // Issue #2185: a same-line `(args)` following an arbitrary postfix
+                // expression is an indirect invocation of that function-typed value.
+                // Issue #3356: an adjacent `?(` uses the same machinery but carries
+                // the question token so binding short-circuits on a nil receiver.
+                SyntaxToken? questionToken = null;
+                if (Current.Kind == SyntaxKind.QuestionToken)
+                {
+                    questionToken = NextToken();
+                }
+
+                var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
 
                 var savedInvokeSuppress = suppressTrailingObjectInitializer;
                 suppressTrailingObjectInitializer = 0;
@@ -852,7 +857,13 @@ public partial class Parser
 
                 var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
                 arguments = MaybeAppendTrailingLambda(arguments);
-                current = new CallExpressionSyntax(syntaxTree, current, openParen, arguments, closeParen);
+                current = new CallExpressionSyntax(
+                    syntaxTree,
+                    current,
+                    questionToken,
+                    openParen,
+                    arguments,
+                    closeParen);
             }
             else
             {

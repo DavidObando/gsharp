@@ -348,10 +348,8 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
-    internal static string GetNullableDelegateNullSafeInvocation(ExpressionSyntax? receiverSyntax)
-        => receiverSyntax is NameExpressionSyntax or AccessorExpressionSyntax
-            ? "?(...)"
-            : "?.Invoke(...)";
+    internal static string GetNullableDelegateNullSafeInvocation()
+        => "?(...)";
 
     private BoundScope Scope => binderCtx.RootScope;
 
