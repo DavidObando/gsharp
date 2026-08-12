@@ -552,14 +552,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// A C# extension method whose <c>this</c> receiver is an enum cannot use the
-    /// G# receiver-clause form (ADR-0079; gsc rejects it with GS0103 "receiver
-    /// type must be a struct or class declared in the same package"). It must be
-    /// emitted as a plain static helper and its call sites rewritten to the
-    /// positional form <c>Owner.Method(receiver, …)</c>.
+    /// Issue #3357: enum extensions use the explicit receiver-clause form and
+    /// retain member-call syntax.
     /// </summary>
     [Fact]
-    public void EnumExtensionMethod_EmittedAsPlainFunc_AndCallSiteRewritten()
+    public void EnumExtensionMethod_UsesExplicitReceiverAndMemberCall()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -576,9 +573,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func ChannelCount(channels ChannelGroups) int32", printed);
-        Assert.DoesNotContain("func (channels ChannelGroups) ChannelCount", printed);
-        Assert.Contains("Ac4Extensions.ChannelCount(g)", printed);
+        Assert.Contains("func extension (channels ChannelGroups) ChannelCount() int32", printed);
+        Assert.Contains("g.ChannelCount()", printed);
+        Assert.DoesNotContain("Ac4Extensions.ChannelCount(g)", printed);
     }
 
     /// <summary>

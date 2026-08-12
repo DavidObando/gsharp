@@ -356,7 +356,7 @@ namespace Corpus.Issue1879
     }
 
     [Fact]
-    public void ExtensionBlock_EnumReceiver_ReportsLoudGap()
+    public void ExtensionBlock_EnumReceiver_UsesExplicitReceiverClause()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -382,8 +382,11 @@ namespace Corpus.Issue1879
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("enum receiver", StringComparison.Ordinal));
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains("func extension (c Color) Describe()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Message.Contains("enum receiver", StringComparison.Ordinal));
+        AssertRoundTripParses(rendered);
     }
 
     private static void AssertRoundTripParses(string rendered)

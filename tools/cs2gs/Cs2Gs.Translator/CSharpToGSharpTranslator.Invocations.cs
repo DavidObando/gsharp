@@ -53,8 +53,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
 
-            // Extensions that must remain static helpers (enum receivers or
-            // owned reduced-signature collisions) use positional calls.
+            // Extensions that cannot receive an issue #3357 receiver companion
+            // (by-ref receivers or exact owned signature collisions) use
+            // positional static-helper calls.
             if (invocation.Expression is MemberAccessExpressionSyntax extMember
                 && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol extMethod
                 && extMethod.MethodKind == MethodKind.ReducedExtension
@@ -79,15 +80,14 @@ public sealed partial class CSharpToGSharpTranslator
             // A SOURCE-defined extension method called in STATIC (unreduced) form
             // `Owner.M<T>(recv, args)` — as opposed to the instance form
             // `recv.M<T>(args)` — must be rewritten to the G# receiver-clause call
-            // `recv.M[T](args)`. cs2gs lifts every non-enum source extension method
+            // `recv.M[T](args)`. cs2gs lifts source extension methods
             // of a `static class` to a top-level receiver-clause `func (recv R) M[…](…)`
             // (ADR-0115 §B.19), which gsc invokes ONLY through the receiver form; the
             // static-form call site (`JsonSerialization.FromJsonFile<T>(path)`) would
             // otherwise resolve to a non-existent static member (GS0158). The reduced
             // instance form already binds directly, so it is excluded via
-            // `MethodKind.ReducedExtension`. Scoped to source-defined, non-enum
-            // extensions to avoid rewriting BCL static-form calls (enum receivers
-            // take the positional path above).
+            // `MethodKind.ReducedExtension`. Scoped to source-defined extensions
+            // to avoid rewriting BCL static-form calls.
             if (invocation.Expression is MemberAccessExpressionSyntax staticExtMember
                 && staticExtMember.Expression is TypeSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax
                 && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation staticExtOperation
@@ -95,7 +95,6 @@ public sealed partial class CSharpToGSharpTranslator
                     { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } staticExt
                 && staticExt.Parameters.Length >= 1
                 && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
-                && (staticExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
                 && !this.ownedExtensions.IsStaticHelper(staticExt)
                 && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is INamedTypeSymbol
                 && TryGetExplicitExtensionReceiverArgument(
@@ -124,14 +123,13 @@ public sealed partial class CSharpToGSharpTranslator
             // sibling member inside the declaring `static class` uses — must be
             // rewritten to the G# receiver-clause call `book.Conversion.ApplicableState()`
             // for the same reason as the `Owner.M(recv, args)` static form above:
-            // cs2gs lifts every non-enum source extension method to a top-level
+            // cs2gs lifts every source extension method to a top-level
             // receiver-clause `func (recv R) M[…](…)` (ADR-0115 §B.19), which gsc
             // invokes ONLY through the receiver form. Without this the bare call
             // falls through to the sibling-static-call branch below and is qualified
             // as `EntityExtensions.ApplicableState(...)`, but the lifted extension
             // leaves no `EntityExtensions` type behind (GS0157). The reduced instance
-            // form already binds directly (`MethodKind.ReducedExtension` excluded),
-            // and enum receivers keep the positional `Owner.M(x)` helper form.
+            // form already binds directly (`MethodKind.ReducedExtension` excluded).
             if (invocation.Expression is SimpleNameSyntax bareExtName
                 && bareExtName is IdentifierNameSyntax or GenericNameSyntax
                 && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation bareExtOperation
@@ -139,7 +137,6 @@ public sealed partial class CSharpToGSharpTranslator
                     { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } bareExt
                 && bareExt.Parameters.Length >= 1
                 && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
-                && (bareExt.Parameters[0].Type?.TypeKind ?? TypeKind.Unknown) != TypeKind.Enum
                 && !this.ownedExtensions.IsStaticHelper(bareExt)
                 && TryGetExplicitExtensionReceiverArgument(
                     bareExtOperation,
@@ -638,9 +635,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ITypeSymbol receiverType = method.ReceiverType
-                ?? method.Parameters.FirstOrDefault()?.Type;
-            if (receiverType?.TypeKind != TypeKind.Enum &&
+            if (this.ownedExtensions.HasReceiverCompanion(method) ||
                 !this.ownedExtensions.IsStaticHelper(method))
             {
                 return false;
@@ -720,15 +715,16 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver,
             ExpressionSyntax receiverSyntax)
         {
-            // Issue #3360 considered adding an `IsTrivialOperand` guard here, as at
-            // `BuildPositiveValueGuardHoist`. It would be WRONG. `IsTrivialOperand`
-            // answers "is this safe to DUPLICATE", but the temp here exists for
-            // CAPTURE TIMING: a C# method group evaluates its receiver immediately
-            // and captures that value, whereas a G# lambda closing over the
-            // variable would re-read it at invocation. For a receiver that is
-            // reassigned between the method-group conversion and the call, those
-            // differ — and a bare identifier is exactly the shape that can be
-            // reassigned. The temp is load-bearing, like `CaptureAssignmentValue`'s.
+            // Issue #3357/#3360: a trivial, stable receiver needs no temp. A
+            // mutable/reassigned local still spills because C# captures the
+            // receiver value when the method group is formed, while the
+            // synthesized G# lambda would otherwise re-read it when invoked.
+            if (IsTrivialOperand(receiver) &&
+                this.IsStableMethodGroupReceiver(receiverSyntax))
+            {
+                return receiver;
+            }
+
             if (this.state.PendingSpillPrologue != null)
             {
                 string temp = $"__spill{this.state.SpillCounter++}";
@@ -741,6 +737,43 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverSyntax,
                 "a static-helper extension method group here has no enclosing evaluation seam to capture its receiver once.");
             return receiver;
+        }
+
+        private bool IsStableMethodGroupReceiver(ExpressionSyntax receiverSyntax)
+        {
+            if (receiverSyntax is LiteralExpressionSyntax)
+            {
+                return true;
+            }
+
+            ITypeSymbol receiverType = this.context.GetTypeInfo(receiverSyntax).Type;
+            if (receiverSyntax is ThisExpressionSyntax)
+            {
+                return receiverType?.IsReferenceType == true;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(receiverSyntax).Symbol;
+            if (symbol is ILocalSymbol { IsConst: true })
+            {
+                return true;
+            }
+
+            if (symbol is not ILocalSymbol and not IParameterSymbol)
+            {
+                return false;
+            }
+
+            if (symbol is IParameterSymbol { RefKind: not RefKind.None })
+            {
+                return false;
+            }
+
+            bool stableValueShape = receiverType?.IsReferenceType == true ||
+                receiverType?.TypeKind == TypeKind.Enum ||
+                receiverType?.SpecialType != SpecialType.None ||
+                receiverType is INamedTypeSymbol { IsReadOnly: true };
+            return stableValueShape &&
+                !this.IsSymbolReassigned(symbol, this.state.CurrentBodyScope);
         }
 
         /// <summary>

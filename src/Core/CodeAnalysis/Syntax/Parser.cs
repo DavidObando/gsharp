@@ -410,7 +410,12 @@ public partial class Parser
 
             try
             {
-                member = ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier);
+                member = ParseFunctionDeclaration(
+                    accessibilityModifier,
+                    openModifier: null,
+                    overrideModifier: null,
+                    asyncModifier,
+                    allowExplicitExtension: true);
             }
             finally
             {

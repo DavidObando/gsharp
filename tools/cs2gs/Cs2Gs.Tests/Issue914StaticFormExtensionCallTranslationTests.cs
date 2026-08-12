@@ -15,7 +15,7 @@ namespace Cs2Gs.Tests;
 /// Translator-fidelity tests for issue #914: a SOURCE-defined extension method
 /// called in STATIC (unreduced) form <c>Owner.M&lt;T&gt;(recv, args)</c> must be
 /// rewritten to the G# receiver-clause call <c>recv.M[T](args)</c>. cs2gs lifts
-/// every non-enum source extension of a <c>static class</c> to a top-level
+/// every source extension of a <c>static class</c> to a top-level
 /// receiver-clause <c>func (recv R) M[…](…)</c> (ADR-0115 §B.19), which gsc
 /// invokes only through the receiver form; the static-form call site would
 /// otherwise resolve to a non-existent static member (GS0158). The reduced

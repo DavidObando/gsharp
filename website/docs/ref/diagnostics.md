@@ -740,6 +740,10 @@ Cause/fix:
   `<NoWarn>GS0314</NoWarn>` if migration must be deferred — but note
   this is a one-release grace period; a future release may escalate to error.
 
+  If the declaration intentionally extends an owned type, use
+  `func extension (p Point) Distance() ...` (ADR-0165). Explicit extension
+  receiver clauses do not produce `GS0314` and also support same-package enums.
+
 ## Named-argument `=` separator retired (GS0524)
 
 See [ADR-0161](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0161-retire-equals-named-argument-separator.md), which supersedes

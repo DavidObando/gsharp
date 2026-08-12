@@ -3,11 +3,16 @@
 // </copyright>
 
 using System;
+using System.IO;
+using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
+using GSharpCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
+using GSharpSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
+using GSharpSourceText = GSharp.Core.CodeAnalysis.Text.SourceText;
 
 namespace Cs2Gs.Tests;
 
@@ -182,12 +187,9 @@ namespace Corpus.Issue1839
     [Fact]
     public void EnumExtensionOwnerAndMethodName_KeywordCollision_IsSanitizedConsistently()
     {
-        // Issue #1836 (N1 parity): the null-conditional enum-extension call
-        // rewrite (`TryGetEnumExtension`) synthesizes an `Owner.Method(receiver, …)`
-        // static-call form from the extension's declaring type and method
-        // names. Both must be sanitized consistently, so a keyword-colliding
-        // owner/method name agrees between the synthesized call and (if it were
-        // ever declared elsewhere) its declaration.
+        // Issue #3357: enum extensions use the explicit receiver form, so the
+        // obsolete static owner disappears while the keyword-colliding method
+        // name remains sanitized at declaration and call sites.
         string rendered = Render(@"
 namespace Corpus.Issue1839
 {
@@ -205,9 +207,57 @@ namespace Corpus.Issue1839
 }
 ");
 
-        Assert.Contains("select_", rendered, StringComparison.Ordinal);
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
+        Assert.Contains("func extension (color Color) type_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("color?.type_()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("select_", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void EnumExtension_NullConditionalCall_PreservesMemberSyntaxWithoutSpill()
+    {
+        string rendered = Render(@"
+#nullable enable
+namespace Corpus.Issue3357
+{
+    public enum Color { Red, Green }
+
+    public static class ColorExtensions
+    {
+        public static string Describe(this Color color) => color.ToString();
+    }
+
+    public static class C
+    {
+        public static Color? Pick() => Color.Green;
+
+        public static string? Run() => Pick()?.Describe();
+    }
+}
+");
+
+        Assert.Contains("func extension (color Color) Describe()", rendered, StringComparison.Ordinal);
+        Assert.Contains("C.Pick()?.Describe()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("ColorExtensions.Describe", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+        AssertCompilesWithoutErrors(rendered);
+    }
+
+    private static void AssertCompilesWithoutErrors(string source)
+    {
+        var compilation = new GSharpCompilation(
+            GSharpSyntaxTree.Parse(GSharpSourceText.From(source)))
+        {
+            IsLibrary = true,
+        };
+        using var peStream = new MemoryStream();
+        var result = compilation.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "Emit failed:\n" + string.Join("\n", result.Diagnostics.Select(d => d.ToString())));
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
     private static void AssertRoundTripParses(string rendered)

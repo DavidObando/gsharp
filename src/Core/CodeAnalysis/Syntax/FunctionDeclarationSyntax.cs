@@ -18,6 +18,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     private SyntaxToken? explicitInterfaceOpenParenToken;
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
+    private SyntaxToken? explicitExtensionModifier;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
@@ -408,6 +409,25 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// Gets the func keyword.
     /// </summary>
     public SyntaxToken FunctionKeyword { get; }
+
+    /// <summary>
+    /// Gets or sets the optional contextual <c>extension</c> marker in
+    /// <c>func extension (receiver Type) Name(...)</c>. The marker forces a
+    /// receiver-clause declaration to remain an extension even when the
+    /// receiver type is owned by the current package.
+    /// </summary>
+    public SyntaxToken? ExplicitExtensionModifier
+    {
+        get => explicitExtensionModifier;
+        set
+        {
+            explicitExtensionModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this receiver clause is explicitly extension-dispatched.</summary>
+    public bool IsExplicitExtension => ExplicitExtensionModifier != null;
 
     /// <summary>
     /// Gets the function identifier.

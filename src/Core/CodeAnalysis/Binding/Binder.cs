@@ -207,6 +207,7 @@ public sealed class Binder
             bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
+            createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
                 method.IsAsync && !IsAsyncIteratorReturnType(returnType)
                     ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)

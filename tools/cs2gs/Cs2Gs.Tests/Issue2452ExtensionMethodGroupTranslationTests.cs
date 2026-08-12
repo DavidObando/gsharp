@@ -123,7 +123,7 @@ public class Issue2452ExtensionMethodGroupTranslationTests
         Assert.Contains("class Extensions", printed, StringComparison.Ordinal);
         Assert.Contains("func Shape(host Host)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("func (host Host) Shape", printed, StringComparison.Ordinal);
-        Assert.Contains("func (host Host) Measure(unused int32 = 0)", printed, StringComparison.Ordinal);
+        Assert.Contains("func extension (host Host) Measure(unused int32 = 0)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("host.Shape()", printed, StringComparison.Ordinal);
         AssertCompilesWithoutErrors(printed);
     }

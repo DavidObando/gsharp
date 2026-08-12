@@ -71,6 +71,19 @@ public sealed partial class CSharpToGSharpTranslator
                         yield return (methodMember, methodIsStatic);
                     }
 
+                    if (ownedExtensionTarget is null &&
+                        this.ownedExtensions.HasReceiverCompanion(method))
+                    {
+                        (GMember companion, bool companionIsStatic) = this.TranslateMethod(
+                            method,
+                            ownerKind,
+                            forceExtensionReceiver: true);
+                        if (companion != null)
+                        {
+                            yield return (companion, companionIsStatic);
+                        }
+                    }
+
                     break;
 
                 case ExtensionBlockDeclarationSyntax extensionBlock:
@@ -540,7 +553,47 @@ public sealed partial class CSharpToGSharpTranslator
 
             IParameterSymbol receiver = symbol.Parameters[0];
             return receiver.RefKind == RefKind.None &&
+                receiver.Type is INamedTypeSymbol
+                    { TypeKind: TypeKind.Class or TypeKind.Struct } receiverType &&
+                !IsGenericReceiver(receiverType) &&
                 !this.ShouldPromoteToNullableReference(receiver);
+        }
+
+        private static bool RequiresExplicitExtensionReceiver(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            return RequiresExplicitExtensionReceiver(
+                original?.Parameters.FirstOrDefault()?.Type,
+                original);
+        }
+
+        private static bool RequiresExplicitExtensionReceiver(
+            ITypeSymbol receiverType,
+            ISymbol extensionOwner)
+        {
+            if (receiverType is INamedTypeSymbol
+                { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T, TypeArguments: { Length: 1 } } nullable)
+            {
+                receiverType = nullable.TypeArguments[0];
+            }
+
+            if (receiverType?.TypeKind == TypeKind.Enum)
+            {
+                return true;
+            }
+
+            if (receiverType is not INamedTypeSymbol named || extensionOwner == null)
+            {
+                return false;
+            }
+
+            INamedTypeSymbol definition = named.OriginalDefinition;
+            return SymbolEqualityComparer.Default.Equals(
+                    definition.ContainingAssembly,
+                    extensionOwner.ContainingAssembly) &&
+                SymbolEqualityComparer.Default.Equals(
+                    definition.ContainingNamespace,
+                    extensionOwner.ContainingNamespace);
         }
 
         /// <summary>
@@ -631,22 +684,12 @@ public sealed partial class CSharpToGSharpTranslator
                     ? this.typeMapper.Map(receiverSymbol.Type, this.context, receiverParameter.GetLocation())
                     : this.MapTypeSyntax(receiverParameter.Type);
 
-                // Issue #1879 (parity with the classic extension-method path,
-                // ADR-0079/ADR-0115 §B.5): an enum receiver cannot carry a G#
-                // receiver clause (GS0103). Rather than silently emit a
-                // receiver-clause `func` that gsc would reject, gap it loudly —
-                // reworking every instance member and call site to the positional
-                // `Owner.Method(receiver, …)` form used for classic enum
-                // extensions is a larger, separate follow-up.
-                if (receiverSymbol != null && receiverSymbol.Type.TypeKind == TypeKind.Enum)
-                {
-                    this.context.ReportUnsupported(
-                        node,
-                        "an extension block with an enum receiver has no canonical G# mapping yet; a receiver clause is rejected on enum types (GS0103) and the positional call-site rewrite classic enum extension methods use (ADR-0115 §B.5) is not yet implemented for extension blocks (ADR-0115 §B.19).");
-                    yield break;
-                }
-
-                receiver = new Receiver(SanitizeIdentifier(receiverParameter.Identifier.Text), receiverType);
+                receiver = new Receiver(
+                    SanitizeIdentifier(receiverParameter.Identifier.Text),
+                    receiverType,
+                    isExplicitExtension: RequiresExplicitExtensionReceiver(
+                        receiverSymbol?.Type,
+                        receiverSymbol?.ContainingSymbol));
             }
 
             foreach (MemberDeclarationSyntax member in node.Members)
@@ -1076,7 +1119,8 @@ public sealed partial class CSharpToGSharpTranslator
             MethodDeclarationSyntax node,
             TypeDeclarationKind ownerKind,
             Receiver forcedReceiver = null,
-            INamedTypeSymbol ownedExtensionTarget = null)
+            INamedTypeSymbol ownedExtensionTarget = null,
+            bool forceExtensionReceiver = false)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -1230,12 +1274,13 @@ public sealed partial class CSharpToGSharpTranslator
                     isStatic = false;
                 }
                 else if (self != null &&
-                    self.Type.TypeKind != TypeKind.Enum &&
-                    !this.ownedExtensions.IsStaticHelper(symbol))
+                    (forceExtensionReceiver ||
+                        !this.ownedExtensions.IsStaticHelper(symbol)))
                 {
-                    // External C# extension methods retain receiver-clause form
-                    // (ADR-0115 §B.5). Enum receivers stay static helpers because
-                    // G# rejects receiver clauses on enums (GS0103).
+                    // Issue #3357: enum receivers and source-owned receivers
+                    // that cannot become real in-body members use the explicit
+                    // extension receiver form. It preserves member-call syntax
+                    // without making the declaration an owned instance method.
                     // Issue #1072/#1535: an extension receiver that is null-compared
                     // or null-assigned in the body is really nullable (common in
                     // nullable-oblivious sources, e.g. `this object o => o == null`),
@@ -1246,7 +1291,8 @@ public sealed partial class CSharpToGSharpTranslator
                     receiverType = this.PromoteIfUsedAsNullable(receiverType, self);
                     receiver = new Receiver(
                         SanitizeIdentifier(self.Name),
-                        receiverType);
+                        receiverType,
+                        isExplicitExtension: RequiresExplicitExtensionReceiver(symbol));
                     skipFirstParameter = true;
                     isStatic = false;
                 }

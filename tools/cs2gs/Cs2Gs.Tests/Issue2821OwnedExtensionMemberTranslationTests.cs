@@ -142,11 +142,11 @@ public static class HostExtensions
 }"));
 
         Assert.DoesNotContain("func M(value string)", printed["Host.cs"]);
-        Assert.Contains("func (host Host) M(value string)", printed["Extensions.cs"]);
+        Assert.Contains("func extension (host Host) M(value string)", printed["Extensions.cs"]);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
-        Assert.Single(diagnostics.Where(diagnostic => diagnostic.Id == "GS0314"));
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "GS0314");
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "GS0264");
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
     }
@@ -191,7 +191,7 @@ public static class User
 
         Assert.Contains("func M(value IA)", printed["Host.cs"]);
         Assert.DoesNotContain("func M(value IB)", printed["Host.cs"]);
-        Assert.Contains("func (host Host) M(value IB)", printed["Extensions.cs"]);
+        Assert.Contains("func extension (host Host) M(value IB)", printed["Extensions.cs"]);
         Assert.Contains("host.M(value)", printed["User.cs"]);
     }
 
@@ -275,12 +275,12 @@ public static class User
         Assert.Contains("class SecondExtensions", combined);
         Assert.Contains("func Describe(host Host, value object)", printed["FirstExtensions.cs"]);
         Assert.Contains("func Describe(host Host, value string)", printed["SecondExtensions.cs"]);
+        Assert.Contains("func extension (host Host) Describe(value object)", printed["FirstExtensions.cs"]);
+        Assert.Contains("func extension (host Host) Describe(value string)", printed["SecondExtensions.cs"]);
         Assert.DoesNotContain("func Describe(value ", printed["Host.cs"]);
-        Assert.DoesNotContain("func (host Host) Describe", combined);
         Assert.Contains("FirstExtensions.Describe(host, value)", printed["User.cs"]);
-        Assert.Equal(
-            2,
-            CountOccurrences(printed["User.cs"], "SecondExtensions.Describe(host, value)"));
+        Assert.Contains("SecondExtensions.Describe(host, value)", printed["User.cs"]);
+        Assert.Contains("host.Describe(value)", printed["User.cs"]);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -405,14 +405,12 @@ public static class User
         string printedConsumer = TranslateProject(consumer, siblings);
         string compactConsumer = Compact(printedConsumer);
 
-        Assert.Contains("func Describe(host Host, value object)", printedProducer);
-        Assert.Contains("func Describe(host Host, value string)", printedProducer);
-        Assert.Equal(
-            2,
-            CountOccurrences(compactConsumer, "SecondExtensions.Describe(host, value)"));
-        Assert.Contains("SecondExtensions.Describe(__spill", compactConsumer);
-        Assert.Contains("FirstExtensions.Describe(__spill", compactConsumer);
-        Assert.DoesNotContain("host.Describe", compactConsumer);
+        Assert.Contains("func extension (host Host) Describe(value object)", printedProducer);
+        Assert.Contains("func extension (host Host) Describe(value string)", printedProducer);
+        Assert.Contains("SecondExtensions.Describe(host, value)", compactConsumer);
+        Assert.Contains("host.Describe(value)", compactConsumer);
+        Assert.Contains("host.Describe", compactConsumer);
+        Assert.DoesNotContain("__spill", compactConsumer);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(new[] { printedProducer, printedConsumer });
@@ -457,8 +455,9 @@ public static class User
         string user = Compact(printed["User.cs"]);
 
         Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
-        Assert.Contains("let __spill", user);
-        Assert.Contains("FirstExtensions.Describe(__spill", user);
+        Assert.Contains("User.GetHost()?.Describe()", user);
+        Assert.DoesNotContain("__spill", user);
+        Assert.DoesNotContain("FirstExtensions.Describe", user);
         Assert.DoesNotContain("if User.GetHost() != nil", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
@@ -505,7 +504,7 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Contains("if host != nil { FirstExtensions.Touch(host!!) }", user);
+        Assert.Contains("host?.Touch()", user);
         Assert.DoesNotContain("else { nil }", user);
         Assert.DoesNotContain("default(void", user);
 
@@ -558,10 +557,9 @@ public static class User
         string user = Compact(printed["User.cs"]);
 
         Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
-        Assert.Contains("() -> { let __spill", user);
-        Assert.Contains("if __spill", user);
-        Assert.Contains("FirstExtensions.Touch(__spill", user);
-        Assert.DoesNotContain("() -> User.GetHost()?.Touch()", user);
+        Assert.Contains("() -> User.GetHost()?.Touch()", user);
+        Assert.DoesNotContain("__spill", user);
+        Assert.DoesNotContain("FirstExtensions.Touch", user);
         Assert.DoesNotContain("default(void", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
@@ -630,14 +628,12 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Contains("default(List[int32]?)", user);
-        Assert.Contains("default([]?int32)", user);
-        Assert.Contains("default((int32, string)?)", user);
-        Assert.Contains("default(((int32) -> string)?)", user);
-        Assert.DoesNotContain("List[int32]?(", user);
-        Assert.DoesNotContain("[]?int32(", user);
-        Assert.DoesNotContain("(int32, string)?(", user);
-        Assert.DoesNotContain("-> string)?(", user);
+        Assert.Contains("host?.Items()", user);
+        Assert.Contains("host?.Values()", user);
+        Assert.Contains("host?.Pair()", user);
+        Assert.Contains("host?.Formatter()", user);
+        Assert.DoesNotContain("default(", user);
+        Assert.DoesNotContain("FirstExtensions.", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -687,11 +683,9 @@ public static class User
         string user = Compact(printed["User.cs"]);
 
         Assert.Equal(1, CountOccurrences(user, "User.GetConfig()"));
-        Assert.Contains("let __spill", user);
-        Assert.Contains("FirstExtensions.Describe(__spill", user);
-        Assert.Contains("!!.Options)", user);
-        Assert.DoesNotContain("FirstExtensions.Describe(.Options", user);
-        Assert.DoesNotContain(".Options.Describe()", user);
+        Assert.Contains("User.GetConfig()?.Options.Describe()", user);
+        Assert.DoesNotContain("__spill", user);
+        Assert.DoesNotContain("FirstExtensions.Describe", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -812,10 +806,11 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Equal(3, CountOccurrences(user, "FirstExtensions.Describe("));
-        Assert.Contains(".Pair.Item1)", user);
-        Assert.Contains(".Maybe!!)", user);
-        Assert.Contains(".Holder.Current())", user);
+        Assert.Equal(3, CountOccurrences(user, ".Describe()"));
+        Assert.Contains(".Pair.Item1.Describe()", user);
+        Assert.Contains(".Maybe!!.Describe()", user);
+        Assert.Contains(".Holder.Current().Describe()", user);
+        Assert.DoesNotContain("FirstExtensions.Describe", user);
         Assert.DoesNotContain(".Pair.Node", user);
         Assert.DoesNotContain(".Maybe.Value", user);
 
@@ -870,8 +865,8 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Contains("FirstExtensions.Describe(", user);
-        Assert.Contains(".Pointer->Value)", user);
+        Assert.Contains(".Pointer->Value.Describe()", user);
+        Assert.DoesNotContain("FirstExtensions.Describe", user);
         Assert.DoesNotContain(".Pointer.Value", user);
     }
 
@@ -955,9 +950,10 @@ public sealed class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Contains("SecondExtensions.Describe(Current!!, value)", user);
-        Assert.Contains("= Current!!", user);
-        Assert.Contains("SecondExtensions.Describe(__spill", user);
+        Assert.Contains("Current!!.Describe(value)", user);
+        Assert.Contains("Current!!.Describe", user);
+        Assert.DoesNotContain("__spill", user);
+        Assert.DoesNotContain("SecondExtensions.Describe(Current", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -998,7 +994,7 @@ public static class BoxExtensions
     public static T Read<T>(this Box<T> box) => box.Value;
 }"));
 
-        Assert.Contains("func (box Box[T]) Read[T]()", printed["Extensions.cs"]);
+        Assert.Contains("func extension (box Box[T]) Read[T]()", printed["Extensions.cs"]);
         Assert.DoesNotContain("func Read", printed["Box.cs"]);
     }
 
@@ -1021,7 +1017,7 @@ public static class BoxExtensions
     public static int Read(this Box<int> box) => box.Value;
 }"));
 
-        Assert.Contains("func (box Box[int32]) Read()", printed["Extensions.cs"]);
+        Assert.Contains("func extension (box Box[int32]) Read()", printed["Extensions.cs"]);
         Assert.DoesNotContain("func Read", printed["Box.cs"]);
     }
 

@@ -43,7 +43,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `unsafe`, pointers, `stackalloc`, `fixed` | `unsafe`, `*T`, `stackalloc [n]T`, `fixed p *T = source { ... }` | `*void` maps C# `void*`; raw-pointer operations require an unsafe context. |
 | `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML. |
 | lambda `x => x + 1` | `x -> x + 1` | Arrow lambdas with inferred parameter/return types are the canonical lambda form. |
-| extension method | `func (r Receiver) M()` on a non-owned `Receiver` | A receiver clause declares a CLR-visible extension method. The receiver type must be a type the package does not own. |
+| extension method | `func (r Receiver) M()`; `func extension (r Receiver) M()` for enum/owned receivers | A receiver clause declares a CLR-visible extension method. The explicit marker prevents ownership from turning the declaration into an instance method. |
 
 ## Packages replace namespaces in source
 
