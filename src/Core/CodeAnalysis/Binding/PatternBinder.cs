@@ -618,32 +618,43 @@ internal sealed class PatternBinder
             targetType = nullableTarget.UnderlyingType;
         }
 
-        var isDiscard = identifier?.Text == "_";
-        var hasBinding = identifier != null && !isDiscard;
-        var variableName = hasBinding ? identifier!.Text : "<type-pattern-value>";
+        var bindingIdentifier = identifier != null && identifier.Text != "_"
+            ? identifier
+            : null;
+        var hasBinding = bindingIdentifier != null;
+        var variableName = bindingIdentifier?.Text ?? "<type-pattern-value>";
         var variable = new LocalVariableSymbol(
             variableName,
             isReadOnly: true,
             targetType,
             declaringSyntax: identifier);
 
-        if (hasBinding && bindingContext == PatternBindingContext.Allowed)
+        if (bindingIdentifier != null)
         {
-            if (!Scope.TryDeclareVariable(variable))
+            if (bindingContext == PatternBindingContext.Allowed)
             {
-                Diagnostics.ReportSymbolAlreadyDeclared(identifier!.Location, identifier.Text);
+                if (!Scope.TryDeclareVariable(variable))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(
+                        bindingIdentifier.Location,
+                        bindingIdentifier.Text);
+                }
             }
-        }
-        else if (hasBinding && bindingContext == PatternBindingContext.OrOrNot)
-        {
-            // Issue #992: a type pattern that introduces a binding variable is
-            // not allowed under `or` / `not` — the variable would not be
-            // definitely assigned. The discard identifier `_` is permitted.
-            Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(identifier!.Location, identifier.Text);
-        }
-        else if (hasBinding)
-        {
-            Diagnostics.ReportPatternBindingNotAllowedInIsExpression(identifier!.Location, identifier.Text);
+            else if (bindingContext == PatternBindingContext.OrOrNot)
+            {
+                // Issue #992: a type pattern that introduces a binding variable is
+                // not allowed under `or` / `not` — the variable would not be
+                // definitely assigned. The discard identifier `_` is permitted.
+                Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(
+                    bindingIdentifier.Location,
+                    bindingIdentifier.Text);
+            }
+            else
+            {
+                Diagnostics.ReportPatternBindingNotAllowedInIsExpression(
+                    bindingIdentifier.Location,
+                    bindingIdentifier.Text);
+            }
         }
 
         var boundProperty = propertyPattern == null

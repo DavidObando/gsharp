@@ -188,7 +188,8 @@ public partial class Parser
             return new DiscardPatternSyntax(syntaxTree, MatchToken(SyntaxKind.IdentifierToken));
         }
 
-        if (TryParseBareTypePattern(out var typePattern))
+        var typePattern = TryParseBareTypePattern();
+        if (typePattern != null)
         {
             return typePattern;
         }
@@ -331,12 +332,11 @@ public partial class Parser
         return new SlicePatternSyntax(syntaxTree, dotDot, captureIdentifier, pattern);
     }
 
-    private bool TryParseBareTypePattern(out PatternSyntax pattern)
+    private PatternSyntax? TryParseBareTypePattern()
     {
-        pattern = null!;
         if (!CanStartTypeClause(Current))
         {
-            return false;
+            return null;
         }
 
         var savedPosition = position;
@@ -361,7 +361,7 @@ public partial class Parser
 
         if (!isCandidate)
         {
-            return false;
+            return null;
         }
 
         var candidateType = ParseTypeClause();
@@ -395,12 +395,11 @@ public partial class Parser
         if (position == candidateEnd && Diagnostics.Count == expressionDiagnosticCount)
         {
             var propertyPattern = TryParseTypePropertyPattern();
-            pattern = new TypeOrConstantPatternSyntax(
+            return new TypeOrConstantPatternSyntax(
                 syntaxTree,
                 expression,
                 candidateType,
                 propertyPattern);
-            return true;
         }
 
         if (position > candidateEnd
@@ -413,20 +412,19 @@ public partial class Parser
             position = savedPosition;
             tokens = savedTokens;
             Diagnostics.TruncateTo(savedDiagnosticCount);
-            return false;
+            return null;
         }
 
         position = candidateEnd;
         tokens = candidateTokens;
         Diagnostics.TruncateTo(expressionDiagnosticCount);
         var suffix = TryParseTypePropertyPattern();
-        pattern = new TypePatternSyntax(
+        return new TypePatternSyntax(
             syntaxTree,
             identifier: null,
             isKeyword: null,
             candidateType,
             suffix);
-        return true;
     }
 
     private static bool CanFollowBareTypePattern(SyntaxToken token)
