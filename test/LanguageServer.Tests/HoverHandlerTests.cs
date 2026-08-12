@@ -84,6 +84,20 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_PreservesRectangularArrayRank()
+    {
+        const string source = "package P\nfunc Read(matrix [,]int32) int32 { return matrix[0, 1] }\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var hover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "matrix"));
+
+        Assert.NotNull(hover);
+        Assert.Contains("(parameter) matrix [,]int32", hover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ComputeHover_PreservesConstructedTypesInsideCompositeTypeClauses()
     {
         const string source = """

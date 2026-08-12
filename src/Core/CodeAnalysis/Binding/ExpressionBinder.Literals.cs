@@ -2231,6 +2231,73 @@ internal sealed partial class ExpressionBinder
             ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
         var elements = ImmutableArray.CreateBuilder<BoundExpression>(elementSyntaxes.Count);
 
+        if (syntax.Dimensions is { Count: > 1 } dimensions)
+        {
+            if (dimensions.Count > 32)
+            {
+                Diagnostics.ReportRectangularArrayRankTooLarge(syntax.Location, dimensions.Count);
+                return new BoundErrorExpression(syntax);
+            }
+
+            var boundDimensions = ImmutableArray.CreateBuilder<BoundExpression>(dimensions.Count);
+            foreach (var dimension in dimensions)
+            {
+                boundDimensions.Add(conversions.BindConversion(dimension, TypeSymbol.Int32));
+            }
+
+            var rectangularElements = ImmutableArray.CreateBuilder<BoundExpression>(elementSyntaxes.Count);
+            foreach (var elementSyntax in elementSyntaxes)
+            {
+                rectangularElements.Add(conversions.BindConversion(elementSyntax, elementType));
+            }
+
+            var rectangularLengths = ImmutableArray<int>.Empty;
+            if (elementSyntaxes.Count > 0)
+            {
+                var lengths = ImmutableArray.CreateBuilder<int>(boundDimensions.Count);
+                long expectedCount = 1;
+                var allConstant = true;
+                foreach (var dimension in boundDimensions)
+                {
+                    if (dimension is not BoundLiteralExpression { Value: int dimensionLength } || dimensionLength < 0)
+                    {
+                        allConstant = false;
+                        break;
+                    }
+
+                    lengths.Add(dimensionLength);
+                    expectedCount = dimensionLength == 0
+                        ? 0
+                        : expectedCount > long.MaxValue / dimensionLength
+                            ? long.MaxValue
+                            : expectedCount * dimensionLength;
+                }
+
+                if (!allConstant)
+                {
+                    Diagnostics.ReportRectangularArrayInitializerRequiresConstantDimensions(syntax.Location);
+                }
+                else
+                {
+                    rectangularLengths = lengths.MoveToImmutable();
+                    if (expectedCount != elementSyntaxes.Count)
+                    {
+                        Diagnostics.ReportRectangularArrayInitializerLengthMismatch(
+                            syntax.Location,
+                            expectedCount,
+                            elementSyntaxes.Count);
+                    }
+                }
+            }
+
+            return BoundArrayCreationExpression.CreateRectangular(
+                syntax,
+                RectangularArrayTypeSymbol.Get(elementType, dimensions.Count),
+                boundDimensions.MoveToImmutable(),
+                rectangularElements.MoveToImmutable(),
+                rectangularLengths);
+        }
+
         // Issue #1272: the runtime/zero-initialised allocation form `[n]T`
         // (and the empty-initializer spelling `[n]T{}`). The length is an
         // arbitrary expression converted to int32 (mirroring how array indices

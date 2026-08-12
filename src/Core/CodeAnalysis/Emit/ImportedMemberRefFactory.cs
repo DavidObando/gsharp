@@ -195,6 +195,15 @@ internal sealed class ImportedMemberRefFactory
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
+        if (element is RectangularArrayTypeSymbol nestedRectangular)
+        {
+            var sigBlob = new BlobBuilder();
+            this.signatures.EncodeTypeSymbol(
+                new BlobEncoder(sigBlob).TypeSpecificationSignature(),
+                nestedRectangular);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        }
+
         if (element is SliceTypeSymbol nestedSlice)
         {
             var sigBlob = new BlobBuilder();
@@ -2175,6 +2184,69 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("get_Count"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    internal TypeSpecificationHandle GetRectangularArrayTypeSpec(RectangularArrayTypeSymbol arrayType)
+    {
+        var sigBlob = new BlobBuilder();
+        this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), arrayType);
+        return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    internal MemberReferenceHandle GetRectangularArrayMemberReference(
+        RectangularArrayTypeSymbol arrayType,
+        string name)
+    {
+        var parent = this.GetRectangularArrayTypeSpec(arrayType);
+        var sigBlob = new BlobBuilder();
+        var signature = new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true);
+        if (name == ".ctor")
+        {
+            signature.Parameters(
+                arrayType.Rank,
+                returnType: r => r.Void(),
+                parameters: ps =>
+                {
+                    for (var i = 0; i < arrayType.Rank; i++)
+                    {
+                        ps.AddParameter().Type().Int32();
+                    }
+                });
+        }
+        else
+        {
+            var parameterCount = arrayType.Rank + (name == "Set" ? 1 : 0);
+            signature.Parameters(
+                parameterCount,
+                returnType: r =>
+                {
+                    if (name == "Set")
+                    {
+                        r.Void();
+                    }
+                    else
+                    {
+                        this.signatures.EncodeTypeSymbol(r.Type(isByRef: name == "Address"), arrayType.ElementType);
+                    }
+                },
+                parameters: ps =>
+                {
+                    for (var i = 0; i < arrayType.Rank; i++)
+                    {
+                        ps.AddParameter().Type().Int32();
+                    }
+
+                    if (name == "Set")
+                    {
+                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), arrayType.ElementType);
+                    }
+                });
+        }
+
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent,
+            this.emitCtx.Metadata.GetOrAddString(name),
+            this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     // ADR-0087 §3 R6: cache reified delegate metadata by function shape and

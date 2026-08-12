@@ -41,7 +41,7 @@ internal static class AssignmentTargetSyntaxFacts
                     target.SyntaxTree,
                     indexedName.IdentifierToken,
                     indexed.OpenBracketToken,
-                    indexed.Index,
+                    indexed.Indices,
                     indexed.CloseBracketToken,
                     equalsToken,
                     value);
@@ -140,7 +140,7 @@ internal static class AssignmentTargetSyntaxFacts
                 expression.SyntaxTree,
                 rebuiltReceiver,
                 inner.OpenBracketToken,
-                inner.Index,
+                inner.Indices,
                 inner.CloseBracketToken);
             return true;
         }

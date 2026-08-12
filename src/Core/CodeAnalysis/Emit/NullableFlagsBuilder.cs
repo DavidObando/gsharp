@@ -122,6 +122,13 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        if (type is RectangularArrayTypeSymbol rectangular)
+        {
+            builder.Add(NotAnnotated);
+            Append(rectangular.ElementType, builder);
+            return;
+        }
+
         if (type is SliceTypeSymbol slice)
         {
             builder.Add(NotAnnotated);
@@ -271,6 +278,24 @@ internal static class NullableFlagsBuilder
                 Append(elem, builder);
             }
 
+            return;
+        }
+
+        if (type is ArrayTypeSymbol array)
+        {
+            Append(array.ElementType, builder);
+            return;
+        }
+
+        if (type is RectangularArrayTypeSymbol rectangular)
+        {
+            Append(rectangular.ElementType, builder);
+            return;
+        }
+
+        if (type is SliceTypeSymbol slice)
+        {
+            Append(slice.ElementType, builder);
             return;
         }
 

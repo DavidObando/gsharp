@@ -40,37 +40,6 @@ public sealed partial class CSharpToGSharpTranslator
                 this.typeMapper.TrackExtensionMethodNamespace(invocationExtMethod);
             }
 
-            // Issue #1893: `grid.GetLength(k)` against a genuine multi-dim array
-            // (Rank > 1) has no meaning on the flat backing array gsc actually
-            // holds (a rank-1 `.GetLength(1)` throws
-            // IndexOutOfRangeException at runtime — the original bug's crash).
-            // For a tracked array with a compile-time-constant `k`, substitute
-            // the corresponding hoisted/constant dimension size directly.
-            if (invocation.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "GetLength" } getLengthMember &&
-                invocation.ArgumentList.Arguments.Count == 1 &&
-                this.context.GetTypeInfo(getLengthMember.Expression).Type is IArrayTypeSymbol { Rank: > 1 })
-            {
-                ISymbol receiverSymbol = this.context.GetSymbolInfo(getLengthMember.Expression).Symbol;
-                Optional<object> constantDimIndex =
-                    this.context.SemanticModel.GetConstantValue(invocation.ArgumentList.Arguments[0].Expression);
-                if (receiverSymbol != null &&
-                    this.state.MultiDimArrays.TryGetValue(receiverSymbol, out MultiDimArrayInfo getLengthInfo) &&
-                    constantDimIndex.HasValue &&
-                    constantDimIndex.Value is int dimIndex &&
-                    dimIndex >= 0 &&
-                    dimIndex < getLengthInfo.DimensionSizes.Count)
-                {
-                    return getLengthInfo.DimensionSizes[dimIndex];
-                }
-
-                string getLengthGapMessage =
-                    "Array.GetLength on a multi-dimensional array requires a tracked receiver (a local " +
-                    "initialized directly from `new T[d0, d1, ...]` or a rectangular initializer) and a " +
-                    "compile-time-constant dimension index; this call has no canonical G# mapping yet.";
-                this.context.ReportUnsupported(invocation, getLengthGapMessage);
-                return LiteralExpression.Int("0");
-            }
-
             // C# delegate/event invocation `d.Invoke(args)` / `d?.Invoke(args)` maps
             // to G#'s direct function-call form `d(args)` / `d?(args)`: G# invokes a
             // function-typed value (delegate field or event) directly and has no

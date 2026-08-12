@@ -2,10 +2,15 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
+
+#pragma warning disable SA1611
+#pragma warning disable SA1615
+#pragma warning disable SA1642
 
 /// <summary>
 /// Bound indexed assignment <c>target[index] = value</c>. The target is either
@@ -29,10 +34,30 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
         BoundExpression index,
         BoundExpression value,
         TypeSymbol elementType)
+        : this(syntax, target, ImmutableArray.Create(index), value, elementType)
+    {
+    }
+
+    #pragma warning restore SA1642
+    #pragma warning restore SA1615
+    #pragma warning restore SA1611
+
+    /// <summary>Initializes a new instance of the <see cref="BoundIndexAssignmentExpression"/> class.</summary>
+    /// <param name="syntax">Originating syntax.</param>
+    /// <param name="target">Target variable.</param>
+    /// <param name="indices">Index expressions.</param>
+    /// <param name="value">Assigned value.</param>
+    /// <param name="elementType">Element type.</param>
+    public BoundIndexAssignmentExpression(
+        SyntaxNode? syntax,
+        VariableSymbol target,
+        ImmutableArray<BoundExpression> indices,
+        BoundExpression value,
+        TypeSymbol elementType)
         : base(syntax)
     {
         Target = target;
-        Index = index;
+        Indices = indices;
         Value = value;
         Type = elementType;
     }
@@ -43,10 +68,20 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
         BoundExpression index,
         BoundExpression value,
         TypeSymbol elementType)
+        : this(syntax, targetExpression, ImmutableArray.Create(index), value, elementType)
+    {
+    }
+
+    private BoundIndexAssignmentExpression(
+        SyntaxNode? syntax,
+        BoundExpression targetExpression,
+        ImmutableArray<BoundExpression> indices,
+        BoundExpression value,
+        TypeSymbol elementType)
         : base(syntax)
     {
         TargetExpression = targetExpression;
-        Index = index;
+        Indices = indices;
         Value = value;
         Type = elementType;
     }
@@ -69,7 +104,10 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
     public BoundExpression? TargetExpression { get; }
 
     /// <summary>Gets the index expression.</summary>
-    public BoundExpression Index { get; }
+    public BoundExpression Index => Indices[0];
+
+    /// <summary>Gets index expressions.</summary>
+    public ImmutableArray<BoundExpression> Indices { get; }
 
     /// <summary>Gets the value expression.</summary>
     public BoundExpression Value { get; }
@@ -93,5 +131,22 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
         TypeSymbol elementType)
     {
         return new BoundIndexAssignmentExpression(syntax, targetExpression, index, value, elementType);
+    }
+
+    /// <summary>Creates an expression-target indexed assignment with multiple indices.</summary>
+    /// <param name="syntax">Originating syntax.</param>
+    /// <param name="targetExpression">Target expression.</param>
+    /// <param name="indices">Index expressions.</param>
+    /// <param name="value">Assigned value.</param>
+    /// <param name="elementType">Element type.</param>
+    /// <returns>Bound indexed assignment.</returns>
+    public static BoundIndexAssignmentExpression WithExpressionTarget(
+        SyntaxNode? syntax,
+        BoundExpression targetExpression,
+        ImmutableArray<BoundExpression> indices,
+        BoundExpression value,
+        TypeSymbol elementType)
+    {
+        return new BoundIndexAssignmentExpression(syntax, targetExpression, indices, value, elementType);
     }
 }

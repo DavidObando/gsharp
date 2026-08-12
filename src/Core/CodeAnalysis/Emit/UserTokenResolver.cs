@@ -435,6 +435,13 @@ internal sealed class UserTokenResolver
             return TryUnify(fa.ElementType, aa.ElementType, tp, out inferred);
         }
 
+        if (formal is RectangularArrayTypeSymbol fr
+            && actual is RectangularArrayTypeSymbol ar
+            && fr.Rank == ar.Rank)
+        {
+            return TryUnify(fr.ElementType, ar.ElementType, tp, out inferred);
+        }
+
         // Issue #810: unify open-generic iterator returns of
         // `sequence[T]` / `async sequence[T]` against their substituted
         // counterparts so the MethodSpec for a call like

@@ -337,6 +337,17 @@ internal sealed class SignatureEncoder
         {
             EncodeTypeSymbol(encoder.SZArray(), arr.ElementType);
         }
+        else if (type is RectangularArrayTypeSymbol rectangular)
+        {
+            encoder.Array(
+                out var elementEncoder,
+                out var shapeEncoder);
+            this.EncodeTypeSymbol(elementEncoder, rectangular.ElementType);
+            shapeEncoder.Shape(
+                rectangular.Rank,
+                ImmutableArray<int>.Empty,
+                Enumerable.Repeat(0, rectangular.Rank).ToImmutableArray());
+        }
         else if (type is SliceTypeSymbol slice)
         {
             EncodeTypeSymbol(encoder.SZArray(), slice.ElementType);
@@ -795,6 +806,20 @@ internal sealed class SignatureEncoder
                 if (type.IsArray && type.GetArrayRank() == 1)
                 {
                     EncodeClrType(encoder.SZArray(), type.GetElementType()!);
+                    break;
+                }
+
+                if (type.IsArray)
+                {
+                    encoder.Array(
+                        out var elementEncoder,
+                        out var shapeEncoder);
+                    // IsArray check above establishes a non-null reflection element type.
+                    EncodeClrType(elementEncoder, type.GetElementType()!);
+                    shapeEncoder.Shape(
+                        type.GetArrayRank(),
+                        ImmutableArray<int>.Empty,
+                        Enumerable.Repeat(0, type.GetArrayRank()).ToImmutableArray());
                     break;
                 }
 

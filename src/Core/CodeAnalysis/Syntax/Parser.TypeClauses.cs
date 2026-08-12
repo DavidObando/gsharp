@@ -119,9 +119,20 @@ public partial class Parser
         {
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
             SyntaxToken? length = null;
+            var rankCommas = ImmutableArray.CreateBuilder<SyntaxToken>();
             if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
             {
-                length = MatchToken(SyntaxKind.NumberToken);
+                if (Current.Kind == SyntaxKind.CommaToken)
+                {
+                    while (Current.Kind == SyntaxKind.CommaToken)
+                    {
+                        rankCommas.Add(MatchToken(SyntaxKind.CommaToken));
+                    }
+                }
+                else
+                {
+                    length = MatchToken(SyntaxKind.NumberToken);
+                }
             }
 
             var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
@@ -162,7 +173,8 @@ public partial class Parser
                     closeBracket,
                     nestedElement,
                     nestedQuestion,
-                    arrayNullableQuestion);
+                    arrayNullableQuestion,
+                    rankCommas.ToImmutable());
             }
 
             var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -190,7 +202,8 @@ public partial class Parser
                 arrayNullableQuestion,
                 arrayTail.OuterSegmentTypeArgumentOpens,
                 arrayTail.OuterSegmentTypeArgumentLists,
-                arrayTail.OuterSegmentTypeArgumentCloses);
+                arrayTail.OuterSegmentTypeArgumentCloses,
+                rankCommas.ToImmutable());
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);

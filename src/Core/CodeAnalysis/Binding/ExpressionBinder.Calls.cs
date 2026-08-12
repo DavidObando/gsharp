@@ -1033,7 +1033,9 @@ internal sealed partial class ExpressionBinder
                 binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, operand.Type);
 
                 var ok = operand.Type is ArrayTypeSymbol || operand.Type is SliceTypeSymbol
-                    || (name == "len" && (operand.Type == TypeSymbol.String || operand.Type is MapTypeSymbol));
+                    || (name == "len"
+                        && (operand.Type == TypeSymbol.String
+                            || operand.Type is MapTypeSymbol or RectangularArrayTypeSymbol));
                 if (!ok)
                 {
                     Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, operand.Type);

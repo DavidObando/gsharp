@@ -1687,7 +1687,12 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether GS0523 should be reported.</returns>
     private static bool IsBareMagicCollectionNilCompareOperand(BoundExpression operand)
     {
-        if (operand.Type is not (MapTypeSymbol or SliceTypeSymbol or ArrayTypeSymbol or ChannelTypeSymbol))
+        if (operand.Type is not (
+            MapTypeSymbol
+            or SliceTypeSymbol
+            or ArrayTypeSymbol
+            or RectangularArrayTypeSymbol
+            or ChannelTypeSymbol))
         {
             return false;
         }

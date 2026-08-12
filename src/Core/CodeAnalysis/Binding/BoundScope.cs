@@ -2687,6 +2687,9 @@ public sealed class BoundScope
             case ArrayTypeSymbol a:
                 CollectTypeParameters(a.ElementType, sink, depth + 1);
                 return;
+            case RectangularArrayTypeSymbol a:
+                CollectTypeParameters(a.ElementType, sink, depth + 1);
+                return;
             case SequenceTypeSymbol seq:
                 CollectTypeParameters(seq.ElementType, sink, depth + 1);
                 return;

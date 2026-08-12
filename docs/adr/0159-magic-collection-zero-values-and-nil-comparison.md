@@ -3,12 +3,13 @@
 - **Status**: Accepted
 - **Date**: 2026-08-06
 - **Phase**: Language semantics
-- **Related**: #3310, #2262, #3163; ADR-0001 (null model), ADR-0008 (variable bindings), ADR-0016 (slices), ADR-0022 (channels), ADR-0040 (sequences), ADR-0100 (`default` expression), ADR-0104 (`?` spelling discipline, unchanged)
+- **Related**: #3310, #2262, #3163; ADR-0001 (null model), ADR-0008 (variable bindings), ADR-0016 (slices), ADR-0022 (channels), ADR-0040 (sequences), ADR-0100 (`default` expression), ADR-0104 (`?` spelling discipline, unchanged), ADR-0164 (rectangular arrays)
 
 ## Context
 
 G#'s compiler-known ("magic") collection types are all backed by CLR reference
-types: `map[K, V]` by `Dictionary<K, V>`, `[]T` and `[N]T` by `T[]`, `chan T`
+types: `map[K, V]` by `Dictionary<K, V>`, `[]T` and `[N]T` by `T[]`, `[,]T`
+and higher ranks by CLR rectangular arrays, `chan T`
 by `System.Threading.Channels.Channel<T>`, `sequence[T]` by `IEnumerable<T>`,
 `asyncSequence[T]` by `IAsyncEnumerable<T>`. Two long-standing unsoundnesses
 follow from that representation:
@@ -48,6 +49,7 @@ semantics.
 | `map[K, V]` | `Dictionary<K, V>` | yes | binds (since #3309) | **empty map** (`new Dictionary<K, V>()`) — new here |
 | `[]T` | `T[]` | yes | **binds — new here** (flips #3309's pin) | **empty slice** (`new T[0]`) — new here |
 | `[N]T` | `T[]` | yes | **binds — new here** | **zeroed array of length N** (`new T[N]`) — new here |
+| `[,]T` and higher ranks | CLR rectangular array | yes | binds (ADR-0164) | **empty rectangular array** (every dimension zero) — ADR-0164 |
 | `chan T` | `Channel<T>` | yes | **binds — new here** (flips #3309's pin) | **carved out — no auto-creation; GS0520 requires an explicit initializer** |
 | `sequence[T]` | `IEnumerable<T>` | yes | binds (since #796) | **empty sequence** (an empty `T[]` as `IEnumerable<T>`) — new here |
 | `asyncSequence[T]` | `IAsyncEnumerable<T>` | yes | binds (since #796) | n/a — not a declarable slot type (GS0113); exists only in async-func return position (ADR-0041) |
@@ -58,7 +60,8 @@ semantics.
 ### Nil comparison: one rule, stated once
 
 `x == nil` / `x != nil` binds for **every reference-backed builtin type**.
-`SliceTypeSymbol`, `ChannelTypeSymbol`, and `ArrayTypeSymbol` join
+`SliceTypeSymbol`, `ChannelTypeSymbol`, `ArrayTypeSymbol`, and
+`RectangularArrayTypeSymbol` join
 `BoundBinaryOperator.IsNullCompare`'s reference-shaped family alongside the
 existing function/delegate/sequence/map/interface/class arms. Both operators,
 both operand orders (#3217 nil-on-left canonicalization), `?`-typed and bare
@@ -77,8 +80,9 @@ follow-up candidate.
 
 ### Zero values: empty instances at every declaration surface
 
-A declared-without-initializer slot of type `map[K, V]`, `[]T`, `[N]T`, or
-`sequence[T]` binds an **empty instance** instead of null:
+A declared-without-initializer slot of type `map[K, V]`, `[]T`, `[N]T`,
+`[,]T` (or higher rank), or `sequence[T]` binds an **empty instance** instead
+of null:
 
 - **Locals** — `var m map[int, long]` binds `map[int, long]{}` (the #2262
   repro simply works).

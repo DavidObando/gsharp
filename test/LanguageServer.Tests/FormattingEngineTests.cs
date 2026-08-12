@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
 namespace GSharp.LanguageServer.Tests;
@@ -154,5 +155,20 @@ public class FormattingEngineTests
 
         Assert.Contains("while let value = maybe {", result);
         Assert.Contains("    var length = value.Length", result);
+    }
+
+    [Fact]
+    public void Format_RectangularArrayRanksDimensionsIndicesAndInitializers()
+    {
+        const string input = "func read(value[,]int32)int32{\nlet copy=[2,3]int32{1,2,3,4,5,6}\nreturn value[0,1]+copy[1,2]\n}\n";
+
+        var result = FormattingEngine.Format(input);
+
+        Assert.Contains("[,]", result);
+        Assert.Contains("[2, 3]", result);
+        Assert.Contains("[0, 1]", result);
+        Assert.Contains("[1, 2]", result);
+        Assert.Equal(result, FormattingEngine.Format(result));
+        Assert.Empty(SyntaxTree.Parse(result).Diagnostics);
     }
 }

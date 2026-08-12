@@ -614,7 +614,11 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitArrayCreationExpression(BoundArrayCreationExpression node)
     {
-        if (node.LengthExpression != null)
+        if (node.DimensionExpressions.Length > 1)
+        {
+            VisitList(node.DimensionExpressions);
+        }
+        else if (node.LengthExpression != null)
         {
             VisitExpression(node.LengthExpression);
         }
@@ -649,7 +653,10 @@ public abstract class BoundTreeWalker
     protected virtual void VisitIndexExpression(BoundIndexExpression node)
     {
         VisitExpression(node.Target);
-        VisitExpression(node.Index);
+        foreach (var index in node.Indices)
+        {
+            VisitExpression(index);
+        }
     }
 
     protected virtual void VisitIndexAssignmentExpression(BoundIndexAssignmentExpression node)
@@ -659,7 +666,11 @@ public abstract class BoundTreeWalker
             VisitExpression(node.TargetExpression);
         }
 
-        VisitExpression(node.Index);
+        foreach (var index in node.Indices)
+        {
+            VisitExpression(index);
+        }
+
         VisitExpression(node.Value);
     }
 

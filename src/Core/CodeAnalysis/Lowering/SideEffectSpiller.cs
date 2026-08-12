@@ -130,7 +130,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         // the index or value are themselves spilled bottom-up.
         var rewritten = (BoundIndexAssignmentExpression)base.RewriteIndexAssignmentExpression(node);
 
-        var spillIndex = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Index);
+        var spillIndex = rewritten.Indices.Any(SideEffectAnalyzer.HasObservableSideEffect);
         var spillValue = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value);
         if (!spillIndex && !spillValue)
         {
@@ -138,26 +138,34 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         }
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        var index = this.MaybeSpill(rewritten.Index, spillIndex, "idx", statements);
+        var target = rewritten.TargetExpression
+            ?? new BoundVariableExpression(
+                rewritten.Syntax,
+                BoundNodeForm.VariableTarget(rewritten));
+        target = this.MaybeSpill(target, true, "coll", statements);
+
+        var indices = ImmutableArray.CreateBuilder<BoundExpression>(rewritten.Indices.Length);
+        foreach (var candidate in rewritten.Indices)
+        {
+            indices.Add(this.MaybeSpill(
+                candidate,
+                true,
+                "idx",
+                statements));
+        }
+
+        var rewrittenIndices = indices.MoveToImmutable();
         var value = this.MaybeSpill(rewritten.Value, spillValue, "val", statements);
 
-        // Rebuild through the form the node actually has: the expression-target
-        // form (#2488, a narrowed target) carries no Target, and reconstructing it
-        // through the variable-target constructor would drop TargetExpression --
-        // the #3333 failure shape.
-        var assignment = rewritten.TargetExpression != null
-            ? BoundIndexAssignmentExpression.WithExpressionTarget(
-                rewritten.Syntax,
-                rewritten.TargetExpression,
-                index,
-                value,
-                rewritten.Type)
-            : new BoundIndexAssignmentExpression(
-                rewritten.Syntax,
-                BoundNodeForm.VariableTarget(rewritten),
-                index,
-                value,
-                rewritten.Type);
+        // Target and every index must be captured before value evaluation.
+        // A later call can mutate even a previously pure variable or field
+        // read, so spilling only effectful operands breaks left-to-right order.
+        var assignment = BoundIndexAssignmentExpression.WithExpressionTarget(
+            rewritten.Syntax,
+            target,
+            rewrittenIndices,
+            value,
+            rewritten.Type);
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
     }
@@ -462,17 +470,25 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
                     SideEffectAnalyzer.HasObservableSideEffect(element.Target),
                     "coll",
                     statements);
-                var index = this.MaybeSpill(
-                    element.Index,
-                    SideEffectAnalyzer.HasObservableSideEffect(element.Index),
-                    "idx",
-                    statements);
-                if (ReferenceEquals(target, element.Target) && ReferenceEquals(index, element.Index))
+                var indices = ImmutableArray.CreateBuilder<BoundExpression>(element.Indices.Length);
+                var changed = !ReferenceEquals(target, element.Target);
+                foreach (var candidate in element.Indices)
+                {
+                    var index = this.MaybeSpill(
+                        candidate,
+                        SideEffectAnalyzer.HasObservableSideEffect(candidate),
+                        "idx",
+                        statements);
+                    indices.Add(index);
+                    changed |= !ReferenceEquals(index, candidate);
+                }
+
+                if (!changed)
                 {
                     return element;
                 }
 
-                return new BoundIndexExpression(element.Syntax, target, index, element.Type);
+                return new BoundIndexExpression(element.Syntax, target, indices.MoveToImmutable(), element.Type);
             }
 
             case BoundFieldAccessExpression fieldLink when fieldLink.Receiver != null:

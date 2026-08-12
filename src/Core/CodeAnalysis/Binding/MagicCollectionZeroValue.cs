@@ -15,7 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #3310 / ADR-0159: sound zero values for the magic collection types.
 /// A declared-without-initializer slot of type <c>map[K, V]</c>, <c>[]T</c>,
-/// <c>[N]T</c>, or <c>sequence[T]</c> binds an <b>empty instance</b> instead
+/// <c>[N]T</c>, <c>[,]T</c>, or <c>sequence[T]</c> binds an <b>empty instance</b> instead
 /// of a null reference, making the bare (non-<c>?</c>) spelling's non-null
 /// promise true (the #2262 NRE class). The synthesized expressions reuse the
 /// existing literal machinery — <see cref="BoundMapLiteralExpression"/> with
@@ -107,6 +107,7 @@ internal static class MagicCollectionZeroValue
         => type is MapTypeSymbol
             or SliceTypeSymbol
             or ArrayTypeSymbol
+            or RectangularArrayTypeSymbol
             or SequenceTypeSymbol
             or StructSymbol { IsClass: false, IsInline: false };
 
@@ -149,6 +150,7 @@ internal static class MagicCollectionZeroValue
         MapTypeSymbol => "map",
         SliceTypeSymbol => "slice",
         ArrayTypeSymbol arr => "arr" + arr.Length.ToString(CultureInfo.InvariantCulture),
+        RectangularArrayTypeSymbol array => "rect" + array.Rank.ToString(CultureInfo.InvariantCulture),
         SequenceTypeSymbol => "seq",
         StructSymbol { IsClass: false, IsInline: false } structField when TrySynthesizeEmptyInstance(null, structField) != null => "struct",
         _ => null,
@@ -217,6 +219,23 @@ internal static class MagicCollectionZeroValue
             }
 
             type = ArrayTypeSymbol.Get(TypeSymbol.FromClrType(elementClr), length);
+        }
+        else if (markerKind.StartsWith("rect", StringComparison.Ordinal))
+        {
+            var elementClr = fieldInfo.FieldType.GetElementType();
+            if (elementClr == null
+                || !fieldInfo.FieldType.IsArray
+                || !int.TryParse(
+                    markerKind.AsSpan(4),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var rank)
+                || fieldInfo.FieldType.GetArrayRank() != rank)
+            {
+                return null;
+            }
+
+            type = RectangularArrayTypeSymbol.Get(TypeSymbol.FromClrType(elementClr), rank);
         }
         else if (string.Equals(markerKind, "seq", StringComparison.Ordinal))
         {
@@ -343,6 +362,18 @@ internal static class MagicCollectionZeroValue
                     syntax,
                     arrayType,
                     new BoundLiteralExpression(syntax, arrayType.Length, TypeSymbol.Int32));
+
+            case RectangularArrayTypeSymbol rectangularType:
+                var dimensions = ImmutableArray.CreateBuilder<BoundExpression>(rectangularType.Rank);
+                for (var i = 0; i < rectangularType.Rank; i++)
+                {
+                    dimensions.Add(new BoundLiteralExpression(syntax, 0, TypeSymbol.Int32));
+                }
+
+                return BoundArrayCreationExpression.CreateRectangular(
+                    syntax,
+                    rectangularType,
+                    dimensions.MoveToImmutable());
 
             case SequenceTypeSymbol sequenceType:
                 // The empty sequence is an empty T[] held as IEnumerable<T> —

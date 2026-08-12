@@ -294,6 +294,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             // the same failure mode as #1624. Always key them structurally.
             case SliceTypeSymbol:
             case ArrayTypeSymbol:
+            case RectangularArrayTypeSymbol:
             case PinnedTypeSymbol:
             case NullabilityAnnotatedTypeSymbol:
             case TupleTypeSymbol:
@@ -353,6 +354,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 // and `[5]int32` (and `[]int32`, via the distinct `!slice` tag
                 // above) would otherwise collide.
                 builder.Append("!array(").Append(a.Length).Append(',');
+                AppendIdentityKey(builder, a.ElementType);
+                builder.Append(')');
+                break;
+            case RectangularArrayTypeSymbol a:
+                builder.Append("!mdarray(").Append(a.Rank).Append(',');
                 AppendIdentityKey(builder, a.ElementType);
                 builder.Append(')');
                 break;

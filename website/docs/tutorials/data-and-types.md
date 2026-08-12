@@ -243,7 +243,7 @@ o-1
 
 ## 6. Choose arrays, slices, and maps
 
-Fixed arrays use `[N]T`. Slices use `[]T`, expose `.Length`, and are backed by CLR arrays. Use CLR collections such as `List[T]` when you need growable storage; CLR collections can use collection initializers:
+Fixed arrays use `[N]T`. Slices use `[]T`, expose `.Length`, and are backed by CLR arrays. Native CLR rectangular arrays use `[,]T` / `[,,]T`, allocate with `[d0, d1]T`, and index with `a[i, j]`. Use CLR collections such as `List[T]` when you need growable storage; CLR collections can use collection initializers:
 
 ```gsharp title="Slices.gs"
 // file: Slices.gs
@@ -330,6 +330,31 @@ Expected output:
 alpha
 beta
 139
+```
+
+Rectangular arrays preserve CLR rank, bounds, row-major order, and interop:
+
+```gsharp title="RectangularArrays.gs"
+package GSharp.Example.RectangularArrays
+
+import System
+
+var matrix [,]int32 = [2, 3]int32{1, 2, 3, 4, 5, 6}
+matrix[1, 2] = 42
+
+Console.WriteLine(matrix.Rank)
+Console.WriteLine(matrix.Length)
+Console.WriteLine(matrix.GetLength(1))
+Console.WriteLine(matrix[1, 2])
+```
+
+Expected output:
+
+```text
+2
+6
+3
+42
 ```
 
 For maps, use `map[K,V]` for the G# map type or import `System.Collections.Generic` and use CLR `Dictionary[K, V]`, as shown in [Projects and packages](./project-and-packages).

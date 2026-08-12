@@ -985,8 +985,9 @@ internal sealed partial class MethodBodyEmitter
         // before the general CLR assignability shortcuts below: exact array and
         // invariant-interface elements remain required, while covariant
         // read-only interfaces may widen their reference element.
-        if ((a is SliceTypeSymbol || a is ImportedTypeSymbol { ClrType: { IsArray: true } })
-            && (b is SliceTypeSymbol or ArrayTypeSymbol
+        if ((a is SliceTypeSymbol or RectangularArrayTypeSymbol
+                || a is ImportedTypeSymbol { ClrType: { IsArray: true } })
+            && (b is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol
                 || b?.ClrType?.IsArray == true
                 || b?.ClrType?.IsInterface == true))
         {
@@ -1018,8 +1019,8 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        // Issue #2140: a G# slice `[]T` (any element type) is backed at
-        // runtime by a one-dimensional CLR array. Upcasting it to the base
+        // Issue #2140 / #3354: a G# slice or rectangular array (any element
+        // type) is CLR array-backed. Upcasting it to the base
         // class `System.Array` — or to any of the element-INDEPENDENT non-
         // generic array supertype interfaces (IEnumerable, ICollection,
         // IList, ICloneable, IStructuralComparable, IStructuralEquatable) —
@@ -1029,7 +1030,7 @@ internal sealed partial class MethodBodyEmitter
         // #570 CLR arms above; these arms additionally recognise the
         // generic-type-parameter / same-compilation-user element case whose
         // backing `ClrType` is null during emit.
-        if (a is SliceTypeSymbol)
+        if (a is SliceTypeSymbol or RectangularArrayTypeSymbol)
         {
             var bClr = b?.ClrType;
             if (bClr != null

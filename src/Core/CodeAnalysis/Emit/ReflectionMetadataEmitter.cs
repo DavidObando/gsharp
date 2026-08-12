@@ -5285,6 +5285,11 @@ internal sealed class ReflectionMetadataEmitter
             return ArgIsSymbolicUserDefined(arr.ElementType);
         }
 
+        if (arg is RectangularArrayTypeSymbol rectangular)
+        {
+            return ArgIsSymbolicUserDefined(rectangular.ElementType);
+        }
+
         if (arg is SliceTypeSymbol slice)
         {
             return ArgIsSymbolicUserDefined(slice.ElementType);

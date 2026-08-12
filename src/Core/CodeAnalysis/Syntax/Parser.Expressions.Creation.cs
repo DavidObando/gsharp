@@ -282,6 +282,7 @@ public partial class Parser
         // full `LengthExpression`.
         SyntaxToken? lengthToken = null;
         ExpressionSyntax? lengthExpression = null;
+        SeparatedSyntaxList<ExpressionSyntax>? dimensions = null;
         if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
         {
             if (Current.Kind == SyntaxKind.NumberToken && Peek(1).Kind == SyntaxKind.CloseSquareBracketToken)
@@ -290,7 +291,19 @@ public partial class Parser
             }
             else
             {
+                var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
                 lengthExpression = ParseExpression();
+                nodesAndSeparators.Add(lengthExpression);
+                while (Current.Kind == SyntaxKind.CommaToken)
+                {
+                    nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                    nodesAndSeparators.Add(ParseExpression());
+                }
+
+                if (nodesAndSeparators.Count > 1)
+                {
+                    dimensions = new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+                }
             }
         }
 
@@ -319,6 +332,19 @@ public partial class Parser
             var nestedElementType = ParseTypeClause();
             var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) =
                 ParseOptionalArrayInitializer(allowSpread: lengthExpression == null && lengthToken == null);
+
+            if (dimensions != null)
+            {
+                return new ArrayCreationExpressionSyntax(
+                    syntaxTree,
+                    openBracket,
+                    dimensions,
+                    closeBracket,
+                    nestedElementType,
+                    nestedOpenBrace,
+                    nestedElements,
+                    nestedCloseBrace);
+            }
 
             // Issue #1272: the no-initializer (or empty-initializer) form with a
             // length yields the runtime/zero-initialised allocation `[n][]T`.
@@ -364,6 +390,19 @@ public partial class Parser
             var (nElemOpenBrace, nElemElements, nElemCloseBrace, nElemHasElements) =
                 ParseOptionalArrayInitializer(allowSpread: lengthExpression == null && lengthToken == null);
 
+            if (dimensions != null)
+            {
+                return new ArrayCreationExpressionSyntax(
+                    syntaxTree,
+                    openBracket,
+                    dimensions,
+                    closeBracket,
+                    elementClause,
+                    nElemOpenBrace,
+                    nElemElements,
+                    nElemCloseBrace);
+            }
+
             if (!nElemHasElements && (lengthExpression != null || lengthToken != null))
             {
                 // The enclosing `if` requires one of lengthExpression/lengthToken, and
@@ -401,12 +440,38 @@ public partial class Parser
         // `[5]T{}`) is likewise a (constant-length) zero-initialised allocation.
         if (!hasElements && (lengthExpression != null || lengthToken != null))
         {
+            if (dimensions != null)
+            {
+                return new ArrayCreationExpressionSyntax(
+                    syntaxTree,
+                    openBracket,
+                    dimensions,
+                    closeBracket,
+                    elementType,
+                    openBrace,
+                    elements,
+                    closeBrace);
+            }
+
             // The enclosing `if` requires one of lengthExpression/lengthToken, and
             // the coalesce only reaches lengthToken when lengthExpression is null.
             return new ArrayCreationExpressionSyntax(
                 syntaxTree,
                 openBracket,
                 lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken!),
+                closeBracket,
+                elementType,
+                openBrace,
+                elements,
+                closeBrace);
+        }
+
+        if (dimensions != null)
+        {
+            return new ArrayCreationExpressionSyntax(
+                syntaxTree,
+                openBracket,
+                dimensions,
                 closeBracket,
                 elementType,
                 openBrace,
@@ -849,6 +914,13 @@ public partial class Parser
             if (Peek(pos).Kind == SyntaxKind.NumberToken)
             {
                 pos++;
+            }
+            else
+            {
+                while (Peek(pos).Kind == SyntaxKind.CommaToken)
+                {
+                    pos++;
+                }
             }
 
             if (Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken)

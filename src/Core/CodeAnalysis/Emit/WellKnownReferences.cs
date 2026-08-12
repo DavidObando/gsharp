@@ -28,7 +28,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <c>IsReadOnlyAttribute</c> / <c>IsByRefLikeAttribute</c> /
 /// <c>ObsoleteAttribute</c> ctors, and the stateless lookups for
 /// <c>String.get_Length</c> / <c>String.get_Chars</c> /
-/// <c>Type.GetTypeFromHandle</c> / <c>Array.Copy</c> /
+/// <c>Type.GetTypeFromHandle</c> / <c>Array.get_Length</c> / <c>Array.Copy</c> /
 /// <c>Nullable&lt;T&gt;.get_Value</c> / <c>Nullable&lt;T&gt;.get_HasValue</c>.
 /// </summary>
 /// <remarks>
@@ -865,6 +865,13 @@ internal sealed class WellKnownReferences
         // System.String::get_Chars(Int32) — used for string indexing (issue #537).
         var method = this.emitCtx.CoreStringType.GetMethod("get_Chars", new[] { this.emitCtx.CoreInt32Type })
             ?? throw new InvalidOperationException("String.get_Chars(int) is not resolvable from the supplied references.");
+        return this.getMethodReference(method);
+    }
+
+    public MemberReferenceHandle GetArrayLengthReference()
+    {
+        var method = this.emitCtx.CoreArrayType.GetMethod("get_Length", Type.EmptyTypes)
+            ?? throw new InvalidOperationException("Array.get_Length is not resolvable from the supplied references.");
         return this.getMethodReference(method);
     }
 

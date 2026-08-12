@@ -130,7 +130,7 @@ public static class GSharpPrinter
         if (type is ArrayTypeReference array)
         {
             var arrayMarker = array.IsNullable ? "?" : string.Empty;
-            return $"[]{arrayMarker}{RenderType(array.ElementType)}";
+            return $"[{new string(',', array.Rank - 1)}]{arrayMarker}{RenderType(array.ElementType)}";
         }
 
         // Issue #1745: `type` can't be null here — RenderTypeCore already
@@ -163,7 +163,7 @@ public static class GSharpPrinter
                 return $"{named.Name}[{string.Join(", ", named.TypeArguments.Select(RenderType))}]";
 
             case ArrayTypeReference array:
-                return $"[]{RenderType(array.ElementType)}";
+                return $"[{new string(',', array.Rank - 1)}]{RenderType(array.ElementType)}";
 
             case PointerTypeReference pointer:
                 return $"*{RenderType(pointer.ElementType)}";
@@ -494,7 +494,7 @@ public static class GSharpPrinter
                 return $"{namedArgument.Name}: {RenderExpression(namedArgument.Value, indent)}";
 
             case IndexExpression index:
-                return $"{RenderExpression(index.Target, indent)}[{RenderExpression(index.Index, indent)}]";
+                return $"{RenderExpression(index.Target, indent)}[{string.Join(", ", index.Indices.Select(i => RenderExpression(i, indent)))}]";
 
             case FromEndIndexExpression fromEnd:
                 return $"^{RenderExpression(fromEnd.Operand, indent)}";
@@ -540,7 +540,10 @@ public static class GSharpPrinter
                 return $"[]{RenderType(arrayLiteral.ElementType)}{{{elements}}}";
 
             case ArrayAllocationExpression arrayAllocation:
-                return $"[{RenderExpression(arrayAllocation.Length, indent)}]{RenderType(arrayAllocation.ElementType)}";
+                var allocation = $"[{string.Join(", ", arrayAllocation.Dimensions.Select(d => RenderExpression(d, indent)))}]{RenderType(arrayAllocation.ElementType)}";
+                return arrayAllocation.Elements.Count == 0
+                    ? allocation
+                    : $"{allocation}{{{string.Join(", ", arrayAllocation.Elements.Select(e => RenderExpression(e, indent)))}}}";
 
             case TupleLiteralExpression tuple:
                 var tupleElements = string.Join(", ", tuple.Elements.Select(e => RenderExpression(e, indent)));

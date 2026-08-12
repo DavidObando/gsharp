@@ -167,9 +167,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // a genuine multi-dim array (Rank > 1) needs every index — the
                     // single-index path below only ever reads argument 0.
                     if (elementAccess.ArgumentList.Arguments.Count > 1 &&
-                        this.context.GetTypeInfo(elementAccess.Expression).Type is IArrayTypeSymbol { Rank: > 1 } multiDimArray)
+                        this.context.GetTypeInfo(elementAccess.Expression).Type is IArrayTypeSymbol { Rank: > 1 })
                     {
-                        return this.TranslateMultiDimElementAccess(elementAccess, multiDimArray.Rank);
+                        return this.TranslateMultiDimElementAccess(elementAccess);
                     }
 
                     // Issue #1987: `list[i]` against a ref-returning indexer
@@ -1426,19 +1426,50 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (creation.Type.RankSpecifiers.Count > 0 && creation.Type.RankSpecifiers[0].Sizes.Count > 1)
             {
-                // A rectangular multi-dim `new T[d0, d1, ...]` / `new T[,]{{...}}`
-                // reached from anywhere other than a tracked local declaration
-                // (see TranslateLocalDeclaration) has no symbol to hang its
-                // per-dimension sizes on, so a later `x[i, j]`/`x.GetLength(k)`
-                // could not rebuild the flat index. Rather than silently emit a
-                // lossy 1-D array (the original #1893 bug), report the gap loudly.
-                string multiDimCreationGapMessage =
-                    "multi-dimensional array creation is only supported as the direct initializer of a local " +
-                    "variable declaration (`T[,] x = new T[d0, d1, ...]` or `T[,] x = new T[,]{{...}}`); this " +
-                    "shape has no symbol to track per-dimension sizes against, so it has no canonical " +
-                    "flat-array mapping yet.";
-                this.context.ReportUnsupported(creation, multiDimCreationGapMessage);
-                return new ArrayAllocationExpression(elementType, LiteralExpression.Int("0"));
+                int rank = creation.Type.RankSpecifiers[0].Sizes.Count;
+                if (creation.Initializer != null)
+                {
+                    var leaves = new List<ExpressionSyntax>();
+                    IReadOnlyList<GExpression> dimensions;
+                    if (creation.Type.RankSpecifiers[0].Sizes.All(
+                        size => size.IsKind(SyntaxKind.OmittedArraySizeExpression)))
+                    {
+                        var inferredDimensions = new int[rank];
+                        FlattenRectangularArrayInitializer(
+                            creation.Initializer,
+                            0,
+                            rank,
+                            inferredDimensions,
+                            leaves);
+                        dimensions = inferredDimensions
+                            .Select(d => (GExpression)LiteralExpression.Int(
+                                d.ToString(CultureInfo.InvariantCulture)))
+                            .ToList();
+                    }
+                    else
+                    {
+                        dimensions = creation.Type.RankSpecifiers[0].Sizes
+                            .Select(this.TranslateRectangularInitializerDimension)
+                            .ToList();
+                        FlattenRectangularArrayInitializer(
+                            creation.Initializer,
+                            0,
+                            rank,
+                            new int[rank],
+                            leaves);
+                    }
+
+                    return new ArrayAllocationExpression(
+                        elementType,
+                        dimensions,
+                        leaves.Select(this.TranslateExpression).ToList());
+                }
+
+                return new ArrayAllocationExpression(
+                    elementType,
+                    creation.Type.RankSpecifiers[0].Sizes
+                        .Select(size => this.CoerceLengthToInt32(size, this.TranslateExpression(size)))
+                        .ToList());
             }
 
             if (creation.Initializer != null)
@@ -1472,79 +1503,41 @@ public sealed partial class CSharpToGSharpTranslator
             return new ArrayAllocationExpression(elementType, length);
         }
 
-        /// <summary>
-        /// Issue #1893: lowers a C# rectangular multi-dim array creation
-        /// (<c>new T[d0, d1, ...]</c> or the initializer form
-        /// <c>new T[,]{{...}}</c>) that is the DIRECT initializer of a tracked
-        /// local declaration to a single flat backing array of length
-        /// <c>d0*d1*...</c>. Registers <paramref name="declaredSymbol"/> in
-        /// <see cref="DocumentTranslationState.MultiDimArrays"/> so later <c>x[i, j, ...]</c> element
-        /// access and <c>x.GetLength(k)</c> calls can rebuild the row-major flat
-        /// index / per-dimension size instead of the original bug's silent 1-D
-        /// collapse (dropped indices). Runtime-sized dimensions (<c>new T[rows,
-        /// cols]</c>) are each hoisted into their own `let` — evaluated once,
-        /// exactly where C# evaluates them — appended to
-        /// <paramref name="prologue"/> ahead of the declaration statement
-        /// itself; a rectangular initializer's dimensions are compile-time
-        /// constants (the outer/inner element counts) and need no hoist.
-        /// </summary>
-        /// <param name="creation">The multi-dim array-creation syntax.</param>
-        /// <param name="variableBaseName">
-        /// The sanitized declared variable name, used to derive readable
-        /// per-dimension hoisted `let` names (e.g. <c>gridDim0</c>).
-        /// </param>
-        /// <param name="declaredSymbol">
-        /// The declared local/field symbol the array is bound to, or
-        /// <see langword="null"/> if none (tracking is then skipped and later
-        /// accesses report the loud gap).
-        /// </param>
-        /// <param name="prologue">Receives any hoisted dimension `let` statements.</param>
-        /// <returns>The flat-array G# initializer expression.</returns>
-        private GExpression TranslateMultiDimArrayCreationForLocal(
-            ArrayCreationExpressionSyntax creation,
-            string variableBaseName,
-            ISymbol declaredSymbol,
-            List<GStatement> prologue)
+        private GExpression TranslateRectangularInitializerDimension(ExpressionSyntax size)
         {
-            GTypeReference elementType = this.GetArrayElementType(creation, creation.Type.ElementType);
-            int rank = creation.Type.RankSpecifiers[0].Sizes.Count;
-            List<GExpression> dimensionSizes;
-            GExpression flatArrayExpression;
-
-            if (creation.Initializer != null)
+            Optional<object> constant = this.context.SemanticModel.GetConstantValue(size);
+            if (constant.HasValue && TryGetNonNegativeInt32(constant.Value, out int value))
             {
-                var dims = new int[rank];
-                var leaves = new List<ExpressionSyntax>();
-                FlattenRectangularArrayInitializer(creation.Initializer, level: 0, rank: rank, dims: dims, leaves: leaves);
-                dimensionSizes = dims
-                    .Select(d => (GExpression)LiteralExpression.Int(d.ToString(CultureInfo.InvariantCulture)))
-                    .ToList();
-                flatArrayExpression = new ArrayLiteralExpression(
-                    elementType,
-                    leaves.Select(this.TranslateExpression).ToList());
-            }
-            else
-            {
-                dimensionSizes = new List<GExpression>();
-                for (int i = 0; i < rank; i++)
-                {
-                    ExpressionSyntax sizeExpr = creation.Type.RankSpecifiers[0].Sizes[i];
-                    GExpression translatedSize = this.CoerceLengthToInt32(sizeExpr, this.TranslateExpression(sizeExpr));
-                    string dimName = SanitizeIdentifier($"{variableBaseName}Dim{i}");
-                    prologue.Add(new LocalDeclarationStatement(BindingKind.Let, dimName, type: null, initializer: translatedSize));
-                    dimensionSizes.Add(new IdentifierExpression(dimName));
-                }
-
-                GExpression length = dimensionSizes.Aggregate((a, b) => new BinaryExpression(a, "*", b));
-                flatArrayExpression = new ArrayAllocationExpression(elementType, length);
+                return LiteralExpression.Int(value.ToString(CultureInfo.InvariantCulture));
             }
 
-            if (declaredSymbol != null)
+            return this.CoerceLengthToInt32(size, this.TranslateExpression(size));
+        }
+
+        private static bool TryGetNonNegativeInt32(object value, out int result)
+        {
+            long candidate = value switch
             {
-                this.state.MultiDimArrays[declaredSymbol] = new MultiDimArrayInfo(dimensionSizes);
+                sbyte item => item,
+                byte item => item,
+                short item => item,
+                ushort item => item,
+                char item => item,
+                int item => item,
+                uint item when item <= int.MaxValue => item,
+                long item when item is >= 0 and <= int.MaxValue => item,
+                ulong item when item <= int.MaxValue => (long)item,
+                _ => -1,
+            };
+
+            if (candidate is >= 0 and <= int.MaxValue)
+            {
+                result = (int)candidate;
+                return true;
             }
 
-            return flatArrayExpression;
+            result = 0;
+            return false;
         }
 
         /// <summary>
@@ -1573,82 +1566,20 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Issue #1893: translates a multi-index element access
-        /// (<c>grid[r, c, ...]</c>, read or write — an assignment LHS routes
-        /// here too via <see cref="TranslateAssignmentTarget"/>) against a
-        /// tracked flat-lowered multi-dim array to the faithful row-major flat
-        /// index <c>grid[((r * dim1) + c) * ... ]</c>, using every index (the
-        /// original bug dropped every index past the first). An access whose
-        /// receiver was not tracked by <see cref="DocumentTranslationState.MultiDimArrays"/> (e.g. a
-        /// field, parameter, or return value — see the deliberate scope note on
-        /// <see cref="DocumentTranslationState.MultiDimArrays"/>) reports the loud gap instead of
-        /// silently collapsing to 1-D.
-        /// <para>
-        /// Issue #1954: a flat index that is in range overall
-        /// (<c>0 &lt;= flat &lt; dim0*dim1*...</c>) is not necessarily in range
-        /// PER DIMENSION — <c>grid[r, c]</c> with <c>r &lt; rows</c> but
-        /// <c>c &gt;= cols</c> can still land at a flat index
-        /// <c>r*cols + c &lt; rows*cols</c>, silently reading/writing the WRONG
-        /// cell instead of C#'s per-dimension <c>IndexOutOfRangeException</c>.
-        /// Every index is therefore range-checked against its own dimension
-        /// size (<c>0 &lt;= i_k &lt; dim_k</c>) before the flat index is used,
-        /// throwing <c>IndexOutOfRangeException</c> to match C#'s crash instead
-        /// of continuing on to the wrong cell.
-        /// </para>
+        /// Translates a CLR rectangular-array element access directly to native
+        /// G# multi-index syntax. Runtime preserves left-to-right single
+        /// evaluation, per-dimension bounds checks, and row-major storage.
         /// </summary>
-        private GExpression TranslateMultiDimElementAccess(ElementAccessExpressionSyntax elementAccess, int rank)
+        private GExpression TranslateMultiDimElementAccess(ElementAccessExpressionSyntax elementAccess)
         {
             GExpression target = this.TranslateReceiverWithNullForgiveness(elementAccess.Expression);
-            ISymbol receiverSymbol = this.context.GetSymbolInfo(elementAccess.Expression).Symbol;
-            if (receiverSymbol == null ||
-                !this.state.MultiDimArrays.TryGetValue(receiverSymbol, out MultiDimArrayInfo info) ||
-                info.DimensionSizes.Count != rank)
-            {
-                string elementAccessGapMessage =
-                    "multi-dimensional array element access has no tracked per-dimension sizes for this " +
-                    "receiver; only a local initialized directly from `new T[d0, d1, ...]` or a rectangular " +
-                    "initializer is supported, so this access has no canonical flat-array mapping yet.";
-                this.context.ReportUnsupported(elementAccess, elementAccessGapMessage);
-                return new IndexExpression(
-                    target, this.TranslateExpression(elementAccess.ArgumentList.Arguments[0].Expression));
-            }
-
-            // Each index is spilled (issue #1731 machinery) so a non-trivial
-            // index expression (a call, a mutating pre/post-increment, ...) is
-            // evaluated exactly once even though it is read again below by the
-            // per-dimension bounds check.
-            List<GExpression> indexArguments = elementAccess.ArgumentList.Arguments
-                .Select(a => this.SpillOperand(
-                    this.CoerceMultiDimIndexToInt32(a.Expression, this.TranslateExpression(a.Expression))))
-                .ToList();
-
-            // Row-major flattening: acc = i0; acc = acc*dim1 + i1; acc = acc*dim2 + i2; ...
-            GExpression flatIndex = indexArguments[0];
-            for (int i = 1; i < rank; i++)
-            {
-                flatIndex = new BinaryExpression(
-                    new BinaryExpression(flatIndex, "*", info.DimensionSizes[i]), "+", indexArguments[i]);
-            }
-
-            GExpression inBoundsCheck = null;
-            for (int i = 0; i < rank; i++)
-            {
-                GExpression dimensionInBounds = new BinaryExpression(
-                    new BinaryExpression(indexArguments[i], ">=", LiteralExpression.Int("0")),
-                    "&&",
-                    new BinaryExpression(indexArguments[i], "<", info.DimensionSizes[i]));
-                inBoundsCheck = inBoundsCheck == null
-                    ? dimensionInBounds
-                    : new BinaryExpression(inBoundsCheck, "&&", dimensionInBounds);
-            }
-
-            GTypeReference int32Type = this.typeMapper.Map(
-                this.context.Compilation.GetSpecialType(SpecialType.System_Int32), this.context, elementAccess.GetLocation());
-            GExpression outOfRangeThrow = new ThrowExpression(
-                BuildConstruction(new NamedTypeReference("IndexOutOfRangeException"), Array.Empty<GExpression>()),
-                int32Type);
-
-            return new IndexExpression(target, new IfExpression(inBoundsCheck, flatIndex, outOfRangeThrow));
+            return new IndexExpression(
+                target,
+                elementAccess.ArgumentList.Arguments
+                    .Select(a => this.CoerceMultiDimIndexToInt32(
+                        a.Expression,
+                        this.TranslateExpression(a.Expression)))
+                    .ToList());
         }
 
         private GExpression TranslateStackAlloc(StackAllocArrayCreationExpressionSyntax node)
@@ -1716,6 +1647,23 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, null);
+            if (this.context.GetTypeInfo(creation).Type is IArrayTypeSymbol { Rank: > 1 } arrayType)
+            {
+                var dims = new int[arrayType.Rank];
+                var leaves = new List<ExpressionSyntax>();
+                FlattenRectangularArrayInitializer(
+                    creation.Initializer,
+                    level: 0,
+                    rank: arrayType.Rank,
+                    dims,
+                    leaves);
+                return new ArrayAllocationExpression(
+                    elementType,
+                    dims.Select(d => (GExpression)LiteralExpression.Int(
+                        d.ToString(CultureInfo.InvariantCulture))).ToList(),
+                    leaves.Select(this.TranslateExpression).ToList());
+            }
+
             return new ArrayLiteralExpression(
                 elementType,
                 creation.Initializer.Expressions.Select(this.TranslateExpression).ToList());
@@ -1723,6 +1671,24 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateInitializerExpression(InitializerExpressionSyntax initializer)
         {
+            if (this.context.GetTypeInfo(initializer).ConvertedType is IArrayTypeSymbol { Rank: > 1 } arrayType)
+            {
+                GTypeReference rectangularElementType = this.GetArrayElementType(initializer, null);
+                var dims = new int[arrayType.Rank];
+                var leaves = new List<ExpressionSyntax>();
+                FlattenRectangularArrayInitializer(
+                    initializer,
+                    level: 0,
+                    rank: arrayType.Rank,
+                    dims,
+                    leaves);
+                return new ArrayAllocationExpression(
+                    rectangularElementType,
+                    dims.Select(d => (GExpression)LiteralExpression.Int(
+                        d.ToString(CultureInfo.InvariantCulture))).ToList(),
+                    leaves.Select(this.TranslateExpression).ToList());
+            }
+
             // A bare `{ a, b, c }` array initializer (a field/local of array type
             // initialised without `new T[]`) or a collection-initializer element
             // list reaching value position maps to the slice literal `[]T{ … }`,

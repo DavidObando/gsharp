@@ -2581,6 +2581,12 @@ public sealed class StructSymbol : TypeSymbol
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
         }
 
+        if (type is RectangularArrayTypeSymbol rectangularArray)
+        {
+            var inner = SubstituteNested(rectangularArray.ElementType);
+            return ReferenceEquals(inner, rectangularArray.ElementType) ? type : RectangularArrayTypeSymbol.Get(inner, rectangularArray.Rank);
+        }
+
         if (type is ChannelTypeSymbol channel)
         {
             var inner = SubstituteNested(channel.ElementType);

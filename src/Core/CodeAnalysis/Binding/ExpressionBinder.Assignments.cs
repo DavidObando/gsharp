@@ -2043,6 +2043,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (syntax.Indices.Count > 1 || IsRectangularArrayType(variable.Type))
+        {
+            return BindRectangularIndexAssignment(
+                variable,
+                syntax.Indices,
+                syntax.Value,
+                syntax.TargetIdentifier.Location);
+        }
+
         // Issue #674: when the target resolves to an implicit field on `this`,
         // the raw ImplicitFieldVariableSymbol has no local slot in the emitter.
         // Rewrite to a temp-local initialized from the proper field access
@@ -2141,6 +2150,114 @@ internal sealed partial class ExpressionBinder
         return BindIndexedAssignmentToVariable(variable, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
     }
 
+    private BoundExpression BindRectangularIndexAssignment(
+        VariableSymbol variable,
+        SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
+        ExpressionSyntax valueSyntax,
+        TextLocation diagnosticLocation)
+    {
+        BoundExpression target;
+        switch (variable)
+        {
+            case ImplicitFieldVariableSymbol implicitField:
+                target = new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field,
+                    TryGetNarrowedType(implicitField));
+                break;
+
+            case ImplicitStaticFieldVariableSymbol implicitStaticField:
+                target = implicitStaticField.InterfaceType != null
+                    ? new BoundFieldAccessExpression(
+                        null,
+                        implicitStaticField.Field,
+                        implicitStaticField.InterfaceType)
+                    : new BoundFieldAccessExpression(
+                        null,
+                        receiver: null,
+                        implicitStaticField.StructType,
+                        implicitStaticField.Field,
+                        TryGetNarrowedType(implicitStaticField));
+                break;
+
+            case ImplicitPropertyVariableSymbol implicitProperty:
+                if (!implicitProperty.Property.HasGetter)
+                {
+                    Diagnostics.ReportCannotAssign(diagnosticLocation, implicitProperty.Property.Name);
+                    return new BoundErrorExpression(null);
+                }
+
+                target = new BoundPropertyAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, implicitProperty.Receiver),
+                    implicitProperty.StructType,
+                    implicitProperty.Property,
+                    TryGetNarrowedType(implicitProperty));
+                break;
+
+            case ImplicitStaticPropertyVariableSymbol implicitStaticProperty:
+                if (!implicitStaticProperty.Property.HasGetter)
+                {
+                    Diagnostics.ReportCannotAssign(diagnosticLocation, implicitStaticProperty.Property.Name);
+                    return new BoundErrorExpression(null);
+                }
+
+                target = new BoundPropertyAccessExpression(
+                    null,
+                    receiver: null,
+                    implicitStaticProperty.StructType,
+                    implicitStaticProperty.Property,
+                    TryGetNarrowedType(implicitStaticProperty));
+                break;
+
+            default:
+                target = BuildNarrowedVariableRead(variable);
+                break;
+        }
+
+        var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+        if (rectangular == null)
+        {
+            Diagnostics.ReportTypeNotIndexable(diagnosticLocation, target.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        if (indexSyntaxes.Count != rectangular.Rank)
+        {
+            Diagnostics.ReportRectangularArrayIndexRankMismatch(
+                diagnosticLocation,
+                rectangular.Rank,
+                indexSyntaxes.Count);
+            return new BoundErrorExpression(null);
+        }
+
+        var indices = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+        foreach (var indexSyntax in indexSyntaxes)
+        {
+            indices.Add(BindRectangularArrayElementIndex(indexSyntax));
+        }
+
+        var value = conversions.BindConversion(valueSyntax, rectangular.ElementType);
+        var boundIndices = indices.MoveToImmutable();
+        var narrowed = target is not BoundVariableExpression targetVariable || targetVariable.NarrowedType != null;
+        return narrowed
+            ? BoundIndexAssignmentExpression.WithExpressionTarget(
+                null,
+                target,
+                boundIndices,
+                value,
+                rectangular.ElementType)
+            : new BoundIndexAssignmentExpression(
+                null,
+                variable,
+                boundIndices,
+                value,
+                rectangular.ElementType);
+    }
+
     private BoundExpression BindMemberIndexAssignmentExpression(MemberIndexAssignmentExpressionSyntax syntax)
     {
         if (syntax.Target.IsNullConditional)
@@ -2151,6 +2268,40 @@ internal sealed partial class ExpressionBinder
             // (or `a[i] = v` directly) instead.
             Diagnostics.ReportNullConditionalIndexAssignmentTarget(syntax.Target.OpenBracketToken.Location);
             return new BoundErrorExpression(syntax);
+        }
+
+        if (syntax.Target.Indices.Count > 1)
+        {
+            var target = BindExpression(syntax.Target.Target);
+            var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+            if (rectangular == null)
+            {
+                Diagnostics.ReportTypeNotIndexable(syntax.Target.Target.Location, target.Type);
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (syntax.Target.Indices.Count != rectangular.Rank)
+            {
+                Diagnostics.ReportRectangularArrayIndexRankMismatch(
+                    syntax.Target.Target.Location,
+                    rectangular.Rank,
+                    syntax.Target.Indices.Count);
+                return new BoundErrorExpression(syntax);
+            }
+
+            var indices = ImmutableArray.CreateBuilder<BoundExpression>(rectangular.Rank);
+            foreach (var indexSyntax in syntax.Target.Indices)
+            {
+                indices.Add(BindRectangularArrayElementIndex(indexSyntax));
+            }
+
+            return BoundIndexAssignmentExpression.WithExpressionTarget(
+                syntax,
+                target,
+                indices.MoveToImmutable(),
+                conversions.BindConversion(syntax.Value, rectangular.ElementType),
+                rectangular.ElementType);
         }
 
         return BindIndexedWriteThroughChain(
@@ -2516,6 +2667,11 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(syntax);
         }
 
+        if (syntax.Target.Indices.Count > 1)
+        {
+            return BindRectangularCompoundIndexAssignment(syntax);
+        }
+
         return BindIndexedWriteThroughChain(
             chainBase: null,
             remainingChain: syntax.Target.Target,
@@ -2526,6 +2682,75 @@ internal sealed partial class ExpressionBinder
             compoundRhsSyntax: syntax.Value,
             diagnosticLocation: syntax.OperatorToken.Location,
             outerSyntax: syntax);
+    }
+
+    private BoundExpression BindRectangularCompoundIndexAssignment(CompoundIndexAssignmentExpressionSyntax syntax)
+    {
+        var target = BindExpression(syntax.Target.Target);
+        var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+        if (rectangular == null)
+        {
+            Diagnostics.ReportTypeNotIndexable(syntax.Target.Target.Location, target.Type);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (syntax.Target.Indices.Count != rectangular.Rank)
+        {
+            Diagnostics.ReportRectangularArrayIndexRankMismatch(
+                syntax.Target.Target.Location,
+                rectangular.Rank,
+                syntax.Target.Indices.Count);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (!SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOperator))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var targetLocal = DeclareRangeTemp("array", target.Type, target, statements);
+        var targetReference = new BoundVariableExpression(null, targetLocal);
+        var indices = ImmutableArray.CreateBuilder<BoundExpression>(rectangular.Rank);
+        foreach (var indexSyntax in syntax.Target.Indices)
+        {
+            var index = BindRectangularArrayElementIndex(indexSyntax);
+            var indexLocal = DeclareRangeTemp("index", index.Type, index, statements);
+            indices.Add(new BoundVariableExpression(null, indexLocal));
+        }
+
+        var capturedIndices = indices.MoveToImmutable();
+        var read = new BoundIndexExpression(
+            syntax.Target,
+            targetReference,
+            capturedIndices,
+            rectangular.ElementType);
+        var rhs = BindExpression(syntax.Value);
+        if (rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var combined = TryBindCompoundBinaryOperation(baseOperator, read, rhs, syntax.Value.Location);
+        if (combined == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                rectangular.ElementType,
+                rhs.Type);
+            return new BoundErrorExpression(syntax);
+        }
+
+        var converted = conversions.BindConversion(syntax.Value.Location, combined, rectangular.ElementType);
+        var assignment = BoundIndexAssignmentExpression.WithExpressionTarget(
+            syntax,
+            targetReference,
+            capturedIndices,
+            converted,
+            rectangular.ElementType);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), assignment);
     }
 
     /// <summary>

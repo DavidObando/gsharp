@@ -3659,6 +3659,17 @@ public sealed class Binder
             return SliceTypeSymbol.Get(element);
         }
 
+        if (syntax.RectangularRank > 1)
+        {
+            if (syntax.RectangularRank > 32)
+            {
+                Diagnostics.ReportRectangularArrayRankTooLarge(syntax.Location, syntax.RectangularRank);
+                return null;
+            }
+
+            return RectangularArrayTypeSymbol.Get(element, syntax.RectangularRank);
+        }
+
         // IsSlice (checked above, false here) is exactly "bracketed AND no
         // length token", so a non-slice array clause has a length token.
         var lengthToken = Invariant.Required(syntax.LengthToken, "a non-slice array type clause has a length token");
@@ -4948,6 +4959,12 @@ public sealed class Binder
             // handles this differently because both map to CLR T[], but at the
             // GSharp semantic level they are distinct types.
         }
+        else if (parameterType is RectangularArrayTypeSymbol pr
+            && argumentType is RectangularArrayTypeSymbol ar
+            && pr.Rank == ar.Rank)
+        {
+            InferTypeArguments(pr.ElementType, ar.ElementType, substitution);
+        }
         else if (parameterType is SequenceTypeSymbol pseq)
         {
             // Issue #773 / ADR-0084 §L2: an extension declared as
@@ -5313,6 +5330,12 @@ public sealed class Binder
         {
             var inner = SubstituteType(a.ElementType, substitution, mapClrType);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        if (type is RectangularArrayTypeSymbol rectangularArray)
+        {
+            var inner = SubstituteType(rectangularArray.ElementType, substitution, mapClrType);
+            return ReferenceEquals(inner, rectangularArray.ElementType) ? type : RectangularArrayTypeSymbol.Get(inner, rectangularArray.Rank);
         }
 
         if (type is SequenceTypeSymbol seq)
@@ -5761,7 +5784,7 @@ public sealed class Binder
         }
 
         if (type is InterfaceSymbol || type is FunctionTypeSymbol || type is DelegateTypeSymbol
-            || type is ArrayTypeSymbol || type is SliceTypeSymbol || type is MapTypeSymbol
+            || type is ArrayTypeSymbol || type is SliceTypeSymbol || type is RectangularArrayTypeSymbol || type is MapTypeSymbol
             || type is ChannelTypeSymbol || type is SequenceTypeSymbol || type is AsyncSequenceTypeSymbol)
         {
             return true;

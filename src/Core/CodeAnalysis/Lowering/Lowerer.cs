@@ -1250,6 +1250,27 @@ public sealed class Lowerer : BoundTreeRewriter
             return true;
         }
 
+        if (collection.Type is RectangularArrayTypeSymbol)
+        {
+            var getEnumerator = typeof(System.Array).GetMethod(
+                "GetEnumerator",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public,
+                binder: null,
+                types: System.Type.EmptyTypes,
+                modifiers: null);
+            if (getEnumerator != null)
+            {
+                enumeratorType = TypeSymbol.FromClrType(getEnumerator.ReturnType);
+                getEnumeratorCall = new BoundImportedInstanceCallExpression(
+                    null,
+                    collection,
+                    getEnumerator,
+                    enumeratorType,
+                    ImmutableArray<BoundExpression>.Empty);
+                return true;
+            }
+        }
+
         var clrType = collection.Type.ClrType;
         if (clrType != null)
         {

@@ -297,6 +297,12 @@ public static class ClrNullability
             return 0;
         }
 
+        if (type.IsArray)
+        {
+            return 1 + CountNullabilityBytes(
+                Invariant.Required(type.GetElementType(), "an array type has an element type"));
+        }
+
         int count = type.IsValueType ? 0 : 1;
 
         if (type.IsGenericType && !type.IsGenericTypeDefinition)
@@ -367,6 +373,18 @@ public static class ClrNullability
             return baseSymbol;
         }
 
+        if (clrType.IsArray && clrType.GetArrayRank() > 1)
+        {
+            var elementType = SymbolFromFlagsOffset(
+                Invariant.Required(clrType.GetElementType(), "an array type has an element type"),
+                flags,
+                offset + 1);
+            var rectangular = RectangularArrayTypeSymbol.Get(elementType, clrType.GetArrayRank());
+            return IsPositionNonNull(flags, offset)
+                ? rectangular
+                : NullableTypeSymbol.Get(rectangular);
+        }
+
         if (clrType.IsValueType)
         {
             // Value types carry no reference-nullability byte for themselves.
@@ -424,6 +442,11 @@ public static class ClrNullability
         }
 
         var flags = ReadNullableFlags(declaration, enclosingMember);
+
+        if (clrType.IsArray && clrType.GetArrayRank() > 1)
+        {
+            return SymbolFromFlagsOffset(clrType, flags, 0);
+        }
 
         // Issue #1354: the top-level reference position is non-null only when the
         // flags array explicitly marks it `1`; empty/oblivious/annotated → nullable.

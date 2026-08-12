@@ -1282,7 +1282,7 @@ internal sealed partial class StatementBinder
                 var element = new BoundIndexExpression(
                     targetSyntax,
                     indexTarget,
-                    index.Index,
+                    index.Indices,
                     index.Type);
                 plan = CreateAddressedMultiAssignmentTarget(
                     index.Value,
@@ -1403,10 +1403,21 @@ internal sealed partial class StatementBinder
                         field.NarrowedType);
 
             case BoundIndexExpression index:
+                var capturedIndexTarget = CaptureMultiAssignmentValue(
+                    index.Target,
+                    targetSyntax,
+                    captures);
+                var capturedIndices = ImmutableArray.CreateBuilder<BoundExpression>(index.Indices.Length);
+                foreach (var indexExpression in index.Indices)
+                {
+                    capturedIndices.Add(
+                        CaptureMultiAssignmentValue(indexExpression, targetSyntax, captures));
+                }
+
                 return new BoundIndexExpression(
                     index.Syntax,
-                    CaptureMultiAssignmentValue(index.Target, targetSyntax, captures),
-                    CaptureMultiAssignmentValue(index.Index, targetSyntax, captures),
+                    capturedIndexTarget,
+                    capturedIndices.MoveToImmutable(),
                     index.Type);
 
             case BoundDereferenceExpression dereference:

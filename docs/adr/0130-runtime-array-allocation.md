@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — language surface completeness
-- **Related**: ADR-0124 (`stackalloc [n]T` G#-style array grammar), issues [#1016](https://github.com/DavidObando/gsharp/issues/1016) (range/slice backing allocation), [#1046](https://github.com/DavidObando/gsharp/issues/1046) (nested element type clauses), [#1272](https://github.com/DavidObando/gsharp/issues/1272)
+- **Related**: ADR-0124 (`stackalloc [n]T` G#-style array grammar), ADR-0164 (native rectangular arrays), issues [#1016](https://github.com/DavidObando/gsharp/issues/1016) (range/slice backing allocation), [#1046](https://github.com/DavidObando/gsharp/issues/1046) (nested element type clauses), [#1272](https://github.com/DavidObando/gsharp/issues/1272)
 
 ## Context
 
@@ -92,5 +92,7 @@ initializer form is unaffected and keeps mapping to the slice literal `[]T{…}`
   `System.GC.AllocateArray[T](n)` BCL call (the deliverable of issue #1272).
 - The existing literal (`[N]T{…}`), slice (`[]T{…}`), and jagged
   (`[][]int32{…}`) forms are unchanged, as is the `GS0115` constant-count check.
+- Rectangular allocation (`[d0, d1]T`) is a distinct native CLR array shape
+  specified by ADR-0164; it does not change this rank-one SZ-array decision.
 - No new `SyntaxKind`/`BoundNodeKind` was added; the coverage matrix and the
   exhaustiveness allowlists are unaffected.

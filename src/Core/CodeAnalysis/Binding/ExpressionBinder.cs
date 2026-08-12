@@ -1483,6 +1483,15 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        if (typeSymbol is RectangularArrayTypeSymbol rectangular)
+        {
+            var elementClr = GetEffectiveArgumentClrTypeForOverloadResolution(rectangular.ElementType);
+            if (elementClr != null && !elementClr.IsByRef && !elementClr.IsPointer)
+            {
+                return elementClr.MakeArrayType(rectangular.Rank);
+            }
+        }
+
         // Issue #3303: a `map[K, V]` whose key or value has no CLR backing (a
         // generic type parameter or a same-compilation user type) has a null
         // `ClrType`, so `GetEffectiveArgumentClrType` returned null above. Its

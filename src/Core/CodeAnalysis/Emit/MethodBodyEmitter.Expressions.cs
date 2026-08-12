@@ -391,7 +391,18 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitStackAlloc(stackAlloc);
                 break;
             case BoundIndexExpression idx:
-                if (idx.Target.Type is MapTypeSymbol)
+                if (GetRectangularArrayType(idx.Target.Type) is { } rectangular)
+                {
+                    this.EmitExpression(idx.Target);
+                    foreach (var index in idx.Indices)
+                    {
+                        this.EmitExpression(index);
+                    }
+
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Get"));
+                }
+                else if (idx.Target.Type is MapTypeSymbol)
                 {
                     this.EmitMapIndexRead(idx);
                 }
@@ -415,6 +426,30 @@ internal sealed partial class MethodBodyEmitter
                 if (ixaTargetType is MapTypeSymbol)
                 {
                     this.EmitMapIndexAssignment(ixa);
+                }
+                else if (GetRectangularArrayType(ixaTargetType) is { } assignmentRectangular)
+                {
+                    var tmp = this.indexAssignmentValueSlots[ixa];
+                    if (ixa.TargetExpression != null)
+                    {
+                        this.EmitExpression(ixa.TargetExpression);
+                    }
+                    else
+                    {
+                        this.EmitLoadVariable(BoundNodeForm.VariableTarget(ixa));
+                    }
+
+                    foreach (var index in ixa.Indices)
+                    {
+                        this.EmitExpression(index);
+                    }
+
+                    this.EmitExpression(ixa.Value);
+                    this.il.OpCode(ILOpCode.Dup);
+                    this.il.StoreLocal(tmp);
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(assignmentRectangular, "Set"));
+                    this.il.LoadLocal(tmp);
                 }
                 else
                 {
@@ -795,6 +830,44 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitArrayCreation(BoundArrayCreationExpression arr)
     {
+        if (arr.ContainerType is RectangularArrayTypeSymbol rectangular)
+        {
+            foreach (var dimension in arr.DimensionExpressions)
+            {
+                this.EmitExpression(dimension);
+            }
+
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, ".ctor"));
+
+            if (!arr.Elements.IsDefaultOrEmpty && arr.RectangularLengths.Length == rectangular.Rank)
+            {
+                for (var flatIndex = 0; flatIndex < arr.Elements.Length; flatIndex++)
+                {
+                    this.il.OpCode(ILOpCode.Dup);
+                    var remainder = flatIndex;
+                    for (var dimension = 0; dimension < arr.RectangularLengths.Length; dimension++)
+                    {
+                        var stride = 1;
+                        for (var trailing = dimension + 1; trailing < arr.RectangularLengths.Length; trailing++)
+                        {
+                            stride *= arr.RectangularLengths[trailing];
+                        }
+
+                        var index = stride == 0 ? 0 : remainder / stride;
+                        remainder = stride == 0 ? 0 : remainder % stride;
+                        this.il.LoadConstantI4(index);
+                    }
+
+                    this.EmitExpression(arr.Elements[flatIndex]);
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Set"));
+                }
+            }
+
+            return;
+        }
+
         // Issue #1016: a runtime-length, zero-initialised array/slice (slice
         // backing allocation). `newarr` already zero-inits every element, so no
         // per-element store loop is required.
@@ -817,6 +890,20 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arr.Elements[i]);
             this.EmitStoreElement(arr.ElementType);
         }
+    }
+
+    private static RectangularArrayTypeSymbol? GetRectangularArrayType(TypeSymbol type)
+    {
+        if (type is RectangularArrayTypeSymbol rectangular)
+        {
+            return rectangular;
+        }
+
+        return type.ClrType is { IsArray: true } clrArray && clrArray.GetArrayRank() > 1
+            ? RectangularArrayTypeSymbol.Get(
+                TypeSymbol.FromClrType(clrArray.GetElementType()),
+                clrArray.GetArrayRank())
+            : null;
     }
 
     // ADR-0124 / issues #1024, #1057, #1041: emits a `stackalloc [n]T`
@@ -946,6 +1033,11 @@ internal sealed partial class MethodBodyEmitter
                 : this.outer.memberRefs.GetMapGetCountReference(mapType);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getCountRef);
+        }
+        else if (len.Operand.Type is RectangularArrayTypeSymbol
+            || (len.Operand.Type.ClrType is { IsArray: true } clrArray && clrArray.GetArrayRank() > 1))
+        {
+            this.il.Call(this.outer.wellKnown.GetArrayLengthReference());
         }
         else
         {
@@ -1877,8 +1969,22 @@ internal sealed partial class MethodBodyEmitter
 
             case BoundIndexExpression idx:
                 this.EmitExpression(idx.Target);
-                this.EmitExpression(idx.Index);
-                this.EmitLoadElementAddress(idx.Type);
+                if (GetRectangularArrayType(idx.Target.Type) is { } rectangular)
+                {
+                    foreach (var index in idx.Indices)
+                    {
+                        this.EmitExpression(index);
+                    }
+
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Address"));
+                }
+                else
+                {
+                    this.EmitExpression(idx.Index);
+                    this.EmitLoadElementAddress(idx.Type);
+                }
+
                 break;
 
             case BoundDereferenceExpression deref:

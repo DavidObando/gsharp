@@ -775,6 +775,15 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | --- | --- | --- | --- |
 | GS0526 | Error | A multi-assignment target is not writable storage. Use a variable, field, property, array element, indexer, or pointer dereference. | `GetValue(), x = 1, 2` |
 
+## Rectangular arrays (GS0527–GS0530)
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0527 | Error | `Rectangular array rank is <rank>, but <count> index expression(s) were supplied.` | `let a = [2, 3]int32; let x = a[0]` |
+| GS0528 | Error | `Rectangular array rank <rank> exceeds CLR maximum rank 32.` | A type or allocation with 33 dimensions. |
+| GS0529 | Error | `Rectangular array initializer dimensions must be non-negative int32 constants.` | `let n = 2; let a = [n, 2]int32{1, 2, 3, 4}` |
+| GS0530 | Error | `Rectangular array initializer requires <expected> element(s), but <actual> were supplied.` | `let a = [2, 3]int32{1, 2, 3}` |
+
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 
 The contract for the C# spelling `null` used
@@ -1854,7 +1863,7 @@ this analysis applies only to kinds with no usable zero value.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, or `chan T`. With ADR-0159's sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `(chan T)?`) if it is genuinely optional. |
+| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan T`. With ADR-0159's sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
 
 The warning is static-type based and fires for both operand orders. It does
 NOT fire for `?`-typed operands (including interop values surfaced as `T?`,

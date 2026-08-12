@@ -258,7 +258,7 @@ internal sealed partial class ExpressionBinder
                     typeof(System.Collections.Generic.IAsyncEnumerable<>),
                     ImmutableArray.Create(aseq.ElementType));
                 return true;
-            case ArrayTypeSymbol or SliceTypeSymbol:
+            case ArrayTypeSymbol or SliceTypeSymbol or RectangularArrayTypeSymbol:
                 if (MemberLookup.TryProjectErasedClrType(receiverType, out var erasedArray))
                 {
                     normalized = ImportedTypeSymbol.Get(erasedArray);

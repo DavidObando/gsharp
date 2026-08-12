@@ -124,11 +124,11 @@
     "kind": "ArrayCreationExpression",
     "nodeType": "ArrayCreationExpressionSyntax",
     "status": "Translated",
-    "rule": "ADR-0115 \u00A7B.16",
+    "rule": "ADR-0115 \u00A7B.16; ADR-0164",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ArrayCreationExpression.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1893",
-    "notes": "1-D/jagged green; rank\u003E1 (issue #1893) flat-lowers a tracked local\u0027s rectangular \u0060new T[d0, d1, ...]\u0060/\u0060new T[,]{{...}}\u0060 to a single backing array with hoisted per-dimension sizes, preserving every index (see ArrayCreationExpressionMultiDim.cs, parity-verified). An untracked rank\u003E1 shape (field/parameter/no-initializer) reports the CS2GS-GAP instead of silently collapsing to 1-D."
+    "issue": "https://github.com/DavidObando/gsharp/issues/1893, https://github.com/DavidObando/gsharp/issues/3354",
+    "notes": "1-D, jagged, and rank\u003E1 green. Rectangular \u0060new T[d0, d1, ...]\u0060, explicit/implicit/target-typed initializers, and element access map to native \u0060[d0, d1]T\u0060 / \u0060a[i, j]\u0060; fields, parameters, returns, and imported APIs require no tracked-local state or flattening."
   },
   {
     "kind": "ArrayInitializerExpression",

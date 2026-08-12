@@ -158,7 +158,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             return BoundIndexAssignmentExpression.WithExpressionTarget(
                 null,
                 this.FieldRead(targetField),
-                this.RewriteExpression(node.Index),
+                node.Indices.Select(this.RewriteExpression).ToImmutableArray(),
                 this.RewriteExpression(node.Value),
                 node.Type);
         }

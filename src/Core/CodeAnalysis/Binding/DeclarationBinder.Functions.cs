@@ -2742,6 +2742,12 @@ internal sealed partial class DeclarationBinder
                 && TypeSignaturesEquivalent(ara.ElementType, arb.ElementType, typeParamMap);
         }
 
+        if (a is RectangularArrayTypeSymbol raa && b is RectangularArrayTypeSymbol rab)
+        {
+            return raa.Rank == rab.Rank
+                && TypeSignaturesEquivalent(raa.ElementType, rab.ElementType, typeParamMap);
+        }
+
         if (a is NullableTypeSymbol na && b is NullableTypeSymbol nb)
         {
             return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType, typeParamMap);

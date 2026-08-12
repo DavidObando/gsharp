@@ -964,6 +964,12 @@ public sealed class InterfaceSymbol : TypeSymbol
             return sub == a.ElementType ? a : ArrayTypeSymbol.Get(sub, a.Length);
         }
 
+        if (type is RectangularArrayTypeSymbol rectangularArray)
+        {
+            var sub = SubstituteType(rectangularArray.ElementType, subst, mapClrType);
+            return sub == rectangularArray.ElementType ? rectangularArray : RectangularArrayTypeSymbol.Get(sub, rectangularArray.Rank);
+        }
+
         if (type is ChannelTypeSymbol channel)
         {
             var sub = SubstituteType(channel.ElementType, subst, mapClrType);

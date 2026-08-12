@@ -2,10 +2,14 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
+
+#pragma warning disable SA1611
+#pragma warning disable SA1642
 
 /// <summary>
 /// Bound index expression <c>target[index]</c>.
@@ -20,10 +24,27 @@ public sealed class BoundIndexExpression : BoundExpression
     /// <param name="index">The index expression (must be int).</param>
     /// <param name="resultType">The element type.</param>
     public BoundIndexExpression(SyntaxNode? syntax, BoundExpression target, BoundExpression index, TypeSymbol resultType)
+        : this(syntax, target, ImmutableArray.Create(index), resultType)
+    {
+    }
+
+    #pragma warning restore SA1642
+    #pragma warning restore SA1611
+
+    /// <summary>Initializes a new instance of the <see cref="BoundIndexExpression"/> class.</summary>
+    /// <param name="syntax">Originating syntax.</param>
+    /// <param name="target">Indexed target.</param>
+    /// <param name="indices">Index expressions.</param>
+    /// <param name="resultType">Element type.</param>
+    public BoundIndexExpression(
+        SyntaxNode? syntax,
+        BoundExpression target,
+        ImmutableArray<BoundExpression> indices,
+        TypeSymbol resultType)
         : base(syntax)
     {
         Target = target;
-        Index = index;
+        Indices = indices;
         Type = resultType;
     }
 
@@ -37,7 +58,10 @@ public sealed class BoundIndexExpression : BoundExpression
     public BoundExpression Target { get; }
 
     /// <summary>Gets the index expression.</summary>
-    public BoundExpression Index { get; }
+    public BoundExpression Index => Indices[0];
+
+    /// <summary>Gets index expressions.</summary>
+    public ImmutableArray<BoundExpression> Indices { get; }
 
     /// <summary>
     /// Gets a value indicating whether this element load reads real,
@@ -51,7 +75,7 @@ public sealed class BoundIndexExpression : BoundExpression
     /// element address and stay non-addressable.
     /// </summary>
     public bool IsArrayBackedElementAccess =>
-        Target.Type is ArrayTypeSymbol or SliceTypeSymbol
+        Target.Type is ArrayTypeSymbol or SliceTypeSymbol or RectangularArrayTypeSymbol
         || (Target.Type is not MapTypeSymbol
             && Target.Type != TypeSymbol.String
             && Target.Type?.ClrType is { IsArray: true } clrArray

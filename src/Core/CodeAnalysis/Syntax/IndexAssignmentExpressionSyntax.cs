@@ -2,7 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
+
+#pragma warning disable SA1611
+#pragma warning disable SA1642
 
 /// <summary>
 /// Represents an indexed assignment <c>target[index] = value</c>.
@@ -27,11 +32,41 @@ public sealed class IndexAssignmentExpressionSyntax : ExpressionSyntax
         SyntaxToken closeBracketToken,
         SyntaxToken equalsToken,
         ExpressionSyntax value)
+        : this(
+            syntaxTree,
+            targetIdentifier,
+            openBracketToken,
+            new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray.Create<SyntaxNode>(index)),
+            closeBracketToken,
+            equalsToken,
+            value)
+    {
+    }
+
+    #pragma warning restore SA1642
+    #pragma warning restore SA1611
+
+    /// <summary>Initializes a new instance of the <see cref="IndexAssignmentExpressionSyntax"/> class.</summary>
+    /// <param name="syntaxTree">Parent syntax tree.</param>
+    /// <param name="targetIdentifier">Target identifier.</param>
+    /// <param name="openBracketToken">Opening bracket.</param>
+    /// <param name="indices">Index expressions.</param>
+    /// <param name="closeBracketToken">Closing bracket.</param>
+    /// <param name="equalsToken">Equals token.</param>
+    /// <param name="value">Assigned value.</param>
+    public IndexAssignmentExpressionSyntax(
+        SyntaxTree syntaxTree,
+        SyntaxToken targetIdentifier,
+        SyntaxToken openBracketToken,
+        SeparatedSyntaxList<ExpressionSyntax> indices,
+        SyntaxToken closeBracketToken,
+        SyntaxToken equalsToken,
+        ExpressionSyntax value)
         : base(syntaxTree)
     {
         TargetIdentifier = targetIdentifier;
         OpenBracketToken = openBracketToken;
-        Index = index;
+        Indices = indices;
         CloseBracketToken = closeBracketToken;
         EqualsToken = equalsToken;
         Value = value;
@@ -47,7 +82,11 @@ public sealed class IndexAssignmentExpressionSyntax : ExpressionSyntax
     public SyntaxToken OpenBracketToken { get; }
 
     /// <summary>Gets the index expression.</summary>
-    public ExpressionSyntax Index { get; }
+    [SyntaxChildIgnore]
+    public ExpressionSyntax Index => Indices[0];
+
+    /// <summary>Gets index expressions.</summary>
+    public SeparatedSyntaxList<ExpressionSyntax> Indices { get; }
 
     /// <summary>Gets the closing bracket token.</summary>
     public SyntaxToken CloseBracketToken { get; }

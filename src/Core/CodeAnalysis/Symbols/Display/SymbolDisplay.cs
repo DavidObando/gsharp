@@ -690,6 +690,11 @@ public static class SymbolDisplay
                     return $"[{nullableArray.Length}]?{FormatType(nullableArray.ElementType)}";
                 }
 
+                if (nullable.UnderlyingType is RectangularArrayTypeSymbol nullableRectangular)
+                {
+                    return $"[{new string(',', nullableRectangular.Rank - 1)}]?{FormatType(nullableRectangular.ElementType)}";
+                }
+
                 var underlying = FormatType(nullable.UnderlyingType);
                 return nullable.UnderlyingType is FunctionTypeSymbol
                     ? $"({underlying})?"
@@ -702,6 +707,8 @@ public static class SymbolDisplay
                 return FormatFunctionPointerType(functionPointer);
             case ArrayTypeSymbol array:
                 return $"[{array.Length}]{FormatType(array.ElementType)}";
+            case RectangularArrayTypeSymbol rectangular:
+                return $"[{new string(',', rectangular.Rank - 1)}]{FormatType(rectangular.ElementType)}";
             case SliceTypeSymbol slice:
                 return $"[]{FormatType(slice.ElementType)}";
             case AsyncSequenceTypeSymbol asyncSequence:
@@ -956,7 +963,9 @@ public static class SymbolDisplay
 
         if (clrType.IsArray)
         {
-            return $"{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}[]";
+            return clrType.GetArrayRank() == 1
+                ? $"{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}[]"
+                : $"[{new string(',', clrType.GetArrayRank() - 1)}]{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}";
         }
 
         if (clrType.IsPointer)

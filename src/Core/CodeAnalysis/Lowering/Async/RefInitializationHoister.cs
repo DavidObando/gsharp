@@ -228,8 +228,8 @@ public static class RefInitializationHoister
                 case BoundIndexExpression idx:
                     {
                         var target = HoistIfNeeded(idx.Target, prelude);
-                        var index = HoistIfNeeded(idx.Index, prelude);
-                        return new BoundIndexExpression(idx.Syntax, target, index, idx.Type);
+                        var indices = idx.Indices.Select(index => HoistIfNeeded(index, prelude)).ToImmutableArray();
+                        return new BoundIndexExpression(idx.Syntax, target, indices, idx.Type);
                     }
 
                 case BoundFieldAccessExpression field:

@@ -679,12 +679,12 @@ internal static class CaptureBoxingRewriter
                     new BoundVariableExpression(null, bi.BoxLocal),
                     bi.BoxClass,
                     bi.BoxField);
-                var index = this.RewriteExpression(node.Index);
+                var indices = node.Indices.Select(this.RewriteExpression).ToImmutableArray();
                 var value = this.RewriteExpression(node.Value);
                 return BoundIndexAssignmentExpression.WithExpressionTarget(
                     null,
                     targetExpr,
-                    index,
+                    indices,
                     value,
                     node.Type);
             }
