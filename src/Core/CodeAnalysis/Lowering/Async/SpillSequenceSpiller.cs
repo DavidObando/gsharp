@@ -689,7 +689,10 @@ public static class SpillSequenceSpiller
                         mapDelete.Key,
                         (map, key) => new BoundMapDeleteExpression(null, map, key));
                 case BoundIsExpression isExpr:
-                    return SpillOneOperand(isExpr, isExpr.Expression, operand => new BoundIsExpression(null, operand, isExpr.TargetType));
+                    return SpillOneOperand(
+                        isExpr,
+                        isExpr.Expression,
+                        operand => new BoundIsExpression(null, operand, isExpr.Pattern));
                 case BoundAsExpression asExpr:
                     return SpillOneOperand(asExpr, asExpr.Expression, operand => new BoundAsExpression(null, operand, asExpr.TargetType));
                 case BoundThrowExpression throwExpr:

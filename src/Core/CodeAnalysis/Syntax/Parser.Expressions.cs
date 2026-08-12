@@ -480,13 +480,17 @@ public partial class Parser
                 if (parentPrecedence < 3 && (Current.Kind == SyntaxKind.IsKeyword || Current.Kind == SyntaxKind.AsKeyword))
                 {
                     var keyword = NextToken();
-                    var typeClause = ParseTypeClause();
                     if (keyword.Kind == SyntaxKind.IsKeyword)
                     {
-                        left = new IsExpressionSyntax(syntaxTree, left, keyword, typeClause);
+                        var context = suppressStructLiteral > 0
+                            ? PatternParseContext.IsExpressionBodyHeader
+                            : PatternParseContext.IsExpression;
+                        var pattern = ParsePattern(context);
+                        left = new IsExpressionSyntax(syntaxTree, left, keyword, pattern);
                     }
                     else
                     {
+                        var typeClause = ParseTypeClause();
                         left = new AsExpressionSyntax(syntaxTree, left, keyword, typeClause);
                     }
 
@@ -502,8 +506,11 @@ public partial class Parser
                 {
                     var bangToken = NextToken();
                     var isKeyword = NextToken();
-                    var typeClause = ParseTypeClause();
-                    var inner = new IsExpressionSyntax(syntaxTree, left, isKeyword, typeClause);
+                    var context = suppressStructLiteral > 0
+                        ? PatternParseContext.IsExpressionBodyHeader
+                        : PatternParseContext.IsExpression;
+                    var pattern = ParsePattern(context);
+                    var inner = new IsExpressionSyntax(syntaxTree, left, isKeyword, pattern);
                     left = new UnaryExpressionSyntax(syntaxTree, bangToken, inner);
                     continue;
                 }

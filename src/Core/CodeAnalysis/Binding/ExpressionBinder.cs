@@ -893,51 +893,10 @@ internal sealed partial class ExpressionBinder
         switch (condition)
         {
             case BoundIsExpression isExpr:
-                {
-                    AccessPath? targetPath;
-                    TypeSymbol? declaredType;
-                    if (isExpr.Expression is BoundVariableExpression bve
-                        && bve.Variable is LocalVariableSymbol or ParameterSymbol)
-                    {
-                        targetPath = bve.Variable;
-                        declaredType = bve.Variable.Type;
-                    }
-                    else if (SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out targetPath, out declaredType))
-                    {
-                        // ADR-0069 addendum / issue #1180: stable member path.
-                    }
-                    else
-                    {
-                        return (null, null);
-                    }
-
-                    var targetType = isExpr.TargetType;
-                    if (targetType == null || targetType == TypeSymbol.Error)
-                    {
-                        return (null, null);
-                    }
-
-                    if (targetType is NullableTypeSymbol nts)
-                    {
-                        targetType = nts.UnderlyingType;
-                    }
-
-                    if (targetType == null || targetType == declaredType)
-                    {
-                        return (null, null);
-                    }
-
-                    // Issue #1636 / #2165: reuse the shared classifier so the
-                    // short-circuit (`x is T && …`) narrowing agrees with the
-                    // `if`-statement narrowing — including the type-parameter/
-                    // interface operand tested against an interface (#2165).
-                    if (!SmartCastStability.IsTypeTestNarrowing(declaredType, targetType))
-                    {
-                        return (null, null);
-                    }
-
-                    return (new Dictionary<AccessPath, TypeSymbol> { [targetPath] = targetType }, null);
-                }
+                return (StatementBinder.TryClassifyPatternNarrowing(
+                    isExpr.Expression,
+                    isExpr.Pattern,
+                    allowReadOnlyGlobals: false), null);
 
             case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
                 {
@@ -2184,17 +2143,12 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindIsExpression(IsExpressionSyntax syntax)
     {
         var expression = BindExpression(syntax.Expression);
-        var targetType = bindTypeClause(syntax.TypeClause);
-        if (targetType == null || targetType == TypeSymbol.Error)
-        {
-            return new BoundErrorExpression(syntax);
-        }
-
-        // Unwrap nullable for the purpose of isinst — `is T?` checks against T.
-        var checkType = targetType is NullableTypeSymbol nts ? nts.UnderlyingType : targetType;
-        _ = checkType; // future: could validate compatibility
-
-        return new BoundIsExpression(syntax, expression, targetType);
+        var pattern = patterns.BindPattern(
+            syntax.Pattern,
+            expression.Type,
+            allowBindings: false,
+            preferTypeNames: true);
+        return new BoundIsExpression(syntax, expression, pattern);
     }
 
     private BoundExpression BindAsExpression(AsExpressionSyntax syntax)

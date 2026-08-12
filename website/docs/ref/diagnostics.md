@@ -761,6 +761,13 @@ Only a **bare** assignment argument warns. Parenthesising (`Foo((timeout = 30))`
 assignment intent unambiguously and is warning-free — it is the spelling cs2gs emits for a
 value-position assignment. Parameter default values (`func f(x int32 = 0)`) and `with`-expression
 field initializers (`p with { x = 10 }`) parse on separate paths and are unaffected.
+
+## Pattern binding in boolean `is` expression (GS0525)
+
+| ID | Severity | Summary | Example |
+| --- | --- | --- | --- |
+| GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let` for binding. | `if value is text is string { }`, `if values is [..rest] { }` |
+
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 
 The contract for the C# spelling `null` used

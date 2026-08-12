@@ -386,6 +386,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor NilComparisonAlwaysConstant = new("GS0523", DiagnosticSeverity.Warning, "Comparison of non-nullable '{0}' with 'nil' is always {1} — a bare (non-'?') collection-typed value can never be nil (ADR-0159); remove the dead comparison or declare the operand as '({0})?'.");
 
     internal static readonly DiagnosticDescriptor AssignmentArgumentWasNamedArgumentSpelling = new("GS0524", DiagnosticSeverity.Warning, "Argument '{0} = …' is an assignment to '{0}', not a named argument — the '=' named-argument separator was retired (ADR-0161). Write '{0}: value' for a named argument, or '({0} = value)' to assign deliberately.");
+    internal static readonly DiagnosticDescriptor PatternBindingNotAllowedInIsExpression = new("GS0525", DiagnosticSeverity.Error, "Pattern binding '{0}' is not allowed in an 'is' expression; use 'if let' or 'guard let' when a matched value needs a name (issue #3351).");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

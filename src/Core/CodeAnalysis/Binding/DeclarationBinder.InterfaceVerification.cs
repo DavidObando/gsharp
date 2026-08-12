@@ -2001,9 +2001,8 @@ internal sealed partial class DeclarationBinder
     /// capture, catch/for-loop variable, ...) shadows the instance member of
     /// the same name and must not be flagged. <paramref name="shadowedNames"/>
     /// carries the names bound by enclosing scopes down into this call.
-    /// Note: unlike C#, G#'s <c>is</c> operator (<see cref="IsExpressionSyntax"/>)
-    /// is a plain type test with no capture — <c>expr is T name</c> does not
-    /// exist. The only pattern captures reachable here come from
+    /// Expression-level <c>is</c> patterns (<see cref="IsExpressionSyntax"/>)
+    /// reject captures (GS0525). The pattern captures reachable here come from
     /// <c>switch</c>/<c>match</c> arm patterns (<see cref="TypePatternSyntax"/>,
     /// <see cref="SlicePatternSyntax"/>), which the generic child walk already
     /// scopes correctly: a capture is added to the shadow set only while

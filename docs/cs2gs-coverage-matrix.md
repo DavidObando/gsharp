@@ -137,7 +137,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | InterpolationFormatClause | InterpolationFormatClauseSyntax | ADR-0115 §B.9 |  | tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolationFormatClause.cs |  |  |
 | InvocationExpression | InvocationExpressionSyntax | ADR-0115 §B |  |  |  |  |
 | IsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/IsExpression.cs |  |  |
-| IsPatternExpression | IsPatternExpressionSyntax | ADR-0115 §B.36 |  |  |  |  |
+| IsPatternExpression | IsPatternExpressionSyntax | ADR-0115 §B.36 / ADR-0162 |  |  | https://github.com/DavidObando/gsharp/issues/3347 | gsc now accepts full non-binding patterns directly after boolean `is`, including type+property composition and narrowing across `and` (issue #3351). cs2gs spill elimination remains translator work under parent #3347; this language change removes the compiler blocker but does not alter translator output in this PR. |
 | LabeledStatement | LabeledStatementSyntax | ADR-0139 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LabeledStatement.cs |  |  |
 | LeftShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftAssignmentExpression.cs |  |  |
 | LeftShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftExpression.cs |  |  |

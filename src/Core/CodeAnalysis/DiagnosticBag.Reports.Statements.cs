@@ -702,6 +702,17 @@ public sealed partial class DiagnosticBag
         string variableName)
     => Report(location, DiagnosticDescriptors.PatternVariableNotAllowedUnderOrNot, variableName);
 
+    /// <summary>
+    /// Issue #3351: reports a source-visible binding inside a boolean
+    /// <c>is</c>-expression pattern.
+    /// </summary>
+    /// <param name="location">The source location of the binding identifier.</param>
+    /// <param name="variableName">The rejected binding name.</param>
+    public void ReportPatternBindingNotAllowedInIsExpression(
+        TextLocation location,
+        string variableName)
+    => Report(location, DiagnosticDescriptors.PatternBindingNotAllowedInIsExpression, variableName);
+
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {
         var displayed = new List<string>();

@@ -215,6 +215,7 @@ public enum SyntaxKind
 
     // Pattern syntax
     ConstantPattern,
+    TypeOrConstantPattern,
     DiscardPattern,
     TypePattern,
     PropertyPattern,
@@ -345,8 +346,8 @@ public enum SyntaxKind
     ObjectCreationExpression,
     PropertyInitializer,
 
-    // Issue #575: expression-level type-test and safe-cast operators.
-    // `expr is T` → bool; `expr as T` → T (or T?).
+    // Issues #575 / #3351: expression-level pattern-test and safe-cast operators.
+    // `expr is pattern` → bool; `expr as T` → T (or T?).
     IsExpression,
     AsExpression,
 

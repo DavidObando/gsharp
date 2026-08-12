@@ -2117,26 +2117,51 @@ internal sealed partial class MethodBodyEmitter
     // ──────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Emits <c>expr is T</c> → <c>bool</c>:
+    /// Emits <c>expr is pattern</c> → <c>bool</c>:
     /// <code>
-    ///   [expr]
-    ///   box (if value type)
-    ///   isinst T
-    ///   ldnull
-    ///   cgt.un
+    ///   input = expr
+    ///   EmitPattern(pattern, input, fail)
+    ///   true
+    ///   br done
+    /// fail:
+    ///   false
+    /// done:
     /// </code>
     /// </summary>
     private void EmitIsExpression(BoundIsExpression node)
     {
-        this.EmitExpression(node.Expression);
+        if (node.Pattern is BoundTypePattern { PropertyPattern: null } typePattern)
+        {
+            this.EmitSimpleTypeIsExpression(node.Expression, typePattern.TargetType);
+            return;
+        }
 
-        // Box value-type operands so that `isinst` can operate on them.
-        // Issue #1467: an UNCONSTRAINED type-parameter operand (or `T?` over
-        // one) is neither a known value type nor a known reference type — its
-        // runtime value sits unboxed on the stack as a bare `!i`/`!!i` slot, so
-        // `isinst` (which requires an ObjRef) rejects it (`StackObjRef`). Box
-        // the underlying type parameter in that case too.
-        var operandType = node.Expression.Type;
+        var inputSlot = this.locals[node.InputVariable];
+        this.EmitExpression(node.Expression);
+        this.il.StoreLocal(inputSlot);
+
+        var failLabel = this.il.DefineLabel();
+        var doneLabel = this.il.DefineLabel();
+        this.EmitPattern(
+            node.Pattern,
+            loadValue: () => this.il.LoadLocal(inputSlot),
+            valueType: node.Expression.Type,
+            failLabel);
+        this.il.LoadConstantI4(1);
+        this.il.Branch(ILOpCode.Br, doneLabel);
+        this.il.MarkLabel(failLabel);
+        this.il.LoadConstantI4(0);
+        this.il.MarkLabel(doneLabel);
+    }
+
+    private void EmitSimpleTypeIsExpression(BoundExpression expression, TypeSymbol targetType)
+    {
+        this.EmitExpression(expression);
+
+        // Preserve the issue #575 type-test lowering byte-for-byte for source
+        // compatibility and stable emitted baselines. General patterns use the
+        // value-producing EmitPattern wrapper above.
+        var operandType = expression.Type;
         var boxNeeded = ReflectionMetadataEmitter.IsValueTypeSymbol(operandType);
         var boxType = operandType;
         if (!boxNeeded)
@@ -2159,13 +2184,11 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(boxType));
         }
 
-        // Determine the isinst target. For nullable targets, test against the underlying type.
-        var isinstTarget = node.TargetType is NullableTypeSymbol nts ? nts.UnderlyingType : node.TargetType;
-
+        var isinstTarget = targetType is NullableTypeSymbol nullableTarget
+            ? nullableTarget.UnderlyingType
+            : targetType;
         this.il.OpCode(ILOpCode.Isinst);
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(isinstTarget));
-
-        // Convert the object-or-null result to bool.
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Cgt_un);
     }

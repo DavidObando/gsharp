@@ -156,7 +156,7 @@ public enum BoundNodeKind
     // Issue #141 / ADR-0047: attribute application (annotation in source).
     Attribute,
 
-    // Issue #575: expression-level type-test and safe-cast operators.
+    // Issues #575 / #3351: expression-level pattern-test and safe-cast operators.
     IsExpression,
     AsExpression,
 

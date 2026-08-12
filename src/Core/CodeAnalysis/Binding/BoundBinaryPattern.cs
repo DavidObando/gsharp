@@ -21,12 +21,20 @@ public sealed class BoundBinaryPattern : BoundPattern
     /// <param name="isConjunction"><see langword="true"/> for <c>and</c>; <see langword="false"/> for <c>or</c>.</param>
     /// <param name="left">The left sub-pattern.</param>
     /// <param name="right">The right sub-pattern.</param>
-    public BoundBinaryPattern(SyntaxNode? syntax, TypeSymbol type, bool isConjunction, BoundPattern left, BoundPattern right)
+    /// <param name="rightInputVariable">A narrowed left-hand value used to bind and evaluate the right side.</param>
+    public BoundBinaryPattern(
+        SyntaxNode? syntax,
+        TypeSymbol type,
+        bool isConjunction,
+        BoundPattern left,
+        BoundPattern right,
+        LocalVariableSymbol? rightInputVariable = null)
         : base(syntax, type)
     {
         IsConjunction = isConjunction;
         Left = left;
         Right = right;
+        RightInputVariable = rightInputVariable;
     }
 
     /// <inheritdoc/>
@@ -40,4 +48,7 @@ public sealed class BoundBinaryPattern : BoundPattern
 
     /// <summary>Gets the right sub-pattern.</summary>
     public BoundPattern Right { get; }
+
+    /// <summary>Gets the narrowed input local used by the right side of an <c>and</c> pattern.</summary>
+    public LocalVariableSymbol? RightInputVariable { get; }
 }

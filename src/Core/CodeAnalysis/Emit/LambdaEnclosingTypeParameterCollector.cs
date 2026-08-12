@@ -82,9 +82,6 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
                 }
 
                 break;
-            case BoundIsExpression isExpression:
-                TypeSymbol.CollectReferencedTypeParameters(isExpression.TargetType, this.sink);
-                break;
             case BoundTypeOfExpression typeOfExpression:
                 TypeSymbol.CollectReferencedTypeParameters(typeOfExpression.OperandType, this.sink);
                 break;

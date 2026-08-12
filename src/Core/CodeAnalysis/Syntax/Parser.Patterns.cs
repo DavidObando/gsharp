@@ -13,6 +13,18 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 public partial class Parser
 {
+    private PatternParseContext patternParseContext;
+    private int patternNestingDepth;
+
+    private enum PatternParseContext
+    {
+        General,
+        IsExpression,
+        IsExpressionBodyHeader,
+        SwitchStatement,
+        SwitchExpression,
+    }
+
     private StatementSyntax ParseSwitchStatement()
     {
         var switchKeyword = MatchToken(SyntaxKind.SwitchKeyword);
@@ -48,7 +60,7 @@ public partial class Parser
         }
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
-        var value = ParsePattern();
+        var value = ParsePattern(PatternParseContext.SwitchStatement);
         var (whenKeyword, guard) = ParseOptionalWhenGuard();
         var caseBody = ParseBlockStatement();
         return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard, caseBody);
@@ -71,9 +83,34 @@ public partial class Parser
         return (null, null);
     }
 
-    private PatternSyntax ParsePattern()
+    private PatternSyntax ParsePattern(PatternParseContext context = PatternParseContext.General)
     {
-        return ParseOrPattern();
+        var savedContext = patternParseContext;
+        var savedNestingDepth = patternNestingDepth;
+        patternParseContext = context;
+        patternNestingDepth = 0;
+        try
+        {
+            return ParseOrPattern();
+        }
+        finally
+        {
+            patternParseContext = savedContext;
+            patternNestingDepth = savedNestingDepth;
+        }
+    }
+
+    private PatternSyntax ParseNestedPattern()
+    {
+        patternNestingDepth++;
+        try
+        {
+            return ParseOrPattern();
+        }
+        finally
+        {
+            patternNestingDepth--;
+        }
     }
 
     // Combinator precedence (matches C#): `not` binds tightest, then `and`,
@@ -138,6 +175,24 @@ public partial class Parser
 
     private PatternSyntax ParsePrimaryPattern()
     {
+        if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.IsKeyword)
+        {
+            return ParseTypePattern();
+        }
+
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "_"
+            && Peek(1).Kind != SyntaxKind.OpenParenthesisToken
+            && Peek(1).Kind != SyntaxKind.DotToken)
+        {
+            return new DiscardPatternSyntax(syntaxTree, MatchToken(SyntaxKind.IdentifierToken));
+        }
+
+        if (TryParseBareTypePattern(out var typePattern))
+        {
+            return typePattern;
+        }
+
         switch (Current.Kind)
         {
             case SyntaxKind.OpenParenthesisToken:
@@ -145,11 +200,7 @@ public partial class Parser
             case SyntaxKind.OpenSquareBracketToken:
                 return ParseListPattern();
             case SyntaxKind.OpenBraceToken:
-                return ParsePropertyPattern();
-            case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.IsKeyword:
-                return ParseTypePattern();
-            case SyntaxKind.IdentifierToken when Current.Text == "_" && Peek(1).Kind != SyntaxKind.OpenParenthesisToken && Peek(1).Kind != SyntaxKind.DotToken:
-                return new DiscardPatternSyntax(syntaxTree, MatchToken(SyntaxKind.IdentifierToken));
+                return ParsePropertyPatternOrBody();
             case SyntaxKind.LessToken:
             case SyntaxKind.LessOrEqualsToken:
             case SyntaxKind.GreaterToken:
@@ -165,7 +216,7 @@ public partial class Parser
     private PatternSyntax ParseParenthesizedPattern()
     {
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-        var pattern = ParsePattern();
+        var pattern = ParseNestedPattern();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new ParenthesizedPatternSyntax(syntaxTree, openParen, pattern, closeParen);
     }
@@ -175,7 +226,8 @@ public partial class Parser
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var isKeyword = MatchToken(SyntaxKind.IsKeyword);
         var type = ParseTypeClause();
-        return new TypePatternSyntax(syntaxTree, identifier, isKeyword, type);
+        var propertyPattern = TryParseTypePropertyPattern();
+        return new TypePatternSyntax(syntaxTree, identifier, isKeyword, type, propertyPattern);
     }
 
     private PatternSyntax ParseRelationalPattern()
@@ -193,7 +245,7 @@ public partial class Parser
         {
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
             var colon = MatchToken(SyntaxKind.ColonToken);
-            var pattern = ParsePattern();
+            var pattern = ParseNestedPattern();
             nodesAndSeparators.Add(new PropertyPatternFieldSyntax(syntaxTree, identifier, colon, pattern));
             if (Current.Kind == SyntaxKind.CommaToken)
             {
@@ -225,7 +277,7 @@ public partial class Parser
             }
             else
             {
-                nodesAndSeparators.Add(ParsePattern());
+                nodesAndSeparators.Add(ParseNestedPattern());
             }
 
             if (Current.Kind == SyntaxKind.CommaToken)
@@ -273,10 +325,221 @@ public partial class Parser
             && Current.Kind != SyntaxKind.CloseSquareBracketToken
             && Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            pattern = ParsePattern();
+            pattern = ParseNestedPattern();
         }
 
         return new SlicePatternSyntax(syntaxTree, dotDot, captureIdentifier, pattern);
+    }
+
+    private bool TryParseBareTypePattern(out PatternSyntax pattern)
+    {
+        pattern = null!;
+        if (!CanStartTypeClause(Current))
+        {
+            return false;
+        }
+
+        var savedPosition = position;
+        var savedTokens = tokens;
+        var savedDiagnosticCount = Diagnostics.Count;
+        var candidateEnd = savedPosition;
+        var isCandidate = false;
+        try
+        {
+            var trialType = ParseTypeClause();
+            candidateEnd = position;
+            isCandidate = Diagnostics.Count == savedDiagnosticCount
+                && (CanFollowBareTypePattern(Current)
+                    || IsTokenOnNewLineAfter(Current, trialType));
+        }
+        finally
+        {
+            position = savedPosition;
+            tokens = savedTokens;
+            Diagnostics.TruncateTo(savedDiagnosticCount);
+        }
+
+        if (!isCandidate)
+        {
+            return false;
+        }
+
+        var candidateType = ParseTypeClause();
+        candidateEnd = position;
+        var candidateFollowKind = Current.Kind;
+        var candidateTokens = tokens;
+
+        // Option B disambiguation is semantic, not capitalization-based.
+        // Preserve the value-shaped parse alongside the type candidate when
+        // both consume exactly the same tokens. PatternBinder then gives the
+        // legacy interpretation priority for its context (value in switch,
+        // type after expression-level `is`).
+        var expressionStart = savedPosition;
+        position = expressionStart;
+        var expressionDiagnosticCount = Diagnostics.Count;
+        var savedStructLiteral = suppressStructLiteral;
+        var savedObjectInitializer = suppressTrailingObjectInitializer;
+        suppressStructLiteral++;
+        suppressTrailingObjectInitializer++;
+        ExpressionSyntax? expression = null;
+        try
+        {
+            expression = ParseExpression();
+        }
+        finally
+        {
+            suppressStructLiteral = savedStructLiteral;
+            suppressTrailingObjectInitializer = savedObjectInitializer;
+        }
+
+        if (position == candidateEnd && Diagnostics.Count == expressionDiagnosticCount)
+        {
+            var propertyPattern = TryParseTypePropertyPattern();
+            pattern = new TypeOrConstantPatternSyntax(
+                syntaxTree,
+                expression,
+                candidateType,
+                propertyPattern);
+            return true;
+        }
+
+        if (position > candidateEnd
+            && Diagnostics.Count == expressionDiagnosticCount
+            && candidateFollowKind != SyntaxKind.OpenBraceToken
+            && patternParseContext is PatternParseContext.General
+                or PatternParseContext.SwitchStatement
+                or PatternParseContext.SwitchExpression)
+        {
+            position = savedPosition;
+            tokens = savedTokens;
+            Diagnostics.TruncateTo(savedDiagnosticCount);
+            return false;
+        }
+
+        position = candidateEnd;
+        tokens = candidateTokens;
+        Diagnostics.TruncateTo(expressionDiagnosticCount);
+        var suffix = TryParseTypePropertyPattern();
+        pattern = new TypePatternSyntax(
+            syntaxTree,
+            identifier: null,
+            isKeyword: null,
+            candidateType,
+            suffix);
+        return true;
+    }
+
+    private static bool CanFollowBareTypePattern(SyntaxToken token)
+    {
+        if (token.Kind.GetBinaryOperatorPrecedence() != 0)
+        {
+            return true;
+        }
+
+        if (token.Kind == SyntaxKind.IdentifierToken
+            && (token.Text == "and" || token.Text == "or" || token.Text == "when"))
+        {
+            return true;
+        }
+
+        return token.Kind switch
+        {
+            SyntaxKind.OpenBraceToken
+                or SyntaxKind.CloseBraceToken
+                or SyntaxKind.CloseSquareBracketToken
+                or SyntaxKind.CloseParenthesisToken
+                or SyntaxKind.CommaToken
+                or SyntaxKind.ColonToken
+                or SyntaxKind.RightArrowToken
+                or SyntaxKind.SemicolonToken
+                or SyntaxKind.QuestionToken
+                or SyntaxKind.EndOfFileToken
+                or SyntaxKind.ElseKeyword
+                or SyntaxKind.CaseKeyword
+                or SyntaxKind.DefaultKeyword => true,
+            _ => false,
+        };
+    }
+
+    private PatternSyntax ParsePropertyPatternOrBody()
+    {
+        if (patternParseContext != PatternParseContext.IsExpressionBodyHeader
+            || patternNestingDepth != 0)
+        {
+            return ParsePropertyPattern();
+        }
+
+        var savedPosition = position;
+        var savedDiagnosticCount = Diagnostics.Count;
+        var property = ParsePropertyPattern();
+        if (CanCommitTypePropertyPattern())
+        {
+            return property;
+        }
+
+        position = savedPosition;
+        Diagnostics.TruncateTo(savedDiagnosticCount);
+
+        // Leave the brace for the owning statement body. MatchToken reports the
+        // missing is-pattern at the brace without consuming it.
+        var missing = MatchToken(SyntaxKind.IdentifierToken);
+        return new ConstantPatternSyntax(syntaxTree, new NameExpressionSyntax(syntaxTree, missing));
+    }
+
+    private PropertyPatternSyntax? TryParseTypePropertyPattern()
+    {
+        if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            return null;
+        }
+
+        if (patternNestingDepth > 0
+            || patternParseContext is PatternParseContext.General or PatternParseContext.IsExpression)
+        {
+            return (PropertyPatternSyntax)ParsePropertyPattern();
+        }
+
+        var savedPosition = position;
+        var savedDiagnosticCount = Diagnostics.Count;
+        var property = (PropertyPatternSyntax)ParsePropertyPattern();
+        if (CanCommitTypePropertyPattern())
+        {
+            return property;
+        }
+
+        position = savedPosition;
+        Diagnostics.TruncateTo(savedDiagnosticCount);
+        return null;
+    }
+
+    private bool CanCommitTypePropertyPattern()
+    {
+        if (patternNestingDepth > 0)
+        {
+            return true;
+        }
+
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && (Current.Text == "and" || Current.Text == "or"))
+        {
+            return true;
+        }
+
+        return patternParseContext switch
+        {
+            PatternParseContext.General or PatternParseContext.IsExpression => true,
+            PatternParseContext.IsExpressionBodyHeader =>
+                Current.Kind == SyntaxKind.OpenBraceToken
+                || Current.Kind == SyntaxKind.CloseParenthesisToken
+                || Current.Kind.GetBinaryOperatorPrecedence() != 0,
+            PatternParseContext.SwitchStatement =>
+                Current.Kind == SyntaxKind.OpenBraceToken
+                || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when"),
+            PatternParseContext.SwitchExpression =>
+                Current.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken
+                || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when"),
+            _ => false,
+        };
     }
 
     private StatementSyntax ParseFallthroughStatement()
