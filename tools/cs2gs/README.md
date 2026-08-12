@@ -117,6 +117,27 @@ triage artifact; later stages are reported as `skip`.
    `Gsharp.NET.Sdk`) and compares the passing/failing test set against the C#
    xUnit oracle. Failures → `test-parity-failure`.
 
+### Native while-pattern bindings
+
+Positive single-binder C# while patterns use G# `while let` when translation
+is faithful:
+
+```csharp
+while (Next() is string text && text.Length > 0) { Use(text); }
+```
+
+```gs
+while let text = Next() as string {
+    if !(text.Length > 0) { break }
+    Use(text)
+}
+```
+
+This removes L1's unconditional loop-condition hoist for common declaration
+and type patterns. Complex patterns, reassigned binders, ref-like targets, and
+spill-requiring receiver/guard expressions keep the conservative `while true`
+body-hoist fallback.
+
 ### ILVerify exception policy
 
 Stage 3 does not treat green CI or an application that happens to run as proof

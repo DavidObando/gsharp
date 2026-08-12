@@ -623,7 +623,7 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 
 | ID | Severity | Summary | Example |
 | --- | --- | --- | --- |
-| GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let` for binding. | `if value is text is string { }`, `if values is [..rest] { }` |
+| GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let`, or `while let` for a loop condition. | `if value is text is string { }`, `if values is [..rest] { }` |
 
 ## Default-interface-method diagnostics (GS0318–GS0321)
 
@@ -948,7 +948,7 @@ nesting depth.
 | GS0293 | Error | No enclosing loop is labeled `<label>` (in `break <label>` / `continue <label>`).  | |
 | GS0294 | _Retired_ | Previously: labels could only be applied to loop statements. Non-loop labels are now valid `goto` targets (ADR-0139); this diagnostic is no longer emitted.  | |
 | GS0295 | Warning | Label `<label>` shadows an enclosing loop label of the same name; the inner label wins for nested `break` / `continue`.  | |
-| GS0296 | Error | The right-hand side of an `if let` / `guard let` binding must be of nullable type; non-nullable initializers have nothing to strip.  | |
+| GS0296 | Error | The right-hand side of an `if let` / `guard let` / `while let` binding must be of nullable type; non-nullable initializers have nothing to strip.  | |
 | GS0297 | Error | A `guard let` else block can fall through instead of unconditionally exiting with `return`, `throw`, `break`, or `continue`.  | |
 | GS0300 | Warning | A null-conditional index access uses a non-nullable receiver; use ordinary indexing instead.  | |
 | GS0301 | Error | Null-conditional indexing `?[]` is not allowed on the left-hand side of an assignment. Use a plain `[]` after a nil-check, an `if let` binding, or the `??=` compound assignment instead.  | |

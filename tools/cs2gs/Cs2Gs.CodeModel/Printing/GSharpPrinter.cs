@@ -1046,6 +1046,9 @@ public static class GSharpPrinter
             case WhileStatement whileStatement:
                 return $"{pad}while {RenderExpression(whileStatement.Condition, indent)} {RenderBlock(whileStatement.Body, indent)}";
 
+            case WhileLetStatement whileLetStatement:
+                return $"{pad}while {RenderLetBindings(whileLetStatement.Bindings, indent)} {RenderBlock(whileLetStatement.Body, indent)}";
+
             case LockStatement lockStatement:
                 return $"{pad}lock {RenderExpression(lockStatement.Target, indent)} {RenderBlock(lockStatement.Body, indent)}";
 
@@ -1175,16 +1178,7 @@ public static class GSharpPrinter
     private static string RenderIfLet(IfLetStatement ifLet, int indent)
     {
         var pad = Indent(indent);
-        var bindings = string.Join(
-            ", ",
-            ifLet.Bindings.Select(binding =>
-            {
-                var type = binding.DeclaredType == null
-                    ? string.Empty
-                    : $" {RenderType(binding.DeclaredType)}";
-                var initializer = RenderExpression(binding.Initializer, indent, IfLetInitializerPrecedence);
-                return $"let {binding.Name}{type} = {initializer}";
-            }));
+        var bindings = RenderLetBindings(ifLet.Bindings, indent);
 
         // No guard clause: the statement grammar has none (see IfLetStatement).
         var sb = new StringBuilder();
@@ -1206,6 +1200,20 @@ public static class GSharpPrinter
         }
 
         return sb.ToString();
+    }
+
+    private static string RenderLetBindings(IReadOnlyList<IfLetBinding> bindings, int indent)
+    {
+        return string.Join(
+            ", ",
+            bindings.Select(binding =>
+            {
+                var type = binding.DeclaredType == null
+                    ? string.Empty
+                    : $" {RenderType(binding.DeclaredType)}";
+                var initializer = RenderExpression(binding.Initializer, indent, IfLetInitializerPrecedence);
+                return $"let {binding.Name}{type} = {initializer}";
+            }));
     }
 
     private static string RenderIf(IfStatement ifStatement, int indent)

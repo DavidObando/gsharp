@@ -3,9 +3,13 @@
 - **Status**: Accepted
 - **Date**: 2026-06-11
 - **Phase**: Phase 9 — language depth / control-flow ergonomics
-- **Related**: ADR-0010 (aspirational samples), issues [#707](https://github.com/DavidObando/gsharp/issues/707) (this ADR), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish)
+- **Related**: ADR-0010 (aspirational samples), ADR-0163 (`while let`), issues [#707](https://github.com/DavidObando/gsharp/issues/707) (this ADR), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish)
 
 > **Amendment (issue [#1884](https://github.com/DavidObando/gsharp/issues/1884), see ADR-0139)**: `label:` is no longer restricted to loop statements. A label on a non-loop statement now declares a `goto` target instead of reporting GS0294 (retired); GS0293/GS0295 and loop labels for `break`/`continue` are unchanged.
+>
+> **Amendment (ADR-0163)**: `while let` is a pre-test loop and participates in
+> the same label, `break`, and `continue` rules. Its `continue` target
+> re-evaluates the nullable binding condition.
 
 ## Context
 
@@ -45,7 +49,7 @@ The trailing `while` keyword is the same token as the leading `while` of the pre
 ### Loop labels
 
 ```
-LabeledLoop ::= identifier ':' (ForStmt | WhileStmt | DoWhileStmt)
+LabeledLoop ::= identifier ':' (ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt)
 BreakStmt   ::= 'break' identifier?
 ContinueStmt::= 'continue' identifier?
 ```

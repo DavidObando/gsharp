@@ -71,6 +71,7 @@ SwitchStatement
 ThrowStatement
 TryStatement
 TupleDeconstructionStatement
+WhileLetStatement
 WhileStatement
 YieldStatement
 

@@ -283,6 +283,143 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
+        /// <summary>
+        /// Issue #3352: emits C#'s body-scoped positive loop-pattern binding as
+        /// native G# <c>while let</c> when the condition is exactly a non-null
+        /// binding or type-test binding, optionally followed by spill-free
+        /// <c>&amp;&amp;</c> guards:
+        /// <code>
+        /// while (Next() is string text &amp;&amp; text.Length &gt; 0) { body }
+        /// // becomes
+        /// while let text = Next() as string {
+        ///     if !(text.Length &gt; 0) { break }
+        ///     body
+        /// }
+        /// </code>
+        /// The native loop owns re-evaluation and continue/break routing, so the
+        /// old <c>let __scrutineeN</c> body prologue is unnecessary.
+        /// </summary>
+        private bool TryBuildWhileLetLoop(
+            ExpressionSyntax condition,
+            StatementSyntax bodyStatement,
+            out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+
+            DecomposeConjunction(condition, out ExpressionSyntax leftmost, out List<ExpressionSyntax> guards);
+            if (leftmost is not IsPatternExpressionSyntax isPattern)
+            {
+                return false;
+            }
+
+            SingleVariableDesignationSyntax designation;
+            GTypeReference asTarget = null;
+            if (IsBareNonNullDeclarationPattern(isPattern.Pattern, out designation))
+            {
+                // A direct `while let name = receiver` needs an existing
+                // nullable layer to strip. Non-nullable receivers keep the
+                // general pattern lowering.
+                if (!this.IsNullableIfLetReceiver(isPattern.Expression))
+                {
+                    return false;
+                }
+            }
+            else if (TryExtractSingleVarTypePattern(
+                isPattern.Pattern,
+                out TypeSyntax typeSyntax,
+                out designation))
+            {
+                ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+                if (targetSymbol == null ||
+                    targetSymbol.TypeKind == TypeKind.Error ||
+                    targetSymbol.IsRefLikeType ||
+                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                {
+                    return false;
+                }
+
+                asTarget = this.MapTypeSyntax(typeSyntax);
+                if (targetSymbol.IsValueType)
+                {
+                    // `as` requires a nullable value-type target; `while let`
+                    // then strips that nullable layer back to the C# binder's T.
+                    asTarget = MakeNullable(asTarget);
+                }
+                else if (!targetSymbol.IsReferenceType)
+                {
+                    // An unconstrained type parameter cannot be the target of
+                    // G#'s testing conversion.
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+
+            if (this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder ||
+                this.IsLocalReassigned(binder) ||
+                guards.Any(ContainsSpillHoistingConstruct) ||
+                ContainsSpillHoistingConstruct(isPattern.Expression))
+            {
+                return false;
+            }
+
+            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
+
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            GExpression initializer = asTarget == null
+                ? receiver
+                : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+
+            bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
+            this.state.PatternBindings[binder] = new IdentifierExpression(name);
+
+            BlockStatement body;
+            try
+            {
+                GExpression guard = null;
+                foreach (ExpressionSyntax conjunct in guards)
+                {
+                    GExpression translated = this.TranslateExpression(conjunct);
+                    guard = guard == null
+                        ? translated
+                        : new BinaryExpression(guard, "&&", translated);
+                }
+
+                body = this.TranslateStatementAsBlock(bodyStatement);
+                if (guard != null)
+                {
+                    var statements = new List<GStatement>
+                    {
+                        BreakIf(Negate(guard)),
+                    };
+                    statements.AddRange(body.Statements);
+                    body = new BlockStatement(statements);
+                }
+            }
+            finally
+            {
+                if (hadPrevious)
+                {
+                    this.state.PatternBindings[binder] = previous;
+                }
+                else
+                {
+                    this.state.PatternBindings.Remove(binder);
+                }
+            }
+
+            result = new GStatement[]
+            {
+                new WhileLetStatement(
+                    new List<IfLetBinding> { new IfLetBinding(name, initializer) },
+                    body),
+            };
+            return true;
+        }
+
         // True when `node` reads `symbol` anywhere. Used to keep an `if let` from
         // swallowing a shape whose ELSE branch reads the pattern binder — legal in
         // C# when the then-branch exits, but out of scope for a G# `if let`.
@@ -372,9 +509,10 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// True when the pattern scrutinee lands in G# as a nullable type, so
-        /// the synthesized <c>if let</c> initializer has a nullable layer to
-        /// strip (gsc GS0296 otherwise). Covers both an annotated / taint-
-        /// promoted reference type and a <c>Nullable&lt;T&gt;</c> value type.
+        /// a synthesized <c>if let</c> or <c>while let</c> initializer has a
+        /// nullable layer to strip (gsc GS0296 otherwise). Covers both an
+        /// annotated / taint-promoted reference type and a
+        /// <c>Nullable&lt;T&gt;</c> value type.
         /// </summary>
         private bool IsNullableIfLetReceiver(ExpressionSyntax receiver)
         {
@@ -391,10 +529,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// True when translating <paramref name="node"/> can hoist a spill
         /// <c>let</c> into the active statement seam (issue #1731 machinery) or
         /// hoist a write/mutation out of the expression. Such a hoist must not
-        /// escape an <c>if let</c> guard or then-branch, so the rewrite bails
-        /// out and the spill-based <see cref="IfExpression"/> fallback is used
-        /// instead. Anonymous-function bodies are skipped: they open their own
-        /// seam and can never leak into this one.
+        /// escape an <c>if let</c> / <c>while let</c> binding scope, so those
+        /// rewrites bail out and keep their spill-based fallback instead.
+        /// Anonymous-function bodies are skipped: they open their own seam and
+        /// can never leak into this one.
         /// </summary>
         private static bool ContainsSpillHoistingConstruct(SyntaxNode node)
         {

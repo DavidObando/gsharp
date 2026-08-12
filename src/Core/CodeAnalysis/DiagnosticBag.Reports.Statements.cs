@@ -619,8 +619,9 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.LabelShadowsEnclosingLoop, labelName);
 
     /// <summary>
-    /// ADR-0071 / issue #708: GS0296 — the right-hand side of an
-    /// <c>if let</c> / <c>guard let</c> binding is not of nullable type.
+    /// ADR-0071 / ADR-0163: GS0296 — the right-hand side of an
+    /// <c>if let</c>, <c>guard let</c>, or <c>while let</c> binding is not
+    /// of nullable type.
     /// The binding form is intended to strip a single layer of nullability;
     /// applying it to a non-nullable value would do nothing useful and is
     /// almost certainly a programmer error.

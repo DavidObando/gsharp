@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-08-11
 - **Phase**: Language patterns / flow analysis
-- **Related**: ADR-0009 (switch patterns), ADR-0069 (smart-cast narrowing), ADR-0071 (`if let` / `guard let` bindings), [#3351](https://github.com/DavidObando/gsharp/issues/3351), parent [#3347](https://github.com/DavidObando/gsharp/issues/3347)
+- **Related**: ADR-0009 (switch patterns), ADR-0069 (smart-cast narrowing), ADR-0071 (`if let` / `guard let` bindings), ADR-0163 (`while let`), [#3351](https://github.com/DavidObando/gsharp/issues/3351), parent [#3347](https://github.com/DavidObando/gsharp/issues/3347)
 
 ## Context
 
@@ -91,8 +91,8 @@ Parentheses are the explicit escape hatch: `if (value is {}) { ... }`.
 
 Boolean pattern position introduces no scope. Source-visible type or slice
 bindings are rejected with **GS0525** and direct users to `if let` or
-`guard let`. Switch bindings keep their existing rules, including GS0390 under
-`or` / `not`.
+`guard let`, or to `while let` for a loop-condition binding. Switch bindings
+keep their existing rules, including GS0390 under `or` / `not`.
 
 ## Consequences
 

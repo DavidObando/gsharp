@@ -200,6 +200,7 @@ public enum SyntaxKind
     ForClauseStatement,
     ForRangeStatement,
     ForTupleRangeStatement,
+    WhileLetStatement,
     WhileStatement,
     DoWhileStatement,
     LabeledStatement,

@@ -63,6 +63,10 @@ Greet(nil)
 the remainder of the enclosing block when the value is non-nil, and the
 `else` branch must unconditionally exit.
 
+`while let v = Next() { ... }` is the loop form: `Next()` is re-evaluated
+before each iteration, `v` is non-null inside the body, and the loop ends when
+the initializer returns `nil`.
+
 ### Sequences from `Gsharp.Extensions.Sequences`
 
 ```gsharp

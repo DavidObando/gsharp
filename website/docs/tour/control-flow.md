@@ -57,9 +57,12 @@ func Main() {
 
 The result type is the common type of all branch tails. Missing the terminal `else` in value position reports `GS0276`; an empty block reports `GS0277`; branches with no common type report `GS0263`.
 
-## `if let` and `guard let` — nullable bindings
+## `if let`, `guard let`, and `while let` — nullable bindings
 
 `if let name = expr { ... }` strips the nullable layer from a value and binds the underlying non-null view to `name` inside the then-branch. The companion `guard let name = expr else { exit }` form binds `name` for the remainder of the enclosing block; the else clause must unconditionally exit.
+`while let name = expr { ... }` repeats while the initializer is non-`nil`,
+re-evaluating it before every iteration and binding the non-null value only
+inside the loop body.
 
 ```gsharp title="NullableBindings.gs"
 package Tour.ControlFlow.NullableBindings
@@ -87,9 +90,18 @@ func Both(left string?, right string?) {
         Console.WriteLine("$a + $b")
     }
 }
+
+func Drain(reader System.IO.TextReader) {
+    while let line = reader.ReadLine() {
+        Console.WriteLine(line.Length)
+    }
+}
 ```
 
-The binding's initializer must have a nullable type (`T?`). The else-block of `guard let` must end in `return`, `throw`, `break`, or `continue`.
+The binding's initializer must have a nullable type (`T?`). The else-block of
+`guard let` must end in `return`, `throw`, `break`, or `continue`. A
+`continue` inside `while let` re-evaluates the initializer; a `break` exits
+without another evaluation.
 
 ## `if let` as a value
 
@@ -204,7 +216,11 @@ func Main() {
 
 ## While and do-while
 
-`while cond { ... }` evaluates `cond` first and runs the body while it is true. `do { ... } while cond` is the post-test variant: the body always runs at least once.
+`while cond { ... }` evaluates `cond` first and runs the body while it is true.
+The nullable-binding variant, `while let value = Next() { ... }`, runs while
+`Next()` returns a non-`nil` value and scopes `value` to the body.
+`do { ... } while cond` is the post-test variant: the body always runs at least
+once.
 
 ```gsharp title="WhileDo.gs"
 package Tour.ControlFlow.WhileDo

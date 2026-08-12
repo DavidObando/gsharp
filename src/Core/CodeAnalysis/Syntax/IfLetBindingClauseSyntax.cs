@@ -6,8 +6,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// One <c>let name [T] = expr</c> clause inside an
-/// <see cref="IfLetStatementSyntax"/> or <see cref="GuardLetStatementSyntax"/>
-/// header (ADR-0071 / issue #708).
+/// <see cref="IfLetStatementSyntax"/>, <see cref="GuardLetStatementSyntax"/>,
+/// or <see cref="WhileLetStatementSyntax"/> header (ADR-0071 / ADR-0163).
 /// </summary>
 public sealed class IfLetBindingClauseSyntax : SyntaxNode
 {

@@ -894,6 +894,12 @@ public static class SemanticLookup
         Dictionary<SyntaxTree, NodeBuckets> bucketsByTree,
         bool useIncrementalCaches)
     {
+        var whileLetIdentifiers = new HashSet<SyntaxToken>(
+            bucketsByTree.Values
+                .SelectMany(bucket => bucket.WhileLets)
+                .SelectMany(statement => statement.Bindings)
+                .Select(binding => binding.Identifier));
+
         BoundProgram program;
         try
         {
@@ -947,7 +953,10 @@ public static class SemanticLookup
             foreach (var (identifier, variable) in entries)
             {
                 declarations[identifier] = variable;
-                GetLocals(localDeclarations, scope)[variable.Name] = variable;
+                if (!whileLetIdentifiers.Contains(identifier))
+                {
+                    GetLocals(localDeclarations, scope)[variable.Name] = variable;
+                }
             }
         }
 
@@ -960,7 +969,9 @@ public static class SemanticLookup
             // cached per-tree buckets, so this stays cheap on large workspaces).
             var topLevelLoopIdentifiers =
                 bucketsByTree.Values.SelectMany(b => b.ForRanges).SelectMany(f => EnumerateForRangeIdentifiers(f))
-                .Concat(bucketsByTree.Values.SelectMany(b => b.AwaitForRanges).Select(f => f.Identifier));
+                .Concat(bucketsByTree.Values.SelectMany(b => b.AwaitForRanges).Select(f => f.Identifier))
+                .Concat(bucketsByTree.Values.SelectMany(b => b.WhileLets).SelectMany(
+                    statement => statement.Bindings.Select(binding => binding.Identifier)));
             foreach (var (identifier, variable) in MatchBoundLocals(program.Statement, topLevelLoopIdentifiers))
             {
                 declarations[identifier] = variable;
@@ -1002,7 +1013,9 @@ public static class SemanticLookup
         var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { bodySyntax })
             .Select(v => v.Identifier)
             .Concat(FindNodes<ForRangeStatementSyntax>(new[] { bodySyntax }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
-            .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { bodySyntax }).Select(f => f.Identifier));
+            .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { bodySyntax }).Select(f => f.Identifier))
+            .Concat(FindNodes<WhileLetStatementSyntax>(new[] { bodySyntax }).SelectMany(
+                statement => statement.Bindings.Select(binding => binding.Identifier)));
 
         return MatchBoundLocals(body, syntaxLocalIdentifiers);
     }
@@ -1033,6 +1046,16 @@ public static class SemanticLookup
                      .Where(id => id != null)
                      .OrderBy(id => id.Span.Start))
         {
+            var exactBindingIndex = boundDeclarations.FindIndex(
+                declaration => declaration.Syntax is IfLetBindingClauseSyntax binding &&
+                    ReferenceEquals(binding.Identifier, syntaxIdentifier));
+            if (exactBindingIndex >= 0 && !used.Contains(exactBindingIndex))
+            {
+                used.Add(exactBindingIndex);
+                result.Add((syntaxIdentifier, boundDeclarations[exactBindingIndex].Variable));
+                continue;
+            }
+
             for (var i = 0; i < boundDeclarations.Count; i++)
             {
                 if (used.Contains(i) || boundDeclarations[i].Variable.Name != syntaxIdentifier.Text)
@@ -1121,6 +1144,9 @@ public static class SemanticLookup
                 break;
             case AwaitForRangeStatementSyntax afr:
                 buckets.AwaitForRanges.Add(afr);
+                break;
+            case WhileLetStatementSyntax whileLet:
+                buckets.WhileLets.Add(whileLet);
                 break;
             case VariableDeclarationSyntax vd:
                 buckets.VariableDeclarations.Add(vd);
@@ -1335,6 +1361,8 @@ public static class SemanticLookup
 
         public List<AwaitForRangeStatementSyntax> AwaitForRanges { get; } = new();
 
+        public List<WhileLetStatementSyntax> WhileLets { get; } = new();
+
         public List<VariableDeclarationSyntax> VariableDeclarations { get; } = new();
 
         public List<TypeAliasDeclarationSyntax> TypeAliasDeclarations { get; } = new();
@@ -1367,6 +1395,7 @@ public static class SemanticLookup
         private Dictionary<string, FunctionDeclarationSyntax[]> cachedFunctionsByFile;
         private Dictionary<string, ConstructorDeclarationSyntax[]> cachedConstructorsByFile;
         private Dictionary<string, StructDeclarationSyntax[]> cachedStructsByFile;
+        private Dictionary<string, WhileLetStatementSyntax[]> cachedWhileLetsByFile;
         private Dictionary<SyntaxTree, AccessorExpressionSyntax[]> cachedAccessorsByTree;
         private Dictionary<SyntaxTree, FieldAssignmentExpressionSyntax[]> cachedFieldAssignmentsByTree;
         private Dictionary<SyntaxTree, ForRangeStatementSyntax[]> cachedForRangesByTree;
@@ -1427,6 +1456,7 @@ public static class SemanticLookup
             var functionsByFile = new Dictionary<string, List<FunctionDeclarationSyntax>>();
             var constructorsByFile = new Dictionary<string, List<ConstructorDeclarationSyntax>>();
             var structsByFile = new Dictionary<string, List<StructDeclarationSyntax>>();
+            var whileLetsByFile = new Dictionary<string, List<WhileLetStatementSyntax>>();
             this.memberAccessTokenSpans = new HashSet<(string, int, int)>();
             this.fieldAssignmentTokenSpans = new HashSet<(string, int, int)>();
 
@@ -1473,6 +1503,17 @@ public static class SemanticLookup
                     sts.AddRange(bucket.Structs);
                 }
 
+                if (bucket.WhileLets.Count > 0)
+                {
+                    if (!whileLetsByFile.TryGetValue(fileName, out var whileLets))
+                    {
+                        whileLets = new List<WhileLetStatementSyntax>();
+                        whileLetsByFile[fileName] = whileLets;
+                    }
+
+                    whileLets.AddRange(bucket.WhileLets);
+                }
+
                 foreach (var accessor in bucket.Accessors)
                 {
                     foreach (var memberToken in EnumerateAccessorMemberTokens(accessor.RightPart))
@@ -1498,6 +1539,7 @@ public static class SemanticLookup
             this.cachedFunctionsByFile = functionsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
             this.cachedConstructorsByFile = constructorsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
             this.cachedStructsByFile = structsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
+            this.cachedWhileLetsByFile = whileLetsByFile.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToArray());
         }
 
         /// <summary>Gets a snapshot of the global name → symbol map. ADR-0106 test hook.</summary>
@@ -1537,6 +1579,12 @@ public static class SemanticLookup
             {
                 // Token is clearly a member name; do not fall through to by-name lookups.
                 return null;
+            }
+
+            var whileLetLocal = this.ResolveWhileLetLoopLocal(token);
+            if (whileLetLocal != null)
+            {
+                return whileLetLocal;
             }
 
             var function = this.FindContainingFunction(token);
@@ -2078,6 +2126,44 @@ public static class SemanticLookup
             return best;
         }
 
+        private Symbol? ResolveWhileLetLoopLocal(SyntaxToken token)
+        {
+            if (token?.SyntaxTree == null)
+            {
+                return null;
+            }
+
+            Symbol? best = null;
+            var bestSpanLength = int.MaxValue;
+            foreach (var statement in this.GetWhileLetsForToken(token))
+            {
+                if (statement.Body == null
+                    || token.Span.Start < statement.Body.Span.Start
+                    || statement.Body.Span.End < token.Span.End
+                    || statement.Body.Span.Length >= bestSpanLength)
+                {
+                    continue;
+                }
+
+                foreach (var binding in statement.Bindings)
+                {
+                    if (!string.Equals(binding.Identifier?.Text, token.Text, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var symbol = binding.Identifier is null ? null : this.Resolve(binding.Identifier);
+                    if (symbol != null)
+                    {
+                        best = symbol;
+                        bestSpanLength = statement.Body.Span.Length;
+                    }
+                }
+            }
+
+            return best;
+        }
+
         private Symbol? ResolveForRangeLoopLocal(SyntaxToken token)
         {
             if (token?.SyntaxTree == null)
@@ -2154,6 +2240,14 @@ public static class SemanticLookup
             return this.cachedAwaitForRangesByTree.TryGetValue(tree, out var cached)
                 ? cached
                 : FindNodes<AwaitForRangeStatementSyntax>(tree.Root).ToArray();
+        }
+
+        private WhileLetStatementSyntax[] GetWhileLetsForToken(SyntaxToken token)
+        {
+            var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
+            return this.cachedWhileLetsByFile.TryGetValue(fileName, out var cached)
+                ? cached
+                : Array.Empty<WhileLetStatementSyntax>();
         }
 
         private Symbol? ResolvePrimitiveOrImportedType(string text)

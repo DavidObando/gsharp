@@ -732,6 +732,122 @@ internal sealed partial class StatementBinder
         return BindForConditionStatementCore(syntax, syntax.Condition, syntax.Body, labelName: null);
     }
 
+    private BoundStatement BindWhileLetStatement(WhileLetStatementSyntax syntax)
+    {
+        return BindWhileLetStatementCore(syntax, syntax.Bindings, syntax.Body, labelName: null);
+    }
+
+    /// <summary>
+    /// ADR-0163 / issue #3352: lowers <c>while let</c> through the existing
+    /// declaration, nil-check, goto, and loop-label nodes. Binding declarations
+    /// sit at the check label, so their initializers run before every iteration
+    /// and every <c>continue</c> re-enters through the same check.
+    /// </summary>
+    private BoundStatement BindWhileLetStatementCore(
+        SyntaxNode originatingSyntax,
+        SeparatedSyntaxList<IfLetBindingClauseSyntax> bindingSyntaxes,
+        StatementSyntax bodySyntax,
+        string? labelName)
+    {
+        // Lowers to:
+        //   {
+        //     goto checkLabel
+        //     bodyLabel:
+        //     <body, bindings narrowed to their underlying types>
+        //     continueLabel:
+        //     checkLabel:
+        //     let a T1? = e1
+        //     let b T2? = e2
+        //     if a != nil && b != nil goto bodyLabel
+        //     breakLabel:
+        //   }
+        var enclosingScope = scope;
+        scope = new BoundScope(enclosingScope);
+        var loopScope = scope;
+
+        var localsForFrame = new List<(VariableSymbol Variable, TypeSymbol Underlying)>();
+        var declarations = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var binding in bindingSyntaxes)
+        {
+            var (variable, underlying, declaration) = BindWhileLetBindingClause(
+                binding,
+                enclosingScope,
+                loopScope);
+            declarations.Add(declaration);
+            if (variable != null && underlying != null)
+            {
+                localsForFrame.Add((variable, underlying));
+            }
+        }
+
+        var condition = BuildNilCheckChain(originatingSyntax, localsForFrame)
+            ?? new BoundLiteralExpression(originatingSyntax, false, TypeSymbol.Bool);
+        var declarationBlock = new BoundBlockStatement(originatingSyntax, declarations.ToImmutable());
+        var body = BindConditionedLoopBody(
+            condition,
+            bodySyntax,
+            labelName,
+            out var breakLabel,
+            out var continueLabel,
+            backEdgeTail: declarationBlock,
+            backEdgeCondition: condition);
+
+        scope = scope.Pop();
+
+        var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
+        var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundGotoStatement(originatingSyntax, checkLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, bodyLabel));
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
+        statements.Add(new BoundLabelStatement(originatingSyntax, checkLabel));
+        statements.AddRange(declarationBlock.Statements);
+        statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
+        return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
+    }
+
+    private (VariableSymbol? Variable, TypeSymbol? Underlying, BoundStatement Declaration) BindWhileLetBindingClause(
+        IfLetBindingClauseSyntax binding,
+        BoundScope enclosingScope,
+        BoundScope loopScope)
+    {
+        var savedScope = scope;
+        scope = new BoundScope(enclosingScope);
+        try
+        {
+            var bound = IfLetBindingSupport.BindBindingClause(
+                binding,
+                Diagnostics,
+                conversions,
+                bindTypeClause,
+                syntax => bindExpression(syntax),
+                (identifier, isReadOnly, type) =>
+                {
+                    var initializerScope = scope;
+                    scope = loopScope;
+                    try
+                    {
+                        return bindLocalVariable(identifier, isReadOnly, type);
+                    }
+                    finally
+                    {
+                        scope = initializerScope;
+                    }
+                });
+
+            var declaration = new BoundVariableDeclaration(binding, bound.Variable, bound.Initializer);
+            return bound.IsValid
+                ? (bound.Variable, bound.Underlying, declaration)
+                : (null, null, declaration);
+        }
+        finally
+        {
+            scope = savedScope;
+        }
+    }
+
     /// <summary>
     /// Issue #1885: lowers <c>lock expr { body }</c> to the classic
     /// <c>System.Threading.Monitor.Enter</c> / <c>try</c> / <c>finally</c> /
@@ -914,6 +1030,12 @@ internal sealed partial class StatementBinder
 
         return inner.Kind switch
         {
+            SyntaxKind.WhileLetStatement =>
+                BindWhileLetStatementCore(
+                    syntax,
+                    ((WhileLetStatementSyntax)inner).Bindings,
+                    ((WhileLetStatementSyntax)inner).Body,
+                    labelName),
             SyntaxKind.WhileStatement =>
                 BindForConditionStatementCore(syntax, ((WhileStatementSyntax)inner).Condition, ((WhileStatementSyntax)inner).Body, labelName),
             SyntaxKind.DoWhileStatement =>
@@ -940,6 +1062,7 @@ internal sealed partial class StatementBinder
     {
         return stmt.Kind switch
         {
+            SyntaxKind.WhileLetStatement => true,
             SyntaxKind.WhileStatement => true,
             SyntaxKind.DoWhileStatement => true,
             SyntaxKind.ForInfiniteStatement => true,

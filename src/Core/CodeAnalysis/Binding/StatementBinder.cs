@@ -176,6 +176,8 @@ internal sealed partial class StatementBinder
                 return BindIfLetStatement((IfLetStatementSyntax)syntax);
             case SyntaxKind.GuardLetStatement:
                 return BindGuardLetStatement((GuardLetStatementSyntax)syntax);
+            case SyntaxKind.WhileLetStatement:
+                return BindWhileLetStatement((WhileLetStatementSyntax)syntax);
             case SyntaxKind.ForInfiniteStatement:
                 return BindForInfiniteStatement((ForInfiniteStatementSyntax)syntax);
             case SyntaxKind.ForEllipsisStatement:
