@@ -814,6 +814,7 @@ internal sealed class SignatureEncoder
                     encoder.Array(
                         out var elementEncoder,
                         out var shapeEncoder);
+                    // IsArray check above establishes a non-null reflection element type.
                     EncodeClrType(elementEncoder, type.GetElementType()!);
                     shapeEncoder.Shape(
                         type.GetArrayRank(),

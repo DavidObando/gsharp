@@ -3975,6 +3975,7 @@ internal sealed class MemberLookup
             && closedType.IsArray
             && closedType.GetArrayRank() == openType.GetArrayRank())
         {
+            // Matching IsArray checks above establish non-null element types for both arrays.
             return RectangularArrayTypeSymbol.Get(
                 SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!),
                 openType.GetArrayRank());

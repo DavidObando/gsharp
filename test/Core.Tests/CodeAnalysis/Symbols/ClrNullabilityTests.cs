@@ -184,6 +184,7 @@ public class ClrNullabilityTests
     public void RectangularArray_NullableElementAndOuterAnnotations_RoundTrip()
     {
         var nonNullMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableElementGrid));
+        // nameof targets a declared Sample method, establishing reflection lookup success.
         var nonNullSymbol = Assert.IsType<RectangularArrayTypeSymbol>(
             ClrNullability.GetReturnTypeSymbol(nonNullMethod!));
         Assert.Equal(2, nonNullSymbol.Rank);
@@ -191,6 +192,7 @@ public class ClrNullabilityTests
         Assert.Same(TypeSymbol.String, nullableElement.UnderlyingType);
 
         var nullableMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableGrid));
+        // nameof targets a declared Sample method, establishing reflection lookup success.
         var nullableOuter = Assert.IsType<NullableTypeSymbol>(
             ClrNullability.GetReturnTypeSymbol(nullableMethod!));
         var nullableGrid = Assert.IsType<RectangularArrayTypeSymbol>(nullableOuter.UnderlyingType);
