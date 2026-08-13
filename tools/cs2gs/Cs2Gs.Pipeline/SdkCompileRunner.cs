@@ -103,10 +103,15 @@ public sealed class SdkCompileRunner
                 "-c",
                 config ?? "Release",
                 "-p:RestoreConfigFile=" + projectNugetConfig,
+                "-p:RestorePackagesPath=" + Path.Combine(artifactDirectory, ".nuget-packages"),
                 "-p:Cs2GsArtifactRoot=" + artifactDirectory,
             };
             ProcessRunResult result = ProcessRunner.Run(
-                "dotnet", args, projectDirectory, TimeSpan.FromMinutes(10));
+                "dotnet",
+                args,
+                projectDirectory,
+                TimeSpan.FromMinutes(10),
+                IsolatedNugetEnvironment(artifactDirectory));
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty);
 
             IReadOnlyList<GscDiagnostic> diagnostics = GscInvoker.ParseDiagnostics(result.Output);
@@ -321,6 +326,7 @@ public sealed class SdkCompileRunner
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
+        args.Add("-p:RestorePackagesPath=" + Path.Combine(appRunDir, ".nuget-packages"));
         string repoNugetConfig = Path.Combine(repoRoot, "nuget.config");
         if (File.Exists(repoNugetConfig))
         {
@@ -331,7 +337,12 @@ public sealed class SdkCompileRunner
             args.Add("-p:RestoreConfigFile=" + repoNugetConfig);
         }
 
-        ProcessRunResult result = ProcessRunner.Run("dotnet", args, appRunDir, TimeSpan.FromMinutes(10));
+        ProcessRunResult result = ProcessRunner.Run(
+            "dotnet",
+            args,
+            appRunDir,
+            TimeSpan.FromMinutes(10),
+            IsolatedNugetEnvironment(appRunDir));
         File.WriteAllText(Path.Combine(appRunDir, "sdk.build.log"), result.Output ?? string.Empty);
 
         IReadOnlyList<GscDiagnostic> diagnostics = GscInvoker.ParseDiagnostics(result.Output);
@@ -696,7 +707,8 @@ public sealed class SdkCompileRunner
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory,
                 },
                 projectDirectory,
-                TimeSpan.FromMinutes(10));
+                TimeSpan.FromMinutes(10),
+                IsolatedNugetEnvironment(artifactDirectory));
         }
         finally
         {
@@ -907,7 +919,8 @@ public sealed class SdkCompileRunner
                 "-p:Cs2GsArtifactRoot=" + artifactDirectory,
             },
             projectDirectory,
-            TimeSpan.FromMinutes(2));
+            TimeSpan.FromMinutes(2),
+            IsolatedNugetEnvironment(artifactDirectory));
         if (result.ExitCode != 0)
         {
             return null;
@@ -1056,6 +1069,12 @@ public sealed class SdkCompileRunner
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".nuget", "packages");
     }
 
+    private static IReadOnlyDictionary<string, string> IsolatedNugetEnvironment(string root) =>
+        new Dictionary<string, string>
+        {
+            ["NUGET_PACKAGES"] = Path.Combine(root, ".nuget-packages"),
+        };
+
     private static (string NupkgPath, string Version)? ResolveFallbackSdkPackageFromLocalFeed(string repoRoot)
     {
         string feed = Path.Combine(repoRoot, ".nugs");
@@ -1064,7 +1083,7 @@ public sealed class SdkCompileRunner
             return null;
         }
 
-        (string Path, string Version)? best = null;
+        (string Path, string Version, DateTime WrittenUtc)? best = null;
         foreach (string file in Directory.EnumerateFiles(feed, SdkPackagePrefix + "*.nupkg"))
         {
             string version = GsharpTestProjectRunner.ParseVersion(Path.GetFileName(file));
@@ -1073,13 +1092,17 @@ public sealed class SdkCompileRunner
                 continue;
             }
 
-            if (best is null || GsharpTestProjectRunner.CompareVersions(version, best.Value.Version) > 0)
+            DateTime writtenUtc = File.GetLastWriteTimeUtc(file);
+            if (best is null
+                || writtenUtc > best.Value.WrittenUtc
+                || (writtenUtc == best.Value.WrittenUtc
+                    && GsharpTestProjectRunner.CompareVersions(version, best.Value.Version) > 0))
             {
-                best = (file, version);
+                best = (file, version, writtenUtc);
             }
         }
 
-        return best;
+        return best is null ? null : (best.Value.Path, best.Value.Version);
     }
 
     private static GscDiagnostic SynthesizeFallbackDiagnostic(ProcessRunResult result, IReadOnlyList<string> gsFilePaths)

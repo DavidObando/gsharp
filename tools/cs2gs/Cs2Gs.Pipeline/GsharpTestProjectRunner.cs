@@ -60,7 +60,7 @@ public class GsharpTestProjectRunner
     public string RepoRoot { get; }
 
     /// <summary>
-    /// Resolves the highest-versioned locally-built <c>Gsharp.NET.Sdk</c> nupkg
+    /// Resolves the most recently built local <c>Gsharp.NET.Sdk</c> nupkg
     /// under <c>out/bin/&lt;Config&gt;/nupkgs/</c>.
     /// </summary>
     /// <param name="repoRoot">The repository root.</param>
@@ -85,7 +85,7 @@ public class GsharpTestProjectRunner
                 continue;
             }
 
-            (string Path, string Version)? best = null;
+            (string Path, string Version, DateTime WrittenUtc)? best = null;
             foreach (string file in Directory.EnumerateFiles(nupkgDir, SdkPackagePrefix + "*.nupkg"))
             {
                 string version = ParseVersion(Path.GetFileName(file));
@@ -94,15 +94,19 @@ public class GsharpTestProjectRunner
                     continue;
                 }
 
-                if (best is null || CompareVersions(version, best.Value.Version) > 0)
+                DateTime writtenUtc = File.GetLastWriteTimeUtc(file);
+                if (best is null
+                    || writtenUtc > best.Value.WrittenUtc
+                    || (writtenUtc == best.Value.WrittenUtc
+                        && CompareVersions(version, best.Value.Version) > 0))
                 {
-                    best = (file, version);
+                    best = (file, version, writtenUtc);
                 }
             }
 
             if (best is not null)
             {
-                return best;
+                return (best.Value.Path, best.Value.Version);
             }
         }
 
@@ -502,7 +506,14 @@ public class GsharpTestProjectRunner
         // headroom than the default; still bounded so a wedged run fails the
         // batch instead of hanging it (#1748).
         ProcessRunResult result = ProcessRunner.Run(
-            "dotnet", arguments, workingDirectory, TimeSpan.FromMinutes(10));
+            "dotnet",
+            arguments,
+            workingDirectory,
+            TimeSpan.FromMinutes(10),
+            new Dictionary<string, string>
+            {
+                ["NUGET_PACKAGES"] = Path.Combine(workingDirectory, ".nuget-packages"),
+            });
         return (result.ExitCode, result.Output);
     }
 }
