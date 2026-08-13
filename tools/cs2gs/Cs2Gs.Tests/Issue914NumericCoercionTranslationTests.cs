@@ -448,7 +448,8 @@ namespace Demo
             GetHolder().Handler?.Invoke(x);
         }
     }
-}");
+}",
+            "G# currently keeps a nullable result type after coalescing nullable delegates.");
 
         Assert.Contains("(Left())?(x)", printed);
         Assert.Contains("(Left() ?? Right())?(x)", printed);
@@ -618,7 +619,7 @@ namespace Demo
         Assert.Contains("int32(uint16.MaxValue)", printed);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -631,7 +632,9 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

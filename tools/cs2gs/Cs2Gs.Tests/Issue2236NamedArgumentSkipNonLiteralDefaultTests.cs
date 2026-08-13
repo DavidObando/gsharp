@@ -33,7 +33,8 @@ namespace Demo
             Foo(a: 1, flag: 2);
         }
     }
-}");
+}",
+            "G# currently cannot bind decimal optional defaults emitted without a decimal literal suffix.");
         Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
@@ -55,7 +56,8 @@ namespace Demo
             Foo(1);
         }
     }
-}");
+}",
+            "G# currently cannot bind decimal optional defaults emitted without a decimal literal suffix.");
         Assert.Contains("price decimal = 1.5", printed, StringComparison.Ordinal);
         Assert.Contains("Foo(1)", printed, StringComparison.Ordinal);
     }
@@ -143,7 +145,7 @@ namespace Demo
         Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -155,7 +157,9 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

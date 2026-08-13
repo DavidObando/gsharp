@@ -217,7 +217,7 @@ namespace Demo
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors) + Environment.NewLine + printed);
         return printed;
     }

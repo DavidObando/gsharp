@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -187,14 +186,10 @@ namespace Demo
             CompilationUnit unit = new CSharpToGSharpTranslator(preservePartialParts).TranslateDocument(document, context);
 
             string printed = GSharpPrinter.Print(unit);
-            RoundTripResult result = GSharpRoundTrip.Validate(printed);
-            Assert.True(
-                result.Success,
-                "Translated G# must round-trip. Errors:\n" +
-                    string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
             printedFiles.Add((System.IO.Path.GetFileName(document.FilePath), printed));
         }
 
+        TranslationTestValidation.AssertBinds(printedFiles.Select(file => file.Printed).ToArray());
         return printedFiles;
     }
 

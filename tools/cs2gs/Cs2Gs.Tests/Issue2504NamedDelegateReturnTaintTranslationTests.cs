@@ -88,7 +88,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
                     Changed += Produce;
                 }
             }
-            """);
+            """,
+            "G# currently does not bind source event names inside shared method bodies.");
 
         Assert.Contains("type Callback = delegate func(enforce bool = false) Result?", printed, StringComparison.Ordinal);
         Assert.Contains("func Clean(enforce bool) Result?", printed, StringComparison.Ordinal);
@@ -182,7 +183,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
                 private static ArrayCallback array = ArrayProduce;
                 private static NestedCallback nested = NestedProduce;
             }
-            """);
+            """,
+            "G# cannot yet convert this open generic method group to the constructed named delegate.");
 
         Assert.Contains("delegate func() T?", printed, StringComparison.Ordinal);
         Assert.Contains("type TaskCallback = delegate func() Task[Result?]", printed, StringComparison.Ordinal);
@@ -308,7 +310,10 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             new[] { producer.ToMetadataReference() },
             NullableContextOptions.Disable);
 
-        string printed = TranslateCompilation(consumer, new[] { producer, consumer });
+        string printed = TranslateCompilation(
+            consumer,
+            new[] { producer, consumer },
+            "Consumer-only fixture omits the referenced producer project from emitted G#.");
 
         Assert.Contains("type Callback = delegate func() Result?", printed, StringComparison.Ordinal);
         Assert.Contains("Factory.Produce", printed, StringComparison.Ordinal);
@@ -343,17 +348,23 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
         Assert.DoesNotContain("Clean() Result?", printed, StringComparison.Ordinal);
     }
 
-    private static string TranslateOblivious(string source) =>
-        Translate(source, NullableContextOptions.Disable);
+    private static string TranslateOblivious(string source, string roundTripOnlyReason = null) =>
+        Translate(source, NullableContextOptions.Disable, roundTripOnlyReason);
 
-    private static string Translate(string source, NullableContextOptions nullableContext)
+    private static string Translate(
+        string source,
+        NullableContextOptions nullableContext,
+        string roundTripOnlyReason = null)
     {
         CSharpCompilation compilation = CreateCompilation(
             "Issue2504",
             source,
             references: null,
             nullableContext);
-        return TranslateCompilation(compilation, siblingCompilations: null);
+        return TranslateCompilation(
+            compilation,
+            siblingCompilations: null,
+            roundTripOnlyReason: roundTripOnlyReason);
     }
 
     private static CSharpCompilation CreateCompilation(
@@ -382,7 +393,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
 
     private static string TranslateCompilation(
         CSharpCompilation compilation,
-        IReadOnlyList<CSharpCompilation> siblingCompilations)
+        IReadOnlyList<CSharpCompilation> siblingCompilations,
+        string roundTripOnlyReason = null)
     {
         var printed = new List<string>();
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
@@ -396,7 +408,9 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
                 siblingCompilations);
             CompilationUnit translated = new CSharpToGSharpTranslator().TranslateDocument(document, context);
             string text = GSharpPrinter.Print(translated);
-            RoundTripResult roundTrip = GSharpRoundTrip.Validate(text);
+            RoundTripResult roundTrip = roundTripOnlyReason is null
+                ? TranslationTestValidation.AssertBinds(text)
+                : TranslationTestValidation.ValidateRoundTripOnly(text, roundTripOnlyReason);
             Assert.True(
                 roundTrip.Success,
                 "Translated G# must round-trip. Errors:\n" +

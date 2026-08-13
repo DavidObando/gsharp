@@ -9,7 +9,6 @@ using System.IO;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -822,7 +821,8 @@ public static class User
     [Fact]
     public void NullConditionalStaticHelper_ChainedPrefixPreservesPointerAccess()
     {
-        IReadOnlyDictionary<string, string> printed = TranslateFiles(
+        IReadOnlyDictionary<string, string> printed = TranslateFilesRoundTripOnly(
+            "Managed pointer member chains remain outside current G# binding support.",
             ("Types.cs", @"
 #nullable enable
 namespace Demo;
@@ -1047,11 +1047,26 @@ public static class MeterExtensions
     private static IReadOnlyDictionary<string, string> TranslateFiles(
         params (string FileName, string Source)[] files)
     {
-        return TranslateFiles(new CSharpToGSharpTranslator(), files);
+        return TranslateFiles(new CSharpToGSharpTranslator(), roundTripOnlyReason: null, files);
+    }
+
+    private static IReadOnlyDictionary<string, string> TranslateFilesRoundTripOnly(
+        string reason,
+        params (string FileName, string Source)[] files)
+    {
+        return TranslateFiles(new CSharpToGSharpTranslator(), reason, files);
     }
 
     private static IReadOnlyDictionary<string, string> TranslateFiles(
         CSharpToGSharpTranslator translator,
+        params (string FileName, string Source)[] files)
+    {
+        return TranslateFiles(translator, roundTripOnlyReason: null, files);
+    }
+
+    private static IReadOnlyDictionary<string, string> TranslateFiles(
+        CSharpToGSharpTranslator translator,
+        string roundTripOnlyReason,
         params (string FileName, string Source)[] files)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(files);
@@ -1069,12 +1084,20 @@ public static class MeterExtensions
                 document.FilePath);
             CompilationUnit unit = translator.TranslateDocument(document, context);
             string printed = GSharpPrinter.Print(unit);
-            RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
-            Assert.True(
-                roundTrip.Success,
-                "Translated G# must round-trip. Errors:\n" +
-                    string.Join("\n", roundTrip.Errors) + "\n\nPrinted:\n" + printed);
             result.Add(document.FilePath, printed);
+        }
+
+        if (roundTripOnlyReason is null)
+        {
+            TranslationTestValidation.AssertBinds(result.Values.ToArray());
+        }
+        else
+        {
+            foreach (string source in result.Values)
+            {
+                var roundTrip = TranslationTestValidation.ValidateRoundTripOnly(source, roundTripOnlyReason);
+                Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+            }
         }
 
         return result;

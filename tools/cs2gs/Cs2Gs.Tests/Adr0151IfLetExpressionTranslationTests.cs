@@ -490,7 +490,8 @@ namespace Demo
 
         public string Name() => Find() is { } n && Reassign(ref n) ? n : ""anonymous"";
     }
-}");
+}",
+            "Reassigned pattern binders currently keep a spill fallback that cannot declare the mutable designator in G#.");
 
         Assert.DoesNotContain("if let n =", printed, StringComparison.Ordinal);
     }
@@ -599,7 +600,9 @@ namespace Demo
             });
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Printer-only expression fixtures deliberately use undefined placeholder identifiers.");
         Assert.True(
             result.Success,
             "Printed G# must round-trip. Errors:\n" +
@@ -612,7 +615,7 @@ namespace Demo
         return printed.Substring(start, end - start).TrimEnd();
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -625,7 +628,9 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

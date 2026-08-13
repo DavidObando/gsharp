@@ -83,7 +83,7 @@ public sealed class Issue2538ConvenienceInitializerTests
         int parameterShadow = printed.IndexOf("var seed = seed", StringComparison.Ordinal);
         Assert.True(delegation >= 0 && parameterShadow > delegation, printed);
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" +

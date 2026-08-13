@@ -50,7 +50,7 @@ public sealed class Issue3096CollectionSpreadInitializerTranslationTests
         Assert.DoesNotContain(".AddRange(", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("CS2GS-GAP", rendered, StringComparison.Ordinal);
 
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
         Assert.True(
             result.Success,
             string.Join(Environment.NewLine, result.Errors) + Environment.NewLine + rendered);

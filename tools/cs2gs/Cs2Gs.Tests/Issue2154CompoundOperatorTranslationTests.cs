@@ -80,7 +80,7 @@ namespace Demo
 
         Assert.Contains($"h.V {compoundToken} 3", printed);
 
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated compound-assignment member access must round-trip-parse. Errors:\n" +

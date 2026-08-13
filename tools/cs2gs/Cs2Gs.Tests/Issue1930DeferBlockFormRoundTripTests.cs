@@ -35,7 +35,9 @@ public class Issue1930DeferBlockFormRoundTripTests
     public void DeferStatement_PrintedForm_RoundTripsThroughRealParser()
     {
         var printed = GSharpPrinter.Print(DeferSample());
-        var result = GSharpRoundTrip.Validate(printed);
+        var result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "This parser regression fixture deliberately leaves cleanup() undefined.");
 
         Assert.True(result.Success, $"Printed G#:\n{printed}\nParse errors:\n{string.Join("\n", result.Errors)}");
     }

@@ -131,7 +131,7 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors) + "\n" + printed);
         return printed;
     }

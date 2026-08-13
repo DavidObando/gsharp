@@ -78,7 +78,7 @@ public sealed class Issue2538AnonymousConstructionPipelineTests
         Assert.DoesNotContain(envelopeType + "{", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(apiType + "{", printed, StringComparison.Ordinal);
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" +

@@ -333,7 +333,9 @@ namespace Demo
 
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        string printed = PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        string printed = PrintAndValidate(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context),
+            "Nullable-enabled control preserves a null-forgiven nil return that G# rejects at a non-null sink.");
 
         Assert.Contains("func Get() Task[string];", printed);
         Assert.Contains("async func Get() string ->", printed);
@@ -355,10 +357,12 @@ namespace Demo
         return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
     }
 
-    private static string PrintAndValidate(CompilationUnit unit)
+    private static string PrintAndValidate(CompilationUnit unit, string roundTripOnlyReason = null)
     {
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

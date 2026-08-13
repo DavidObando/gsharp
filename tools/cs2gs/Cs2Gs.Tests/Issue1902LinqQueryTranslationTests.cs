@@ -174,7 +174,9 @@ namespace Corpus.Issue1902
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("petGroup.Count()", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(rendered);
+        AssertRoundTripParses(
+            rendered,
+            "G# cannot yet bind the translated GroupJoin continuation and its inferred sequence element types.");
     }
 
     [Fact]
@@ -230,9 +232,11 @@ namespace Corpus.Issue1902
         AssertRoundTripParses(rendered);
     }
 
-    private static void AssertRoundTripParses(string rendered)
+    private static void AssertRoundTripParses(string rendered, string roundTripOnlyReason = null)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(rendered)
+            : TranslationTestValidation.ValidateRoundTripOnly(rendered, roundTripOnlyReason);
 
         Assert.True(
             result.Success,

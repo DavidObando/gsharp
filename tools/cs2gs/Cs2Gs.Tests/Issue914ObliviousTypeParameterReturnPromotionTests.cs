@@ -168,7 +168,7 @@ namespace Demo
     private static string PrintAndValidate(CompilationUnit unit)
     {
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

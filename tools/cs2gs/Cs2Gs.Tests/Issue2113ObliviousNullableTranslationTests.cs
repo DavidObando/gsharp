@@ -210,7 +210,9 @@ namespace Demo
         SemanticModel model = compilation.GetSemanticModel(tree);
         var document = new LoadedDocument("Snippet.cs", tree, model);
         var context = new TranslationContext(compilation, model, document.FilePath);
-        return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        return PrintAndValidate(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context),
+            "Consumer-only fixture omits the referenced C# metadata library from emitted G#.");
     }
 
     private static string TranslateOblivious(string source)
@@ -251,10 +253,12 @@ namespace Demo
         return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
     }
 
-    private static string PrintAndValidate(CompilationUnit unit)
+    private static string PrintAndValidate(CompilationUnit unit, string roundTripOnlyReason = null)
     {
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

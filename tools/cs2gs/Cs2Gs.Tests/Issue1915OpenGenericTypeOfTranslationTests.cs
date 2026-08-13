@@ -89,7 +89,7 @@ namespace Demo
         Assert.Empty(context.Diagnostics);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

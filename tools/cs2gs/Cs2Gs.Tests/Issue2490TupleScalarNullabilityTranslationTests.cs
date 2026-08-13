@@ -286,7 +286,10 @@ namespace LibA
         var siblings = new[] { projectA.Compilation, projectB.Compilation };
 
         string printedB = TranslateProject(projectB, siblings);
-        string printedA = TranslateProject(projectA, siblings);
+        string printedA = TranslateProject(
+            projectA,
+            siblings,
+            "Consumer fixture omits the sibling Provider declaration from its emitted G# binding input.");
 
         Assert.Contains("func Gather(missing bool) (string?, int32)", printedB);
         Assert.Contains("func Count(value string?) int32", printedA);
@@ -381,7 +384,8 @@ public static class Repro
 
     private static string TranslateProject(
         LoadedCSharpProject project,
-        IReadOnlyList<CSharpCompilation> siblingCompilations)
+        IReadOnlyList<CSharpCompilation> siblingCompilations,
+        string roundTripOnlyReason = null)
     {
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(
@@ -391,7 +395,9 @@ public static class Repro
             siblingCompilations);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

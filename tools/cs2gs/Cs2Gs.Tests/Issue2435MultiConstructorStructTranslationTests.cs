@@ -269,7 +269,7 @@ namespace Demo
 
     private static void AssertRoundTrips(string printed)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

@@ -67,7 +67,7 @@ namespace Corpus.Issue1528
     {
         string rendered = Render();
 
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
 
         Assert.True(
             result.Success,

@@ -154,7 +154,7 @@ namespace Demo
 
     private static void AssertRoundTripParses(string rendered)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
         Assert.True(
             result.Success,
             "Sanitized G# must round-trip-parse. Errors:\n" +

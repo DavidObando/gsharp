@@ -10,7 +10,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -115,8 +114,7 @@ namespace Oahu.BooksDatabase.Migrations
         CompilationUnit unitB = translator.TranslateDocument(documentB, contextB);
         string printedB = GSharpPrinter.Print(unitB);
 
-        Assert.True(GSharpRoundTrip.Validate(printedA).Success, "File A must round-trip:\n" + printedA);
-        Assert.True(GSharpRoundTrip.Validate(printedB).Success, "File B must round-trip:\n" + printedB);
+        TranslationTestValidation.AssertBinds(printedA, printedB);
 
         return (printedA, printedB);
     }

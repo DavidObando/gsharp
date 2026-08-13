@@ -77,7 +77,9 @@ namespace Corpus.Issue1899
 ");
 
         Assert.Contains("event Ticked EventHandler", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(rendered);
+        AssertRoundTripParses(
+            rendered,
+            "G# cannot convert nominal System.EventHandler values to structural delegate locals.");
     }
 
     [Fact]
@@ -130,9 +132,11 @@ namespace Corpus.Issue1899
         AssertRoundTripParses(rendered);
     }
 
-    private static void AssertRoundTripParses(string rendered)
+    private static void AssertRoundTripParses(string rendered, string roundTripOnlyReason = null)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(rendered)
+            : TranslationTestValidation.ValidateRoundTripOnly(rendered, roundTripOnlyReason);
 
         Assert.True(
             result.Success,

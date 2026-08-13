@@ -63,7 +63,7 @@ public sealed class Issue2704RecordInitializerTranslationTests
         Assert.DoesNotContain("data class LibraryItem(Asin", printed, StringComparison.Ordinal);
         Assert.Contains("LibraryItem{Asin: asin, Title: title", printed, StringComparison.Ordinal);
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             string.Join(Environment.NewLine, roundTrip.Errors) + Environment.NewLine + printed);

@@ -93,7 +93,7 @@ public sealed class Issue2766ValueTypeConstructorAbiTests
         Assert.Contains("init(level int32)", printed, StringComparison.Ordinal);
         Assert.Contains("init(publicValue int32, privateValue int32, propertyValue int32)", printed, StringComparison.Ordinal);
         Assert.Contains("convenience init(all int32)", printed, StringComparison.Ordinal);
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
     }
 

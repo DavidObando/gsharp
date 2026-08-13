@@ -166,13 +166,14 @@ namespace Demo
             return Fact(5);
         }
     }
-}");
+}",
+            "Recursive local functions lower to non-recursive let bindings, a documented G# letrec limitation.");
 
         Assert.Contains("let Fact = func (n int32) int32 {", printed);
         Assert.DoesNotContain("(n int32) -> {", printed);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -185,7 +186,9 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

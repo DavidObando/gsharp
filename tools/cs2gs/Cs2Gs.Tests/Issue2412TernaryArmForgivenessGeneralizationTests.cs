@@ -591,6 +591,7 @@ namespace LibA
         var siblings = new[] { projectA.Compilation, projectB.Compilation };
         string printedB = TranslateProject(projectB, siblings);
         string printedA = TranslateProject(projectA, siblings);
+        TranslationTestValidation.AssertBinds(printedA, printedB);
         return (printedB, printedA);
     }
 
@@ -657,13 +658,13 @@ namespace LibA
         var context = new TranslationContext(
             project.Compilation, document.SemanticModel, document.FilePath, siblingCompilations);
         CompilationUnit unit = translator.TranslateDocument(document, context);
-        return PrintAndValidate(unit);
+        return GSharpPrinter.Print(unit);
     }
 
     private static string PrintAndValidate(CompilationUnit unit)
     {
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

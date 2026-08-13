@@ -494,7 +494,7 @@ public class GoldenTests
         Assert.Contains("func Negate()", printed);
 
         // ...and the real parser + binder now accept it warning-free.
-        var result = GSharpRoundTrip.Validate(printed);
+        var result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(result.Success);
         Assert.DoesNotContain(result.Errors, e => e.StartsWith("GS0005", System.StringComparison.Ordinal));
         Assert.DoesNotContain(result.Errors, e => e.Contains("GS0314", System.StringComparison.Ordinal));
@@ -909,7 +909,7 @@ public class GoldenTests
         var printed = GSharpPrinter.Print(unit);
         Assert.Contains("init(message string) : base(message) {", printed);
 
-        var result = GSharpRoundTrip.Validate(printed);
+        var result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(result.Success, "Round-trip errors:\n" + string.Join("\n", result.Errors));
     }
 
@@ -981,7 +981,9 @@ public class GoldenTests
         // Determinism: the same AST prints byte-identically.
         Assert.Equal(printed, GSharpPrinter.Print(unit));
 
-        var result = GSharpRoundTrip.Validate(printed);
+        var result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Golden printer samples intentionally use semantically incomplete hand-built ASTs.");
         Assert.True(result.Success, "Round-trip errors:\n" + string.Join("\n", result.Errors));
     }
 

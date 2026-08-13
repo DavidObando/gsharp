@@ -414,7 +414,7 @@ public sealed class Issue3090AwaitInvocationArgumentTests
 
     private static void AssertRoundTrip(string printed)
     {
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             string.Join(Environment.NewLine, roundTrip.Errors) + Environment.NewLine + printed);
