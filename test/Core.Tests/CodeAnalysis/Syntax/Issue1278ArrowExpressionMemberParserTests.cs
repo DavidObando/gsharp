@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
@@ -59,6 +60,59 @@ public class Issue1278ArrowExpressionMemberParserTests
         const string source = "package P\nstruct C {\n  var d int32\n}\nfunc operator implicit (c C) int32 -> c.d\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
+    }
+
+    [Fact]
+    public void Issue3375_TupleReturningArrowBody_ParsesAsTupleReturn()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  shared {\n" +
+            "    private func Pair() (int32, int32) -> (1, 2)\n" +
+            "  }\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var func = Walk(tree.Root).OfType<FunctionDeclarationSyntax>().Single();
+        Assert.True(func.Type.IsTuple);
+        Assert.Equal(2, func.Type.TupleElements.Count);
+        var statement = Assert.Single(func.Body.Statements);
+        var returnStatement = Assert.IsType<ReturnStatementSyntax>(statement);
+        var tuple = Assert.IsType<TupleLiteralExpressionSyntax>(returnStatement.Expression);
+        Assert.Equal(2, tuple.Elements.Count);
+    }
+
+    [Fact]
+    public void Issue3375_TupleReturningArrowCallBody_ParsesAsTupleReturn()
+    {
+        const string source =
+            "package P\n" +
+            "func MakePair() (int32, int32) { return (1, 2) }\n" +
+            "func Pair() (int32, int32) -> MakePair()\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var pair = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Last();
+        Assert.True(pair.Type.IsTuple);
+        Assert.IsType<CallExpressionSyntax>(
+            Assert.IsType<ReturnStatementSyntax>(Assert.Single(pair.Body.Statements)).Expression);
+    }
+
+    [Fact]
+    public void Issue3375_ArrowFunctionReturnWithArrowBody_RemainsFunctionType()
+    {
+        const string source =
+            "package P\n" +
+            "func Compare() (int32, int32) -> int32 -> (left int32, right int32) -> left - right\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var func = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        Assert.True(func.Type.IsArrowFunction);
+        Assert.IsType<LambdaExpressionSyntax>(
+            Assert.IsType<ReturnStatementSyntax>(Assert.Single(func.Body.Statements)).Expression);
     }
 
     [Fact]
@@ -146,5 +200,22 @@ public class Issue1278ArrowExpressionMemberParserTests
         var funcs = tree.Root.Members.OfType<FunctionDeclarationSyntax>().ToArray();
         Assert.Equal(3, funcs.Length);
         Assert.All(funcs, f => Assert.NotNull(f.Body));
+    }
+
+    private static IEnumerable<SyntaxNode> Walk(SyntaxNode node)
+    {
+        yield return node;
+        foreach (var child in node.GetChildren())
+        {
+            if (child is not SyntaxNode syntaxNode)
+            {
+                continue;
+            }
+
+            foreach (var descendant in Walk(syntaxNode))
+            {
+                yield return descendant;
+            }
+        }
     }
 }

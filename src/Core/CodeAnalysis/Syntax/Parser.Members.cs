@@ -1180,7 +1180,7 @@ public partial class Parser
             returnRefModifier = NextToken();
         }
 
-        var type = ParseOptionalTypeClause();
+        var type = ParseOptionalFunctionReturnTypeClause();
 
         // ADR-0086 / issue #727: a `;` in place of a `{ ... }` body marks the
         // declaration as a P/Invoke stub (`@DllImport`-annotated function with
@@ -1228,6 +1228,39 @@ public partial class Parser
         decl.ExplicitInterfaceType = explicitIfaceType;
         decl.ExplicitInterfaceCloseParenthesisToken = explicitIfaceCloseParen;
         return decl;
+    }
+
+    private TypeClauseSyntax? ParseOptionalFunctionReturnTypeClause()
+    {
+        if (LooksLikeTupleReturnTypeBeforeArrowBody())
+        {
+            return ParseTupleTypeClause();
+        }
+
+        return ParseOptionalTypeClause();
+    }
+
+    private bool LooksLikeTupleReturnTypeBeforeArrowBody()
+    {
+        // `(T1, T2) -> ...` is ambiguous with an arrow function type. Keep the
+        // type interpretation only when its complete scan reaches a declaration
+        // body marker; otherwise the arrow starts this function's expression body.
+        if (!LooksLikeArrowFunctionTypeClauseStart(0, out var hasTopLevelComma) ||
+            !hasTopLevelComma)
+        {
+            return false;
+        }
+
+        var functionTypeEnd = 0;
+        if (!TryScanTypeClause(ref functionTypeEnd))
+        {
+            return true;
+        }
+
+        return Peek(functionTypeEnd).Kind is not (
+            SyntaxKind.OpenBraceToken or
+            SyntaxKind.SemicolonToken or
+            SyntaxKind.RightArrowToken);
     }
 
     // Stream D: `func (a Point) operator +(b Point) Point { … }`. After the
