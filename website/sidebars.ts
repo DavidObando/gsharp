@@ -75,6 +75,7 @@ const sidebars: SidebarsConfig = {
     'ref/diagnostics',
     'design-decisions',
     'release-notes',
+    'project/quality-dashboard',
     'faq',
   ],
 

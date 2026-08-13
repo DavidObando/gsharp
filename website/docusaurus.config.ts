@@ -129,6 +129,7 @@ const config: Config = {
             {label: 'CLR interop', to: '/docs/ref/clr-interop'},
             {label: 'Diagnostics', to: '/docs/ref/diagnostics'},
             {label: 'Feature matrix', to: '/docs/ref/feature-matrix'},
+            {label: 'Quality dashboard', to: '/docs/next/project/quality-dashboard'},
           ],
         },
         {

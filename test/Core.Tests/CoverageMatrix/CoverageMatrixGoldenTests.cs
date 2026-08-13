@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CoverageMatrix;
@@ -28,21 +29,10 @@ public class CoverageMatrixGoldenTests
     {
         var generated = BuildSnapshot();
         var goldenPath = LocateGolden();
-        Assert.True(File.Exists(goldenPath), $"missing golden at {goldenPath}");
-        var golden = File.ReadAllText(goldenPath).ReplaceLineEndings(Environment.NewLine);
-
-        if (!string.Equals(generated, golden, StringComparison.Ordinal))
-        {
-            // Emit the freshly-generated snapshot beside the golden so updates
-            // are a one-line `mv` away. Also surface it in the failure message
-            // so CI logs alone are sufficient to diff.
-            var actualPath = goldenPath + ".actual";
-            File.WriteAllText(actualPath, generated);
-            Assert.Fail(
-                $"coverage-matrix snapshot drifted. Update both `{goldenPath}` and `docs/coverage-matrix.md`, then re-run.\n" +
-                $"Wrote regenerated snapshot to `{actualPath}`.\n\n" +
-                $"--- generated ---\n{generated}\n--- golden ---\n{golden}");
-        }
+        GoldenFile.AssertMatches(
+            goldenPath,
+            generated,
+            $"Update both `{goldenPath}` and `docs/coverage-matrix.md`, then re-run.");
     }
 
     private static string BuildSnapshot()

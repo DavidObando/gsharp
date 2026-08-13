@@ -38,6 +38,7 @@
     <Compile Include="..\..\..\test\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
     <Compile Include="..\..\..\test\Shared\EmittedOracleOptions.cs" Link="EmittedOracleOptions.cs" />
     <Compile Include="..\..\..\test\Shared\EmittedOracleResult.cs" Link="EmittedOracleResult.cs" />
+    <Compile Include="..\..\..\test\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
   </ItemGroup>
 
   <ItemGroup>

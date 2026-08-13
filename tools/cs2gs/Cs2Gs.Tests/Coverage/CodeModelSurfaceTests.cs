@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Cs2Gs.CodeModel.Ast;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests.Coverage;
@@ -27,26 +28,11 @@ public class CodeModelSurfaceTests
         string generated = BuildSnapshot();
         string goldenPath = Path.Combine(
             RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests", "Coverage", "code-model-surface.golden.txt");
-
-        if (!File.Exists(goldenPath))
-        {
-            File.WriteAllText(goldenPath + ".actual", generated);
-            Assert.Fail(
-                $"missing golden at {goldenPath}. " +
-                $"Wrote the generated snapshot to `{goldenPath}.actual`; review and move it into place.");
-        }
-
-        string golden = File.ReadAllText(goldenPath).ReplaceLineEndings(Environment.NewLine);
-        if (!string.Equals(generated, golden, StringComparison.Ordinal))
-        {
-            string actualPath = goldenPath + ".actual";
-            File.WriteAllText(actualPath, generated);
-            Assert.Fail(
-                "Code-model surface snapshot drifted (a GNode subclass or Ast enum changed).\n" +
-                "For each new node type: add printer coverage (GSharpPrinter) and a minimal\n" +
-                "GNodeSamples entry so PrinterExhaustivenessTests exercises it, then update\n" +
-                $"the golden. Wrote regenerated snapshot to `{actualPath}`.");
-        }
+        GoldenFile.AssertMatches(
+            goldenPath,
+            generated,
+            "Code-model surface changed. Add printer coverage and a minimal GNodeSamples entry "
+            + "for every new node type before accepting the snapshot.");
     }
 
     /// <summary>

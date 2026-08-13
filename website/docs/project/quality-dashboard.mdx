@@ -1,0 +1,65 @@
+---
+title: Quality dashboard
+description: Public G# conformance and benchmark snapshot
+---
+
+import data from '@site/static/data/quality-dashboard.json';
+
+# Quality dashboard
+
+[![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
+[![quality dashboard](https://github.com/DavidObando/gsharp/actions/workflows/pages.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/pages.yml)
+
+Latest published snapshot: **{data.generatedAt}**, commit
+<code>{data.commit.slice(0, 8)}</code>, .NET SDK
+**{data.environment.dotnetSdk}** on
+**{data.environment.os}/{data.environment.architecture}**. Source state:
+**{data.workingTreeDirty ? 'local working tree' : 'clean commit'}**.
+
+## Conformance
+
+Complete programs run through three real hosts: emitted executable (oracle),
+bare `gsc` emit-to-memory, and `gsi` script mode. Results compare exit code,
+stdout, diagnostic IDs, and stderr byte-for-byte after line-ending
+normalization.
+
+| Metric | Current |
+|---|---:|
+| Checked-in single-file golden programs | {data.conformance.goldenPrograms} |
+| Multi-file emitted golden programs | {data.conformance.multiFileGoldenPrograms} |
+| Deterministic randomized programs | {data.conformance.randomizedPrograms} |
+| Programs compared across all drivers | {data.conformance.crossDriverPrograms} |
+| Driver executions represented by that matrix | {data.conformance.crossDriverExecutions} |
+| Scoped ILVerify suppressions | {data.conformance.ilVerifyKnownSuppressions} |
+
+Every pull request runs the conformance tests and ILVerify gate. Random cases
+use fixed seeds so failures reproduce locally; expanding `CaseCount` grows the
+standing corpus without changing the oracle.
+
+## Benchmarks
+
+| Metric | Median |
+|---|---:|
+| `gsc /help` process startup | {data.benchmarks.compilerStartupMedianMs} ms |
+| Compile four-program reference corpus | {data.benchmarks.referenceCorpusCompileMedianMs} ms |
+| G# steady-state workload | {data.benchmarks.gsharpRuntimeMedianMs} ms |
+| Equivalent C# steady-state workload | {data.benchmarks.csharpRuntimeMedianMs} ms |
+| G#/C# runtime ratio | {data.benchmarks.runtimeRatio}× |
+
+Reference corpus:{' '}
+<strong>{data.benchmarks.referenceCorpusPrograms.join(', ')}</strong>.
+Runtime comparison executes {data.benchmarks.runtimeIterations.toLocaleString()}
+integer-loop iterations and verifies both programs produce checksum
+<code>{data.benchmarks.checksum}</code>.
+
+These are trend signals, not laboratory claims. GitHub-hosted runner load and
+process startup vary. Compare snapshots from the same OS/architecture and
+investigate sustained movement, not a single run.
+
+## Policy and method
+
+- [Compatibility and stability policy](https://github.com/DavidObando/gsharp/blob/main/docs/compatibility-and-stability.md)
+- [Contributing and golden-update workflow](https://github.com/DavidObando/gsharp/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/DavidObando/gsharp/blob/main/SECURITY.md)
+- [ADR-0154: witness of discrimination](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0154-test-oracle-strength.md)
+- [Benchmark generator](https://github.com/DavidObando/gsharp/blob/main/build/generate-quality-dashboard.py)

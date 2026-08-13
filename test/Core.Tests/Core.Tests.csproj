@@ -25,6 +25,7 @@
     <Compile Include="..\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
     <Compile Include="..\Shared\EmittedOracleOptions.cs" Link="EmittedOracleOptions.cs" />
     <Compile Include="..\Shared\EmittedOracleResult.cs" Link="EmittedOracleResult.cs" />
+    <Compile Include="..\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
   </ItemGroup>
 
 </Project>
