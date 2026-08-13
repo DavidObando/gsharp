@@ -64,13 +64,13 @@ public class RefactoringBaselineTests
     [Fact]
     public void Samples_EmittedPE_Match_Baseline()
     {
-        var repoRoot = LocateRepoRoot();
-        Assert.NotNull(repoRoot);
+        string repoRoot = LocateRepoRoot()
+            ?? throw new InvalidOperationException("Could not locate repository root.");
 
         var entries = new SortedDictionary<string, string?>(StringComparer.Ordinal);
         var failures = new List<string>();
 
-        foreach (var rel in EnumerateSampleRelativePaths(repoRoot!))
+        foreach (var rel in EnumerateSampleRelativePaths(repoRoot))
         {
             if (KnownCompileFailureSamples.Contains(rel))
             {
@@ -78,7 +78,7 @@ public class RefactoringBaselineTests
                 continue;
             }
 
-            var absolute = Path.Combine(repoRoot!, rel);
+            var absolute = Path.Combine(repoRoot, rel);
             var (success, hash, diagnostics) = TryHashSample(absolute);
             if (success)
             {
@@ -96,7 +96,7 @@ public class RefactoringBaselineTests
             + string.Join("\n", failures));
 
         string baselinePath = Path.Combine(
-            repoRoot!,
+            repoRoot,
             "test",
             "Core.Tests",
             "Baselines",
