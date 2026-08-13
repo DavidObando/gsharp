@@ -7,6 +7,7 @@ using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -35,6 +36,27 @@ namespace N
 
         Assert.Contains("func Square(x int32) int32 -> x * x", g, StringComparison.Ordinal);
         Assert.DoesNotContain("=>", g, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TupleReturningExpressionBodiedMethod_TranslatedGSharp_ParsesBindsAndCompiles()
+    {
+        string g = Render(@"
+namespace N
+{
+    public class C
+    {
+        private static (int, int) Pair() => (1, 2);
+    }
+}");
+
+        Assert.Contains("private func Pair() (int32, int32) -> (1, 2)", g, StringComparison.Ordinal);
+
+        var result = EmittedOracle.Evaluate(
+            new[] { g },
+            new EmittedOracleOptions { IsLibrary = true });
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Equal(0, result.ExitCode);
     }
 
     [Fact]
