@@ -44,7 +44,7 @@ public static class Program
                 Console.WriteLine("  /reference:<file>      Alias for /r: (also -r: and --reference:).");
                 Console.WriteLine("  --engine <name>        Interactive engine: 'emit' (the default and only");
                 Console.WriteLine("                         engine; also via GSI_ENGINE). The legacy 'evaluator'");
-                Console.WriteLine("                         engine was removed in ADR-0156 Phase 3c.");
+                Console.WriteLine("                         engine has been removed.");
                 Console.WriteLine("  --help, -h             Show this help and exit.");
                 Console.WriteLine("  --version              Show the gsi version and exit.");
                 Console.WriteLine("  (no args)              Start the interactive REPL.");
