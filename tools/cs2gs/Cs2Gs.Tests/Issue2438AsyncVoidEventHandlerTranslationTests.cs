@@ -783,7 +783,11 @@ namespace Demo
             d => d.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
+        RoundTripResult result = extraReferences is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(
+                printed,
+                "Consumer fixture omits the referenced support assembly from emitted G#; CompileAndRun binds it below.");
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

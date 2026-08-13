@@ -47,7 +47,8 @@ public sealed class Issue2661ExpressionTreeNullableTranslationTests
                             b.Conversion.Region == profileId.Region)
                         .Select(b => b.PurchaseDate.Value);
             }
-            """);
+            """,
+            "Queryable expression-tree lambdas intentionally omit runtime assertions that ordinary G# binding requires.");
 
         Assert.Contains("b.PurchaseDate != nil", printed, StringComparison.Ordinal);
         Assert.Contains(".Select((b Book) -> b.PurchaseDate.Value)", printed, StringComparison.Ordinal);
@@ -94,7 +95,7 @@ public sealed class Issue2661ExpressionTreeNullableTranslationTests
         Assert.Contains("book.PurchaseDate!!", printed, StringComparison.Ordinal);
     }
 
-    private static string Translate(string source)
+    private static string Translate(string source, string? roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("BookLibrary.cs", source) });
         Assert.True(
@@ -105,7 +106,9 @@ public sealed class Issue2661ExpressionTreeNullableTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit translated = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(translated);
-        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
+        RoundTripResult roundTrip = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip:\n" +

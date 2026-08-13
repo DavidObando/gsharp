@@ -24,6 +24,16 @@ public class TranslationTestValidationTests
     }
 
     [Fact]
+    public void AssertBinds_RejectsUnboundReferenceInsideFunctionBody()
+    {
+        TrueException exception = Assert.Throws<TrueException>(
+            () => TranslationTestValidation.AssertBinds(
+                "package Demo\nfunc Run() {\n    let value = missing\n}\n"));
+
+        Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ValidateRoundTripOnly_RequiresAJustification()
     {
         Assert.Throws<ArgumentException>(

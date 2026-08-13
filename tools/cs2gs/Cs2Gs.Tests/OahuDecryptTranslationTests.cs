@@ -234,7 +234,8 @@ namespace Demo
             return null;
         }
     }
-}");
+}",
+            "Fixture deliberately places nil at invalid non-null sinks to verify cs2gs never invents non-null assertions.");
 
         Assert.Contains("[\"error\"] = nil", printed);
         Assert.Contains("response[\"error\"] = nil", printed);
@@ -892,7 +893,7 @@ namespace Demo
         Assert.Contains("return (a!!,", printed);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -905,7 +906,9 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

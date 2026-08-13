@@ -219,7 +219,8 @@ namespace Demo
     {
         public System.Type T() => typeof(System.Collections.Generic.IEnumerable<>);
     }
-}");
+}",
+            "G# parses unbound generic typeof placeholders but cannot resolve the metadata generic definition.");
 
         // Issue #2012 (S1): cs2gs now emits the explicit-arity `_` placeholder
         // form (#1989/#2011) rather than the bare generic-definition name.
@@ -697,9 +698,9 @@ namespace Demo
         Assert.Contains("this.handler!!(value)", printed);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
-        (string printed, RoundTripResult result) = TranslateAndValidate(source);
+        (string printed, RoundTripResult result) = TranslateAndValidate(source, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
@@ -727,14 +728,19 @@ namespace Demo
         return (printed, context);
     }
 
-    private static (string Printed, RoundTripResult Result) TranslateAndValidate(string source)
+    private static (string Printed, RoundTripResult Result) TranslateAndValidate(
+        string source,
+        string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = LoadProject(source);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
-        return (printed, TranslationTestValidation.AssertBinds(printed));
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
+        return (printed, result);
     }
 
     private static LoadedCSharpProject LoadProject(string source)

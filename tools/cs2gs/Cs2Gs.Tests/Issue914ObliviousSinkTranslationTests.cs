@@ -143,7 +143,8 @@ namespace Demo
 
         public C() : this(null, null) { }
     }
-}");
+}",
+            "Nullable-enabled C# permits null-forgiven calls that G# rejects at non-null parameters.");
 
         Assert.Contains("init(context string, message string)", printed);
         Assert.DoesNotContain("string?", printed);
@@ -308,7 +309,7 @@ namespace Demo
         return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
     }
 
-    private static string TranslateEnabled(string source)
+    private static string TranslateEnabled(string source, string roundTripOnlyReason = null)
     {
         var parseOptions = new CSharpParseOptions(LanguageVersion.Latest);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions, path: "Snippet.cs");
@@ -327,13 +328,17 @@ namespace Demo
         SemanticModel model = compilation.GetSemanticModel(tree);
         var document = new LoadedDocument("Snippet.cs", tree, model);
         var context = new TranslationContext(compilation, model, document.FilePath);
-        return PrintAndValidate(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        return PrintAndValidate(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context),
+            roundTripOnlyReason);
     }
 
-    private static string PrintAndValidate(CompilationUnit unit)
+    private static string PrintAndValidate(CompilationUnit unit, string roundTripOnlyReason = null)
     {
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

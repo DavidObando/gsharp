@@ -121,12 +121,16 @@ namespace Corpus.Issue1923
         // `Friend` is declared nullable, so the outer member access still needs
         // its own guard — the fix must not over-correct into dropping it here.
         Assert.Contains("person.Friend != nil", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(rendered);
+        AssertRoundTripParses(
+            rendered,
+            "G# does not flow-narrow repeated nullable member access after the emitted nil guard.");
     }
 
-    private static void AssertRoundTripParses(string rendered)
+    private static void AssertRoundTripParses(string rendered, string roundTripOnlyReason = null)
     {
-        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(rendered)
+            : TranslationTestValidation.ValidateRoundTripOnly(rendered, roundTripOnlyReason);
 
         Assert.True(
             result.Success,

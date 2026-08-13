@@ -41,7 +41,10 @@ internal static class TranslationTestValidation
         }).ToImmutableArray();
 
         BoundGlobalScope scope = Binder.BindGlobalScope(previous: null, trees);
-        var errors = scope.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+        var errors = scope.Diagnostics
+            .Concat(Binder.BindProgram(scope).Diagnostics)
+            .Where(diagnostic => diagnostic.IsError)
+            .ToArray();
         Assert.True(
             errors.Length == 0,
             "Translated G# must bind without errors. Errors:\n"

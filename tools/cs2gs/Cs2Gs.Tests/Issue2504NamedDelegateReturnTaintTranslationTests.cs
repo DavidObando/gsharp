@@ -88,7 +88,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
                     Changed += Produce;
                 }
             }
-            """);
+            """,
+            "G# currently does not bind source event names inside shared method bodies.");
 
         Assert.Contains("type Callback = delegate func(enforce bool = false) Result?", printed, StringComparison.Ordinal);
         Assert.Contains("func Clean(enforce bool) Result?", printed, StringComparison.Ordinal);

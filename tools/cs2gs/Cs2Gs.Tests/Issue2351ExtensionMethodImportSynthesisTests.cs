@@ -134,8 +134,9 @@ namespace Demo
         // `GlobalUsings.cs` takes) rather than a per-file `using` — proves the
         // fix generalizes beyond BCL/System.Linq to any imported (same-
         // compilation, different-namespace) extension.
-        string printed = TranslateNamed(
+        string printed = TranslateNamedRoundTripOnly(
             "Consumer.cs",
+            "Target-only fixture omits the source extension declaration needed to bind the imported call.",
             ("Extensions.cs", @"
 namespace Acme.Extensions
 {
@@ -194,8 +195,9 @@ namespace Acme.App
     {
         // A custom extension declared in a multi-segment nested namespace,
         // reached through a global using rather than a per-file `using`.
-        string printed = TranslateNamed(
+        string printed = TranslateNamedRoundTripOnly(
             "Consumer.cs",
+            "Target-only fixture omits the source extension declaration needed to bind the imported call.",
             ("Extensions.cs", @"
 namespace Acme.Deep.Nested.Extensions
 {
@@ -266,8 +268,9 @@ namespace Demo
         // merges multiple same-file namespaces into one dominant package,
         // which would make them share a package and hide the cross-namespace
         // import requirement this test targets.
-        string printed = TranslateNamed(
+        string printed = TranslateNamedRoundTripOnly(
             "Consumer.cs",
+            "Target-only fixture omits the source extension declaration needed to bind the imported call.",
             ("Extensions.cs", @"
 namespace Acme.Extensions
 {
@@ -298,7 +301,25 @@ namespace Acme.App
         return TranslateNamed("Snippet.cs", ("Snippet.cs", source));
     }
 
-    private static string TranslateNamed(string targetFileName, params (string FileName, string Source)[] sources)
+    private static string TranslateNamedRoundTripOnly(
+        string targetFileName,
+        string reason,
+        params (string FileName, string Source)[] sources)
+    {
+        return TranslateNamed(targetFileName, reason, sources);
+    }
+
+    private static string TranslateNamed(
+        string targetFileName,
+        params (string FileName, string Source)[] sources)
+    {
+        return TranslateNamed(targetFileName, roundTripOnlyReason: null, sources);
+    }
+
+    private static string TranslateNamed(
+        string targetFileName,
+        string roundTripOnlyReason,
+        params (string FileName, string Source)[] sources)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources);
         Assert.True(
@@ -315,7 +336,9 @@ namespace Acme.App
             d => d.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

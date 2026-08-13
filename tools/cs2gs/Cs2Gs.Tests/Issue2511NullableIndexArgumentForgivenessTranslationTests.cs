@@ -53,7 +53,8 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
                     return items[key];
                 }
             }
-            """);
+            """,
+            "G# rejects ??= on the oblivious Dictionary value because its indexer type is non-nullable.");
 
         Assert.Contains("items[key!!] = \"value\"", printed, StringComparison.Ordinal);
         Assert.Contains("let value = items[key!!]", printed, StringComparison.Ordinal);
@@ -257,7 +258,8 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
                         + text[1..^1].Length + grid[row, column];
                 }
             }
-            """);
+            """,
+            "Expression-tree index arguments deliberately retain nullable references that G# cannot bind to string.");
 
         Assert.Contains("items[key]", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("key!!", printed, StringComparison.Ordinal);
@@ -272,12 +274,19 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
         Assert.DoesNotContain("column!!", printed, StringComparison.Ordinal);
     }
 
-    private static string TranslateOblivious(string source) =>
-        Translate(source, NullableContextOptions.Disable);
+    private static string TranslateOblivious(string source, string roundTripOnlyReason = null) =>
+        Translate(source, NullableContextOptions.Disable, roundTripOnlyReason);
 
     private static string Translate(
         string source,
         NullableContextOptions nullableContext,
+        params MetadataReference[] additionalReferences) =>
+        Translate(source, nullableContext, roundTripOnlyReason: null, additionalReferences);
+
+    private static string Translate(
+        string source,
+        NullableContextOptions nullableContext,
+        string roundTripOnlyReason,
         params MetadataReference[] additionalReferences)
     {
         SyntaxTree tree = CSharpSyntaxTree.ParseText(
@@ -300,8 +309,10 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
         var context = new TranslationContext(compilation, model, document.FilePath);
         CompilationUnit translated = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(translated);
-        RoundTripResult roundTrip = additionalReferences.Length == 0
-            ? TranslationTestValidation.AssertBinds(printed)
+        RoundTripResult roundTrip = roundTripOnlyReason is not null
+            ? TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason)
+            : additionalReferences.Length == 0
+                ? TranslationTestValidation.AssertBinds(printed)
             : TranslationTestValidation.ValidateRoundTripOnly(
                 printed,
                 "Consumer-only fixture omits the referenced indexer metadata library from emitted G#.");
