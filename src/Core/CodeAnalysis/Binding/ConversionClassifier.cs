@@ -1485,12 +1485,34 @@ internal sealed class ConversionClassifier
             return null;
         }
 
+        // Symbolic inference can leave an Error/null slot when a deferred
+        // method group supplies that type only to CLR inference. Preserve the
+        // symbolic slots and fill unresolved ones from the selected closure.
+        var effectiveMethodTypeArgs = methodTypeArgs;
+        if (!method.IsGenericMethodDefinition
+            && methodTypeArgs.Any(static type => type == null || type == TypeSymbol.Error))
+        {
+            var closedTypeArgs = method.GetGenericArguments();
+            var merged = ImmutableArray.CreateBuilder<TypeSymbol?>(methodTypeArgs.Length);
+            for (var i = 0; i < methodTypeArgs.Length; i++)
+            {
+                var symbolicType = methodTypeArgs[i];
+                merged.Add(symbolicType != null && symbolicType != TypeSymbol.Error
+                    ? symbolicType
+                    : (uint)i < (uint)closedTypeArgs.Length
+                        ? TypeSymbol.FromClrType(closedTypeArgs[i])
+                        : null);
+            }
+
+            effectiveMethodTypeArgs = merged.MoveToImmutable();
+        }
+
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
             openParamType,
             openDefinition: null,
             typeArguments: default,
             openMethodDefinition: openMethod,
-            methodTypeArguments: methodTypeArgs);
+            methodTypeArguments: effectiveMethodTypeArgs);
         mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
 
         return mapped != null

@@ -1289,6 +1289,16 @@ public sealed class Conversion
             return Conversion.None;
         }
 
+        // Fixed arrays have the same CLR interface surface as slices. Their
+        // element type can remain symbolic while binding, so use the symbolic
+        // element check instead of the erased array's object-based interface.
+        if (from is ArrayTypeSymbol arrayForIface && to?.ClrType != null && to.ClrType.IsInterface)
+        {
+            return ArrayElementConvertsToInterfaceSymbolically(arrayForIface.ElementType, to)
+                ? Conversion.Implicit
+                : Conversion.None;
+        }
+
         // Same rule for an SZ-array returned from imported metadata. Reflection
         // exposes that value as ImportedTypeSymbol(T[]) rather than []T, but G#
         // must not gain broader CLR array covariance because of symbol shape.

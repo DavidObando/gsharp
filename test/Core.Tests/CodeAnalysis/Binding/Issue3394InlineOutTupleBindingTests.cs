@@ -52,6 +52,31 @@ public class Issue3394InlineOutTupleBindingTests
     }
 
     [Fact]
+    public void PartialSymbolicMethodInference_UsesClosedTypeForUnresolvedSlot()
+    {
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From("package P\nclass Item {}")));
+        var item = compilation.GlobalScope.Structs.Single(type => type.Name == "Item");
+        var select = typeof(Enumerable).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(method => method.Name == nameof(Enumerable.Select)
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 2
+                && method.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2)
+            .MakeGenericMethod(typeof(object), typeof(System.Collections.Generic.Dictionary<string, string>));
+
+        var parameterType = Assert.IsType<ImportedTypeSymbol>(
+            ConversionClassifier.TrySubstituteParameterTypeFromMethodTypeArgs(
+                select,
+                1,
+                ImmutableArray.Create<TypeSymbol>(item, TypeSymbol.Error)));
+
+        Assert.True(MemberLookup.TryGetDelegateFunctionTypeFromSymbol(parameterType, out var functionType));
+        Assert.Same(item, Assert.Single(functionType.ParameterTypes));
+        Assert.Equal(
+            typeof(System.Collections.Generic.Dictionary<string, string>),
+            functionType.ReturnType.ClrType);
+    }
+
+    [Fact]
     public void SymbolicMethodInference_MapsDictionaryEntry()
     {
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From("package P\nclass Item {}")));

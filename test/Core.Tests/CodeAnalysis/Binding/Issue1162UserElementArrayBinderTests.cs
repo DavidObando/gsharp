@@ -139,6 +139,22 @@ func F(xs []SegA) int32 { return Take(xs) }
         Assert.Contains(diags, d => d.Id == "GS0154" || d.Id == "GS0155");
     }
 
+    [Fact]
+    public void Negative_FixedStructArray_ToMismatchedIEnumerable_Rejected()
+    {
+        const string source = @"
+package P
+import System.Collections.Generic
+struct SegA { let X uint32 }
+struct SegB { let Y uint32 }
+func Take(e IEnumerable[SegB]) int32 { return 0 }
+func F(xs [3]SegA) int32 { return Take(xs) }
+";
+        var diags = GetDiagnostics(source);
+        Assert.NotEmpty(diags);
+        Assert.Contains(diags, d => d.Id == "GS0154" || d.Id == "GS0155");
+    }
+
     private static ImmutableArrayOfDiagnostic GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
