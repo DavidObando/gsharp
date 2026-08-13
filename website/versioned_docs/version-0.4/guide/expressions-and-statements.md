@@ -1,0 +1,189 @@
+---
+title: "Expressions and statements"
+sidebar_position: 5
+draft: false
+---
+
+# Expressions and statements
+
+G# expression syntax is compact, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](/docs/ref/spec#precedence).
+
+## Operators
+
+Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative except `??`, which is right-associative and sits below `||` and above the ternary conditional. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, null-coalescing, and range levels are implemented. The pattern-test operator `expr is pattern` returns `bool` and accepts constants, relational/list/property patterns, bare types, parentheses, and `not` / `and` / `or`; the safe-cast operator `expr as T` returns `T` (or `T?` for value types) or `nil` on failure. Both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression; both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver `operator` declarations.
+
+## Calls, access, and literals
+
+Calls use parentheses. Generic calls use bracketed type arguments. Member access uses `.`, null-conditional access uses `?.`, indexing uses brackets, and null-conditional indexing uses `?[`. These postfix operators chain after any primary expression, including a parenthesized one — `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The one exception is a bare numeric literal: write `(42).ToString()` rather than `42.ToString`, which is ambiguous with float-literal lexing. Struct literals use field labels; data structs can be copied with `with` updates.
+
+`a?[i]` evaluates the receiver `a` exactly once; when it is `nil` the whole expression yields `nil` and the index is not evaluated, otherwise the result is the indexed value lifted to the nullable form of the indexer's return type. Chained forms (`h?.Data?[i]?.Length`) short-circuit on the first nil receiver. Null-conditional forms (`?.`, `?[...]`) are not allowed on the left-hand side of an assignment (diagnostic GS0301).
+
+From-end indexing and ranges use C#-style tokens. `xs[^1]` reads the last element. `xs[1..^1]`, `xs[..3]`, `xs[2..]`, and `xs[..]` slice arrays, slices, strings, span-like values, or call a `System.Range` indexer. A standalone range such as `let middle = 1..^1` has type `System.Range` and can be reused as `xs[middle]`; a leading from-end marker is only valid inside brackets, so write `xs[^n..]` rather than `let r = ^n..`.
+
+Arguments may be positional, named (`f(timeout: 30, retries: 3)`), or ref-kind-prefixed (`f(ref x)`, `f(out var n)`, `f(in z)`). Named arguments work for free functions, user methods, user constructors, extension functions, and inherited CLR methods (including delegate `Invoke`); indirect calls through a function-typed variable and variadic call sites do not accept names. Ref-kind modifiers must match the parameter declaration (`GS0235`); passing a value to an `in` parameter requires an explicit `in` at the call site (`GS0242`).
+
+```gsharp
+let p = Point{X: 3, Y: 4}
+let q = p with { X = 10 }
+let value = maybePoint?.X ?? 0
+let first = matrix?[0]?[0] ?? -1
+let kind = (p.X + p.Y).GetType()
+let last = numbers[^1]
+let trimmed = numbers[1..^1]
+```
+
+Lambda literals use the arrow form. The canonical form infers parameter and return types from the target delegate: `(x) -> expr`, `(a, b) -> expr`, or the paren-dropped single-parameter `x -> expr`; block bodies use `(params) -> { ... }`. A block body is a statement block with an optional trailing value expression: an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and a trailing expression (or `return`) supplies the value — full parity with `func` literals (void when neither yields a value). Types may also be written explicitly (`(x int32) -> expr`), and async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument.
+
+Closures capture local and parameter variable cells, not value snapshots.
+Writes through the enclosing scope or another closure are visible to every
+closure that captures the same variable.
+
+Members can also use `->` for a single-expression body: `func Square(x int32) int32 -> x * x`, `prop Count int32 -> items.Length`, `get -> field`, and `set -> field = value`. The C# fat arrow `=>` is not G# syntax.
+
+## Interpolation
+
+Interpolated strings evaluate `$name` and braced `${expression}` fragments inside normal double-quoted strings — there is no `$"…"` prefix. A braced hole may add an alignment and format clause, `${expr,alignment:format}`, and the delimiter-aware scanner lets a hole contain nested strings, indexers, ternaries, and even newlines. Use `$$` for a literal dollar sign. By default an interpolation lowers to `DefaultInterpolatedStringHandler`; targeting `IFormattable`/`FormattableString` defers formatting via `FormattableStringFactory.Create`. Keep complex interpolation expressions readable by computing intermediate `let` values.
+
+```gsharp
+let value = 255
+let label = "hi"
+Console.WriteLine("hex=${value:X4}")
+Console.WriteLine("padded=[${label,5}]")
+```
+
+## Declarations, assignment, and deconstruction
+
+Use declaration statements for new bindings and assignment for existing
+storage. Multi-target assignment accepts locals, fields, properties, arrays,
+maps, indexers, nested members, and pointer dereferences. Target components run
+before RHS values, then writes run left-to-right; one matching tuple-valued RHS
+is evaluated once. Tuple and named declarations use `let` forms. The
+null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a`
+currently reads as `nil` — the right-hand side is short-circuited otherwise.
+Prefix and postfix `++` / `--` are value-producing expressions on assignable
+numeric lvalues: `++i` yields the new value, `i++` yields the old value.
+
+```gsharp
+let (x, y) = pair
+left, right = right, left
+items[i], box.Value = 1, 2
+left, right = Pair()
+count += 1
+let before = count++
+let after = ++count
+
+var greeting string? = nil
+greeting ??= "hello"   // greeting is now "hello"
+greeting ??= "ignored" // no-op — RHS not evaluated
+```
+
+## If and switch
+
+`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through. `fallthrough` is reserved and diagnosed if used. Switch expressions use `->` arms and require semantic coverage or a default arm.
+
+```gsharp
+let label = switch n {
+case 0: "zero"
+case 1: "one"
+default: "many"
+}
+```
+
+`if` itself is also a value-producing expression. In expression position the form requires an exhaustive `else` chain and uses brace blocks whose last expression is the branch value — there is no `yield`. The result type is the common type of every branch tail, computed by the same rule as the ternary conditional. Multi-statement blocks run their prefix statements for side effects and then yield the trailing expression.
+
+```gsharp
+let label = if n > 0 { "positive" }
+           else if n < 0 { "negative" }
+           else { "zero" }
+
+let title = if user.IsAdmin {
+    log("admin route")
+    "Admin Dashboard"
+} else {
+    "Home"
+}
+```
+
+Missing the terminal `else` in value position reports `GS0276`. A block with no trailing expression in value position reports `GS0277`. Branches with no common type report `GS0263` (shared with the ternary). The existing if-statement form (`if cond { … }` with optional `else`, optional simple-statement initializer) is unchanged.
+
+## Block expressions
+
+`{ statements... trailingExpression }` is a value anywhere an expression is
+accepted. Prefix statements run in order and the tail runs once:
+
+```gsharp
+let answer = {
+    let left = readLeft()
+    let right = readRight()
+    left + right
+}
+
+consume({ let item = next() item })
+return 2 * { let item = next() item }
+```
+
+The block creates a lexical scope and receives the surrounding expected type.
+Missing the tail reports `GS0277`. Statement bodies and object, collection, and
+struct literal braces keep their existing meanings. Field/property initializers
+and `base(...)`/delegating-`init(...)` arguments reject `return`; nested lambdas
+inside those expressions keep their normal return rules.
+
+## Loops
+
+G# has infinite `for`, condition `for`, three-part `for`, `for in`, ellipsis range loops, `while`, and `do`-`while`. Use `for in` for collection iteration.
+
+```gsharp
+for item in items {
+    Console.WriteLine(item)
+}
+
+for i in 0...10 {
+    Console.WriteLine(i)
+}
+```
+
+`for in` also iterates maps. The two-variable form destructures each entry
+into key and value, and the single-variable form yields each entry as a
+`KeyValuePair[K,V]`; iteration order is unspecified.
+
+```gsharp
+for name, count in inventory {
+    Console.WriteLine("$name: $count")
+}
+
+for entry in inventory {
+    Console.WriteLine(entry.Key)
+}
+```
+
+Over arrays and slices the two-variable form binds the zero-based index and
+the element (`for i, v in items`) — maps' key+value form is the direct
+analog.
+
+Captured variables introduced by collection `for-in` and numeric ellipsis
+loops are fresh for each iteration. A variable declared in a three-part loop
+(`for var i = 0; i < n; i++`) is shared by every closure created by that loop.
+A captured local declared inside any loop body is fresh each time its
+declaration executes, regardless of loop form.
+
+## Goto and labels
+
+A label can prefix any statement, and `goto name` jumps to a label in the same function. Labels can be forward-referenced; duplicates and missing labels are diagnosed. Use this mostly for translated C# or low-level control flow — structured `if`, `switch`, and loops remain clearer for hand-written code.
+
+```gsharp
+goto done
+Console.WriteLine("skipped")
+done: Console.WriteLine("done")
+```
+
+## Return, yield, await
+
+`return` may return zero, one, or multiple expressions; multiple expressions are represented as a tuple. `yield` appears in iterator functions returning `sequence[T]`. `await` is a prefix expression valid in async contexts. `await for` consumes asynchronous sequences.
+
+## Exceptions and cleanup statements
+
+`throw`, `try`, `catch`, and `finally` use CLR exception semantics. `throw e` is also an expression in value position, so `name ?? throw ArgumentNullException("name")`, ternary arms, return operands, lambda bodies, and arguments can throw without a separate guard. `using` introduces a disposable resource variable. `defer` schedules a call for scope exit. See [Errors and cleanup](/docs/guide/errors-and-cleanup).
+
+## Concurrency statements
+
+`go` starts a concurrent call; `scope` joins child work at block exit. Channel send is `ch <- value`; receive is the prefix expression `<-ch`. `select` waits on channel operations and optional default cases. See [Concurrency and async](./concurrency).
