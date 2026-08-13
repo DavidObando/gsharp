@@ -107,6 +107,8 @@ public class TestParityStageTests
         Assert.Contains("\"Oats\"", json);
         Assert.Contains("\"bug\"", json);
         Assert.Contains("sha256:", json);
+        Assert.Contains("GSHARP_UPDATE_GOLDENS=1", json);
+        Assert.True(File.Exists(wrongGolden + ".actual"));
     }
 
     private static string NewOutputRoot(string label)

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using Xunit;
 
@@ -25,5 +26,15 @@ public class TestHostProcessSetupTests
     public void NestedBuildsDisableMsBuildNodeReuse()
     {
         Assert.Equal("1", Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE"));
+    }
+
+    [Fact]
+    public void NestedBuildsAreSerialized()
+    {
+        CollectionBehaviorAttribute behavior =
+            typeof(TestHostProcessSetupTests).Assembly.GetCustomAttribute<CollectionBehaviorAttribute>();
+
+        Assert.NotNull(behavior);
+        Assert.True(behavior.DisableTestParallelization);
     }
 }

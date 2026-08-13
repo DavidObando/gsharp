@@ -4,10 +4,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using GSharp.Tests.LanguageConformance;
@@ -46,9 +44,6 @@ public class SampleConformanceTests
         "PInvokeRefOutIn.gs",
         "PInvokeMarshalAs.gs",
     };
-
-    private static readonly Regex DiagnosticIdPattern =
-        new(@"\b(?:GS\d{4}|GSI\d{3})\b", RegexOptions.CultureInvariant);
 
     public static IEnumerable<object[]> SingleFileSamples()
     {
@@ -90,32 +85,10 @@ public class SampleConformanceTests
         var sourcePath = Path.Combine(samplesDirectory, sampleName);
         var goldenPath = Path.ChangeExtension(sourcePath, ".golden");
 
-        var extensionsAssembly = Assembly.Load("Gsharp.Extensions");
-
-        // Samples that consume the separately built Gsharp.Extensions assembly
-        // need it on every driver's reference channel (#3130): gsc and gsi get
-        // the same /r: path the emitted column compiles against, and gsc also
-        // mirrors the emitted column's GS9100 suppression so the compile-time
-        // console output stays identical.
-        var usesExtensions = File.ReadAllText(sourcePath).Contains("Gsharp.Extensions", StringComparison.Ordinal);
-        var extensionsReference = usesExtensions
-            ? "/r:" + extensionsAssembly.Location
-            : null;
-        var gscArguments = usesExtensions
-            ? new[] { extensionsReference, "/nowarn:GS9100", sourcePath }
-            : new[] { sourcePath };
-        var gsiArguments = usesExtensions
-            ? new[] { extensionsReference, sourcePath }
-            : new[] { sourcePath };
-
-        var emitted = await RunEmittedAsync(new[] { sourcePath }, goldenPath, Path.GetFileNameWithoutExtension(sampleName));
-        var gscInProcessHost = await RunDriverProcessAsync("Compiler", "gsc", sourcePath, compilerProtocol: true, gscArguments);
-        var gsiInProcessHost = await RunDriverProcessAsync("Repl", "gsi", sourcePath, compilerProtocol: false, gsiArguments);
-
-        AssertResults(
+        await DriverConformanceHarness.AssertSingleFileConformsAsync(
             sampleName,
-            ("gsc", emitted, gscInProcessHost),
-            ("gsi", emitted, gsiInProcessHost));
+            sourcePath,
+            goldenPath);
     }
 
     [Theory]
@@ -131,7 +104,10 @@ public class SampleConformanceTests
             .ToArray();
         var goldenPath = Path.Combine(sampleDirectory, directoryName + ".golden");
 
-        await RunEmittedAsync(sourcePaths, goldenPath, directoryName);
+        await DriverConformanceHarness.AssertEmittedMatchesGoldenAsync(
+            directoryName,
+            sourcePaths,
+            goldenPath);
     }
 
     [Fact]
@@ -170,238 +146,6 @@ public class SampleConformanceTests
         }
     }
 
-    private static async Task<DriverResult> RunEmittedAsync(
-        string[] sourcePaths,
-        string goldenPath,
-        string assemblyName)
-    {
-        var expected = SampleConformanceData.ReadNormalizedFile(goldenPath);
-        var testDirectory = Path.GetDirectoryName(typeof(SampleConformanceTests).Assembly.Location);
-        Assert.NotNull(testDirectory);
-        var outputDirectory = Path.Combine(testDirectory, "sample-conformance", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(outputDirectory);
-        var outputPath = Path.Combine(outputDirectory, assemblyName + ".dll");
-
-        try
-        {
-            var usesExtensions = sourcePaths.Any(path =>
-                File.ReadAllText(path).Contains("Gsharp.Extensions", StringComparison.Ordinal));
-            var extensionsAssemblyPath = Assembly.Load("Gsharp.Extensions").Location;
-            if (usesExtensions)
-            {
-                File.Copy(
-                    extensionsAssemblyPath,
-                    Path.Combine(outputDirectory, "Gsharp.Extensions.dll"),
-                    overwrite: true);
-            }
-
-            var arguments = new List<string>
-            {
-                "/out:" + outputPath,
-                "/target:exe",
-                "/targetframework:net10.0",
-                "/nowarn:GS9100",
-            };
-            if (usesExtensions)
-            {
-                arguments.Add("/r:" + extensionsAssemblyPath);
-            }
-
-            arguments.AddRange(sourcePaths);
-            var compile = CaptureConsole(
-                () => GSharp.Compiler.Program.Main(arguments.ToArray()),
-                compilerProtocol: true);
-            Assert.True(
-                compile.ExitCode == 0,
-                $"gsc failed for {assemblyName}: {Format(compile)}");
-            Assert.Equal(string.Empty, compile.StandardError);
-            Assert.True(File.Exists(outputPath), $"Expected emitted assembly at {outputPath}.");
-
-            var knownIlIssues = IlVerifier.GetKnownIssuesForSample(assemblyName);
-            IlVerifier.Verify(
-                outputPath,
-                additionalReferences: usesExtensions ? new[] { extensionsAssemblyPath } : null,
-                ignoredErrorCodes: knownIlIssues.ErrorCodes,
-                ignoredErrorScope: knownIlIssues.Scope);
-            Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
-
-            var runtime = await RunProcessAsync(
-                "dotnet",
-                outputDirectory,
-                "exec",
-                "--runtimeconfig",
-                Path.ChangeExtension(outputPath, ".runtimeconfig.json"),
-                outputPath);
-            var result = new DriverResult(
-                runtime.ExitCode,
-                SampleConformanceData.NormalizeLineEndings(runtime.StandardOutput),
-                compile.DiagnosticIds,
-                SampleConformanceData.NormalizeLineEndings(runtime.StandardError));
-            Assert.True(result.ExitCode == 0, $"{assemblyName} emitted runtime failed: {Format(result)}");
-            Assert.Equal(expected, result.Output);
-            Assert.Equal(string.Empty, result.StandardError);
-            return result;
-        }
-        finally
-        {
-            Directory.Delete(outputDirectory, recursive: true);
-        }
-    }
-
-    private static DriverResult CaptureConsole(Func<int> action, bool compilerProtocol)
-    {
-        using var stdout = new StringWriter { NewLine = Environment.NewLine };
-        using var stderr = new StringWriter { NewLine = Environment.NewLine };
-        var previousOut = Console.Out;
-        var previousError = Console.Error;
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
-        int exitCode;
-        try
-        {
-            exitCode = action();
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-            Console.SetError(previousError);
-        }
-
-        return CreateCliResult(exitCode, stdout.ToString(), stderr.ToString(), compilerProtocol);
-    }
-
-    private static async Task<DriverResult> RunDriverProcessAsync(
-        string projectDirectory,
-        string executableName,
-        string sourcePath,
-        bool compilerProtocol,
-        string[] arguments)
-    {
-        var testDirectory = Path.GetDirectoryName(typeof(SampleConformanceTests).Assembly.Location);
-        Assert.NotNull(testDirectory);
-        var executable = Path.GetFullPath(Path.Combine(
-            testDirectory,
-            "..",
-            projectDirectory,
-            OperatingSystem.IsWindows() ? executableName + ".exe" : executableName));
-        Assert.True(File.Exists(executable), $"{executableName} executable not found at {executable}.");
-
-        var process = await RunProcessAsync(
-            executable,
-            Path.GetDirectoryName(sourcePath),
-            arguments);
-        return CreateCliResult(
-            process.ExitCode,
-            process.StandardOutput,
-            process.StandardError,
-            compilerProtocol);
-    }
-
-    private static DriverResult CreateCliResult(
-        int exitCode,
-        string stdout,
-        string stderr,
-        bool compilerProtocol)
-    {
-        var diagnosticIds = DiagnosticIdPattern.Matches(stdout + Environment.NewLine + stderr)
-            .Select(match => match.Value)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToArray();
-        return new DriverResult(
-            exitCode,
-            CleanCliStream(stdout, compilerProtocol),
-            diagnosticIds,
-            CleanCliStream(stderr, compilerProtocol));
-    }
-
-    private static string CleanCliStream(string value, bool compilerProtocol)
-    {
-        var lines = SampleConformanceData.NormalizeLineEndings(value).Split(Environment.NewLine);
-        var diagnosticIndex = Array.FindIndex(lines, line => DiagnosticIdPattern.IsMatch(line));
-        if (diagnosticIndex >= 0)
-        {
-            lines = lines[..diagnosticIndex];
-        }
-
-        return string.Join(
-            Environment.NewLine,
-            lines.Where(line => !compilerProtocol || line is not "Success." and not "Failed."));
-    }
-
-    private static async Task<ProcessResult> RunProcessAsync(
-        string fileName,
-        string workingDirectory,
-        params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo(fileName)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = workingDirectory,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
-        {
-            process.Kill(entireProcessTree: true);
-            Assert.True(process.WaitForExit(5_000), $"{fileName} did not exit after it was killed.");
-            await Task.WhenAll(stdoutTask, stderrTask);
-            Assert.Fail($"{fileName} timed out after 30 seconds.");
-        }
-
-        return new ProcessResult(
-            process.ExitCode,
-            await stdoutTask,
-            await stderrTask);
-    }
-
-    private static bool Equivalent(DriverResult left, DriverResult right)
-        => left.ExitCode == right.ExitCode
-            && string.Equals(left.Output, right.Output, StringComparison.Ordinal)
-            && left.DiagnosticIds.SequenceEqual(right.DiagnosticIds, StringComparer.Ordinal)
-            && string.Equals(left.StandardError, right.StandardError, StringComparison.Ordinal);
-
-    private static void AssertResults(
-        string sample,
-        params (string Driver, DriverResult Expected, DriverResult Actual)[] results)
-    {
-        var failures = results
-            .Where(result => !Equivalent(result.Expected, result.Actual))
-            .Select(result =>
-                $"{sample} diverged under {result.Driver}.{Environment.NewLine}"
-                + $"Expected: {Format(result.Expected)}{Environment.NewLine}"
-                + $"Actual:   {Format(result.Actual)}")
-            .ToArray();
-        Assert.True(
-            failures.Length == 0,
-            string.Join(Environment.NewLine + Environment.NewLine, failures));
-    }
-
-    private static string Format(DriverResult result)
-        => $"rc={result.ExitCode}, diagnostics=[{string.Join(", ", result.DiagnosticIds)}], "
-            + $"stdout=[{result.Output.Replace("\n", "\\n", StringComparison.Ordinal)}], "
-            + $"stderr=[{result.StandardError.Replace("\n", "\\n", StringComparison.Ordinal)}]";
-
     private static string LocateSamplesDirectory()
         => SampleConformanceData.LocateSamplesDirectory(typeof(SampleConformanceTests).Assembly);
-
-    private sealed record DriverResult(
-        int ExitCode,
-        string Output,
-        string[] DiagnosticIds,
-        string StandardError);
-
-    private sealed record ProcessResult(
-        int ExitCode,
-        string StandardOutput,
-        string StandardError);
 }

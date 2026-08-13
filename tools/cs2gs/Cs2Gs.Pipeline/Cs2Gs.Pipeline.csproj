@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\..\test\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="GSharp.Cs2Gs.Tests" />
   </ItemGroup>
 

@@ -186,8 +186,7 @@ public sealed class TestParityStage : IMigrationStage
         (int exit, string stdout, string stderr, bool timedOut) =
             RunProgram(context.EmittedAssemblyPath, context.ProjectOutputDir);
 
-        string golden = File.ReadAllText(context.App.StdoutGolden);
-        StdoutParityResult parity = StdoutParity.Compare(golden, stdout);
+        StdoutParityResult parity = StdoutParity.CompareFile(context.App.StdoutGolden, stdout);
 
         string note = $"stdout parity: exit={exit}; match={parity.IsMatch}; timedOut={timedOut}." +
             (parity.IsMatch ? string.Empty : " " + parity.Describe()) +

@@ -11,12 +11,12 @@ using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
@@ -34,8 +34,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// Any "behavior-preserving" extraction PR that quietly changes emitted IL
 /// will fail this gate. The fix is to find the divergence in the extraction,
 /// not to regenerate the baseline. To regenerate after an intentional IL
-/// change, run the manual <see cref="RegenerateBaseline"/> entry point in
-/// this file (see <c>test/Core.Tests/Baselines/README.md</c>).
+/// change, run this test with <c>GSHARP_UPDATE_GOLDENS=1</c> (see
+/// <c>test/Core.Tests/Baselines/README.md</c>).
 /// </summary>
 public class RefactoringBaselineTests
 {
@@ -61,68 +61,16 @@ public class RefactoringBaselineTests
         "samples/GsharpExtensionsSequences.gs",
     };
 
-    public static IEnumerable<object[]> Samples()
+    [Fact]
+    public void Samples_EmittedPE_Match_Baseline()
     {
-        var repoRoot = LocateRepoRoot();
-        if (repoRoot is null)
-        {
-            yield break;
-        }
-
-        foreach (var rel in EnumerateSampleRelativePaths(repoRoot))
-        {
-            yield return new object[] { rel };
-        }
-    }
-
-    [Theory]
-    [MemberData(nameof(Samples))]
-    public void Sample_EmittedPE_Matches_Baseline(string relativeSamplePath)
-    {
-        var repoRoot = LocateRepoRoot();
-        Assert.NotNull(repoRoot);
-
-        var baseline = LoadBaseline(repoRoot!);
-        Assert.True(
-            baseline.TryGetValue(relativeSamplePath, out var expectedHash),
-            $"No baseline entry for '{relativeSamplePath}'. Regenerate via the RegenerateBaseline manual fact (see test/Core.Tests/Baselines/README.md) and commit the diff.");
-
-        if (expectedHash is null)
-        {
-            // Deliberately skipped (documented in samples/refactoring-baseline/README.md).
-            return;
-        }
-
-        var absoluteSamplePath = Path.Combine(repoRoot!, relativeSamplePath);
-        var (success, actualHash, diagnostics) = TryHashSample(absoluteSamplePath);
-
-        Assert.True(
-            success,
-            $"Sample '{relativeSamplePath}' failed to compile but the baseline expected it to succeed. Diagnostics: {diagnostics}");
-
-        Assert.True(
-            string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase),
-            $"IL byte-identical gate FAILED for '{relativeSamplePath}'.\n" +
-            $"  expected: {expectedHash}\n" +
-            $"  actual:   {actualHash}\n" +
-            "If this PR intentionally changed emitted IL, regenerate the baseline (see test/Core.Tests/Baselines/README.md). Otherwise, an extraction has silently changed IL — investigate the divergence.");
-    }
-
-    /// <summary>
-    /// Manual entry point: un-skip locally, run, then commit the regenerated
-    /// <c>refactoring-baseline.json</c>. See
-    /// <c>test/Core.Tests/Baselines/README.md</c> for the procedure.
-    /// </summary>
-    [Fact(Skip = "manual: un-skip to regenerate test/Core.Tests/Baselines/refactoring-baseline.json")]
-    public void RegenerateBaseline()
-    {
-        var repoRoot = LocateRepoRoot();
-        Assert.NotNull(repoRoot);
+        string repoRoot = LocateRepoRoot()
+            ?? throw new InvalidOperationException("Could not locate repository root.");
 
         var entries = new SortedDictionary<string, string?>(StringComparer.Ordinal);
-        var skipped = new List<string>();
+        var failures = new List<string>();
 
-        foreach (var rel in EnumerateSampleRelativePaths(repoRoot!))
+        foreach (var rel in EnumerateSampleRelativePaths(repoRoot))
         {
             if (KnownCompileFailureSamples.Contains(rel))
             {
@@ -130,7 +78,7 @@ public class RefactoringBaselineTests
                 continue;
             }
 
-            var absolute = Path.Combine(repoRoot!, rel);
+            var absolute = Path.Combine(repoRoot, rel);
             var (success, hash, diagnostics) = TryHashSample(absolute);
             if (success)
             {
@@ -138,20 +86,26 @@ public class RefactoringBaselineTests
             }
             else
             {
-                entries[rel] = null;
-                skipped.Add($"{rel}: {diagnostics}");
+                failures.Add($"{rel}: {diagnostics}");
             }
         }
 
-        WriteBaseline(repoRoot!, entries);
+        Assert.True(
+            failures.Count == 0,
+            "Samples expected to compile failed before the IL baseline could be compared:\n"
+            + string.Join("\n", failures));
 
-        if (skipped.Count > 0)
-        {
-            // Surface skips so the regenerator updates samples/refactoring-baseline/README.md.
-            throw new InvalidOperationException(
-                "Baseline regenerated, but some samples failed to compile and were recorded with a null hash. Document each in samples/refactoring-baseline/README.md:\n" +
-                string.Join("\n", skipped));
-        }
+        string baselinePath = Path.Combine(
+            repoRoot,
+            "test",
+            "Core.Tests",
+            "Baselines",
+            BaselineFileName);
+        GoldenFile.AssertMatches(
+            baselinePath,
+            SerializeBaseline(entries),
+            "IL byte-identical gate failed. Investigate unintended emit drift; "
+            + "accept and commit a regenerated baseline only for an intentional IL change.");
     }
 
     private static (bool Success, string Hash, string Diagnostics) TryHashSample(string absoluteSamplePath)
@@ -313,34 +267,15 @@ public class RefactoringBaselineTests
         return rel.Replace(Path.DirectorySeparatorChar, '/');
     }
 
-    private static SortedDictionary<string, string?> LoadBaseline(string repoRoot)
+    private static string SerializeBaseline(SortedDictionary<string, string?> entries)
     {
-        var path = Path.Combine(repoRoot, "test", "Core.Tests", "Baselines", BaselineFileName);
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException(
-                $"Baseline file '{path}' does not exist. Regenerate via the RegenerateBaseline manual fact (see test/Core.Tests/Baselines/README.md).");
-        }
-
-        using var stream = File.OpenRead(path);
-        var parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(stream) ?? new();
-        return new SortedDictionary<string, string?>(parsed, StringComparer.Ordinal);
-    }
-
-    private static void WriteBaseline(string repoRoot, SortedDictionary<string, string?> entries)
-    {
-        var dir = Path.Combine(repoRoot, "test", "Core.Tests", "Baselines");
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, BaselineFileName);
-
         var options = new JsonSerializerOptions
         {
             WriteIndented = true,
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
 
-        var json = JsonSerializer.Serialize(entries, options);
-        File.WriteAllText(path, json + Environment.NewLine, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return JsonSerializer.Serialize(entries, options) + "\n";
     }
 
     private static string? LocateRepoRoot()

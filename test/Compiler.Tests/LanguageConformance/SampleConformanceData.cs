@@ -54,5 +54,5 @@ internal static class SampleConformanceData
         => NormalizeLineEndings(File.ReadAllText(path));
 
     public static string NormalizeLineEndings(string text)
-        => text.ReplaceLineEndings(Environment.NewLine);
+        => text.ReplaceLineEndings("\n");
 }

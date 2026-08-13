@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -108,8 +109,9 @@ public class L1MigrationEndToEndTests
         (int runExit, string stdout) = RunDotnet($"\"{dllPath}\"");
         Assert.True(runExit == 0, "Translated L1 must run successfully. Output:\n" + stdout);
 
-        string baseline = File.ReadAllText(ResolveCorpusFile("L1-Console", "baseline.stdout.golden"));
-        Assert.Equal(Normalize(baseline), Normalize(stdout));
+        string baselinePath = ResolveCorpusFile("L1-Console", "baseline.stdout.golden");
+        StdoutParityResult parity = StdoutParity.CompareFile(baselinePath, stdout);
+        Assert.True(parity.IsMatch, parity.Describe());
     }
 
     private static async Task<(CompilationUnit Unit, TranslationContext Context, string Printed)> TranslateL1Async()
@@ -128,10 +130,6 @@ public class L1MigrationEndToEndTests
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         return (unit, context, GSharpPrinter.Print(unit));
     }
-
-    private static string Normalize(string text) =>
-        text.ReplaceLineEndings(Environment.NewLine)
-            .TrimEnd(Environment.NewLine.ToCharArray()) + Environment.NewLine;
 
     private static (int Exit, string Output) RunDotnet(string arguments)
     {

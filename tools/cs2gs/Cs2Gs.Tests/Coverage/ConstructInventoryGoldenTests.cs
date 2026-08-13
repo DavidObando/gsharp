@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Cs2Gs.Translator.Coverage;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests.Coverage;
@@ -37,18 +38,11 @@ public class ConstructInventoryGoldenTests
     {
         string generated = RoslynSurface.BuildSnapshot();
         string goldenPath = Path.Combine(RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests", "Coverage", "roslyn-surface.golden.txt");
-        Assert.True(File.Exists(goldenPath), $"missing golden at {goldenPath}");
-        string golden = File.ReadAllText(goldenPath).ReplaceLineEndings(Environment.NewLine);
-
-        if (!string.Equals(generated, golden, StringComparison.Ordinal))
-        {
-            string actualPath = goldenPath + ".actual";
-            File.WriteAllText(actualPath, generated);
-            Assert.Fail(
-                "Roslyn-surface snapshot drifted (a Roslyn upgrade added/removed node kinds?).\n" +
-                $"Classify the delta in {ConstructInventory.RepoRelativePath} (run `cs2gs coverage --write`),\n" +
-                $"then update the golden. Wrote regenerated snapshot to `{actualPath}`.");
-        }
+        GoldenFile.AssertMatches(
+            goldenPath,
+            generated,
+            "Roslyn surface changed. Classify the delta in "
+            + $"{ConstructInventory.RepoRelativePath} with `cs2gs coverage --write`.");
     }
 
     [Fact]
@@ -77,16 +71,10 @@ public class ConstructInventoryGoldenTests
         ConstructInventory inventory = LoadInventory();
         string generated = inventory.BuildMatrixMarkdown();
         string docPath = Path.Combine(RepoRoot(), "docs", "cs2gs-coverage-matrix.md");
-        Assert.True(File.Exists(docPath), $"missing generated matrix at {docPath}; run `cs2gs coverage --write`.");
-        string onDisk = File.ReadAllText(docPath).ReplaceLineEndings(Environment.NewLine);
-
-        if (!string.Equals(generated, onDisk, StringComparison.Ordinal))
-        {
-            File.WriteAllText(docPath + ".actual", generated);
-            Assert.Fail(
-                $"docs/cs2gs-coverage-matrix.md drifted from the inventory; run `cs2gs coverage --write`.\n" +
-                $"Wrote regenerated matrix to `{docPath}.actual`.");
-        }
+        GoldenFile.AssertMatches(
+            docPath,
+            generated,
+            "`docs/cs2gs-coverage-matrix.md` drifted from the inventory; run `cs2gs coverage --write`.");
     }
 
     /// <summary>

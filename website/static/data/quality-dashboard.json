@@ -1,0 +1,43 @@
+{
+  "benchmarks": {
+    "checksum": "1199999814",
+    "compileRounds": 5,
+    "compilerStartupMedianMs": 38.46,
+    "csharpRuntimeMedianMs": 50.12,
+    "gsharpRuntimeMedianMs": 68.13,
+    "referenceCorpusCompileMedianMs": 1337.29,
+    "referenceCorpusPrograms": [
+      "Arithmetic.gs",
+      "Class.gs",
+      "PatternSwitch.gs",
+      "AsyncTask.gs"
+    ],
+    "runtimeIterations": 25000000,
+    "runtimeRatio": 1.359,
+    "runtimeRounds": 7,
+    "startupRounds": 7
+  },
+  "commit": "0deabb98a51a332269ff592272025a93eb19e0b8",
+  "commitDate": "2026-08-12T21:02:48-07:00",
+  "conformance": {
+    "crossDriverExecutions": 468,
+    "crossDriverPrograms": 156,
+    "drivers": [
+      "emitted executable",
+      "gsc emit-to-memory",
+      "gsi script"
+    ],
+    "goldenPrograms": 124,
+    "ilVerifyKnownSuppressions": 2,
+    "multiFileGoldenPrograms": 1,
+    "randomizedPrograms": 32
+  },
+  "environment": {
+    "architecture": "arm64",
+    "dotnetSdk": "10.0.301",
+    "os": "Darwin"
+  },
+  "generatedAt": "2026-08-13T04:39:53.958957+00:00",
+  "schemaVersion": 1,
+  "workingTreeDirty": true
+}

@@ -8,6 +8,7 @@ already know, so every BCL type, NuGet package, and `dotnet` tool works
 out of the box.
 
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
+[![quality dashboard](https://github.com/DavidObando/gsharp/actions/workflows/pages.yml/badge.svg)](https://davidobando.github.io/gsharp/docs/next/project/quality-dashboard)
 
 📖 **Documentation:** https://davidobando.github.io/gsharp/ — language
 tour, tutorials, specification, and tooling reference. The site source
@@ -287,7 +288,8 @@ website/              # Docusaurus site (source for the docs above)
 
 ## Contributing
 
-Contributions are welcome. Open an issue to discuss your idea before
-sending a pull request — agreeing on the shape up front keeps the
-review cycle short. The [`docs/`](docs/) folder has the ADRs and design
-notes that explain why specific decisions were made.
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for build,
+test, ADR, golden-file, and pull-request guidance. Compatibility commitments
+are documented in
+[`docs/compatibility-and-stability.md`](docs/compatibility-and-stability.md);
+report vulnerabilities privately through [`SECURITY.md`](SECURITY.md).
