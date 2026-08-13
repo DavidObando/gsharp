@@ -354,11 +354,20 @@ namespace Corpus.Issue2370
             "Snippet should bind with no C# errors: " +
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
-        LoadedDocument document = project.Documents.Single(d => d.FilePath == "Both.cs");
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        string printed = GSharpPrinter.Print(unit);
+        var translator = new CSharpToGSharpTranslator();
+        var translated = project.Documents.Select(document =>
+        {
+            var documentContext = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            CompilationUnit documentUnit = translator.TranslateDocument(document, documentContext);
+            return (document, documentContext, documentUnit, printed: GSharpPrinter.Print(documentUnit));
+        }).ToArray();
+        var target = translated.Single(result => result.document.FilePath == "Both.cs");
+        TranslationContext context = target.documentContext;
+        CompilationUnit unit = target.documentUnit;
+        string printed = target.printed;
 
         TypeDeclaration both = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Both");
         var events = both.Members.OfType<EventDeclaration>().Where(e => e.Name == "Changed").ToList();
@@ -368,7 +377,13 @@ namespace Corpus.Issue2370
         Assert.Contains("(NsB.IWatcher) Changed", printed, StringComparison.Ordinal);
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-        AssertRoundTripParses(printed);
+        foreach (var result in translated)
+        {
+            RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
+                result.printed,
+                "Binder.BindGlobalScope cannot resolve qualified interfaces across this multi-package fixture.");
+            Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+        }
     }
 
     /// <summary>
@@ -406,7 +421,7 @@ namespace Corpus.Issue2370
 
     private static void AssertRoundTripParses(string rendered)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
 
         Assert.True(
             result.Success,

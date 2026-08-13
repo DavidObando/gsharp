@@ -181,7 +181,9 @@ namespace Corpus.Issue1839
 }
 ");
 
-        AssertRoundTripParses(rendered);
+        AssertRoundTripParses(
+            rendered,
+            "Single-file multi-namespace translation still flattens both Circle declarations into one G# package.");
     }
 
     [Fact]
@@ -260,9 +262,11 @@ namespace Corpus.Issue3357
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
-    private static void AssertRoundTripParses(string rendered)
+    private static void AssertRoundTripParses(string rendered, string roundTripOnlyReason = null)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(rendered)
+            : TranslationTestValidation.ValidateRoundTripOnly(rendered, roundTripOnlyReason);
 
         Assert.True(
             result.Success,

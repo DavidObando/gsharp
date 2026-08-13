@@ -3,17 +3,10 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
-using GSharp.Core.CodeAnalysis.Binding;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -34,10 +27,9 @@ namespace Cs2Gs.Tests;
 /// not bind), and it ran once for the whole query instead of once per element.
 /// </para>
 /// <para>
-/// The emitted G# still PARSED, so <see cref="GSharpRoundTrip"/> validation —
-/// which every other cs2gs translation test relies on — could not catch this.
-/// Every case here therefore also asserts the output BINDS, via
-/// <see cref="BindDiagnostics"/>.
+/// The emitted G# still PARSED, so round-trip validation could not catch this.
+/// Issue #3382 made binding the shared default for cs2gs translation tests via
+/// <see cref="TranslationTestValidation.AssertBinds(string[])"/>.
 /// </para>
 /// </summary>
 public class Issue3348QueryClauseSpillSeamTests
@@ -165,7 +157,7 @@ public sealed class C
         Assert.True(
             writeIndex > lambdaStart,
             "The `last = x` write must be inside the query lambda, not hoisted ahead of it:\n" + printed);
-        AssertBinds(printed);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     /// <summary>
@@ -198,7 +190,7 @@ public sealed class C
             queryIndex < 0 || writeIndex < queryIndex,
             "The first `from` source is evaluated eagerly; its assignment must hoist ahead of the query:\n"
                 + printed);
-        AssertBinds(printed);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     /// <summary>
@@ -229,7 +221,7 @@ public sealed class C
         Assert.True(
             joinIndex < 0 || writeIndex < joinIndex,
             "A join's `in` source is eager; its assignment must hoist ahead of the query:\n" + printed);
-        AssertBinds(printed);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     /// <summary>
@@ -269,7 +261,7 @@ public sealed class C
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return ", printed, StringComparison.Ordinal);
-        AssertBinds(printed);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     // The spill's `let` must appear AFTER the lambda arrow, i.e. inside the
@@ -285,27 +277,7 @@ public sealed class C
             spillIndex > lambdaStart,
             "The spill must be hoisted INSIDE the query lambda, not ahead of the query:\n" + printed);
 
-        AssertBinds(printed);
-    }
-
-    // The #3348 output parsed but did not bind (the hoisted statement read the
-    // lambda's range variable from the enclosing scope), so round-trip parsing
-    // alone is not a sufficient assertion for this class of defect.
-    private static void AssertBinds(string printed)
-    {
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
-        Assert.True(
-            roundTrip.Success,
-            "Translated G# must round-trip. Errors:\n" + string.Join("\n", roundTrip.Errors)
-                + "\n\nPrinted:\n" + printed);
-
-        List<GSharp.Core.CodeAnalysis.Diagnostic> errors = BindDiagnostics(printed)
-            .Where(diagnostic => diagnostic.IsError)
-            .ToList();
-        Assert.True(
-            errors.Count == 0,
-            "Translated G# must bind without errors. Errors:\n"
-                + string.Join("\n", errors.Select(e => e.ToString())) + "\n\nPrinted:\n" + printed);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     private static string TranslateQuery(string source)
@@ -322,12 +294,5 @@ public sealed class C
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         return GSharpPrinter.Print(unit);
-    }
-
-    private static IEnumerable<GSharp.Core.CodeAnalysis.Diagnostic> BindDiagnostics(string gsharpSource)
-    {
-        SyntaxTree tree = SyntaxTree.Parse(SourceText.From(gsharpSource));
-        BoundGlobalScope scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree));
-        return scope.Diagnostics;
     }
 }

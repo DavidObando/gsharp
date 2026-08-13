@@ -210,7 +210,7 @@ namespace Demo
                 d.Message.Contains("outside the int32 range", StringComparison.Ordinal));
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

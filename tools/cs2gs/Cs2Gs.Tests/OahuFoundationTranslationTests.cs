@@ -717,7 +717,9 @@ namespace Demo
         // The emitted G# must round-trip through the real parser even on the
         // unsafe-interop surface (the binder, not the parser, flags GS0243).
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Unsafe interop fixtures intentionally exercise forms the G# binder rejects with GS0243.");
         Assert.True(
             result.Success,
             "Emitted G# must round-trip. Errors:\n" +
@@ -732,7 +734,7 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
-        return (printed, GSharpRoundTrip.Validate(printed));
+        return (printed, TranslationTestValidation.AssertBinds(printed));
     }
 
     private static LoadedCSharpProject LoadProject(string source)

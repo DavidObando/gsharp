@@ -93,7 +93,7 @@ namespace Corpus.Issue1967
         // gsc's OWN parser actually accepts a from-end index in that position,
         // not just that the printer emitted the `^1` text (a printer-only check
         // would miss gsc silently rejecting it as unparseable G#).
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(rendered);
         Assert.True(roundTrip.Success, "Translated G# must parse. Errors:\n" +
             string.Join("\n", roundTrip.Errors) + "\n\nPrinted:\n" + rendered);
     }

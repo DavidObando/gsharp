@@ -37,7 +37,7 @@ public class BodyTranslationTests
         (CompilationUnit unit, TranslationContext context) = await TranslateL1CorpusAsync();
         string printed = GSharpPrinter.Print(unit);
 
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated L1 must round-trip-parse. Errors:\n" +
@@ -68,7 +68,7 @@ public class BodyTranslationTests
         (CompilationUnit unit, TranslationContext context) = await TranslateConsoleCorpusAsync("L4-Console", "L4-Console.csproj");
         string printed = GSharpPrinter.Print(unit);
 
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated L4 must round-trip-parse. Errors:\n" +
@@ -610,7 +610,7 @@ namespace S
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Snippet G# must round-trip. Errors:\n" +

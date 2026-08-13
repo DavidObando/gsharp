@@ -123,7 +123,7 @@ public sealed class Issue2743NullableObjectInitializerWideningTranslationTests
         LoadedDocument document = Assert.Single(project.Documents);
         string printed = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document));
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
         return printed;
     }

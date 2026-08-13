@@ -459,8 +459,16 @@ namespace LibA
             new MetadataReference[] { projectB.Compilation.ToMetadataReference(), projectC.Compilation.ToMetadataReference() });
 
         var siblings = new[] { projectA.Compilation, projectB.Compilation, projectC.Compilation };
+        string printedB = TranslateProject(projectB, siblings);
         string printedC = TranslateProject(projectC, siblings);
         string printedA = TranslateProject(projectA, siblings);
+        foreach (string printed in new[] { printedA, printedB, printedC })
+        {
+            RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
+                printed,
+                "Binder.BindGlobalScope cannot resolve alias-qualified types across this multi-package fixture.");
+            Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+        }
 
         Assert.Contains("prop Name string {", printedC);
         Assert.DoesNotContain("prop Name string? {", printedC);
@@ -675,8 +683,10 @@ namespace LibCore
             });
 
         var siblings = new[] { projectCore.Compilation, projectData.Compilation, projectFoundation.Compilation };
+        string printedFoundation = TranslateProject(projectFoundation, siblings);
         string printedData = TranslateProject(projectData, siblings);
         string printedCore = TranslateProject(projectCore, siblings);
+        TranslationTestValidation.AssertBinds(printedCore, printedData, printedFoundation);
 
         // LibData's own standalone translation already promotes both endpoints
         // (issue #2285) — the interface member declared in Foundation AND its
@@ -722,6 +732,8 @@ namespace LibA
         string firstPrintedB = TranslateProject(projectB, siblings);
         string secondPrintedB = TranslateProject(projectB, siblings);
         string secondPrintedA = TranslateProject(projectA, siblings);
+        TranslationTestValidation.AssertBinds(firstPrintedA, firstPrintedB);
+        TranslationTestValidation.AssertBinds(secondPrintedA, secondPrintedB);
 
         Assert.Equal(firstPrintedA, secondPrintedA);
         Assert.Equal(firstPrintedB, secondPrintedB);
@@ -743,6 +755,7 @@ namespace LibA
         var siblings = new[] { projectA.Compilation, projectB.Compilation };
         string printedB = TranslateProject(projectB, siblings);
         string printedA = TranslateProject(projectA, siblings);
+        TranslationTestValidation.AssertBinds(printedA, printedB);
         return (printedB, printedA);
     }
 
@@ -817,18 +830,7 @@ namespace LibA
             siblingCompilations,
             repositoryCompilations: siblingCompilations);
         CompilationUnit unit = translator.TranslateDocument(document, context);
-        return PrintAndValidate(unit);
-    }
-
-    private static string PrintAndValidate(CompilationUnit unit)
-    {
-        string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
-        Assert.True(
-            result.Success,
-            "Translated G# must round-trip. Errors:\n" +
-                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return GSharpPrinter.Print(unit);
     }
 
     // Collapses incidental whitespace/newlines around composite-literal braces

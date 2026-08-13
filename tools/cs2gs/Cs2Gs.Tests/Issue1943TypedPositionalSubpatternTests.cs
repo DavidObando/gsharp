@@ -234,7 +234,7 @@ namespace Corpus.Issue1943
 
     private static void AssertRoundTripParses(string rendered)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(rendered);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
 
         Assert.True(
             result.Success,

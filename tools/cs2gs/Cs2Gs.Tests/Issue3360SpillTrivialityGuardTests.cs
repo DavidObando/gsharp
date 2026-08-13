@@ -124,7 +124,7 @@ public sealed class C
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" + string.Join("\n", roundTrip.Errors)

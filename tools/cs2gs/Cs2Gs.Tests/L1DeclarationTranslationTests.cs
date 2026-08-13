@@ -92,7 +92,7 @@ namespace Corpus.L1
         (CompilationUnit unit, TranslationContext context) = TranslateL1();
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
 
         Assert.True(
             result.Success,
@@ -252,7 +252,7 @@ namespace Corpus.L1
 
         string printed = GSharpPrinter.Print(unit);
         Assert.DoesNotContain("// pending", printed);
-        Assert.True(GSharpRoundTrip.Validate(printed).Success);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
     }
 
     private static (CompilationUnit Unit, TranslationContext Context) TranslateL1()

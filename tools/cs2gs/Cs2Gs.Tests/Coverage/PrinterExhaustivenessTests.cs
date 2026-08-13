@@ -90,7 +90,9 @@ public class PrinterExhaustivenessTests
         // ArgumentException for unsupported nodes).
         var printed = GSharpPrinter.Print(unit);
 
-        var result = GSharpRoundTrip.Validate(printed);
+        var result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Printer exhaustiveness samples are minimal syntax fixtures, not complete bindable programs.");
         if (KnownRoundTripGaps.TryGetValue(type, out var reason))
         {
             Assert.False(

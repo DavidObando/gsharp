@@ -135,7 +135,7 @@ namespace Demo
         Assert.Contains("class Unrelated", printed);
         Assert.Contains("struct Point", printed);
 
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# (with the unsupported type dropped) must still round-trip. Errors:\n" +
@@ -169,7 +169,7 @@ namespace Demo
 
     private static void AssertRoundTrips(string printed)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

@@ -55,7 +55,7 @@ namespace Demo
         // segment, plus the `$x` interpolation hole for the expression.
         Assert.Contains(@"""a\\b\""c$$d\u0001e$x""", printed, StringComparison.Ordinal);
 
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(result.Success, "Translated G# must round-trip. Errors:\n" + string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
     }
 
@@ -123,7 +123,7 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

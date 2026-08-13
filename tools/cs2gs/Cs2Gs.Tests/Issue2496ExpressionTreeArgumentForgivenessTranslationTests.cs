@@ -220,7 +220,9 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessTranslationTests
         var context = new TranslationContext(compilation, model, document.FilePath);
         CompilationUnit translated = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(translated);
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Consumer-only fixture omits the referenced expression-sink metadata library from emitted G#.");
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" +

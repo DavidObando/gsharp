@@ -405,7 +405,9 @@ namespace Demo
 
     private static void AssertRoundTripParses(string printed)
     {
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "CompileAndRunProgram binds the complete emitted file set after per-file parse checks.");
 
         Assert.True(
             result.Success,

@@ -300,7 +300,11 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
         var context = new TranslationContext(compilation, model, document.FilePath);
         CompilationUnit translated = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(translated);
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = additionalReferences.Length == 0
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(
+                printed,
+                "Consumer-only fixture omits the referenced indexer metadata library from emitted G#.");
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" +

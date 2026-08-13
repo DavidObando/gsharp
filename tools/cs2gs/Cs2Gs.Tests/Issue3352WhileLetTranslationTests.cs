@@ -309,7 +309,7 @@ public sealed class Issue3352WhileLetTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         var printed = GSharpPrinter.Print(unit);
-        var roundTrip = GSharpRoundTrip.Validate(printed);
+        var roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" +

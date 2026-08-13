@@ -95,7 +95,7 @@ namespace Corpus
         Assert.Contains("SttsBox.SampleEntry", printed);
 
         // The emitted G# parses cleanly...
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
 
         // ...and fully binds with no member-resolution error (GS0158) — proving
@@ -114,7 +114,7 @@ namespace Corpus
         // qualification) and still binds.
         Assert.DoesNotContain("SttsBox.Entry", printed);
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
 
         var diagnostics = BindDiagnostics(printed);
@@ -128,7 +128,7 @@ namespace Corpus
 
         Assert.Contains("class Reader : Host.IReader", printed);
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
 
         var diagnostics = BindDiagnostics(printed);

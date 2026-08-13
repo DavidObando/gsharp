@@ -242,7 +242,9 @@ namespace Oahu.App
             project.Compilation, document.SemanticModel, document.FilePath, siblingCompilations);
         CompilationUnit unit = translator.TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "CompileAndRun binds all three emitted packages together after per-project parse checks.");
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

@@ -165,7 +165,7 @@ public sealed class C
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1723"));
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             "Translated G# must round-trip. Errors:\n" + string.Join("\n", roundTrip.Errors)

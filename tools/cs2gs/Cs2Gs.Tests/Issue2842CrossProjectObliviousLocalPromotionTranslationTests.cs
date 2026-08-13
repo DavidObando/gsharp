@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
@@ -62,7 +61,10 @@ namespace Core
             "Core",
             new MetadataReference[] { data.Compilation.ToMetadataReference() });
 
-        string printed = TranslateProject(core, new[] { core.Compilation, data.Compilation });
+        var compilations = new[] { core.Compilation, data.Compilation };
+        string printedData = TranslateProject(data, compilations);
+        string printed = TranslateProject(core, compilations);
+        TranslationTestValidation.AssertBinds(printed, printedData);
 
         string compact = Compact(printed);
         Assert.Contains("let reason = conversion.FailureReason!!", compact);
@@ -78,7 +80,10 @@ namespace Core
             "Core",
             new MetadataReference[] { data.Compilation.ToMetadataReference() });
 
-        string printed = TranslateProject(core, new[] { core.Compilation, data.Compilation });
+        var compilations = new[] { core.Compilation, data.Compilation };
+        string printedData = TranslateProject(data, compilations);
+        string printed = TranslateProject(core, compilations);
+        TranslationTestValidation.AssertBinds(printed, printedData);
 
         string compact = Compact(printed);
         Assert.Contains("let reason = conversion.FailureReason!!", compact);
@@ -147,6 +152,7 @@ namespace App
         var compilations = new[] { app.Compilation, mid.Compilation, data.Compilation };
         string printedData = TranslateProject(data, compilations);
         string printedApp = TranslateProject(app, compilations);
+        TranslationTestValidation.AssertBinds(printedApp, printedData);
 
         Assert.Contains("prop FailureReason string?", Compact(printedData));
 
@@ -233,13 +239,7 @@ namespace App
             siblingCompilations,
             repositoryCompilations: siblingCompilations);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
-        Assert.True(
-            result.Success,
-            "Translated G# must round-trip. Errors:\n" +
-                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return GSharpPrinter.Print(unit);
     }
 
     private static string Compact(string printed) =>

@@ -104,8 +104,8 @@ namespace Demo
         // ponytail: skip a second real-gsc compile here — the first test
         // already proves the mechanism compiles end-to-end; running gsc as a
         // subprocess for every generality case here multiplies process load
-        // for no extra coverage (GSharpRoundTrip.Validate inside TranslateUnit
-        // already proves the printed text re-parses).
+        // for no extra coverage (AssertBinds inside TranslateUnit already proves
+        // the printed text parses and binds).
     }
 
     [Fact]
@@ -183,7 +183,7 @@ namespace Demo
             d => d.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

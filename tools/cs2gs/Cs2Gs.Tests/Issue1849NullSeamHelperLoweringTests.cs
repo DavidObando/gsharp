@@ -153,7 +153,8 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
                     public Derived() : base(flag: GetA() is { X: 1, Y: 2 }) { }
                 }
             }
-            """);
+            """,
+            "Named base-constructor arguments remain a known G# binding gap; this test isolates block lowering.");
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
         Assert.Contains(": base(flag: {", printed, StringComparison.Ordinal);
@@ -331,7 +332,9 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
         return count;
     }
 
-    private static (string Printed, TranslationContext Context) TranslateUnitWithContext(string source)
+    private static (string Printed, TranslationContext Context) TranslateUnitWithContext(
+        string source,
+        string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -344,7 +347,9 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

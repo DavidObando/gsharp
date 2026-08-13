@@ -221,7 +221,7 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
@@ -268,8 +268,7 @@ namespace Demo
         CompilationUnit unitB = translator.TranslateDocument(documentB, contextB);
         string printedB = GSharpPrinter.Print(unitB);
 
-        Assert.True(GSharpRoundTrip.Validate(printedA).Success, "File A must round-trip:\n" + printedA);
-        Assert.True(GSharpRoundTrip.Validate(printedB).Success, "File B must round-trip:\n" + printedB);
+        TranslationTestValidation.AssertBinds(printedA, printedB);
 
         return (printedA, printedB);
     }

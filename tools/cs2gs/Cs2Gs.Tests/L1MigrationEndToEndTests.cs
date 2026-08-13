@@ -37,7 +37,7 @@ public class L1MigrationEndToEndTests
     {
         (CompilationUnit unit, TranslationContext context, string printed) = await TranslateL1Async();
 
-        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             roundTrip.Success,
             "Canonical L1 must round-trip-parse. Errors:\n" +

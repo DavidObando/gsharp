@@ -9,7 +9,6 @@ using System.IO;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -1069,14 +1068,10 @@ public static class MeterExtensions
                 document.FilePath);
             CompilationUnit unit = translator.TranslateDocument(document, context);
             string printed = GSharpPrinter.Print(unit);
-            RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
-            Assert.True(
-                roundTrip.Success,
-                "Translated G# must round-trip. Errors:\n" +
-                    string.Join("\n", roundTrip.Errors) + "\n\nPrinted:\n" + printed);
             result.Add(document.FilePath, printed);
         }
 
+        TranslationTestValidation.AssertBinds(result.Values.ToArray());
         return result;
     }
 

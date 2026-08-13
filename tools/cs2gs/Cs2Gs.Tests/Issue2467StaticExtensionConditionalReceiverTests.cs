@@ -121,7 +121,8 @@ public class Issue2467StaticExtensionConditionalReceiverTests
                 public string Defaults(Box? box) => Ext.Join(box?.Value);
                 public string Params(Box? box) => Ext.Join(box?.Value, "-", "a", "b");
             }
-            """);
+            """,
+            "G# currently rejects nil as the default for an unconstrained generic optional parameter.");
 
         Assert.Contains("(box?.Value).Pick[string?](\"fallback\")", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Pick(\"fallback\")", printed, StringComparison.Ordinal);
@@ -264,7 +265,7 @@ public class Issue2467StaticExtensionConditionalReceiverTests
         return count;
     }
 
-    private static string TranslateAndValidate(string source)
+    private static string TranslateAndValidate(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -278,7 +279,9 @@ public class Issue2467StaticExtensionConditionalReceiverTests
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        RoundTripResult result = roundTripOnlyReason is null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
