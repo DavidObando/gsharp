@@ -61,7 +61,8 @@ namespace Corpus.Issue1907
 ");
 
         Assert.Contains("private var _name string?", rendered, StringComparison.Ordinal);
-        Assert.Contains("_name ??= \"default\"", rendered, StringComparison.Ordinal);
+        Assert.Contains("if _name == nil", rendered, StringComparison.Ordinal);
+        Assert.Contains("(_name = \"default\")", rendered, StringComparison.Ordinal);
         Assert.Contains("_name = value", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
@@ -177,6 +178,7 @@ namespace Corpus.Issue1907
 
         Assert.Contains("shared", rendered, StringComparison.Ordinal);
         Assert.Contains("private var _name string?", rendered, StringComparison.Ordinal);
+        Assert.Contains("if _name == nil", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

@@ -33,6 +33,7 @@ NonNullAssertionExpression
 ObjectCreationInitializerExpression
 OutArgumentExpression
 ParenthesizedExpression
+PatternTestExpression
 RangeIndexExpression
 SpreadElementExpression
 StackAllocExpression

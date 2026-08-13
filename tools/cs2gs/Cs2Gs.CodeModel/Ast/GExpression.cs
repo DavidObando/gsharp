@@ -853,6 +853,30 @@ public sealed class AssignmentExpression : GExpression
 }
 
 /// <summary>
+/// A native boolean pattern test, <c>value is pattern</c> (ADR-0162 / issue
+/// #3351).
+/// </summary>
+public sealed class PatternTestExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PatternTestExpression"/> class.
+    /// </summary>
+    /// <param name="value">The value tested by the pattern.</param>
+    /// <param name="pattern">The non-binding pattern.</param>
+    public PatternTestExpression(GExpression value, GPattern pattern)
+    {
+        Value = value;
+        Pattern = pattern;
+    }
+
+    /// <summary>Gets the tested value.</summary>
+    public GExpression Value { get; }
+
+    /// <summary>Gets the pattern.</summary>
+    public GPattern Pattern { get; }
+}
+
+/// <summary>
 /// A parenthesized expression <c>(inner)</c>.
 /// </summary>
 public sealed class ParenthesizedExpression : GExpression

@@ -7,7 +7,8 @@ using System.Collections.Generic;
 namespace Cs2Gs.CodeModel.Ast;
 
 /// <summary>
-/// Base type for a G# <c>switch</c> pattern (spec §Pattern matching). A
+/// Base type for a G# pattern (spec §Pattern matching). Patterns are shared by
+/// switch arms and native boolean <c>is</c> expressions. A
 /// <see langword="null"/> pattern in a <see cref="SwitchArm"/> denotes the
 /// <c>default</c> arm.
 /// </summary>

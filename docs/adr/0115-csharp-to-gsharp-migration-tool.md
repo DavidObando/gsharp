@@ -446,9 +446,12 @@ empirically before adoption.
   zero-value expression.
 - **`sizeof(T)` → `sizeof(T)`.** Maps directly for the blittable primitive set.
 - **Assignment as an expression / chained `a = b = c`.** A
-  `SimpleAssignmentExpression` used in **expression** position (inside another
-  expression, or right-associatively chained `a = b = c`) emits the G# assignment
-  expression rather than only the statement form.
+  simple or compound assignment used in **expression** position emits the native
+  G# assignment expression, including right-associative chains, conditions,
+  arguments, returns, initializer elements, and value-returning lambda bodies.
+  `??=` uses a native block/if expression because G# exposes that operator only
+  as a statement; non-trivial storage targets retain only the captures required
+  to evaluate receiver, index, and prior value once.
 - **`out var x` declaration expression → inline `out var x`.** A `DeclarationExpression`
   in argument position emits the inline `out var x` form (§B.30), with the binder
   name sanitized (below).
@@ -520,17 +523,14 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   right-hand side, conditional branch, switch arm). The result type `T` comes
   from the converted type of the throw-expression. A bare arrow body
   `=> throw e` maps directly to a G# `throw` **statement**.
-- **`is`-pattern combinators (constant / relational / not / and / or /
-  recursive) → boolean lowering.** G# `is` in **expression** position supports
-  the full native pattern grammar as of ADR-0162 / issue #3351. The translator
-  still uses its established boolean lowering until parent #3347 removes those
-  spills and substitutions: `x is 0` → `x == 0`; `x is 1 or 2` → `x == 1 || x == 2`;
-  `x is not T` → `!(x is T)`; `x is >= 0 and < n` → `x >= 0 && x < n` (C#
-  precedence `not` > `and` > `or` preserved, parenthesized where needed); a
-  recursive/property pattern `x is { }` → `x != nil` (the property-binder local
-  is rewritten to a member access on the subject). The switch-context pattern set
-  (§B switch mapping) keeps the native `case` pattern forms. This is now a
-  translator implementation choice rather than a gsc language limitation.
+- **`is` patterns → native boolean patterns / scoped bindings.** G# `is` in
+  expression position supports the full non-binding pattern grammar
+  (ADR-0162). cs2gs emits that form when the former boolean expansion would
+  duplicate a non-trivial subject. Single top-level binders use `if let`,
+  `while let`, or a scoped author-named local plus a native residual pattern.
+  Manual subject captures remain only where G# cannot express the C# binding
+  scope directly: nested/multiple pattern binders or a binder reassigned in its
+  matched body.
 - **Expression-position spills → native block expressions (issue #3355).**
   When preserving C# left-to-right evaluation requires temporary receiver,
   index, argument, field/property-initializer, or constructor-initializer

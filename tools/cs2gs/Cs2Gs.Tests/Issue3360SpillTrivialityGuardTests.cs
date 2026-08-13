@@ -24,11 +24,8 @@ namespace Cs2Gs.Tests;
 /// proving the receiver symbol stable; reassigned locals still spill to
 /// preserve C# method-group capture timing (issue #3357 follow-up).
 /// </para>
-/// <para>
-/// <c>CaptureAssignmentValue</c> is deliberately NOT changed: its temp carries
-/// the CONVERTED assigned value, which a re-read of the target would not
-/// reproduce. It is load-bearing rather than noise.
-/// </para>
+/// Issue #3347 later removes the remaining value-type guard spill by emitting
+/// native typed <c>if let</c>.
 /// </summary>
 public class Issue3360SpillTrivialityGuardTests
 {
@@ -51,11 +48,8 @@ public sealed class C
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
 
-        // The narrowing shape itself is unchanged: a separate typed binder local
-        // whose reads do not depend on flow narrowing surviving a try/block.
         Assert.Contains("var i int32", printed, StringComparison.Ordinal);
         Assert.Contains("if o is int32", printed, StringComparison.Ordinal);
-        Assert.Contains("i = int32(o)", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -63,7 +57,7 @@ public sealed class C
     /// evaluated exactly once.
     /// </summary>
     [Fact]
-    public void ValueTypeGuard_NonTrivialScrutinee_StillSpills()
+    public void ValueTypeGuard_NonTrivialScrutinee_UsesTypedIfLet()
     {
         string printed = Translate(@"
 public sealed class C
@@ -76,7 +70,8 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.Contains("if let i = C.Get() as int32?", printed, StringComparison.Ordinal);
 
         // Evaluated exactly once: one declaration site, one call.
         Assert.Equal(2, CountOccurrences(printed, "Get()"));

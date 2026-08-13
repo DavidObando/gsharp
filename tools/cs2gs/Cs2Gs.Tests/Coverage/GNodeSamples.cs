@@ -103,6 +103,8 @@ public static class GNodeSamples
                 isUnsafe: true)),
             [typeof(ParenthesizedExpression)] = () => Expr(new ParenthesizedExpression(Int("1"))),
             [typeof(AssignmentExpression)] = () => Expr(new AssignmentExpression(Id("x"), Int("1"))),
+            [typeof(PatternTestExpression)] = () => Expr(
+                new PatternTestExpression(Id("x"), new ConstantPattern(Int("1")))),
             [typeof(CheckedExpression)] = () => Expr(new CheckedExpression(new BinaryExpression(Int("1"), "+", Int("2")), isChecked: true)),
             [typeof(LambdaExpression)] = () => Expr(new LambdaExpression(
                 List(new Parameter("n", Type("int32"))),

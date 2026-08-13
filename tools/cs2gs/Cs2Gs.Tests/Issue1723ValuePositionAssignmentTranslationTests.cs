@@ -20,25 +20,18 @@ namespace Cs2Gs.Tests;
 /// (<c>while ((line = r.ReadLine()) != null)</c>, <c>a = b += c</c>,
 /// <c>M(x = 5)</c>, <c>if ((x = f()) > 0)</c>, <c>return (x = M());</c>) was
 /// translated as if the assignment were statement-only, or by returning just
-/// the RHS — silently dropping the write. G# models assignment as a
-/// statement, not a value-yielding expression, so the fix hoists the
-/// assignment into a preceding (or, for loop conditions, per-iteration
-/// body-prologue) assignment statement and substitutes the assigned target's
-/// read for the original assignment expression, preserving evaluation order,
-/// evaluation COUNT, and the write itself. Every snippet must round-trip
-/// through the real G# parser.
+/// the RHS — silently dropping the write. ADR-0161 establishes native G#
+/// assignment expressions, so cs2gs now keeps the write at its original value
+/// position. Every snippet must bind through the real G# compiler.
 /// </summary>
 public class Issue1723ValuePositionAssignmentTranslationTests
 {
     /// <summary>
     /// The canonical idiom: <c>while ((line = r.ReadLine()) != null)</c>. The
-    /// assignment must be hoisted into the loop body (so <c>ReadLine</c> is
-    /// called exactly once per iteration) and the loop must break when the
-    /// hoisted <c>line</c> is nil, instead of comparing the call's return value
-    /// directly and losing the assignment to <c>line</c>.
+    /// assignment stays in the loop condition and runs exactly once per test.
     /// </summary>
     [Fact]
-    public void WhileConditionAssignment_HoistsReadLineIntoBodyAndBreaksOnNil()
+    public void WhileConditionAssignment_RemainsInCondition()
     {
         string printed = TranslateUnit(@"
 using System.IO;
@@ -58,27 +51,18 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("while true {", printed);
-
-        // The assignment is hoisted as its own statement — `ReadLine` appears
-        // exactly once, and `line` is actually assigned (not just read).
+        Assert.DoesNotContain("while true {", printed);
         Assert.Equal(1, CountOccurrences(printed, "r.ReadLine()"));
-        Assert.Contains("line = r.ReadLine()", printed);
-
-        // The condition becomes a negated break guard over the hoisted read.
-        Assert.Contains("!((line) != nil)", printed);
-        Assert.Contains("break", printed);
+        Assert.Contains("while (line = r.ReadLine()) != nil {", printed);
 
         Assert.Contains("Console.WriteLine(line)", printed);
     }
 
     /// <summary>
-    /// <c>if ((x = f()) > 0)</c>: the assignment is hoisted immediately before
-    /// the <c>if</c> (evaluated exactly once, matching C#'s single evaluation of
-    /// an if-condition), and the condition reads the now-current <c>x</c>.
+    /// <c>if ((x = f()) > 0)</c> remains a native condition expression.
     /// </summary>
     [Fact]
-    public void IfConditionAssignment_HoistsBeforeIfAndReadsAssignedTarget()
+    public void IfConditionAssignment_RemainsInCondition()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -99,8 +83,7 @@ namespace Demo
 }");
 
         Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
-        Assert.Contains("x = C.F()", printed);
-        Assert.Contains("if (x) > 0 {", printed);
+        Assert.Contains("if (x = C.F()) > 0 {", printed);
         Assert.Contains("Console.WriteLine(x)", printed);
     }
 
@@ -109,7 +92,7 @@ namespace Demo
     /// <c>if (x = F())</c> (C# only allows this for a <c>bool</c>-typed target).
     /// </summary>
     [Fact]
-    public void IfConditionBareAssignment_HoistsAndReadsAssignedTarget()
+    public void IfConditionBareAssignment_RemainsInCondition()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -130,8 +113,7 @@ namespace Demo
 }");
 
         Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
-        Assert.Contains("x = C.F()", printed);
-        Assert.Contains("if x {", printed);
+        Assert.Contains("if (x = C.F()) {", printed);
     }
 
     /// <summary>
@@ -160,13 +142,7 @@ namespace Demo
     }
 }");
 
-        // Both the compound mutation of `b` and the final assignment to `a`
-        // must appear as separate statements, in this order.
-        int bMutation = printed.IndexOf("b += c", StringComparison.Ordinal);
-        int aAssignment = printed.IndexOf("a = b", StringComparison.Ordinal);
-        Assert.True(bMutation >= 0, "Expected `b += c` mutation in:\n" + printed);
-        Assert.True(aAssignment >= 0, "Expected `a = b` assignment in:\n" + printed);
-        Assert.True(bMutation < aAssignment, "`b += c` must run before `a = b`:\n" + printed);
+        Assert.Contains("a = (b += c)", printed);
     }
 
     /// <summary>
@@ -174,7 +150,7 @@ namespace Demo
     /// must land in <c>x</c> AND the call must observe the assigned value.
     /// </summary>
     [Fact]
-    public void AssignmentAsCallArgument_HoistsBeforeCallAndPassesAssignedValue()
+    public void AssignmentAsCallArgument_RemainsInArgument()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -195,16 +171,15 @@ namespace Demo
 }");
 
         Assert.Contains("x = 5", printed);
-        Assert.Contains("Consume(x)", printed);
+        Assert.Contains("Consume((x = 5))", printed);
         Assert.Contains("Console.WriteLine(x)", printed);
     }
 
     /// <summary>
-    /// <c>return (x = M());</c>: the assignment is hoisted into a preceding
-    /// statement and the return value reads the now-assigned <c>x</c>.
+    /// <c>return (x = M());</c> returns the native assignment value.
     /// </summary>
     [Fact]
-    public void ReturnValueAssignment_HoistsBeforeReturnAndReadsAssignedTarget()
+    public void ReturnValueAssignment_RemainsInReturn()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -222,8 +197,7 @@ namespace Demo
 }");
 
         Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
-        Assert.Contains("x = C.F()", printed);
-        Assert.Contains("return (x)", printed);
+        Assert.Contains("return (x = C.F())", printed);
     }
 
     /// <summary>
@@ -276,9 +250,9 @@ namespace Demo
         Assert.DoesNotContain(
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Equal(1, CountOccurrences(printed, "map_[key] = __spill"));
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.Contains("(map_[key] = C.Next())", printed, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
-        Assert.Contains($"else {{{Environment.NewLine}", printed, StringComparison.Ordinal);
 
         Assert.Equal("1,1,42,42,42", CompileAndRun(printed, "C.Run()").Trim());
     }
@@ -335,7 +309,9 @@ namespace Demo
             }
             """);
 
-        Assert.Equal(2, CountOccurrences(printed, "P = __spill"));
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.Contains("(P = 7)", printed, StringComparison.Ordinal);
+        Assert.Contains("(P = 8)", printed, StringComparison.Ordinal);
         Assert.Equal("7,8,8,0", CompileAndRun(printed, "C.Run()").Trim());
     }
 
@@ -663,7 +639,7 @@ namespace Demo
     /// the hoisted read to decide whether to continue.
     /// </summary>
     [Fact]
-    public void ForConditionAssignment_HoistsIntoBodyPrologue()
+    public void ForConditionAssignment_RemainsInCondition()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -692,10 +668,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("while true {", printed);
-        Assert.Contains("c = s.Next()", printed);
-        Assert.Contains("!((c) != -1)", printed);
-        Assert.Contains("break", printed);
+        Assert.DoesNotContain("while true {", printed);
+        Assert.Contains("(c = s.Next()) != -1", printed);
         Assert.Contains("Console.WriteLine(c)", printed);
     }
 
@@ -756,7 +730,7 @@ namespace Demo
     /// observable side effect (issue #1723, do-while regression).
     /// </summary>
     [Fact]
-    public void DoWhileConditionAssignment_HoistsToBodyTailNotTop()
+    public void DoWhileConditionAssignment_RemainsAtLoopTail()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -777,8 +751,8 @@ namespace Demo
         int writeLine = printed.IndexOf("Console.WriteLine(i)", StringComparison.Ordinal);
         int assign = printed.IndexOf("i = i + 1", StringComparison.Ordinal);
         Assert.True(writeLine >= 0, "Expected `Console.WriteLine(i)` in:\n" + printed);
-        Assert.True(assign >= 0, "Expected hoisted `i = i + 1` in:\n" + printed);
-        Assert.True(writeLine < assign, "Body must run before the hoisted condition assignment:\n" + printed);
+        Assert.True(assign >= 0, "Expected `i = i + 1` in:\n" + printed);
+        Assert.True(writeLine < assign, "Body must run before the condition assignment:\n" + printed);
     }
 
     /// <summary>
@@ -792,7 +766,7 @@ namespace Demo
     /// mistranslated (issue #1723, do-while + continue regression).
     /// </summary>
     [Fact]
-    public void DoWhileConditionAssignmentWithOwnContinue_ReportsUnsupportedInsteadOfSilentlyDroppingHoist()
+    public void DoWhileConditionAssignmentWithOwnContinue_UsesNativeCondition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -825,9 +799,9 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("short-circuited"));
+            d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
@@ -837,7 +811,7 @@ namespace Demo
     /// flagged Unsupported the same as an un-nested continue (issue #1723).
     /// </summary>
     [Fact]
-    public void DoWhileConditionAssignmentWithContinueInsideSwitch_ReportsUnsupportedInsteadOfSilentlyDroppingHoist()
+    public void DoWhileConditionAssignmentWithContinueInsideSwitch_UsesNativeCondition()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -872,9 +846,9 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("short-circuited"));
+            d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
@@ -926,7 +900,7 @@ namespace Demo
     /// it re-runs every iteration — it must never go stale.
     /// </summary>
     [Fact]
-    public void WhileConditionAssignmentWithContinue_ReevaluatesHoistedAssignmentEachIteration()
+    public void WhileConditionAssignmentWithContinue_ReevaluatesNativeAssignmentEachIteration()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -960,8 +934,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("while true {", printed);
-        Assert.Contains("c = s.Next()", printed);
+        Assert.DoesNotContain("while true {", printed);
+        Assert.Contains("while (c = s.Next()) != -1 {", printed);
         Assert.Contains("continue", printed);
 
         // The hoisted assignment must be the first statement in the loop body
@@ -1103,7 +1077,7 @@ namespace Demo
         int pAssign = printed.IndexOf("p = 1", StringComparison.Ordinal);
         int qAssign = printed.IndexOf("q = 2", StringComparison.Ordinal);
         Assert.True(pAssign >= 0 && qAssign >= 0 && pAssign < qAssign, printed);
-        Assert.Contains("Consume(p, q)", printed);
+        Assert.Contains("Consume((p = 1), (q = 2))", printed);
     }
 
     private static int CountOccurrences(string haystack, string needle)

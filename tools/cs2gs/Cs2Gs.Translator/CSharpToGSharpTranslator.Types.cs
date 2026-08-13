@@ -177,11 +177,14 @@ public sealed partial class CSharpToGSharpTranslator
                         isAsync: false);
                 }
 
-                if (lambda.Body is AssignmentExpressionSyntax)
+                if (lambda.Body is AssignmentExpressionSyntax
+                    && this.context.GetSymbolInfo(lambda).Symbol is IMethodSymbol
+                        { ReturnsVoid: true })
                 {
-                    // An assignment is statement-only in G#; an assignment-bodied lambda
-                    // (`o => x = f()`) becomes a block-bodied arrow lambda. An assignment
-                    // has no value, so the resulting arrow lambda is void (ADR-0128).
+                    // A C# assignment-bodied lambda converted to a void delegate
+                    // discards the assignment's value. Keep that discard explicit
+                    // with a statement body; value-returning targets use the native
+                    // assignment expression below.
                     return new LambdaExpression(
                         parameters,
                         blockBody: new BlockStatement(this.WithSpillSeam(
@@ -1109,6 +1112,10 @@ public sealed partial class CSharpToGSharpTranslator
                         SanitizeIdentifier(variable.Identifier.Text),
                         this.MapTypeSyntax(declaration.Type));
 
+                case DeclarationPatternSyntax declaration
+                    when declaration.Designation is DiscardDesignationSyntax:
+                    return new TypePattern("_", this.MapTypeSyntax(declaration.Type));
+
                 // Issue #1890: a bare-type arm (`int =>`, no binder) is Roslyn's
                 // `TypePatternSyntax` — same shape as `DeclarationPatternSyntax`
                 // but with no designation at all. G#'s own `TypePattern` grammar
@@ -1139,6 +1146,26 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     return new DiscardPattern();
+
+                case RecursivePatternSyntax { Type: { } type } recursive
+                    when this.state.TranslatingBooleanPattern
+                        && !PatternIntroducesBinding(recursive):
+                    GPattern nativeTypePattern = new TypePattern("_", this.MapTypeSyntax(type));
+                    if (recursive.PropertyPatternClause == null && recursive.PositionalPatternClause == null)
+                    {
+                        return nativeTypePattern;
+                    }
+
+                    return new BinaryPattern(
+                        isConjunction: true,
+                        nativeTypePattern,
+                        this.TranslateRecursivePattern(
+                            recursive,
+                            receiver,
+                            bindings,
+                            usedDesignators,
+                            guards,
+                            treatAsUntyped: true));
 
                 case RecursivePatternSyntax recursive:
                     return this.TranslateRecursivePattern(recursive, receiver, bindings, usedDesignators, guards);
@@ -1266,12 +1293,13 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators,
-            List<GExpression> guards)
+            List<GExpression> guards,
+            bool treatAsUntyped = false)
         {
             // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
             // G# property pattern; a typed recursive pattern (`Circle { Radius: var r }`)
             // maps to a type pattern whose designator is the binding receiver.
-            if (recursive.Type == null)
+            if (treatAsUntyped || recursive.Type == null)
             {
                 var fields = new List<PropertyPatternField>();
                 if (recursive.PropertyPatternClause != null)

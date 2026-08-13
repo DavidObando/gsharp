@@ -67,20 +67,14 @@ internal sealed class DocumentTranslationState
     public HashSet<SyntaxNode> SuppressedPostfix { get; } =
         new HashSet<SyntaxNode>();
 
-    // C# assignment-expressions used in VALUE position (`while ((line =
-    // r.ReadLine()) != null)`, `M(x = 5)`, `if ((x = f()) > 0)`) that the
-    // surrounding statement/condition seam has hoisted into a preceding
-    // assignment statement (G# assignment is a statement, not a
-    // value-yielding expression; spec §Statements). While a node is in this
-    // set, `TranslateExpression` renders its preserved assignment value rather
-    // than dropping the write (issue #1723).
+    // Value-position deconstruction assignments whose statement fallback has
+    // already run. Ordinary, compound, and coalescing assignments now retain
+    // their native expression position (ADR-0161 / issue #3347).
     public HashSet<SyntaxNode> SuppressedAssignments { get; } =
         new HashSet<SyntaxNode>();
 
-    // Exact result of a value-position simple assignment whose target cannot be
-    // safely read back (property/indexer, side-effecting receiver/index, etc.).
-    // FlattenChainedAssignment captures the converted RHS before the write, so
-    // the expression result never invokes a getter or re-evaluates the target.
+    // Exact result captured while flattening a chain that contains a
+    // value-position deconstruction assignment.
     public Dictionary<AssignmentExpressionSyntax, GExpression> AssignmentValues { get; } =
         new Dictionary<AssignmentExpressionSyntax, GExpression>();
 
@@ -169,6 +163,11 @@ internal sealed class DocumentTranslationState
 
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
     public int SpillCounter { get; set; }
+
+    // True only while reusing the switch-pattern code model for a native
+    // boolean `is` expression. Boolean type patterns omit switch designators
+    // and can compose directly with property/positional constraints.
+    public bool TranslatingBooleanPattern { get; set; }
 
     // While rebuilding a static-helper receiver chained from `?.`, replace the
     // conditional-receiver placeholder with the already-guarded receiver so the

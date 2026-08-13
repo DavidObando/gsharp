@@ -329,9 +329,9 @@ namespace Demo
     }
 }");
 
-        // Issue #3355: the field initializer hosts its spill directly.
         Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use
-        Assert.Contains("let __spill", printed);
+        Assert.Contains("GetA() is { X: 1, Y: 2 }", printed);
+        Assert.DoesNotContain("__spill", printed);
         Assert.DoesNotContain("__init", printed);
         Assert.DoesNotContain(
             context.Diagnostics,
@@ -393,8 +393,9 @@ namespace Demo
 }");
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use
-        Assert.Contains(": base({", printed);
-        Assert.Contains("let __spill", printed);
+        Assert.Contains(": base(", printed);
+        Assert.Contains("GetA() is { X: 1, Y: 2 }", printed);
+        Assert.DoesNotContain("__spill", printed);
         Assert.DoesNotContain("__init", printed);
         Assert.DoesNotContain(
             context.Diagnostics,

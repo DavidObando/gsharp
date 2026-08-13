@@ -106,13 +106,11 @@ public sealed class C
     }
 
     /// <summary>
-    /// Nesting the guard is equivalent only when there is no else. With one,
-    /// <c>if let t = x { if g { THEN } } else { ELSE }</c> would skip ELSE when
-    /// the binding succeeds but the guard fails, whereas C# runs it. That
-    /// combination must decline the rewrite.
+    /// A conjoined guard with an else duplicates the else branch into the bound
+    /// path so both binding failure and guard failure retain C# semantics.
     /// </summary>
     [Fact]
-    public void ConjoinedGuardWithElse_DeclinesTheRewrite()
+    public void ConjoinedGuardWithElse_UsesNestedGuard()
     {
         string printed = Translate(NodeType + @"
 public sealed class C
@@ -124,7 +122,9 @@ public sealed class C
     }
 }");
 
-        Assert.DoesNotContain("if let tag =", printed, StringComparison.Ordinal);
+        Assert.Contains("if let tag =", printed, StringComparison.Ordinal);
+        Assert.Contains("if tag.X > 0", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -194,11 +194,10 @@ public sealed class C
     /// ADR-0071 requires a NULLABLE initializer — the binding exists to strip the
     /// nullability, and a non-nullable one is GS0296. C# still treats
     /// <c>s is { }</c> on a non-nullable reference as a runtime null test, so
-    /// that shape must decline the rewrite and keep the existing (already
-    /// spill-free) smart-cast lowering.
+    /// that shape uses a scoped binding with the author's name instead.
     /// </summary>
     [Fact]
-    public void NonNullableScrutinee_DeclinesTheRewrite()
+    public void NonNullableScrutinee_UsesScopedAuthorBinding()
     {
         string printed = Translate(@"
 public sealed class C
@@ -211,7 +210,9 @@ public sealed class C
 }");
 
         Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
-        Assert.Contains("s != nil", printed, StringComparison.Ordinal);
+        Assert.Contains("let text = s", printed, StringComparison.Ordinal);
+        Assert.Contains("text != nil", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     private static string Translate(string source)
