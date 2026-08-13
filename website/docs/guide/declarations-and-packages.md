@@ -149,7 +149,7 @@ enum Result { Ok, Failed }
 
 Classes can have primary constructors, explicit `init` constructors, base clauses, fields, methods, properties, events, and `shared` static members. Base classes must be open to derive from; overriding uses `override`.
 
-Classes and structs can declare nested `class`, `struct`, `interface`, or `enum` types. User-declared nested types currently resolve by simple name in the compilation; `Outer.Inner` qualification is not added for user types.
+Classes and structs can declare nested `class`, `struct`, `interface`, or `enum` types. A nested type can be referenced by simple name when unambiguous or by a qualified name such as `Outer.Inner`; qualified nested names also work in generic arguments and composite literals.
 
 A primary-constructor parameter list accepts a trailing variadic `name ...T` parameter (`class`, `struct`, `data class`, `data struct`, `inline struct`). The variadic param promotes to a `[]T` auto-field with the same name and call binding follows the standard variadic pack / pass-through rules. 
 ```gsharp
@@ -209,6 +209,38 @@ struct Bytes {
 func operator implicit (b Bytes) []uint8 -> b.Value
 func operator explicit (value []uint8) Bytes -> Bytes{Value: value}
 ```
+
+Compound-assignment operators are in-place instance members. They accept one
+right-hand operand, return no value, and may use either the in-body or receiver
+form:
+
+```gsharp
+class Counter {
+    var Value int32
+
+    func operator +=(amount int32) {
+        Value = Value + amount
+    }
+}
+```
+
+## Explicit interface implementations
+
+When two interfaces need distinct implementations of the same member, place
+the interface type in a qualifier clause immediately after `func`, `prop`, or
+`event`:
+
+```gsharp
+class Both : ILeft, IRight {
+    func (ILeft) Name() string -> "left"
+    func (IRight) Name() string -> "right"
+}
+```
+
+The qualifier accepts simple, qualified, or generic interface types and also
+works for properties, indexers, events, and static interface methods or
+properties inside `shared`. The member is callable through the corresponding
+interface view and emits the normal CLR explicit-implementation bridge.
 
 
 ## Annotations

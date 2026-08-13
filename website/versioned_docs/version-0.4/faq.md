@@ -52,7 +52,7 @@ G# combines a structured concurrency surface with .NET primitives. `go f` starts
 User-defined G# functions support all three:
 
 - **Optional parameters**: declare a default value with `=` after the type — `func greet(name string = "world")`. Defaults must be compile-time constants and trailing optional parameters cannot precede required ones. Misuse reports `GS0265`.
-- **Named arguments**: any call site can name an argument — `greet(name: "Ada")` — for free functions, user methods, user constructors, extension functions, and inherited CLR methods. The call-site form is `name: value`; `GS0315` identifies the older separator form. Indirect calls through a function-typed variable and variadic call sites do not accept names because the target does not preserve parameter names. Diagnostics `GS0244`–`GS0247`.
+- **Named arguments**: any call site can name an argument — `greet(name: "Ada")` — for free functions, user methods, user constructors, extension functions, and inherited CLR methods. The call-site form is `name: value`; `=` in an argument is an ordinary assignment expression. Indirect calls through a function-typed variable and variadic call sites do not accept names because the target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` and `GS0524`.
 - **Overloading**: two declarations of the same function name are allowed as long as they differ by parameter types, arity, or ref-kinds. Duplicate signatures report `GS0264`; ambiguous calls report `GS0266`; no-applicable-overload reports `GS0267`.
 
 This is a recent change — earlier docs described G# as having no parameter defaults and only "partial" named-argument support. That is no longer accurate.

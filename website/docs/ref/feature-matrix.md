@@ -59,8 +59,8 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Top-level functions and variables | Supported | Supported | `var`, `let`, and `const` are implemented. The legacy `:=` short variable declaration is not supported; the parser hard-rejects it with `GS0305`. |
 | Visibility modifiers | Supported | Supported | `public`, `internal`, and `private`; invalid locations report `GS0180`. |
 | Receiver methods and extension functions | Supported | Supported | G# receiver style and imported CLR extension dispatch. The inferred receiver-clause form warns (`GS0314`) when it targets an owned class or struct; `func extension (r T) M()` explicitly declares an extension for enum/owned receivers. In-body declarations remain canonical for real owned-type methods. |
-| Operator declarations | Supported | Supported where the evaluator invoked user/CLR op paths | Receiver `operator` declarations map to CLR `op_*` names. |
-| Interface implementation | Supported | Supported for checks/upcasts | Missing members and sealed-interface violations are diagnosed. |
+| Operator declarations | Supported | Supported where the evaluator invoked user/CLR op paths | Receiver and in-body `operator` declarations map to CLR `op_*` names. In-place compound operators such as `operator +=` are void instance members with one operand and take precedence over binary fallback. |
+| Interface implementation | Supported | Supported for checks/upcasts | Missing members and sealed-interface violations are diagnosed. Explicit qualifier clauses (`func (IFoo) M`, `prop (IFoo) P`, `event (IFoo) E`) support distinct method/property/indexer/event implementations and static interface members. |
 | Inheritance and overrides | Supported | Partially supported | Base classes must be `open`; override diagnostics are implemented. |
 | Default parameter values in G# declarations | Supported | Supported | Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
 | Method overloading (user functions) | Supported | Supported | Functions can carry overload sets differing by parameter types, ref-kinds, or generic-parameter constraints (`where T : class` / `where T : struct`); duplicates report `GS0264`, ambiguous calls report `GS0266` or `GS0160`, no-applicable reports `GS0267`. |
@@ -84,23 +84,24 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Null-coalescing compound assignment (`??=`) | Supported | Supported | `a ??= b` writes `b` only when `a` reads as `nil`; RHS short-circuits otherwise. Receiver and index expressions evaluated exactly once. Works on locals, fields, properties, and indexers. Non-nullable LHS reports `GS0298`; non-assignable LHS reports `GS0299`. |
 | `switch` statements | Supported | Supported | Cases do not fall through. Flow analysis narrows the discriminator inside type-pattern arms (`case d is T`) and lifts a common narrowing into the rest of the enclosing block when the switch is exhaustive and every non-exiting arm contributes the same narrowing. |
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |
-| Patterns | Supported | Supported | Constant, relational, type, property, list, and discard patterns are represented. |
+| Patterns | Supported | Supported | Constant, relational, type, property, list/rest, discard, parenthesized, and `not` / `and` / `or` patterns work in switches and boolean `is`; type-plus-property patterns narrow composed `and` operands. |
 | `fallthrough` | Not supported | Not supported | Reserved and diagnosed as `GS0168`. |
 | `try`, `catch`, `finally`, `throw` | Supported | Supported | CLR exception model. |
 | `using` | Supported | Supported if lowered/bound disposable | Resource-scope variable declaration. |
 | `defer` | Supported by binding/lowering intent | Supported when lowered before evaluation | Binder requires a call expression. |
-| `goto` | Partial | Partial | Token and bound label/goto nodes exist; use with caution pending fuller docs. |
+| `goto` | Supported | Supported | `label: statement` and `goto label` support forward references and outward jumps; entering a nested block or exception handler is rejected. |
 
 ## Expressions
 
 | Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | Calls and generic calls | Supported | Supported | Bracketed type arguments. |
-| Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). The legacy `Foo(timeout = 30)` shape is deprecated and emits `GS0315`; both spellings still parse for one release. Indirect calls through a function-typed variable and variadic targets are excluded. Diagnostics `GS0244`–`GS0247`, `GS0315`. |
+| Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). Named arguments use `:`; `=` is an ordinary assignment expression and an ambiguous bare assignment warns with `GS0524`. Indirect calls through a function-typed variable and variadic targets are excluded. |
 | Conditional (`?:`) ternary expression | Supported | Supported | `cond ? a : b` is a normal expression. `GS0263` covers the "no common type" failure. |
 | General block expressions | Supported | Supported | `{ statements... trailingExpression }` works in any expression position, with lexical scope, target typing, async/iterator spilling, and exactly-once evaluation. Missing tail: `GS0277`; expression trees: `GS0473`. |
 | Conditional ref-arguments (`ref cond ? a : b`) | Supported | Supported | Branches must produce same-typed lvalues. Diagnostics `GS0260`–`GS0262`. |
-| Struct, array, and map literals | Supported | Supported | Map literals bind to `Dictionary[K,V]` backing. |
+| Struct, array, map, and collection literals | Supported | Supported | Array/slice and CLR collection initializers accept `...source` spread elements, evaluated once in lexical order with per-element conversion. Named object literals accept one leading spread for explicit structural projection. |
+| Structural projection | Supported | Supported | Compatible public fields/properties can implicitly project into a safely constructible concrete target. `Target{ ...source, Member: override }` makes projection explicit; required constructor inputs must be supplied and explicit entries win. |
 | Indexing and index assignment | Supported | Supported | Arrays, slices, maps, and imported CLR indexers. |
 | Null-conditional access | Supported | Supported | `?.` and `?[i]` are represented in the bound tree. `?[i]` covers arrays, slices, maps, and CLR indexers; non-nullable receiver warns `GS0300`; `?[i]` rejected as assignment LHS (`GS0301`). |
 | Type operators | Supported | Supported | `typeof(...)` and `nameof(...)`. |

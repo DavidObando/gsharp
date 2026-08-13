@@ -10,7 +10,7 @@ G# expression syntax is compact, with CLR-oriented additions for nullability, as
 
 ## Operators
 
-Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative except `??`, which is right-associative and sits below `||` and above the ternary conditional. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, null-coalescing, and range levels are implemented. The pattern-test operator `expr is pattern` returns `bool` and accepts constants, relational/list/property patterns, bare types, parentheses, and `not` / `and` / `or`; the safe-cast operator `expr as T` returns `T` (or `T?` for value types) or `nil` on failure. Both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression; both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver `operator` declarations.
+Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative except `??`, which is right-associative and sits below `||` and above the ternary conditional. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, null-coalescing, and range levels are implemented. The pattern-test operator `expr is pattern` returns `bool` and accepts constants, relational/list/property patterns, bare types, parentheses, and `not` / `and` / `or`; the safe-cast operator `expr as T` always returns nullable `T?` because failure produces `nil`. Both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression; both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver or in-body `operator` declarations.
 
 ## Calls, access, and literals
 
@@ -22,6 +22,8 @@ From-end indexing and ranges use C#-style tokens. `xs[^1]` reads the last elemen
 
 Arguments may be positional, named (`f(timeout: 30, retries: 3)`), or ref-kind-prefixed (`f(ref x)`, `f(out var n)`, `f(in z)`). Named arguments work for free functions, user methods, user constructors, extension functions, and inherited CLR methods (including delegate `Invoke`); indirect calls through a function-typed variable and variadic call sites do not accept names. Ref-kind modifiers must match the parameter declaration (`GS0235`); passing a value to an `in` parameter requires an explicit `in` at the call site (`GS0242`).
 
+Named arguments use `name: value`. In argument position, `=` is an ordinary assignment expression: `f(x = value)` assigns and passes the result. When a bare assignment target also names a parameter, `GS0524` asks you to choose explicitly between `f(x: value)` and `f((x = value))`.
+
 ```gsharp
 let p = Point{X: 3, Y: 4}
 let q = p with { X = 10 }
@@ -30,6 +32,26 @@ let first = matrix?[0]?[0] ?? -1
 let kind = (p.X + p.Y).GetType()
 let last = numbers[^1]
 let trimmed = numbers[1..^1]
+```
+
+Array, slice, and CLR collection initializers accept spread elements:
+
+```gsharp
+let values = []int64{ 1, ...Source(), 4 }
+let list = List[int32](){ 0, ...items, 9 }
+```
+
+Each spread source is evaluated once at its lexical position, then enumerated
+in order with ordinary per-element conversions.
+
+Unrelated concrete object shapes can project when every required target slot
+has one safe public source match. The conversion is implicit in a target-typed
+position, or explicit with a leading object spread; explicit entries override
+projected members:
+
+```gsharp
+let dto PersonDto = entity
+let renamed = PersonDto{ ...entity, Name: entity.DisplayName }
 ```
 
 Lambda literals use the arrow form. The canonical form infers parameter and return types from the target delegate: `(x) -> expr`, `(a, b) -> expr`, or the paren-dropped single-parameter `x -> expr`; block bodies use `(params) -> { ... }`. A block body is a statement block with an optional trailing value expression: an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and a trailing expression (or `return`) supplies the value — full parity with `func` literals (void when neither yields a value). Types may also be written explicitly (`(x int32) -> expr`), and async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument.
@@ -62,6 +84,10 @@ null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a`
 currently reads as `nil` — the right-hand side is short-circuited otherwise.
 Prefix and postfix `++` / `--` are value-producing expressions on assignable
 numeric lvalues: `++i` yields the new value, `i++` yields the old value.
+Classes and structs may define in-place compound-assignment operators such as
+`func operator +=(amount int32) { ... }`; the operator is an instance method
+with one parameter and no return value, mutates its receiver, and takes
+precedence over a separately declared binary `operator +`.
 
 ```gsharp
 let (x, y) = pair
@@ -79,7 +105,7 @@ greeting ??= "ignored" // no-op — RHS not evaluated
 
 ## If and switch
 
-`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through. `fallthrough` is reserved and diagnosed if used. Switch expressions use `->` arms and require semantic coverage or a default arm.
+`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through. `fallthrough` is reserved and diagnosed if used. Switch expressions use `:` arms and require semantic coverage or a default arm.
 
 ```gsharp
 let label = switch n {

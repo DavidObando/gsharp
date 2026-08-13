@@ -94,7 +94,7 @@ public sealed class Adr0156DefaultEngineFlipTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("'emit'", stdout);
-        Assert.Contains("was removed in ADR-0156 Phase 3c", stdout);
+        Assert.Contains("engine has been removed", stdout);
         Assert.DoesNotContain("deprecated", stdout);
     }
 

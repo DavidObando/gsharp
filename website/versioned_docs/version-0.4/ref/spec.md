@@ -64,7 +64,7 @@ Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partia
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. The parser rewrites these as assignment with the corresponding binary operator. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. `++` and `--` are statement forms on identifiers. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. Built-in operands use read/operate/write lowering; when the receiver type declares the matching compound-assignment operator, that in-place operator is called instead. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. Prefix and postfix `++` and `--` are value-producing expressions on assignable numeric lvalues. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -464,15 +464,25 @@ Annotation   = "@" ( AnnotationTarget ":" )? identifier { "." identifier } ( "("
 
 ### Functions and methods
 
-Functions use `func`. Receiver clauses declare extension functions on types this package does not own (BCL primitives, imported CLR types, types from referenced packages); methods on owned classes **and owned structs** are declared inside the type body. A receiver-clause method whose receiver type is owned by the current package emits the soft `GS0314` warning (for both owned classes and owned structs), steering authors to the in-body site. Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream (operators continue to use the receiver-clause form and are exempt from `GS0314`). Parameters may carry a ref-kind modifier (`ref`, `out`, or `in`) and may declare a compile-time-constant default value to become optional. User functions may be overloaded as long as overloads differ by parameter types, arity, or ref-kinds; two declarations that differ only in return type are rejected as `GS0264`. One narrow exception, the *covariant-return interface bridge*, admits two same-name, same-parameter methods that differ only by return type **when each one satisfies a distinct interface slot** — most commonly a generic collection that implements `IEnumerable[T]` by declaring both the generic `func GetEnumerator() IEnumerator[T]` (satisfying `IEnumerable[T]`) and a non-generic `func GetEnumerator() IEnumerator` (satisfying the inherited `System.Collections.IEnumerable`). Because G# has no explicit-interface-implementation syntax, the non-generic method is emitted with an explicit `MethodImpl` row binding it to `IEnumerable.GetEnumerator`. The inherited base-interface slot is required: omitting the non-generic bridge leaves `IEnumerable.GetEnumerator` unimplemented and is reported as `GS0187`.
+Functions use `func`. Receiver clauses declare extension functions on types this package does not own (BCL primitives, imported CLR types, types from referenced packages); methods on owned classes **and owned structs** are declared inside the type body. A receiver-clause method whose receiver type is owned by the current package emits the soft `GS0314` warning (for both owned classes and owned structs), steering authors to the in-body site. `func extension (receiver T) M()` explicitly declares an extension even when `T` is owned or is an enum. Operator overloads use `operator` followed by the operator token and map to CLR operator names downstream (operators continue to use the receiver-clause form and are exempt from `GS0314`). Parameters may carry a ref-kind modifier (`ref`, `out`, or `in`) and may declare a compile-time-constant default value to become optional. User functions may be overloaded as long as overloads differ by parameter types, arity, or ref-kinds; two declarations that differ only in return type are rejected as `GS0264`. One narrow exception, the *covariant-return interface bridge*, admits two same-name, same-parameter methods that differ only by return type **when each one satisfies a distinct interface slot** — most commonly a generic collection that implements `IEnumerable[T]` by declaring both the generic `func GetEnumerator() IEnumerator[T]` and a non-generic `func GetEnumerator() IEnumerator`.
+
+**Compound-assignment operators.** A class or struct may declare
+`func operator +=(rhs T) { ... }` and the corresponding `-=`, `*=`, `/=`, `%=`,
+`&=`, `|=`, `^=`, `<<=`, `>>=`, or `>>>=` forms. The declaration is an
+instance member, takes exactly one by-value operand, returns no value, and
+mutates its receiver in place. It may be written inside the type or with a
+receiver clause. At a compound-assignment expression it takes precedence over
+falling back to the related binary operator. The emitted CLR member is the
+matching public instance `op_*Assignment` special-name method.
 
 **User-defined conversion operators.** A package may declare implicit and explicit conversions on its own struct types using the spelling `func operator implicit (x T) U { … }` and `func operator explicit (x T) U { … }`. The contextual keywords `implicit` and `explicit` are recognized **only** immediately after `operator` (neither is a reserved keyword elsewhere). A conversion operator is implicitly **static**, takes **exactly one** by-value parameter (the source operand type `T`) and declares the target type `U` as its return type; it uses no receiver clause. At least one of `T` or `U` must be a struct owned by the current package, and `T` and `U` must differ. The declaration is emitted as a CLR `public static hidebysig specialname` method named `op_Implicit` or `op_Explicit` with signature `U (T)`, matching C#. Implicit conversions are applied automatically at assignment, at argument passing, and wherever a target type is expected; explicit conversions are applied at the type-call cast form `U(x)`. When a user conversion is applied the compiler emits a `call` to the operator. Conversions defined on imported/referenced CLR types (BCL `op_Implicit`/`op_Explicit`) are likewise recognized and applied. Malformed declarations are diagnosed: more or fewer than one parameter is `GS0393`; neither the source nor the target being an owned struct (or `T` equal to `U`) is `GS0394`; declaring two conversions with the same source/target pair (whether implicit or explicit) is `GS0395`.
 
 ```ebnf
-FunctionDecl      = "func" ReceiverClause? ( identifier | OperatorName | ConversionOperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
+FunctionDecl      = "func" ( ReceiverClause | InterfaceQualifierClause )? ( identifier | OperatorName | ConversionOperatorName ) TypeParamList? "(" Parameters? ")" RefReturnClause? FunctionBody .
 AsyncFunctionDecl = "async" FunctionDecl .
 FunctionBody      = Block | "->" Expression | ";" .  (* "->" Expression = expression-bodied member,  /  *)
 ReceiverClause    = "(" Parameter ")" .
+InterfaceQualifierClause = "(" TypeClause ")" .
 OperatorName      = "operator" OperatorToken .
 ConversionOperatorName = "operator" ( "implicit" | "explicit" ) .
 TypeParamList     = "[" TypeParameter { "," TypeParameter } "]" .
@@ -545,14 +555,34 @@ SharedBlock      = "shared" "{" SharedMember* "}" .
 SharedMember     = Accessibility? ( MethodDecl | PropertyDecl | EventDecl | FieldDecl ) | StaticInitializerBlock .
 StaticInitializerBlock = "init" Block .  (*  / : runs in the type's .cctor after static-field initializers *)
 FieldDecl        = Accessibility? ( "var" | "let" ) identifier TypeClause ( "=" Expression )? .
-PropertyDecl     = "prop" ( identifier | IndexerHeader ) TypeClause ( PropertyBody | "->" Expression )? .  (* "->" Expression = read-only computed property/indexer,  *)
+PropertyDecl     = "prop" InterfaceQualifierClause? ( identifier | IndexerHeader ) TypeClause ( PropertyBody | "->" Expression )? .  (* "->" Expression = read-only computed property/indexer,  *)
 IndexerHeader    = "this" "[" Parameters "]" .  (* : user indexer member, emitted as the CLR default `Item` property *)
 PropertyAccessor = ( "get" | ( "set" | "init" ) ( "(" identifier ")" )? ) ( Block | "->" Expression | ";" )? .  (* "->" Expression = expression-bodied accessor,  *)
-EventDecl        = "event" identifier TypeClause EventBody? .
+EventDecl        = "event" InterfaceQualifierClause? identifier TypeClause EventBody? .
 EventAccessor    = ( "add" | "remove" | "raise" ) ( Block | ";" )? .
 InterfaceBody    = "{" ( InterfaceMethodDecl | PropertyDecl | EventDecl )* "}" .
 InterfaceMethodDecl = "func" identifier "(" Parameters? ")" TypeClause? FunctionBody .  (* FunctionBody ";" = no-body (abstract) marker;  *)
 ```
+
+An explicit interface implementation places its interface type immediately
+after the member keyword:
+
+```gsharp
+class Both : ILeft, IRight {
+    func (ILeft) Name() string -> "left"
+    func (IRight) Name() string -> "right"
+    prop (ILeft) Value int32 { get -> 1 }
+    event (IRight) Changed Handler
+}
+```
+
+The forms are `func (IFace) M`, `prop (IFace) P`,
+`prop (IFace) this[...]`, and `event (IFace) E`. The qualifier accepts simple,
+qualified, and constructed generic interface names and must identify an
+interface implemented by the containing type. The same method and property
+forms inside `shared` implement static interface slots. Qualified members keep
+their ordinary source names, coexist with same-named implementations for other
+interfaces, and are callable only through the corresponding interface view.
 
 A property or event accessor body is a block `{ … }`, an `-> Expression`
 expression body, or `;` (a bare/auto accessor). The expression-body form uses the G# arrow `->`: `prop Name T -> expr` is a
@@ -751,10 +781,10 @@ The right operand may be a [throw-expression](#throw-expressions) — `a ?? thro
 pattern (`expr is T`) tests runtime assignability; constants, relational/list/
 property patterns, parentheses, and `not` / `and` / `or` use the same semantics
 as switch patterns. `expr as T` performs a safe downcast: it returns the value
-typed as `T` when the cast succeeds, or `nil` when it fails. For reference types
-the result type is `T`; for value types, the target must be written as the
-nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as`
-with a non-nullable value type target produces diagnostic `GS0269`. Both
+typed as nullable `T?` when the cast succeeds, or `nil` when it fails. A
+reference target is written `x as string`; a value-type target must itself be
+nullable (`x as int32?`). In both cases the expression result is nullable.
+Using `as` with a non-nullable value type target produces diagnostic `GS0270`. Both
 operators sit at the comparison precedence level. Pattern matching reuses the
 switch pattern binder/emitter; a plain type test lowers to CLR `isinst`.
 
@@ -768,7 +798,7 @@ Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional 
 
 Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, `make(chan ...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
 
-- **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The canonical separator is `:`; the legacy `Foo(timeout = 30)` spelling is deprecated and emits the `GS0315` warning. Both spellings parse for one release; the `=` form is removed in a later release. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names; `GS0315` covers the deprecated `=` separator.
+- **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The separator is `:`. In argument position, `=` is an ordinary assignment expression; a bare assignment whose target also names a parameter reports `GS0524` so the author can choose `Foo(timeout: 30)` or `Foo((timeout = 30))` explicitly. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names.
 - **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)`. The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).
 
 Generic instantiation uses brackets and bounded lookahead to distinguish type arguments from indexing. Examples include `Id[int32](1)` and `Box[string]{Value: "x"}`.
@@ -869,7 +899,66 @@ let d2 = Dictionary[string, int32]{ ["a"] = 1, ["b"] = 2 }   // [key] = value en
 let ci = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Key": 5 }  // ctor args
 ```
 
-Each element lowers against a fresh local seeded by the constructor call: a **bare** element `e` becomes `add.Add(e)`, a **keyed** pair `k: v` becomes `add.Add(k, v)`, and an **indexed** entry `[k] = v` becomes the indexer set `add[k] = v` (overwrite semantics; later duplicate keys win). Element, key, and value expressions are converted through ordinary overload resolution. Identifier-keyed `{ x: y }` entries are reserved for struct-literal field initialization, so an identifier/expression dictionary key must use the `["x"] = y` form. A target type with no accessible `Add` (and no settable indexer for the keyed/bare forms) reports `GS0369` rather than failing internally. Spread elements and target-typed, type-name-free literals are deferred.
+Each element lowers against a fresh local seeded by the constructor call: a **bare** element `e` becomes `add.Add(e)`, a **keyed** pair `k: v` becomes `add.Add(k, v)`, and an **indexed** entry `[k] = v` becomes the indexer set `add[k] = v` (overwrite semantics; later duplicate keys win). Element, key, and value expressions are converted through ordinary overload resolution. Identifier-keyed `{ x: y }` entries are reserved for struct-literal field initialization, so an identifier/expression dictionary key must use the `["x"] = y` form. A target type with no accessible `Add` (and no settable indexer for the keyed/bare forms) reports `GS0369` rather than failing internally.
+
+A **spread element** is written `...source` and is accepted by array, slice,
+and CLR collection initializers:
+
+```gsharp
+let values = []int64{ 1, ...Source(), 4 }
+let list = List[int32](){ 0, ...items, 9 }
+```
+
+The source expression is evaluated exactly once at its lexical position.
+Elements are then enumerated in order and converted individually using the
+same implicit conversions as ordinary initializer elements. Multiple spreads,
+empty sources, generic sources, spans, LINQ results, and user-defined element
+conversions are supported. Dictionary-style collection targets may spread an
+enumerable of key/value pairs. A source that is not enumerable, an inaccessible
+enumerator, or an incompatible element type is diagnosed at the spread.
+
+### Structural projections and object spread
+
+An unrelated concrete source value can implicitly convert to a concrete target
+when the compiler can construct the target safely from public source members.
+Every required constructor input and every automatically writable target slot
+on the selected construction path must have one exact, unambiguous,
+case-sensitive source match with an implicit value conversion. Extra source
+members are ignored:
+
+```gsharp
+class PersonEntity {
+    var Name string
+    var Age int32
+    var PersistenceVersion int64
+}
+
+data class PersonDto(Name string, Age int32)
+
+let dto PersonDto = entity
+```
+
+The same conversion works from anonymous objects and in target-typed arguments
+and returns. It constructs a new value; it is not a cast, does not use runtime
+reflection, and never reads non-public state or writes non-public target
+storage.
+
+A named target literal makes the projection explicit with one leading spread:
+
+```gsharp
+let dto = PersonDto{
+    ...entity,
+    Name: entity.DisplayName
+}
+```
+
+The spread must be first and appears at most once. Explicit entries are
+evaluated in lexical order and override same-named spread members, allowing
+renaming, calculation, explicit conversion, and nested projection. Explicit
+spread may leave optional writable members at their ordinary initialized or
+default values, but required constructor inputs must still come from the spread
+or an explicit entry. The source expression and each selected getter are
+evaluated at most once.
 
 ### Anonymous-object literals
 
@@ -1638,9 +1727,10 @@ Async             ::= 'async'
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
 
-FunctionDecl      ::= 'func' ReceiverClause? (identifier | OperatorName | ConversionOperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | '->' Expression | ';')
+FunctionDecl      ::= 'func' (ReceiverClause | InterfaceQualifierClause)? (identifier | OperatorName | ConversionOperatorName) TypeParamList? '(' Parameters? ')' 'ref'? TypeClause? (Block | '->' Expression | ';')
                       (* '->' Expression = expression-bodied member; ';' is the no-body marker: P/Invoke and abstract members *)
 ReceiverClause    ::= '(' Parameter ')'
+InterfaceQualifierClause ::= '(' TypeClause ')'
 OperatorName      ::= 'operator' OperatorToken
 ConversionOperatorName ::= 'operator' ('implicit' | 'explicit')
 TypeParamList     ::= '[' TypeParameter (',' TypeParameter)* ']'
@@ -1679,11 +1769,11 @@ SharedMember      ::= Annotation* Accessibility? (Async? MethodDecl | PropertyDe
 StaticInitializerBlock ::= 'init' Block          (*  / : statements run in the type's .cctor after field initializers *)
 MethodDecl        ::= FunctionDecl
 FieldDecl         ::= Accessibility? ('var' | 'let') identifier TypeClause ('=' Expression)?
-PropertyDecl      ::= 'prop' (identifier | IndexerHeader) TypeClause (PropertyBody | '->' Expression)?   (* '->' Expression = read-only computed property/indexer,  *)
+PropertyDecl      ::= 'prop' InterfaceQualifierClause? (identifier | IndexerHeader) TypeClause (PropertyBody | '->' Expression)?   (* '->' Expression = read-only computed property/indexer,  *)
 IndexerHeader     ::= 'this' '[' Parameters ']'   (* : user indexer member; emitted as CLR default 'Item' property *)
 PropertyBody      ::= '{' PropertyAccessor* '}'
 PropertyAccessor  ::= ('get' | 'set' ('(' identifier ')')?) (Block | '->' Expression | ';')?   (* '->' Expression = expression-bodied accessor,  *)
-EventDecl         ::= 'event' identifier TypeClause EventBody?
+EventDecl         ::= 'event' InterfaceQualifierClause? identifier TypeClause EventBody?
 EventBody         ::= '{' EventAccessor* '}'
 EventAccessor     ::= ('add' | 'remove' | 'raise') (Block | ';')?
 InterfaceBody     ::= '{' InterfaceMember* '}'
@@ -1869,9 +1959,11 @@ StructLiteral     ::= identifier '{' FieldInitList? '}'
 GenericStructLiteral ::= identifier TypeArgList '{' FieldInitList? '}'
 FieldInitList     ::= identifier ':' Expression (',' identifier ':' Expression)* ','?
 FieldEqualsList   ::= identifier '=' Expression (',' identifier '=' Expression)* ','?
-ArrayLiteral      ::= '[' Number? ']' TypeClause '{' ExpressionList? '}'
-                    | '[' Expression ']' TypeClause ('{' ExpressionList? '}')?
-                    | '[' Expression (',' Expression)+ ']' TypeClause ('{' ExpressionList? '}')?
+ArrayLiteral      ::= '[' Number? ']' TypeClause '{' InitializerElementList? '}'
+                    | '[' Expression ']' TypeClause ('{' InitializerElementList? '}')?
+                    | '[' Expression (',' Expression)+ ']' TypeClause ('{' InitializerElementList? '}')?
+InitializerElementList ::= InitializerElement (',' InitializerElement)* ','?
+InitializerElement ::= '...' Expression | Expression
 MapLiteral        ::= 'map' '[' TypeClause ',' TypeClause ']' '{' MapEntryList? '}'
                     | 'map' '[' TypeClause ']' TypeClause '{' MapEntryList? '}'    (* legacy; GS0366 *)
 MapEntry          ::= Expression ':' Expression
@@ -1891,7 +1983,7 @@ IfLetExpression   ::= 'if' LetBindingList ('&&' Expression)? Block
                       'else' (IfExpression | IfLetExpression | Block)         (* if-let-as-expression *)
 TupleLiteral      ::= '(' Expression ',' Expression (',' Expression)* ')'
 Arguments         ::= Argument (',' Argument)*
-Argument          ::= identifier (':' | '=') (RefArgument | Expression)   (* named argument; '=' separator is deprecated, GS0315 *)
+Argument          ::= identifier ':' (RefArgument | Expression)
                     | RefArgument
                     | Expression
 RefArgument       ::= ('ref' | 'in') (identifier | '(' Expression ')')

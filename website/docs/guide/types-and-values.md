@@ -103,7 +103,7 @@ class Loud : IGreeter {
 }
 ```
 
-`Quiet` inherits `Hello`; `Loud` overrides it. Dispatch through either a class-typed or interface-typed receiver lands on the correct body. When two unrelated interfaces both supply a default for the same signature, the implementing class MUST declare its own override — the binder reports `GS0318` ("conflicting default implementations") otherwise. The deferred-modifier diagnostic `GS0321` covers private and `sealed override` interface members, which are reserved for follow-up work.
+`Quiet` inherits `Hello`; `Loud` overrides it. Dispatch through either a class-typed or interface-typed receiver lands on the correct body. When two unrelated interfaces both supply a default for the same signature, the implementing class MUST declare its own override — the binder reports `GS0318` ("conflicting default implementations") otherwise. Private interface helper methods are supported when they carry a body. The `open`, `override`, and `sealed override` interface-member modifiers remain reserved and report `GS0321`.
 
 ### Static-virtual interface members
 

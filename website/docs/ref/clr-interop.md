@@ -80,6 +80,25 @@ for kv in oddsAndEvens {
 
 The sample above relies on an imported extension method whose trailing optional comparer argument is omitted.
 
+## Explicit interface implementations
+
+G# uses an interface qualifier clause to implement a CLR interface member
+without exposing it as an ordinary class member:
+
+```gsharp
+class Formatter : IText, IDebugText {
+    func (IText) Format() string -> "text"
+    func (IDebugText) Format() string -> "debug"
+}
+```
+
+The forms are `func (IFace) M(...)`, `prop (IFace) P T`,
+`prop (IFace) this[...] T`, and `event (IFace) E T`. A qualifier may be a
+qualified or constructed generic interface type. Static interface methods and
+properties use the same clause inside `shared`. Emission uses CLR `MethodImpl`
+rows and private final virtual accessors, so calls dispatch through the selected
+interface exactly as they do for C# explicit implementations.
+
 ## Delegates, function literals, and method groups
 
 A G# function literal can convert to a compatible CLR delegate type, including named delegate types and the standard `Action[...]`, `Func[...]`, and `Predicate[...]` families. Method groups can convert to delegates when the target delegate signature is known. Delegate values and G# function values can also widen to `System.Delegate` and `System.MulticastDelegate`.
@@ -111,7 +130,7 @@ Event accessors on user types are declared with the G# `event` member form; impo
 
 ## Operator overloads and conversions
 
-Imported CLR operator overloads and conversion operators participate in binding. User-defined G# operator declarations use receiver syntax and map to CLR `op_*` names for emit and interop.
+Imported CLR operator overloads and conversion operators participate in binding. User-defined G# operator declarations use receiver or in-body syntax and map to CLR `op_*` names for emit and interop. Compound-assignment operators (`operator +=`, `-=`, `*=`, and related forms) are void instance members with exactly one parameter; they mutate the receiver in place and interoperate with the corresponding C# operator metadata.
 
 ```gsharp
 class Vec {

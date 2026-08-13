@@ -44,6 +44,8 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML. |
 | lambda `x => x + 1` | `x -> x + 1` | Arrow lambdas with inferred parameter/return types are the canonical lambda form. |
 | extension method | `func (r Receiver) M()`; `func extension (r Receiver) M()` for enum/owned receivers | A receiver clause declares a CLR-visible extension method. The explicit marker prevents ownership from turning the declaration into an instance method. |
+| explicit interface implementation `void IFoo.M()` | `func (IFoo) M()` | The qualifier clause supports methods, properties, indexers, events, and static interface members. |
+| collection spread `[..items]` | `[]T{ ...items }` / `List[T]{ ...items }` | Spread sources are evaluated once and enumerated in lexical order. |
 
 ## Packages replace namespaces in source
 
@@ -95,7 +97,7 @@ func area(width int32, height int32) int32 { return width * height }
 func area(side int32) int32                { return side * side }
 ```
 
-Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. Use the `name: value` spelling for named arguments, including `.copy(...)` calls and attribute argument lists; `GS0315` identifies the older separator form.
+Imported CLR methods that expose `[Optional]` arguments work the same way G# defaults do, and CLR overload sets resolve identically. Use the `name: value` spelling for named arguments, including `.copy(...)` calls and attribute argument lists. In argument position, `=` is an ordinary assignment; parenthesize it when assignment is intentional.
 
 ## Data shapes are richer than plain classes
 

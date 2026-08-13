@@ -75,6 +75,10 @@ The third pre-1.0 line is a **breadth-and-interop** release. The language gains 
 - **Delegate return-type covariance.** Delegate return types can be covariant, including lambda target-typing on CLR method calls.
 - **Predefined type aliases as static-member receivers.** Friendly numeric aliases can be used as receivers for static member access.
 - **Assembly-attribute parity with C#.** Assembly-level attributes are accepted with C#-equivalent behavior.
+- **Collection spreads.** Array, slice, and CLR collection initializers accept `...source`, preserving lexical evaluation order and applying ordinary element conversions.
+- **Safe structural projections.** Compatible public object shapes project into safely constructible concrete targets; `Target{ ...source, Member: override }` provides explicit object-spread mapping.
+- **Explicit interface qualifier clauses.** Methods, properties, indexers, events, and static interface members can use `(IFace)` to provide distinct implementations without source-visible mangled names.
+- **User-defined compound-assignment operators.** Classes and structs can declare in-place `operator +=` and related one-operand, void-returning instance operators.
 
 ### Changed
 

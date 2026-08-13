@@ -274,7 +274,7 @@ Pattern switch statements support constants, relational patterns, type patterns,
 
 ## 6. Use switch expressions when each arm returns a value
 
-Switch expressions use `->` arms:
+Switch expressions use `:` arms:
 
 ```gsharp title="SwitchExpression.gs"
 // file: SwitchExpression.gs
