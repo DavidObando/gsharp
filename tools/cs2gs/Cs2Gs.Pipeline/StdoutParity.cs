@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using GSharp.Tests;
 
 namespace Cs2Gs.Pipeline;
 
@@ -25,29 +26,32 @@ public static class StdoutParity
     /// <returns>The stdout comparison result.</returns>
     public static StdoutParityResult Compare(string golden, string actual)
     {
-        string normalizedGolden = Normalize(golden);
-        string normalizedActual = Normalize(actual);
+        GoldenFileComparison comparison = GoldenFile.CompareText(golden, actual, Normalize);
+        return FromGoldenComparison(comparison);
+    }
 
-        if (string.Equals(normalizedGolden, normalizedActual, StringComparison.Ordinal))
-        {
-            return StdoutParityResult.Match();
-        }
-
-        string[] goldenLines = normalizedGolden.Split('\n');
-        string[] actualLines = normalizedActual.Split('\n');
-        int max = Math.Max(goldenLines.Length, actualLines.Length);
-        for (int i = 0; i < max; i++)
-        {
-            string expectedLine = i < goldenLines.Length ? goldenLines[i] : null;
-            string actualLine = i < actualLines.Length ? actualLines[i] : null;
-            if (!string.Equals(expectedLine, actualLine, StringComparison.Ordinal))
-            {
-                return StdoutParityResult.Mismatch(i + 1, expectedLine, actualLine);
-            }
-        }
-
-        // Fallback: the strings differ but no per-line difference was isolated.
-        return StdoutParityResult.Mismatch(1, normalizedGolden, normalizedActual);
+    /// <summary>
+    /// Compares actual program stdout against a golden baseline file using the
+    /// shared snapshot diff, update, and <c>.actual</c> workflow.
+    /// </summary>
+    /// <param name="goldenPath">The committed <c>baseline.stdout.golden</c> path.</param>
+    /// <param name="actual">The migrated program's captured stdout.</param>
+    /// <param name="update">
+    /// Optional update override. When null, <c>GSHARP_UPDATE_GOLDENS=1</c>
+    /// controls update mode.
+    /// </param>
+    /// <returns>The stdout comparison result.</returns>
+    public static StdoutParityResult CompareFile(
+        string goldenPath,
+        string actual,
+        bool? update = null)
+    {
+        GoldenFileComparison comparison =
+            GoldenFile.CompareFile(goldenPath, actual, update, Normalize);
+        string guidance = comparison.IsMatch
+            ? null
+            : GoldenFile.FormatUpdateGuidance(comparison, goldenPath);
+        return FromGoldenComparison(comparison, guidance);
     }
 
     /// <summary>
@@ -72,6 +76,17 @@ public static class StdoutParity
 
         return normalized + "\n";
     }
+
+    private static StdoutParityResult FromGoldenComparison(
+        GoldenFileComparison comparison,
+        string guidance = null)
+        => comparison.IsMatch
+            ? StdoutParityResult.Match()
+            : StdoutParityResult.Mismatch(
+                comparison.LineNumber,
+                comparison.ExpectedLine,
+                comparison.ActualLine,
+                guidance);
 }
 
 /// <summary>
@@ -79,12 +94,20 @@ public static class StdoutParity
 /// </summary>
 public sealed class StdoutParityResult
 {
-    private StdoutParityResult(bool isMatch, int lineNumber, string expectedLine, string actualLine)
+    private readonly string guidance;
+
+    private StdoutParityResult(
+        bool isMatch,
+        int lineNumber,
+        string expectedLine,
+        string actualLine,
+        string guidance)
     {
         this.IsMatch = isMatch;
         this.LineNumber = lineNumber;
         this.ExpectedLine = expectedLine;
         this.ActualLine = actualLine;
+        this.guidance = guidance;
     }
 
     /// <summary>Gets a value indicating whether stdout matched the golden.</summary>
@@ -101,22 +124,34 @@ public sealed class StdoutParityResult
 
     /// <summary>Creates a matching result.</summary>
     /// <returns>A matching <see cref="StdoutParityResult"/>.</returns>
-    public static StdoutParityResult Match() => new StdoutParityResult(true, 0, null, null);
+    public static StdoutParityResult Match() =>
+        new StdoutParityResult(true, 0, null, null, null);
 
     /// <summary>Creates a mismatching result.</summary>
     /// <param name="lineNumber">The 1-based first differing line.</param>
     /// <param name="expectedLine">The golden line, or null past its end.</param>
     /// <param name="actualLine">The actual line, or null past its end.</param>
+    /// <param name="guidance">Optional snapshot update guidance.</param>
     /// <returns>A mismatching <see cref="StdoutParityResult"/>.</returns>
-    public static StdoutParityResult Mismatch(int lineNumber, string expectedLine, string actualLine) =>
-        new StdoutParityResult(false, lineNumber, expectedLine, actualLine);
+    public static StdoutParityResult Mismatch(
+        int lineNumber,
+        string expectedLine,
+        string actualLine,
+        string guidance = null) =>
+        new StdoutParityResult(false, lineNumber, expectedLine, actualLine, guidance);
 
     /// <summary>
     /// Gets a one-line expected-vs-actual description used in the triage
     /// diagnostic message.
     /// </summary>
     /// <returns>The description.</returns>
-    public string Describe() =>
-        $"stdout differs at line {this.LineNumber}: expected '{this.ExpectedLine ?? "<end-of-output>"}' " +
-        $"but got '{this.ActualLine ?? "<end-of-output>"}'";
+    public string Describe()
+    {
+        string description =
+            $"stdout differs at line {this.LineNumber}: expected '{this.ExpectedLine ?? "<end-of-output>"}' " +
+            $"but got '{this.ActualLine ?? "<end-of-output>"}'";
+        return string.IsNullOrEmpty(this.guidance)
+            ? description
+            : description + ". " + this.guidance;
+    }
 }

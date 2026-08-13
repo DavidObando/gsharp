@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.IO;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -18,8 +20,13 @@ namespace Cs2Gs.Tests;
 /// tolerated but any *extra* trailing blank line registers as a real
 /// difference.
 /// </summary>
-public class StdoutParityNormalizeTests
+public sealed class StdoutParityNormalizeTests : IDisposable
 {
+    private readonly string directory = Path.Combine(
+        Path.GetDirectoryName(typeof(StdoutParityNormalizeTests).Assembly.Location)!,
+        "stdout-parity-tests",
+        Guid.NewGuid().ToString("N"));
+
     [Fact]
     public void Normalize_TripleTrailingNewline_DiffersFromSingle()
     {
@@ -48,6 +55,45 @@ public class StdoutParityNormalizeTests
     [Fact]
     public void Normalize_CrlfAndLf_NormalizeEqual()
     {
-        Assert.Equal(StdoutParity.Normalize($"a{Environment.NewLine}b{Environment.NewLine}"), StdoutParity.Normalize($"a{Environment.NewLine}b{Environment.NewLine}"));
+        Assert.Equal(StdoutParity.Normalize("a\r\nb\r\n"), StdoutParity.Normalize("a\nb\n"));
+    }
+
+    [Fact]
+    public void CompareFile_MismatchWritesActualAndIncludesUpdateGuidance()
+    {
+        string goldenPath = Path.Combine(this.directory, "baseline.stdout.golden");
+        Directory.CreateDirectory(this.directory);
+        File.WriteAllText(goldenPath, "expected\n");
+
+        StdoutParityResult result = StdoutParity.CompareFile(
+            goldenPath,
+            "actual\r\n",
+            update: false);
+
+        Assert.False(result.IsMatch);
+        Assert.Equal("actual\n", File.ReadAllText(goldenPath + ".actual"));
+        Assert.Contains("GSHARP_UPDATE_GOLDENS=1", result.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompareFile_UpdateOverrideWritesNormalizedGolden()
+    {
+        string goldenPath = Path.Combine(this.directory, "baseline.stdout.golden");
+
+        StdoutParityResult result = StdoutParity.CompareFile(
+            goldenPath,
+            "accepted\r\n",
+            update: true);
+
+        Assert.True(result.IsMatch);
+        Assert.Equal("accepted\n", File.ReadAllText(goldenPath));
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(this.directory))
+        {
+            Directory.Delete(this.directory, recursive: true);
+        }
     }
 }

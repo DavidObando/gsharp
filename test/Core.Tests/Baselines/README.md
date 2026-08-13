@@ -23,24 +23,18 @@ For each `samples/*.gs` and `samples/refactoring-baseline/*.gs`:
    checksum, COFF `TimeDateStamp`) is deliberately excluded because those
    regions are derived from content hashes that can drift orthogonally to
    actual emit changes.
-5. Compares against the entry in `refactoring-baseline.json`.
+5. Serializes the complete sorted hash map and compares it to
+   `refactoring-baseline.json` through the shared `GoldenFile` snapshot helper.
+   Drift writes `refactoring-baseline.json.actual` with the first differing
+   line reported.
 
-Entries with a `null` hash are intentionally skipped. Two categories
-exist today:
+Entries with a `null` hash are intentionally skipped. One category exists
+today:
 
 - **Compile failures on `main`** — recorded with a `null` hash so the
   gate doesn't fail on a missing fixture. The per-sample rationale lives
   in `samples/refactoring-baseline/README.md`. The list lives in
   `RefactoringBaselineTests.KnownCompileFailureSamples`.
-- **Flaky emit on `main`** — fixtures whose compiled IL is not currently
-  byte-deterministic across compiles within the same process (the
-  state-machine basic-block emit order depends on reference-identity
-  hashes that vary with heap layout). These are pinned to `null` so the
-  gate stays green while the underlying compiler determinism bug is
-  tracked separately. The list lives in
-  `RefactoringBaselineTests.KnownFlakyEmitSamples`. If the underlying
-  determinism bug is fixed, remove the sample from that set and
-  regenerate the baseline.
 
 ## When to regenerate
 
@@ -52,21 +46,22 @@ You should only regenerate when a PR has **explicitly and intentionally**
 changed emitted IL (e.g. a Wave-3 bug fix that lands after the
 decomposition is complete). In that case:
 
-1. Open `test/Core.Tests/CodeAnalysis/Emit/RefactoringBaselineTests.cs`.
-2. Find the `RegenerateBaseline` `[Fact(Skip = "manual: …")]` and remove
-   the `Skip = …` argument (or change it to a value xUnit accepts as
-   unset) so the fact runs.
-3. From the repo root, run:
+1. Run the gate normally and inspect
+   `test/Core.Tests/Baselines/refactoring-baseline.json.actual`. Confirm every
+   changed hash belongs to the intended emit change.
+2. From the repo root, rerun the same gate with shared golden update mode:
    ```
+   GSHARP_UPDATE_GOLDENS=1 \
    dotnet test test/Core.Tests/Core.Tests.csproj \
-     --filter "FullyQualifiedName~RegenerateBaseline" \
+     --filter "FullyQualifiedName~Samples_EmittedPE_Match_Baseline" \
      --no-restore --nologo
    ```
-4. The fact rewrites `test/Core.Tests/Baselines/refactoring-baseline.json`
-   in place. If any sample failed to compile, the fact throws and lists
-   them — update `samples/refactoring-baseline/README.md` accordingly.
-5. Re-apply the skip so the manual fact doesn't run in CI again.
-6. Commit both the test file (skip restored) and the regenerated JSON.
+3. The shared helper rewrites
+   `test/Core.Tests/Baselines/refactoring-baseline.json` in place. If any
+   sample failed to compile, the fact fails and lists it before updating the
+   snapshot; update `samples/refactoring-baseline/README.md` when adding a
+   deliberate compile-failure exception.
+4. Commit the reviewed regenerated JSON.
 
 If you also added new samples, they will appear in the regenerated JSON
 automatically — both `samples/*.gs` and `samples/refactoring-baseline/*.gs`

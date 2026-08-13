@@ -1,8 +1,9 @@
 name: Docs site
 
 # Builds the G# documentation website (Docusaurus, in /website) and deploys it
-# to GitHub Pages. Pull requests build only; main pushes, nightly schedules,
-# and main-branch manual runs deploy.
+# to GitHub Pages. Pull requests validate the generator CLI and site against
+# the checked-in snapshot without rerunning benchmarks; main pushes, nightly
+# schedules, and main-branch manual runs regenerate data and deploy.
 #
 # After the first merge, a repository admin must set:
 #   Settings → Pages → Build and deployment → Source = "GitHub Actions".
@@ -54,15 +55,22 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Validate quality dashboard generator CLI
+        if: github.event_name == 'pull_request'
+        run: python3 build/generate-quality-dashboard.py --help
       - name: Setup .NET
+        if: github.event_name != 'pull_request'
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
       - name: Restore compiler
+        if: github.event_name != 'pull_request'
         run: dotnet restore src/Compiler/Compiler.csproj --locked-mode
       - name: Build compiler
+        if: github.event_name != 'pull_request'
         run: dotnet build src/Compiler/Compiler.csproj --configuration Release --no-restore -graph
       - name: Generate quality dashboard data
+        if: github.event_name != 'pull_request'
         run: python3 build/generate-quality-dashboard.py
       - name: Setup Node
         uses: actions/setup-node@v5
