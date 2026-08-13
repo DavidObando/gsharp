@@ -187,6 +187,54 @@ public sealed class Issue3347RemainingSpillInventoryTests
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void NativePatternDelimitersAndElseIfBindings_RemainScoped()
+    {
+        string printed = Translate(
+            """
+            public enum Phase
+            {
+                Queued,
+                Completed,
+            }
+
+            public sealed class Update
+            {
+                public double? Progress;
+                public Phase Phase;
+            }
+
+            public static class C
+            {
+                private static object GetValue() => "ok";
+
+                public static bool IsTerminal(Update update) =>
+                    update.Progress is 0.0 or 1.0
+                    || update.Phase is Phase.Queued or Phase.Completed;
+
+                public static int ElseIf(bool first)
+                {
+                    if (first)
+                    {
+                        return 1;
+                    }
+                    else if (GetValue() is string text && text.Length > 0)
+                    {
+                        return text.Length;
+                    }
+
+                    return 0;
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "(update.Progress is 0.0 or 1.0) ||",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0;

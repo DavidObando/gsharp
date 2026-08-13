@@ -534,6 +534,19 @@ public sealed partial class CSharpToGSharpTranslator
             return new[] { this.TranslateIf(ifStatement) };
         }
 
+        private GStatement TranslateElseStatement(StatementSyntax statement)
+        {
+            if (statement is not IfStatementSyntax elseIf)
+            {
+                return this.TranslateStatementAsBlock(statement);
+            }
+
+            List<GStatement> translated = this.TranslateIfStatements(elseIf).ToList();
+            return translated.Count == 1
+                ? translated[0]
+                : new BlockStatement(translated);
+        }
+
         /// <summary>
         /// Lowers a C# positive type-pattern guard <c>if (receiver is T t) { … }</c>
         /// to a smart-cast-friendly G# local that preserves the declaration
@@ -613,9 +626,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             // gsc narrows `local` throughout the guarded block, but does not carry
@@ -688,9 +699,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             GStatement elseBranch = ifStatement.Else == null
                 ? null
-                : ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                : this.TranslateElseStatement(ifStatement.Else.Statement);
 
             var statements = new List<GStatement>();
             if (hoist != null)
@@ -891,9 +900,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
@@ -949,14 +956,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                if (ifStatement.Else.Statement is IfStatementSyntax elseIf)
-                {
-                    elseBranch = this.TranslateIf(elseIf);
-                }
-                else
-                {
-                    elseBranch = this.TranslateStatementAsBlock(ifStatement.Else.Statement);
-                }
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             GStatement result = new IfStatement(condition, then, elseBranch);

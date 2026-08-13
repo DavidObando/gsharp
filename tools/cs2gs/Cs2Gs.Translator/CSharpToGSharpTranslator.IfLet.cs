@@ -260,7 +260,9 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 if (IsTrivialPatternReceiver(isPattern.Expression)
-                    || (residualPattern == null && !targetSymbol.IsValueType))
+                    || (residualPattern == null
+                        && guards.Count == 0
+                        && !targetSymbol.IsValueType))
                 {
                     return false;
                 }
@@ -370,9 +372,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             if (directBinding)

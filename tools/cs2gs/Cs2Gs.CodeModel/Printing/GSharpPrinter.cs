@@ -617,8 +617,13 @@ public static class GSharpPrinter
                     + RenderExpression(assignmentExpression.Value, indent) + ")";
 
             case PatternTestExpression patternTest:
-                return RenderExpression(patternTest.Value, indent, GetBinaryPrecedence("is"))
-                    + " is " + RenderPattern(patternTest.Pattern, indent, includeTypeDesignator: false);
+                var patternText =
+                    RenderExpression(patternTest.Value, indent, GetBinaryPrecedence("is"))
+                    + " is "
+                    + RenderPattern(patternTest.Pattern, indent, includeTypeDesignator: false);
+                return patternTest.Pattern is BinaryPattern
+                    ? $"({patternText})"
+                    : patternText;
 
             case CheckedExpression checkedExpr:
                 return $"{(checkedExpr.IsChecked ? "checked" : "unchecked")}({RenderExpression(checkedExpr.Inner, indent)})";
