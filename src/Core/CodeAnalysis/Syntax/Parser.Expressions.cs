@@ -458,6 +458,7 @@ public partial class Parser
         {
             var postfixOp = NextToken();
             left = BuildIncrementDecrementExpression(left, postfixOp, isPrefix: false);
+            left = ParsePostfixChain(left);
         }
 
         while (true)

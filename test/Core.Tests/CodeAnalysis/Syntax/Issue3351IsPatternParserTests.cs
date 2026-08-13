@@ -69,6 +69,26 @@ public sealed class Issue3351IsPatternParserTests
     }
 
     [Fact]
+    public void IfExpression_TypeTest_DoesNotConsumeCallValuedBranchAsPropertyPattern()
+    {
+        var tree = SyntaxTree.Parse(
+            "let result = if value is string { Make(nil, value) } else { value }");
+
+        Assert.Empty(tree.Diagnostics);
+        var declaration = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(member => member.Statement)
+            .OfType<VariableDeclarationSyntax>()
+            .Single();
+        var expression = Assert.IsType<IfExpressionSyntax>(declaration.Initializer);
+        var typeTest = Assert.IsType<IsExpressionSyntax>(expression.Condition);
+        var candidate = Assert.IsType<TypeOrConstantPatternSyntax>(typeTest.Pattern);
+
+        Assert.Null(candidate.PropertyPattern);
+        Assert.IsType<CallExpressionSyntax>(expression.ThenBlock.Expression);
+    }
+
+    [Fact]
     public void BareTypeSwitchCase_DoesNotConsumeCaseBodyAsPropertySuffix()
     {
         var tree = SyntaxTree.Parse("switch value { case string { work() } default { } }");

@@ -67,7 +67,7 @@ internal sealed class ConversionClassifier
     private readonly Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType;
     private readonly Func<TypeSymbol, bool> isFormattableStringTargetType;
     private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
-    private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
+    private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, bool, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
     private readonly Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter;
     private readonly Func<BoundMethodGroupExpression, BoundExpression> createUserExtensionMethodGroupAdapter;
     private readonly Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType;
@@ -125,7 +125,7 @@ internal sealed class ConversionClassifier
         Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType,
         Func<TypeSymbol, bool> isFormattableStringTargetType,
         Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
-        Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
+        Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, bool, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
         Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter,
         Func<BoundMethodGroupExpression, BoundExpression> createUserExtensionMethodGroupAdapter,
         Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType,
@@ -508,7 +508,7 @@ internal sealed class ConversionClassifier
             && type is FunctionTypeSymbol targetFunctionType
             && TypeSymbol.ContainsTypeParameter(targetFunctionType))
         {
-            return createErasedFunctionLiteralAdapter(literal, targetFunctionType);
+            return createErasedFunctionLiteralAdapter(literal, targetFunctionType, false);
         }
 
         // Issue #2716: a throw-expression lambda naturally has a `never`
@@ -521,7 +521,7 @@ internal sealed class ConversionClassifier
             && !ReferenceEquals(neverTargetFnType.ReturnType, TypeSymbol.Never)
             && Conversion.Classify(neverCandidateFnType, neverTargetFnType).IsImplicit)
         {
-            var shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType);
+            var shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType, false);
             if (!ReferenceEquals(shaped, neverCandidateLiteral))
             {
                 return BindConversion(diagnosticLocation, shaped, type, allowExplicit, callParameter);
@@ -545,7 +545,7 @@ internal sealed class ConversionClassifier
             && voidTargetFnType.Arity == voidCandidateFnType.Arity
             && !ReferenceEquals(type, voidCandidateFnType))
         {
-            var voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType);
+            var voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType, false);
             if (!ReferenceEquals(voidized, voidCandidateLiteral))
             {
                 return BindConversion(diagnosticLocation, voidized, type, allowExplicit, callParameter);
@@ -572,10 +572,32 @@ internal sealed class ConversionClassifier
             && !ReferenceEquals(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType)
             && IsNumericReturnWideningCore(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType))
         {
-            var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType);
+            var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType, false);
             if (!ReferenceEquals(widened, widenCandidateLiteral))
             {
                 return BindConversion(diagnosticLocation, widened, type, allowExplicit, callParameter);
+            }
+        }
+
+        if (expression is BoundFunctionLiteralExpression adaptedCandidateLiteral
+            && adaptedCandidateLiteral.FunctionType is FunctionTypeSymbol adaptedCandidateFnType
+            && adaptedCandidateFnType.ReturnType != TypeSymbol.Void
+            && adaptedCandidateFnType.ReturnType != TypeSymbol.Error
+            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var adaptedTargetFnType)
+            && adaptedTargetFnType.ReturnType != TypeSymbol.Void
+            && adaptedTargetFnType.ReturnType != TypeSymbol.Error
+            && adaptedTargetFnType.Arity == adaptedCandidateFnType.Arity
+            && !ReferenceEquals(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType)
+            && !IsNumericReturnWideningCore(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType)
+            && Conversion.Classify(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType).IsImplicit)
+        {
+            var adapted = createErasedFunctionLiteralAdapter(
+                adaptedCandidateLiteral,
+                adaptedTargetFnType,
+                true);
+            if (!ReferenceEquals(adapted, adaptedCandidateLiteral))
+            {
+                return BindConversion(diagnosticLocation, adapted, type, allowExplicit, callParameter);
             }
         }
 
@@ -843,6 +865,10 @@ internal sealed class ConversionClassifier
     /// a bare <c>default</c> argument when a method type-argument erased to the
     /// reference-context <c>object</c> placeholder (e.g.
     /// <c>Task.FromResult[T?](default)</c>).</param>
+    /// <param name="parameterTypeOverrides">Optional symbolic parameter types
+    /// keyed by resolved parameter index. Constructed generic constructors use
+    /// this to retain delegate targets such as <c>Func&lt;Foo&gt;</c> when
+    /// reflection exposes only the erased <c>Func&lt;object&gt;</c> shape.</param>
     /// <returns>The (possibly rebound) argument array.</returns>
     public ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
@@ -852,7 +878,8 @@ internal sealed class ConversionClassifier
         int receiverArgCount = 0,
         MethodInfo? method = null,
         TypeSymbol? receiverType = null,
-        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default)
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
+        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -911,8 +938,17 @@ internal sealed class ConversionClassifier
                     // boxed at the bind boundary (which would leave a
                     // verifier-rejecting `box T → !0 expected value` IL
                     // sequence at the call site).
-                    var substituted = TrySubstituteParameterTypeFromReceiver(
-                        method, paramIndex, receiverType, symbolicMethodTypeArgs);
+                    TypeSymbol? substituted = null;
+                    if (parameterTypeOverrides != null)
+                    {
+                        parameterTypeOverrides.TryGetValue(paramIndex, out substituted);
+                    }
+
+                    if (substituted == null)
+                    {
+                        substituted = TrySubstituteParameterTypeFromReceiver(
+                            method, paramIndex, receiverType, symbolicMethodTypeArgs);
+                    }
 
                     // Issue #1512/#2643: a function-typed argument bound to a
                     // generic method's delegate parameter (e.g.
@@ -1060,10 +1096,9 @@ internal sealed class ConversionClassifier
                     // MethodInfo/function overload matching targetType's
                     // Invoke signature, the same way it already does for a
                     // user-defined generic function's method-group argument.
-                    var isUnresolvedMethodGroupTarget = ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument);
-
+                    var isMethodGroupTarget = argument is BoundMethodGroupExpression or BoundClrMethodGroupExpression;
                     if (argument.Type != targetType
-                        && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isUnresolvedMethodGroupTarget)
+                        && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isMethodGroupTarget)
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
                         && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
                     {

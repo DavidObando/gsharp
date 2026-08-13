@@ -74,9 +74,11 @@ internal sealed partial class ExpressionBinder
         // falls back to a same-named non-generic type (`typeof(Action[_])`
         // can never silently become non-generic `Action`).
         var typeClause = syntax.TypeClause;
-        var typeClauseIdentifier = Invariant.Required(typeClause.Identifier, "a type clause has an identifier");
         TypeSymbol? typeSymbol = null;
-        if (!typeClause.HasQualifier && !typeClause.IsArray && !typeClause.IsNullable)
+        if (typeClause.Identifier is { } typeClauseIdentifier
+            && !typeClause.HasQualifier
+            && !typeClause.IsArray
+            && !typeClause.IsNullable)
         {
             if (!typeClause.HasTypeArguments)
             {
@@ -595,7 +597,13 @@ internal sealed partial class ExpressionBinder
 
     private bool TryGetNaturalUserMethodGroupType(
         BoundMethodGroupExpression group,
-        out FunctionTypeSymbol? naturalType)
+        [NotNullWhen(true)] out FunctionTypeSymbol? naturalType)
+        => TryGetSymbolicUserMethodGroupType(group, out naturalType)
+            && naturalType.ClrType != null;
+
+    private bool TryGetSymbolicUserMethodGroupType(
+        BoundMethodGroupExpression group,
+        [NotNullWhen(true)] out FunctionTypeSymbol? naturalType)
     {
         naturalType = null;
         if (group.Candidates.Length != 1
@@ -619,7 +627,7 @@ internal sealed partial class ExpressionBinder
         naturalType = FunctionTypeSymbol.Get(
             parameterTypes.MoveToImmutable(),
             MethodGroupObservableReturnType(candidate));
-        return naturalType.ClrType != null;
+        return true;
     }
 
     /// <summary>

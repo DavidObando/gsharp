@@ -124,7 +124,9 @@ public sealed class TupleTypeSymbol : TypeSymbol
         }
 
         var clrTypes = elementTypes
-            .Select(t => Invariant.Required(t.ClrType, "a CLR-backed tuple element has a CLR type"))
+            .Select(t => Invariant.Required(
+                NullableTypeSymbol.GetEffectiveClrType(t),
+                "a CLR-backed tuple element has a CLR type"))
             .ToArray();
         return BuildClrType(clrTypes);
     }

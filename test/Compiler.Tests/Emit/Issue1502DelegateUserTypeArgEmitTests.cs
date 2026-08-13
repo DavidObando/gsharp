@@ -53,6 +53,32 @@ public class Issue1502DelegateUserTypeArgEmitTests
     }
 
     [Fact]
+    public void EndToEnd_FuncUserClass_LazyCapturingLambda_Runs()
+    {
+        const string source = """
+            package i1502funccapture
+            import System
+
+            class Foo { prop N int32 { get; init; } init(n int32) { N = n } }
+
+            class C {
+                let value int32
+
+                init() {
+                    value = 43
+                }
+
+                func Make() Lazy[Foo] -> Lazy[Foo](() -> Foo(value))
+            }
+
+            func Main() { System.Console.WriteLine(C().Make().Value.N) }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"43{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void EndToEnd_FuncUserStruct_LazyLambda_Runs()
     {
         const string source = """

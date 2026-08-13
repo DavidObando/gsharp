@@ -953,7 +953,9 @@ public sealed class ReferenceResolver : IDisposable
         }
 
         var fullName = hostType.FullName;
-        if (!string.IsNullOrEmpty(fullName) && TryResolveType(fullName, out var mapped) && mapped != null)
+        if (!string.IsNullOrEmpty(fullName)
+            && TryResolveType(fullName, requireExternalVisibility: false, out var mapped)
+            && mapped != null)
         {
             return mapped;
         }

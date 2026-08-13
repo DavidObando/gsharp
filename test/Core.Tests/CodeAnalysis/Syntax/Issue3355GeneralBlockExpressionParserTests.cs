@@ -131,6 +131,35 @@ public class Issue3355GeneralBlockExpressionParserTests
         Assert.IsType<BlockExpressionSyntax>(send.Channel);
     }
 
+    [Fact]
+    public void StandaloneBlockAfterIndexedInitializer_RemainsStatementBlock()
+    {
+        const string source = """
+            package P
+
+            func F(values []int32) {
+                for var i = 0; i < values.Length; i++ {
+                    let current = values[i]
+                    {
+                        let next = values[i]
+                        if i < values.Length && next is int32 && check(current) {
+                            continue
+                        }
+                    }
+                    if current > 0 {
+                        return
+                    }
+                }
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        Assert.Equal(5, Walk(tree.Root).OfType<BlockStatementSyntax>().Count());
+        Assert.Empty(Walk(tree.Root).OfType<BlockExpressionSyntax>());
+    }
+
     private static IEnumerable<SyntaxNode> Walk(SyntaxNode node)
     {
         yield return node;

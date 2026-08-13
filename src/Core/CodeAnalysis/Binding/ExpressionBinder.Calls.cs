@@ -1525,7 +1525,7 @@ internal sealed partial class ExpressionBinder
         var ctorParameterLists = ctors.Select(c => c.GetParameters()).ToList();
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-        var symbolicCtorDelegateArgs = new HashSet<int>();
+        var symbolicCtorDelegateTargets = new Dictionary<int, TypeSymbol>();
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
             var argName = argumentNames.IsDefault ? null : argumentNames[i];
@@ -1560,7 +1560,7 @@ internal sealed partial class ExpressionBinder
                         literal,
                         resolvedSymbolicTarget.DelegateType)
                     : literal);
-                symbolicCtorDelegateArgs.Add(i);
+                symbolicCtorDelegateTargets[i] = resolvedSymbolicTarget.DelegateType;
                 continue;
             }
 
@@ -1597,7 +1597,7 @@ internal sealed partial class ExpressionBinder
             // inference elsewhere) keep the default enum→int ride-through.
             System.Type? t;
             var priorErase = eraseDelegateInnerEnumToObject;
-            eraseDelegateInnerEnumToObject = symbolicCtorDelegateArgs.Contains(i);
+            eraseDelegateInnerEnumToObject = symbolicCtorDelegateTargets.ContainsKey(i);
             try
             {
                 t = GetEffectiveArgumentClrTypeForOverloadResolution(boundArguments[i].Type);
@@ -1729,6 +1729,18 @@ internal sealed partial class ExpressionBinder
         // parameter order with optional slots filled — downstream reorderers
         // therefore consume an identity mapping.
         var ctorDownstreamMapping = ctorIsExpanded ? default : ctorMapping;
+        Dictionary<int, TypeSymbol>? ctorParameterTypeOverrides = null;
+        if (symbolicCtorDelegateTargets.Count > 0)
+        {
+            ctorParameterTypeOverrides = new Dictionary<int, TypeSymbol>();
+            foreach (var pair in symbolicCtorDelegateTargets)
+            {
+                var parameterIndex = ctorDownstreamMapping.IsDefault
+                    ? pair.Key
+                    : ctorDownstreamMapping[pair.Key];
+                ctorParameterTypeOverrides[parameterIndex] = pair.Value;
+            }
+        }
 
         // Issue #1638: route through the shared CLR call-argument-construction
         // pipeline (interpolation rebind → handler args → delegate rebind →
@@ -1745,7 +1757,8 @@ internal sealed partial class ExpressionBinder
             syntax,
             ClrCallDelegateRebindMode.Full,
             out var ctorHandlerPrelude,
-            out _);
+            out _,
+            parameterTypeOverrides: ctorParameterTypeOverrides);
         var ctorArgs = OverloadResolver.BuildOrderedCallArguments(ctorConvertedArgs, ctorDownstreamMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {

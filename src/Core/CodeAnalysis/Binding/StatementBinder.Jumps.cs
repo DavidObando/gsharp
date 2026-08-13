@@ -722,7 +722,11 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, boundRead);
         }
 
-        if (boundRead.Type is not NullableTypeSymbol nullableType)
+        var nullableType = boundRead.Type as NullableTypeSymbol;
+        var isNonNullableReferenceTarget = nullableType == null
+            && Conversion.IsReferenceLikeTarget(boundRead.Type)
+            && boundRead is BoundIndexExpression or BoundClrIndexExpression;
+        if (nullableType == null && !isNonNullableReferenceTarget)
         {
             Diagnostics.ReportNullCoalescingAssignmentTargetNotNullable(syntax.OperatorToken.Location, boundRead.Type);
             _ = bindExpression(syntax.Value, false);
@@ -732,7 +736,8 @@ internal sealed partial class StatementBinder
         // Bind the RHS, converting it to the LHS's nullable type so the
         // author can write either an underlying-typed value (which lifts
         // via the implicit T -> T? conversion) or another nullable value.
-        var boundRhs = bindExpressionWithTargetType(syntax.Value, nullableType);
+        var rhsTargetType = nullableType ?? boundRead.Type;
+        var boundRhs = bindExpressionWithTargetType(syntax.Value, rhsTargetType);
         if (boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error)
         {
             return new BoundExpressionStatement(syntax, boundRhs);
@@ -748,11 +753,20 @@ internal sealed partial class StatementBinder
         // Condition: read == nil. Routes through the existing nil-compare
         // operator so any value-type Nullable<T> lowering is handled in the
         // same code path as `x == nil` elsewhere.
+        BoundExpression conditionRead = read;
+        if (isNonNullableReferenceTarget)
+        {
+            conditionRead = new BoundConversionExpression(
+                syntax,
+                NullableTypeSymbol.Get(read.Type),
+                read);
+        }
+
         var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
         var eqOp = Invariant.Required(
-            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, read.Type, TypeSymbol.Null),
+            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null),
             "a nullable coalescing assignment target supports nil comparison");
-        BoundExpression condition = new BoundBinaryExpression(syntax, read, eqOp, nilLiteral);
+        BoundExpression condition = new BoundBinaryExpression(syntax, conditionRead, eqOp, nilLiteral);
 
         var thenStmt = new BoundExpressionStatement(syntax, write);
         BoundStatement ifStmt = new BoundIfStatement(syntax, condition, thenStmt, elseStatement: null);

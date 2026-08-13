@@ -214,6 +214,21 @@ func F() { var buf = stackalloc []string{""a"", ""b""} }
         Assert.Contains(diagnostics, d => d.Id == "GS0399");
     }
 
+    [Fact]
+    public void SafeSpanForm_PassesToImportedReadOnlySpanParameter()
+    {
+        const string source = @"
+package p
+import System.Text
+func F() {
+    let bytes = stackalloc [4]uint8
+    let text = Encoding.ASCII.GetString(bytes.Slice(0, 3))
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Empty(diagnostics);
+    }
+
     private static IEnumerable<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

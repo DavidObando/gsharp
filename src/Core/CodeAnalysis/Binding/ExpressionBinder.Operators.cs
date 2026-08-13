@@ -847,6 +847,10 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        var (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition);
+        whenTrueNarrowing = MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue);
+        whenFalseNarrowing = MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse);
+
         var whenTrue = BindWithNarrowing(
             whenTrueNarrowing,
             () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType));
@@ -891,6 +895,29 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundConditionalExpression(null, condition, convertedTrue, convertedFalse, resultType);
+    }
+
+    private static Dictionary<AccessPath, TypeSymbol>? MergeIfExpressionNarrowing(
+        Dictionary<AccessPath, TypeSymbol>? first,
+        Dictionary<AccessPath, TypeSymbol>? second)
+    {
+        if (first == null || first.Count == 0)
+        {
+            return second;
+        }
+
+        if (second == null || second.Count == 0)
+        {
+            return first;
+        }
+
+        var merged = new Dictionary<AccessPath, TypeSymbol>(first);
+        foreach (var pair in second)
+        {
+            merged[pair.Key] = pair.Value;
+        }
+
+        return merged;
     }
 
     /// <summary>
@@ -1315,8 +1342,10 @@ internal sealed partial class ExpressionBinder
         var leftToRight = Conversion.Classify(left, right);
         var rightToLeft = Conversion.Classify(right, left);
 
-        bool leftImplicit = leftToRight.IsImplicit;
-        bool rightImplicit = rightToLeft.IsImplicit;
+        bool leftImplicit = leftToRight.IsImplicit
+            || HasImportedUserDefinedImplicitConversion(left, right);
+        bool rightImplicit = rightToLeft.IsImplicit
+            || HasImportedUserDefinedImplicitConversion(right, left);
 
         // Identity already handled; treat IsIdentity here as implicit too.
         if (leftImplicit && !rightImplicit)
@@ -1345,6 +1374,22 @@ internal sealed partial class ExpressionBinder
         }
 
         return null;
+    }
+
+    private static bool HasImportedUserDefinedImplicitConversion(TypeSymbol source, TypeSymbol target)
+    {
+        if (source.ClrType == null || target.ClrType == null)
+        {
+            return false;
+        }
+
+        return ClrOperatorResolution.TryResolveConversion(
+                source.ClrType,
+                target.ClrType,
+                allowExplicit: false,
+                out _,
+                out var isExplicit)
+            && !isExplicit;
     }
 
     /// <summary>

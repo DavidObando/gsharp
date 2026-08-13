@@ -202,6 +202,23 @@ public class Issue1278ArrowExpressionMemberParserTests
         Assert.All(funcs, f => Assert.NotNull(f.Body));
     }
 
+    [Fact]
+    public void ArrowCallOperatorBody_FollowedByReceiverOperator_ParsesCleanly()
+    {
+        const string source =
+            "package P\n" +
+            "struct B { func Equals(other B) bool { return true } }\n" +
+            "func (left B) operator ==(right B) bool -> left.Equals(right)\n" +
+            "func (left B) operator !=(right B) bool -> !left.Equals(right)\n";
+
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var funcs = tree.Root.Members.OfType<FunctionDeclarationSyntax>().ToArray();
+        Assert.Equal(2, funcs.Length);
+        Assert.All(funcs, function => Assert.NotNull(function.Body));
+    }
+
     private static IEnumerable<SyntaxNode> Walk(SyntaxNode node)
     {
         yield return node;

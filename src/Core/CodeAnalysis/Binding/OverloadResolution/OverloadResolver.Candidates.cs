@@ -875,6 +875,13 @@ internal sealed partial class OverloadResolver
                 : ClrOverloadResolution.ImplicitConversionKind.StructuralProjection;
         }
 
+        if (!IsNumericPrimitive(argType)
+            && !IsNumericPrimitive(paramType)
+            && conversions.HasUserDefinedImplicitConversion(argType, paramType))
+        {
+            return ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit;
+        }
+
         if (paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType)
         {
             // Issue #2146: `T -> T?` is a genuine value-type nullable WRAP only
@@ -920,6 +927,10 @@ internal sealed partial class OverloadResolver
         // more of Conversion.Classify's structure, if this surfaces in practice.
         return ClrOverloadResolution.ImplicitConversionKind.Reference;
     }
+
+    private static bool IsNumericPrimitive(TypeSymbol type)
+        => type?.ClrType?.FullName is string fullName
+            && NumericWideningLattice.IsNumericPrimitive(fullName);
 
     /// <summary>
     /// Issue #1154: returns <see langword="true"/> when <paramref name="argumentNames"/>

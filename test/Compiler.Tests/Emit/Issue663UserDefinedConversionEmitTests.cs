@@ -140,6 +140,35 @@ public class Issue663UserDefinedConversionEmitTests
         Assert.Equal($"42{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void JsonNode_Implicit_String_InIndexerInitializer_Runs()
+    {
+        var source = """
+            package Test
+            import System
+            import System.Text.Json.Nodes
+
+            class Writer {
+                shared {
+                    const SchemaVersion string = "1"
+
+                    func Build(resourceName string) JsonObject ->
+                        JsonObject(){
+                            ["_schemaVersion"] = Writer.SchemaVersion,
+                            ["resource"] = resourceName,
+                        }
+                }
+            }
+
+            let obj = Writer.Build("queue")
+            Console.WriteLine(string?(obj["_schemaVersion"]) ?? "nil")
+            Console.WriteLine(string?(obj["resource"]) ?? "nil")
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"1{Environment.NewLine}queue{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var (exitCode, stdout, stderr) = CompileAndRunRaw(source);

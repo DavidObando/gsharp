@@ -22,6 +22,21 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class VariadicTests
 {
     [Fact]
+    public void Variadic_PassThroughImportedClrArray()
+    {
+        var result = Evaluate(@"
+import System
+
+func CountTypes(types ...Type) int32 -> len(types)
+
+CountTypes(Type.EmptyTypes)
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
     public void Variadic_PacksTrailingArgs_IntoSlice()
     {
         var result = Evaluate(@"
