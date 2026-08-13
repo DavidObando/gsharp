@@ -1008,10 +1008,17 @@ public partial class Parser
             // A function/tuple type clause is unambiguously a type shape.
             isComplex = true;
             pos++;
+            var sawEllipsis = false;
             if (Peek(pos).Kind != SyntaxKind.CloseParenthesisToken)
             {
                 while (true)
                 {
+                    if (Peek(pos).Kind == SyntaxKind.EllipsisToken)
+                    {
+                        sawEllipsis = true;
+                        pos++;
+                    }
+
                     if (!TryScanTypeClause(ref pos))
                     {
                         return false;
@@ -1035,13 +1042,18 @@ public partial class Parser
             pos++;
 
             // If `->` follows, this is an arrow function-type clause; scan the return type.
-            if (Peek(pos).Kind == SyntaxKind.RightArrowToken)
+            var isArrowFunction = Peek(pos).Kind == SyntaxKind.RightArrowToken;
+            if (isArrowFunction)
             {
                 pos++;
                 if (!TryScanTypeClause(ref pos))
                 {
                     return false;
                 }
+            }
+            else if (sawEllipsis)
+            {
+                return false;
             }
 
             // Optional trailing `?` for nullables (tuples and function types both support `?`).
@@ -1069,6 +1081,11 @@ public partial class Parser
             {
                 while (true)
                 {
+                    if (Peek(pos).Kind == SyntaxKind.EllipsisToken)
+                    {
+                        pos++;
+                    }
+
                     if (!TryScanTypeClause(ref pos))
                     {
                         return false;
