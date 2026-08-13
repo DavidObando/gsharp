@@ -1290,6 +1290,89 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
+    /// Wraps a value-type extension method group in a capturing lambda. CLR
+    /// closed-static delegates cannot bind a boxed value to a value-type first
+    /// parameter, so direct delegate creation fails for enum/struct receivers.
+    /// </summary>
+    /// <param name="group">Resolved extension method group.</param>
+    /// <returns>Original group for reference receivers; capturing adapter for value receivers.</returns>
+    public BoundExpression CreateUserExtensionMethodGroupAdapter(
+        BoundMethodGroupExpression group)
+    {
+        FunctionSymbol function = Invariant.Required(
+            group.Function,
+            "a resolved user method group has a function");
+        FunctionTypeSymbol functionType = Invariant.Required(
+            group.FunctionType,
+            "a resolved user method group has a function type");
+        if (!function.IsExtension ||
+            group.Receiver == null ||
+            !GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type))
+        {
+            return group;
+        }
+
+        var receiverTemp = new LocalVariableSymbol(
+            $"<method_group_receiver{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            isReadOnly: true,
+            group.Receiver.Type);
+        var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(
+            functionType.ParameterTypes.Length);
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(
+            functionType.ParameterTypes.Length + 1);
+        arguments.Add(new BoundVariableExpression(null, receiverTemp));
+
+        for (var i = 0; i < functionType.ParameterTypes.Length; i++)
+        {
+            var parameter = new ParameterSymbol(
+                $"arg{i}",
+                functionType.ParameterTypes[i],
+                declaringSyntax: group.Syntax,
+                refKind: function.Parameters[i + 1].RefKind);
+            adapterParameters.Add(parameter);
+            arguments.Add(new BoundVariableExpression(null, parameter));
+        }
+
+        var call = new BoundCallExpression(
+            null,
+            function,
+            arguments.MoveToImmutable(),
+            functionType.ReturnType)
+        {
+            MethodTypeArguments = group.MethodTypeArguments,
+        };
+        BoundStatement statement = functionType.ReturnType == TypeSymbol.Void
+            ? new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundExpressionStatement(null, call),
+                    new BoundReturnStatement(null, null)))
+            : new BoundReturnStatement(null, call);
+        var body = statement as BoundBlockStatement
+            ?? new BoundBlockStatement(null, ImmutableArray.Create(statement));
+        var adapterFunction = new FunctionSymbol(
+            $"<method_group_adapter{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            adapterParameters.MoveToImmutable(),
+            functionType.ReturnType,
+            package: getCurrentFunction()?.Package)
+        {
+            LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType,
+        };
+        var captured = CollectCapturedVariables(body, adapterFunction.Parameters);
+        var adapter = new BoundFunctionLiteralExpression(
+            group.Syntax,
+            adapterFunction,
+            functionType,
+            body,
+            captured);
+        return new BoundBlockExpression(
+            group.Syntax,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(group.Syntax, receiverTemp, group.Receiver)),
+            adapter);
+    }
+
+    /// <summary>
     /// For an async lambda's declared return type, computes the
     /// observable return type the synthesized
     /// <see cref="FunctionTypeSymbol"/> must present to the delegate

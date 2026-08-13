@@ -170,6 +170,73 @@ public class Issue1103ExtensionInstanceCallEmitTests
         Assert.Equal($"go!{Environment.NewLine}100{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void ExplicitExtensions_OnOwnedAndEnumReceivers_Run()
+    {
+        var source = """
+            package P
+            import System
+
+            enum Color { Red, Green }
+
+            class Box {
+                var Value int32
+            }
+
+            func extension (color Color) Describe() string {
+                return color.ToString()
+            }
+
+            func extension (color Color) Echo[T](value T) T {
+                return value
+            }
+
+            func extension (box Box) Describe() string {
+                return box.Value.ToString()
+            }
+
+            func extension (box Box) Describe(prefix string) string {
+                return prefix + box.Value.ToString()
+            }
+
+            func extension (box Box) Echo[T](value T) T {
+                return value
+            }
+
+            var pickCount = 0
+
+            func PickColor(pick bool) Color? {
+                pickCount++
+                if pick {
+                    return Color.Green
+                }
+
+                return nil
+            }
+
+            let color = Color.Red
+            let describe () -> string = color.Describe
+            let echo (string) -> string = color.Echo
+            let box = Box{Value: 7}
+            var current = box
+            let ownedDescribe () -> string = current.Describe
+            current = Box{Value: 9}
+            Console.WriteLine(PickColor(true)?.Describe())
+            Console.WriteLine(pickCount)
+            Console.WriteLine(describe())
+            Console.WriteLine(box.Describe())
+            Console.WriteLine(box.Describe("v="))
+            Console.WriteLine(box.Echo("generic"))
+            Console.WriteLine(echo("method-group"))
+            Console.WriteLine(ownedDescribe())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal(
+            $"Green{Environment.NewLine}1{Environment.NewLine}Red{Environment.NewLine}7{Environment.NewLine}v=7{Environment.NewLine}generic{Environment.NewLine}method-group{Environment.NewLine}7{Environment.NewLine}",
+            output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1103_emit_").FullName;

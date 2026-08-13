@@ -150,8 +150,8 @@ public sealed class AttributeUse : GNode
 }
 
 /// <summary>
-/// A receiver clause <c>(name Type)</c> for an extension function on a
-/// non-owned type (ADR-0019/ADR-0079, ADR-0115 §B.5).
+/// A receiver clause <c>(name Type)</c> for an extension function
+/// (ADR-0019/ADR-0079, ADR-0115 §B.5).
 /// </summary>
 public sealed class Receiver : GNode
 {
@@ -159,16 +159,24 @@ public sealed class Receiver : GNode
     /// Initializes a new instance of the <see cref="Receiver"/> class.
     /// </summary>
     /// <param name="name">The receiver parameter name.</param>
-    /// <param name="type">The non-owned receiver type.</param>
-    public Receiver(string name, GTypeReference type)
+    /// <param name="type">The receiver type.</param>
+    /// <param name="isExplicitExtension">
+    /// Whether to render the issue #3357 explicit-extension form
+    /// <c>func extension (name Type)</c>.
+    /// </param>
+    public Receiver(string name, GTypeReference type, bool isExplicitExtension = false)
     {
         Name = name;
         Type = type;
+        IsExplicitExtension = isExplicitExtension;
     }
 
     /// <summary>Gets the receiver parameter name.</summary>
     public string Name { get; }
 
-    /// <summary>Gets the non-owned receiver type.</summary>
+    /// <summary>Gets the receiver type.</summary>
     public GTypeReference Type { get; }
+
+    /// <summary>Gets a value indicating whether this is an explicitly extension-dispatched receiver.</summary>
+    public bool IsExplicitExtension { get; }
 }

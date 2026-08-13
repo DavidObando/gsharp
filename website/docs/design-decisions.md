@@ -98,6 +98,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | ADR | Title | Summary |
 | --- | --- | --- |
 | [0019](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0019-extension-functions.md) | Extension function declaration syntax — `func (Receiver) Name(...) ...` | Defines receiver-based extension function syntax. |
+| [0165](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0165-explicit-extension-receiver-clauses.md) | Explicit extension receiver clauses | Adds `func extension (r T) M()` for enum and owned extension receivers. |
 | [0026](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0026-operator-by-name-deferral.md) | Operator-by-name on user types — deferred | Defers user operator naming until a later design is chosen. |
 | [0034](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0034-imported-clr-interop.md) | Imported CLR interop — static members, writes, operators, conversions, overload resolution | Extends imported CLR support across static members, writes, operators, conversions, and overloads. |
 | [0035](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0035-user-operator-overloads.md) | User-defined `operator` keyword on GSharp types | Adds receiver-style operator declarations for G# types. |

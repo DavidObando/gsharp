@@ -73,6 +73,11 @@ The diagnostic fires **once per declaration**, at the location of the
 receiver type clause — not per call site. Cross-package, primitive, and
 CLR receivers continue to bind as extension functions and are not warned.
 
+ADR-0165 adds an explicit exception: `func extension (r T) M(...)` always
+declares an extension, including for owned classes/structs and same-package
+enums. It does not emit `GS0314`; the unmarked form described by this ADR is
+unchanged.
+
 ### Exemption: operators
 
 ADR-0035 requires receiver-clause syntax for `operator` declarations

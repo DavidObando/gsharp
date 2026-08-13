@@ -172,6 +172,19 @@ public class FormattingEngineTests
     }
 
     [Fact]
+    public void Format_ExplicitExtensionReceiver_IsIdempotentAndParseable()
+    {
+        const string input = "enum Color{Red,Green}\nfunc extension(c Color)Describe()string{\nreturn c.ToString()\n}\n";
+
+        var once = FormattingEngine.Format(input);
+        var twice = FormattingEngine.Format(once);
+
+        Assert.Equal(once, twice);
+        Assert.Contains("func extension (c Color) Describe () string {", once);
+        Assert.Empty(SyntaxTree.Parse(once).Diagnostics);
+    }
+
+    [Fact]
     public void Format_RectangularArrayRanksDimensionsIndicesAndInitializers()
     {
         const string input = "func read(value[,]int32)int32{\nlet copy=[2,3]int32{1,2,3,4,5,6}\nreturn value[0,1]+copy[1,2]\n}\n";

@@ -684,11 +684,14 @@ internal sealed partial class DeclarationBinder
             seenParameterNames.Add(recvName);
             parameters.Add(explicitReceiverParameter);
 
-            if (receiverType is StructSymbol receiverStruct && string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
+            if (!syntax.IsExplicitExtension &&
+                receiverType is StructSymbol receiverStruct &&
+                string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
             {
                 methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;
             }
-            else if (IsSamePackageNonAggregateReceiver(receiverSyntax.Type, receiverType, package))
+            else if (!syntax.IsExplicitExtension &&
+                IsSamePackageNonAggregateReceiver(receiverSyntax.Type, receiverType, package))
             {
                 Diagnostics.ReportMethodReceiverMustBeStructOrClass(
                     receiverSyntax.Type?.Location ?? receiverSyntax.Identifier.Location,

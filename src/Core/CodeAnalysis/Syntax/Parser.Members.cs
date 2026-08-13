@@ -1114,9 +1114,27 @@ public partial class Parser
     private MemberSyntax ParseFunctionDeclaration(SyntaxToken? accessibilityModifier, SyntaxToken? openModifier, SyntaxToken? overrideModifier)
         => ParseFunctionDeclaration(accessibilityModifier, openModifier, overrideModifier, asyncModifier: null);
 
-    private MemberSyntax ParseFunctionDeclaration(SyntaxToken? accessibilityModifier, SyntaxToken? openModifier, SyntaxToken? overrideModifier, SyntaxToken? asyncModifier)
+    private MemberSyntax ParseFunctionDeclaration(
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
+        SyntaxToken? asyncModifier,
+        bool allowExplicitExtension = false)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
+
+        // Issue #3357: `func extension (recv Type) Name(...)` forces the
+        // receiver clause to remain an extension for enum and owned receivers.
+        // `extension` stays contextual: a normal function named `extension`
+        // is unaffected unless a complete receiver-clause shape follows.
+        SyntaxToken? explicitExtensionModifier = null;
+        if (allowExplicitExtension &&
+            Current.Kind == SyntaxKind.IdentifierToken &&
+            Current.Text == "extension" &&
+            LooksLikeExplicitExtensionReceiverClause())
+        {
+            explicitExtensionModifier = NextToken();
+        }
 
         SyntaxToken? explicitIfaceOpenParen = null;
         TypeClauseSyntax? explicitIfaceType = null;
@@ -1201,6 +1219,7 @@ public partial class Parser
         }
 
         var decl = new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
+        decl.ExplicitExtensionModifier = explicitExtensionModifier;
         decl.ReturnRefModifier = returnRefModifier;
         decl.SemicolonBodyToken = semicolonBody;
         decl.IsConversionOperator = isConversionOperator;
@@ -1701,6 +1720,26 @@ public partial class Parser
         var type = ParseTypeClause();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         return (openParen, type, closeParen);
+    }
+
+    private bool LooksLikeExplicitExtensionReceiverClause()
+    {
+        if (Peek(1).Kind != SyntaxKind.OpenParenthesisToken ||
+            Peek(2).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var ahead = 3;
+        if (!TryScanTypeClause(ref ahead) ||
+            Peek(ahead).Kind != SyntaxKind.CloseParenthesisToken ||
+            Peek(ahead + 1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var afterName = Peek(ahead + 2).Kind;
+        return afterName is SyntaxKind.OpenParenthesisToken or SyntaxKind.OpenSquareBracketToken;
     }
 
     private bool LooksLikeReceiverClause()

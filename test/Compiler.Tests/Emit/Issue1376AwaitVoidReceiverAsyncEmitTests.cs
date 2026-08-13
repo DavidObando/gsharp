@@ -77,6 +77,29 @@ public class Issue1376AwaitVoidReceiverAsyncEmitTests
         Assert.Equal($"a:x{Environment.NewLine}b:x{Environment.NewLine}", CompileAndRun(source));
     }
 
+    [Fact]
+    public void AwaitExplicitOwnedReceiverAsyncFunc_EmitsAndRuns()
+    {
+        var source = """
+            package P
+            import System
+            import System.Threading.Tasks
+
+            class Worker {
+                var Name string
+            }
+
+            async func extension (worker Worker) PrintAsync() {
+                await Task.Delay(1)
+                Console.WriteLine(worker.Name)
+            }
+
+            Worker{Name: "owned"}.PrintAsync().GetAwaiter().GetResult()
+            """;
+
+        Assert.Equal($"owned{Environment.NewLine}", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1376_emit_").FullName;

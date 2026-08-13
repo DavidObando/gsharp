@@ -20,6 +20,11 @@ namespace Cs2Gs.Tests;
 /// local/parameter/<c>this</c>/literal — which is safe to duplicate and needs no
 /// temp at all.
 /// <para>
+/// <c>CaptureMethodGroupReceiver</c> uses the same triviality gate only after
+/// proving the receiver symbol stable; reassigned locals still spill to
+/// preserve C# method-group capture timing (issue #3357 follow-up).
+/// </para>
+/// <para>
 /// <c>CaptureAssignmentValue</c> is deliberately NOT changed: its temp carries
 /// the CONVERTED assigned value, which a re-read of the target would not
 /// reproduce. It is load-bearing rather than noise.

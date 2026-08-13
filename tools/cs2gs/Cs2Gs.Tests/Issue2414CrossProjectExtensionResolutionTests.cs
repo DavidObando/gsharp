@@ -188,7 +188,7 @@ namespace Oahu.App
         Assert.Contains("IsNullOrEmpty", printedFoundation);
 
         Assert.Contains("package Oahu.Core", printedCore);
-        Assert.Contains("func (headers HttpHeadersLike?) IsNullOrEmpty() bool", printedCore);
+        Assert.Contains("func extension (headers HttpHeadersLike?) IsNullOrEmpty() bool", printedCore);
 
         // Both instance AND static (unreduced) C# call forms must translate
         // to the SAME G# receiver-clause call shape (issue #914) — cs2gs has

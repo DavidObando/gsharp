@@ -135,7 +135,7 @@ Since issue #948, the inline field initializers the translator emits here — `p
 
 #### B.5 Methods: in-body vs receiver-clause — ADR-0079, ADR-0024, spec §Functions and methods
 
-Instance methods on a **`class`** (or `data class`) the package **owns** are declared **in-body** as `func M(...) R { ... }`. The receiver-clause form `func (r T) M(...) R` is **reserved for non-owned receiver types** — CLR/BCL types, primitives, and types from other packages — i.e. C# *extension methods* (`this T` first parameter). ADR-0079 (issue #719) made this the rule and emits the soft `GS0314` warning when a receiver clause names an owned type; `samples/MethodsWithReceivers.gs` is the canonical example (in-body method on an owned class) and `samples/ExtensionFunctions.gs` is the canonical receiver-clause example (on `int32`). Operator overloads keep the receiver-clause form and are exempt from `GS0314` (spec §Functions and methods).
+Instance methods on a **`class`** (or `data class`) the package **owns** are declared **in-body** as `func M(...) R { ... }`. The inferred receiver-clause form `func (r T) M(...) R` is **reserved for non-owned receiver types** — CLR/BCL types, primitives, and types from other packages. ADR-0165 adds `func extension (r T) M(...) R` when a C# extension must remain an extension despite an enum or owned receiver. ADR-0079 (issue #719) still emits `GS0314` only for the unmarked owned receiver form. Operator overloads keep the unmarked receiver-clause form and are exempt from `GS0314` (spec §Functions and methods).
 
 > **Owned-`struct` methods — RESOLVED (issue #938).** ADR-0079 frames the
 > in-body canonical form as applying to owned `class` **and** `struct` receivers.
@@ -155,7 +155,7 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 > reasons; emitting the in-body form instead would now be warning-free and is
 > a possible future translator improvement.
 
-C# **extension methods** (`static R M(this T self, …)`) translate to the receiver-clause form `func (self T) M(…) R` (ADR-0019), since `T` is non-owned by definition.
+C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` for non-owned receivers and `func extension (self T) M(…) R` for enum/owned receivers that cannot become canonical in-body members (ADR-0019/0165).
 
 #### B.6 Inheritance and the `:` clause — ADR-0017, spec §Type declarations
 
@@ -305,7 +305,7 @@ Inside a G# `shared { }` block a bare sibling static call does **not** resolve (
 
 #### B.19 Extension methods → top-level receiver-clause funcs; emptied static class dropped — ADR-0079
 
-A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5), because a receiver-clause `func` only binds its receiver at top level — inside a `shared { }` block the receiver is not in scope (`GS0125`/`GS0157`). The translator therefore **lifts** every extension method out of its enclosing `static class` to a top-level sibling (reusing the `pendingTopLevelDeclarations` mechanism of §B.14), and when *every* member of the static class is lifted the now-empty class is **dropped** entirely (a `class` with an empty body and empty `shared` block is `GS0104`/noise). `samples/ExtensionFunctions.gs` and `samples/GenericExtensionFunctions.gs` are the canonical forms.
+A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5), or the ADR-0165 explicit form `func extension (self T) M(…) R` for enum/owned extension receivers. A receiver-clause `func` only binds at top level, so the translator lifts it out of the enclosing static class. Cross-container overload sets may retain their original static helpers for explicitly qualified C# calls while also emitting explicit receiver companions; reduced calls, null-conditional calls, and method groups use the companion directly and no longer require static-helper spills.
 
 #### B.20 Lambdas → canonical arrow form — ADR-0074, ADR-0075
 

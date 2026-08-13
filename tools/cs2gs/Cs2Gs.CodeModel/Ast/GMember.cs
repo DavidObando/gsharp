@@ -208,8 +208,9 @@ public sealed class PropertyDeclaration : GMember
 /// <summary>
 /// A function or method (ADR-0024/ADR-0079, ADR-0115 §B.5). When
 /// <see cref="Receiver"/> is set the declaration renders as a receiver-clause
-/// extension function on a non-owned type; otherwise it is an in-body method on
-/// an owned type (or a top-level function). A <see langword="null"/>
+/// extension function; issue #3357's explicit form also supports enum and owned
+/// extension receivers. Otherwise it is an in-body method on an owned type (or
+/// a top-level function). A <see langword="null"/>
 /// <see cref="Body"/> renders the bodyless <c>;</c> form (interface/abstract).
 /// </summary>
 public sealed class MethodDeclaration : GMember

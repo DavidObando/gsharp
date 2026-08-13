@@ -142,6 +142,59 @@ func (sb StringBuilder) Reset() {
     }
 
     [Fact]
+    public void ExplicitExtension_OnOwnedClass_DoesNotWarnAndDispatchesAsExtension()
+    {
+        var source = @"
+class Counter {
+    var Value int32
+}
+
+func extension (c Counter) Bump() int32 { return c.Value + 1 }
+
+let c = Counter{Value: 41}
+c.Bump()
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitExtension_OnOwnedEnum_DoesNotReportReceiverError()
+    {
+        var source = @"
+enum Color { Red, Green }
+
+func extension (c Color) Rank() int32 {
+    if c == Color.Green {
+        return 2
+    }
+
+    return 1
+}
+
+Color.Green.Rank()
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void Extension_RemainsAvailableAsOrdinaryFunctionName()
+    {
+        var source = @"
+func extension(value int32) int32 { return value + 1 }
+extension(41)
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void InBodyMethod_OnClass_DoesNotWarn()
     {
         var source = @"

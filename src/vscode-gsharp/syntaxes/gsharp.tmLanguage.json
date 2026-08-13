@@ -303,7 +303,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|shared|sizeof|stackalloc|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
+          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|extension|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|shared|sizeof|stackalloc|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",

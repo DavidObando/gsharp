@@ -1774,6 +1774,11 @@ public static class GSharpPrinter
         sb.Append("func ");
         if (method.Receiver != null)
         {
+            if (method.Receiver.IsExplicitExtension)
+            {
+                sb.Append("extension ");
+            }
+
             sb.Append($"({method.Receiver.Name} {RenderType(method.Receiver.Type)}) ");
         }
         else if (method.ExplicitInterfaceType != null)

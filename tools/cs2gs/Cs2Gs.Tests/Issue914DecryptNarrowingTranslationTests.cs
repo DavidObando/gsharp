@@ -82,14 +82,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// A null-conditional call to an enum extension method
-    /// (<c>recv?.Count()</c> where the <c>this</c> parameter is an enum) cannot
-    /// bind via the G# <c>?.</c> member-binding form because the helper is a
-    /// plain static (a receiver clause is rejected on enums, GS0103). It lowers
-    /// to the guarded positional call <c>if recv != nil { Owner.Count(recv!!) } else { nil }</c>.
+    /// Issue #3357: a null-conditional enum extension call retains its native
+    /// member-binding form and needs no guarded static-helper lowering.
     /// </summary>
     [Fact]
-    public void NullConditionalEnumExtension_LowersToGuardedPositionalCall()
+    public void NullConditionalEnumExtension_RetainsMemberCall()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -109,9 +106,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Count(", printed);
-        Assert.Contains("!= nil", printed);
-        Assert.DoesNotContain("?.Count()", printed);
+        Assert.Contains("G?.Count()", printed);
+        Assert.DoesNotContain("Ext.Count(", printed);
+        Assert.DoesNotContain("__spill", printed);
     }
 
     /// <summary>
