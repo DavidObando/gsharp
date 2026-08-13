@@ -35,6 +35,28 @@ public class Issue1278ArrowExpressionMemberEmitTests
     }
 
     [Fact]
+    public void Issue3375_TupleReturningArrowBody_RunsAndReturns()
+    {
+        var source = """
+            package P
+
+            class PairFactory {
+                shared {
+                    private func Pair() (int32, int32) -> (1, 2)
+                    func Sum() int32 {
+                        let pair = Pair()
+                        return pair.Item1 * 10 + pair.Item2
+                    }
+                }
+            }
+
+            public var result = PairFactory.Sum()
+            """;
+
+        Assert.Equal(12, RunAndGetIntResult(source));
+    }
+
+    [Fact]
     public void VoidMethodArrowBody_ExecutesSideEffect()
     {
         // A void method expression body is an executed statement (a call that

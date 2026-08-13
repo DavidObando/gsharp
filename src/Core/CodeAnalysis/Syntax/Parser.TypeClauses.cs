@@ -847,6 +847,12 @@ public partial class Parser
 
     private bool LooksLikeArrowFunctionTypeClauseStart(int startOffset)
     {
+        return LooksLikeArrowFunctionTypeClauseStart(startOffset, out _);
+    }
+
+    private bool LooksLikeArrowFunctionTypeClauseStart(int startOffset, out bool hasTopLevelComma)
+    {
+        hasTopLevelComma = false;
         if (Peek(startOffset).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
@@ -905,6 +911,13 @@ public partial class Parser
                 {
                     braceDepth--;
                 }
+            }
+            else if (k == SyntaxKind.CommaToken &&
+                     parenDepth == 1 &&
+                     bracketDepth == 0 &&
+                     braceDepth == 0)
+            {
+                hasTopLevelComma = true;
             }
 
             offset++;

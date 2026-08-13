@@ -34,6 +34,27 @@ var r = square(7)
     }
 
     [Fact]
+    public void Issue3375_TupleReturningArrowBody_BindsAndEvaluates()
+    {
+        var source = @"
+class PairFactory {
+    shared {
+        private func Pair() (int32, int32) -> (1, 2)
+        func Sum() int32 {
+            let pair = Pair()
+            return pair.Item1 * 10 + pair.Item2
+        }
+    }
+}
+
+var r = PairFactory.Sum()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
     public void ReadOnlyPropertyArrow_BindsAndEvaluates()
     {
         var source = @"
