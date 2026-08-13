@@ -200,9 +200,9 @@ public sealed partial class CSharpToGSharpTranslator
                         yield break;
                     }
 
-                    // ADR-0161 / issue #3347: ordinary assignment expressions
-                    // stay where C# put them. Only deconstruction and `??=`
-                    // still require statement-hosting fallback machinery.
+                    // ADR-0161 / issue #3347: ordinary assignment expressions,
+                    // including `??=`, stay where C# put them. Only
+                    // deconstruction still requires statement-hosting fallback.
                     if (AssignmentRequiresStatementLowering(assignment))
                     {
                         yield return assignment;

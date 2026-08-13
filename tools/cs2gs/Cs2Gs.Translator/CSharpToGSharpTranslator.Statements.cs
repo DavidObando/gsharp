@@ -2023,9 +2023,9 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            // Ordinary chains are native G# assignment expressions. Keep the
-            // legacy flattening only when a link is tuple-valued or `??=`, the
-            // two assignment shapes that still need statement-hosting lowering.
+            // Ordinary chains, including `??=`, are native G# assignment
+            // expressions. Keep legacy flattening only when a link is
+            // tuple-valued and still needs statement-hosting lowering.
             if (expression is AssignmentExpressionSyntax outerAssignment &&
                 AssignmentChainRequiresStatementLowering(outerAssignment))
             {

@@ -120,6 +120,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
             // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
             // designation has no canonical G# type, and this rewrite bypasses
             // that entry point — report the gap here so the diagnostic surfaces
@@ -130,7 +138,6 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression initializer = asTarget == null
                 ? receiver
                 : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
-            string name = SanitizeIdentifier(designation.Identifier.Text);
 
             // While the guard and the true arm are translated, every reference
             // to the C# pattern local reads as the bare G# binding — no `!!`,
@@ -138,15 +145,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
 
-            GExpression guard = null;
+            GExpression guard = residualGuard;
             GExpression whenTrue;
             try
             {
-                if (residualPattern != null)
-                {
-                    guard = this.TranslateIfLetResidualPattern(residualPattern, name);
-                }
-                else if (directBinding)
+                if (residualPattern == null && directBinding)
                 {
                     guard = new BinaryExpression(
                         new IdentifierExpression(name),
@@ -315,6 +318,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
             // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
             // designation has no canonical G# type. Report here so the gap
             // surfaces exactly once on this path too.
@@ -324,7 +335,6 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression initializer = asTarget == null
                 ? receiver
                 : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
-            string name = SanitizeIdentifier(designation.Identifier.Text);
 
             // Inside the guard and the then-branch every reference to the C#
             // pattern local reads as the bare G# binding — no `!!`, no `as`
@@ -332,15 +342,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
 
-            GExpression guard = null;
+            GExpression guard = residualGuard;
             BlockStatement then;
             try
             {
-                if (residualPattern != null)
-                {
-                    guard = this.TranslateIfLetResidualPattern(residualPattern, name);
-                }
-                else if (directBinding)
+                if (residualPattern == null && directBinding)
                 {
                     guard = new BinaryExpression(
                         new IdentifierExpression(name),
@@ -506,13 +512,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
             this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression initializer = asTarget == null
                 ? receiver
                 : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
-            string name = SanitizeIdentifier(designation.Identifier.Text);
 
             bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
@@ -520,9 +533,7 @@ public sealed partial class CSharpToGSharpTranslator
             BlockStatement body;
             try
             {
-                GExpression guard = residualPattern == null
-                    ? null
-                    : this.TranslateIfLetResidualPattern(residualPattern, name);
+                GExpression guard = residualGuard;
                 foreach (ExpressionSyntax conjunct in guards)
                 {
                     GExpression translated = this.TranslateExpression(conjunct);
@@ -617,26 +628,29 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
             this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression initializer = asTarget == null
                 ? receiver
                 : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
-            string name = SanitizeIdentifier(designation.Identifier.Text);
 
             bool hadPrevious = this.state.PatternBindings.TryGetValue(
                 binder,
                 out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
-            GExpression guard = null;
+            GExpression guard = residualGuard;
             try
             {
-                if (residualPattern != null)
-                {
-                    guard = this.TranslateIfLetResidualPattern(residualPattern, name);
-                }
-                else if (directBinding)
+                if (residualPattern == null && directBinding)
                 {
                     guard = new BinaryExpression(
                         new IdentifierExpression(name),
@@ -791,22 +805,41 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        private GExpression TranslateIfLetResidualPattern(
+        private bool TryTranslateIfLetResidualPattern(
             RecursivePatternSyntax pattern,
-            string bindingName)
+            string bindingName,
+            out GExpression result)
         {
+            result = null;
             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
             var guards = new List<GExpression>();
-            GPattern translated = this.TranslateRecursivePattern(
-                pattern,
-                new IdentifierExpression(bindingName),
-                bindings,
-                new HashSet<string>(System.StringComparer.Ordinal),
-                guards,
-                treatAsUntyped: true);
-            return new PatternTestExpression(
+            bool outerBooleanPattern = this.state.TranslatingBooleanPattern;
+            this.state.TranslatingBooleanPattern = true;
+            GPattern translated;
+            try
+            {
+                translated = this.TranslateRecursivePattern(
+                    pattern,
+                    new IdentifierExpression(bindingName),
+                    bindings,
+                    new HashSet<string>(System.StringComparer.Ordinal),
+                    guards,
+                    treatAsUntyped: true);
+            }
+            finally
+            {
+                this.state.TranslatingBooleanPattern = outerBooleanPattern;
+            }
+
+            if (translated == null || bindings.Count != 0 || guards.Count != 0)
+            {
+                return false;
+            }
+
+            result = new PatternTestExpression(
                 new IdentifierExpression(bindingName),
                 translated);
+            return true;
         }
 
         /// <summary>

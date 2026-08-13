@@ -75,6 +75,59 @@ public sealed class Issue3347RemainingSpillInventoryTests
     }
 
     [Fact]
+    public void IfLetResidualPatterns_PreserveNestedTypedConstraintsAcrossAllSurfaces()
+    {
+        string printed = Translate(
+            """
+            public sealed record Point(int X, int Y);
+            public sealed record Shape(Point Center);
+
+            public static class C
+            {
+                private static object Get() => new Shape(new Point(0, 1));
+
+                public static int Value() =>
+                    Get() is Shape { Center: Point(0, > 0) } shape
+                        ? shape.Center.Y
+                        : 0;
+
+                public static int Statement()
+                {
+                    if (Get() is Shape { Center: Point(0, > 0) } shape)
+                    {
+                        return shape.Center.Y;
+                    }
+
+                    return 0;
+                }
+
+                public static int Loop()
+                {
+                    int result = 0;
+                    while (Get() is Shape { Center: Point(0, > 0) } shape)
+                    {
+                        result = shape.Center.Y;
+                        break;
+                    }
+
+                    return result;
+                }
+
+                public static bool Boolean() =>
+                    Get() is Shape { Center: Point(0, > 0) } shape
+                    && shape.Center.Y == 1;
+            }
+            """);
+
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.Equal(
+            4,
+            CountOccurrences(
+                printed,
+                "shape is { Center: Point and { X: 0, Y: > 0 } }"));
+    }
+
+    [Fact]
     public void NativeAssignmentExpressions_RemoveValueCarryingSpills()
     {
         string printed = Translate(
