@@ -42,14 +42,14 @@ public class Issue1732LoopLoweringTranslationTests
 {
     /// <summary>
     /// <c>do { bodyRuns++; } while ((n = Probe()) &lt; 0)</c>: the condition
-    /// carries a value-position assignment, forcing the condition-hoist lowering
-    /// (issue #1723) for the do-while. C# always runs the body once before the
+    /// carries a value-position assignment. ADR-0161 keeps it in the native
+    /// do-while condition. C# always runs the body once before the
     /// FIRST condition test, so <c>bodyRuns</c> must be 1 and <c>Probe</c> must
     /// have been called exactly once — and only AFTER the body ran once, not
     /// before.
     /// </summary>
     [Fact]
-    public void DoWhileHoistedCondition_RunsBodyOnceBeforeFirstConditionTest()
+    public void DoWhileAssignmentCondition_RunsBodyOnceBeforeFirstConditionTest()
     {
         string printed = TranslateAndValidate(@"
 using System;
@@ -81,9 +81,7 @@ namespace Demo
     }
 }");
 
-        // Structural check: the hoisted assignment/break-guard trails the body
-        // (do-while tail hoist), not leads it.
-        Assert.Contains("} while true", printed);
+        Assert.Contains("} while (n = C.Probe()) < 0", printed);
         Assert.True(printed.IndexOf("bodyRuns++", StringComparison.Ordinal) <
             printed.IndexOf("n = C.Probe()", StringComparison.Ordinal));
 

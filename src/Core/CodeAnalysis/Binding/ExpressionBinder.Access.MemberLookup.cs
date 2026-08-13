@@ -1843,6 +1843,36 @@ internal sealed partial class ExpressionBinder
                     constrainedInterfaceType);
         }
 
+        BoundExpression MakeUserIndexAssignment(
+            FunctionSymbol setter,
+            BoundExpression index,
+            BoundExpression value,
+            TypeSymbol elementType)
+        {
+            var indexName =
+                $"<idxAsnIndex{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var capturedIndex = new LocalVariableSymbol(indexName, isReadOnly: true, index.Type);
+            scope.TryDeclareVariable(capturedIndex);
+            var resultName =
+                $"<idxAsnValue{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var result = new LocalVariableSymbol(resultName, isReadOnly: true, elementType);
+            scope.TryDeclareVariable(result);
+            var indexRead = new BoundVariableExpression(null, capturedIndex);
+            var resultRead = new BoundVariableExpression(null, result);
+            var call = new BoundUserInstanceCallExpression(
+                null,
+                target,
+                setter,
+                ImmutableArray.Create<BoundExpression>(indexRead, resultRead));
+            return new BoundBlockExpression(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundVariableDeclaration(null, capturedIndex, index),
+                    new BoundVariableDeclaration(null, result, value),
+                    new BoundExpressionStatement(null, call)),
+                resultRead);
+        }
+
         BoundExpression BindValue(TypeSymbol elementType)
         {
             if (boundValueOverride != null)
@@ -2064,17 +2094,18 @@ internal sealed partial class ExpressionBinder
             var paramType = writeSubstitution != null
                 ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
                 : writeIndexer.Parameters[0].Type;
+            var setterValueType = writeIndexer.SetterSymbol.Parameters[^1].Type;
             var elementType = writeSubstitution != null
-                ? Binder.SubstituteType(writeIndexer.Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                : writeIndexer.Type;
+                ? Binder.SubstituteType(setterValueType, writeSubstitution, scope.References.MapClrTypeToReferences)
+                : setterValueType;
 
             var indexArg = ConvertIndexValue(paramType);
             var value = BindValue(elementType);
-            return new BoundUserInstanceCallExpression(
-                null,
-                target,
+            return MakeUserIndexAssignment(
                 writeIndexer.SetterSymbol,
-                ImmutableArray.Create(indexArg, value));
+                indexArg,
+                value,
+                elementType);
         }
 
         // ADR-0149 follow-up (issue #2370): index assignment through an
@@ -2094,17 +2125,18 @@ internal sealed partial class ExpressionBinder
             var paramType = writeIfaceSubstitution != null
                 ? Binder.SubstituteType(writeIfaceIndexer.Parameters[0].Type, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
                 : writeIfaceIndexer.Parameters[0].Type;
+            var setterValueType = writeIfaceIndexer.SetterSymbol.Parameters[^1].Type;
             var elementType = writeIfaceSubstitution != null
-                ? Binder.SubstituteType(writeIfaceIndexer.Type, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : writeIfaceIndexer.Type;
+                ? Binder.SubstituteType(setterValueType, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
+                : setterValueType;
 
             var indexArg = ConvertIndexValue(paramType);
             var value = BindValue(elementType);
-            return new BoundUserInstanceCallExpression(
-                null,
-                target,
+            return MakeUserIndexAssignment(
                 writeIfaceIndexer.SetterSymbol,
-                ImmutableArray.Create(indexArg, value));
+                indexArg,
+                value,
+                elementType);
         }
 
         if (targetType != TypeSymbol.Error)

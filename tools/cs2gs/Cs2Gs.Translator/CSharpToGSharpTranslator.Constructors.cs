@@ -1718,10 +1718,8 @@ public sealed partial class CSharpToGSharpTranslator
                         return new[] { (GStatement)new ReturnStatement(null) };
                     }
 
-                    // `return (x = M());` — a value-position assignment in the
-                    // return expression is hoisted into a preceding assignment
-                    // statement; it runs once, exactly where C# would evaluate it
-                    // (issue #1723).
+                    // Only a value-position deconstruction assignment needs a
+                    // return prologue; ordinary assignments remain inline.
                     var returnPrologue = new List<GStatement>();
                     List<AssignmentExpressionSyntax> returnEmbedded =
                         this.CollectEmbeddedAssignments(ret.Expression, includeSelf: true);

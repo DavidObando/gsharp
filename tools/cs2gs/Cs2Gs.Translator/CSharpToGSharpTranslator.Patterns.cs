@@ -336,14 +336,8 @@ public sealed partial class CSharpToGSharpTranslator
                     return new IdentifierExpression(aliasQualified.Name.Identifier.Text);
 
                 case AssignmentExpressionSyntax nestedAssignment:
-                    // An assignment used in value position (`a = b = c`, `M(x =
-                    // 5)`, `while ((line = r.ReadLine()) != null)`). G# models
-                    // assignment as a statement, not a value-yielding expression.
-                    // The enclosing statement/condition seam (WithHoistedAssignments
-                    // / TranslateConditionWithHoist / HoistLoopConditionClause)
-                    // hoists the write into a preceding assignment statement and
-                    // marks this node suppressed; reading it here means the write
-                    // already happened (issue #1723).
+                    // A value-position deconstruction assignment may already have
+                    // been lowered into statements by its enclosing seam.
                     if (this.state.SuppressedAssignments.Contains(nestedAssignment))
                     {
                         // A property/indexer/non-trivial target cannot be read back:
@@ -554,6 +548,39 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
+
+            // ADR-0162 / issue #3347: G# evaluates a native boolean pattern
+            // subject exactly once. Emit that form whenever C# introduces no
+            // pattern local; the old hand-expanded member-test tree was the
+            // dominant source of avoidable __spillN locals.
+            if (!PatternIntroducesBinding(isPattern.Pattern)
+                && !PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
+                && !IsTrivialOperand(receiver))
+            {
+                var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
+                var guards = new List<GExpression>();
+                bool outerBooleanPattern = this.state.TranslatingBooleanPattern;
+                this.state.TranslatingBooleanPattern = true;
+                GPattern pattern;
+                try
+                {
+                    pattern = this.TranslatePattern(
+                        isPattern.Pattern,
+                        receiver,
+                        bindings,
+                        new HashSet<string>(System.StringComparer.Ordinal),
+                        guards);
+                }
+                finally
+                {
+                    this.state.TranslatingBooleanPattern = outerBooleanPattern;
+                }
+
+                if (pattern != null && bindings.Count == 0 && guards.Count == 0)
+                {
+                    return new PatternTestExpression(receiver, pattern);
+                }
+            }
 
             // A pattern that binds a designation, or tests more than one
             // sub-pattern, reads the translated scrutinee more than once:
@@ -1698,22 +1725,51 @@ public sealed partial class CSharpToGSharpTranslator
         // into G#'s assignment expression, preserving the write where C# put it.
         //
         // A deconstruction assignment (`(a, b) = …`) has no single target and is
-        // left to the existing tuple lowering; a `??=` likewise keeps its
-        // hoisting path, since its write is conditional on the target being nil
-        // and G# has no coalescing-assignment EXPRESSION to express that.
+        // left to the existing tuple lowering. G# has no `??=` expression, so
+        // that one uses a native block/if expression below.
         private GExpression TranslateAssignmentAsExpression(AssignmentExpressionSyntax assignment)
         {
-            if (assignment.Left is TupleExpressionSyntax
-                || assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+            if (assignment.Left is TupleExpressionSyntax)
             {
                 // Unchanged fallback: still better than nothing, and these shapes
                 // are handled by their own lowerings when a seam is available.
                 return this.TranslateExpression(assignment.Right);
             }
 
-            GExpression target = this.TranslateExpression(assignment.Left);
-            GExpression value = this.TranslateExpression(assignment.Right);
-            return new AssignmentExpression(target, value, assignment.OperatorToken.Text);
+            if (assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+            {
+                return this.TranslateCoalescingAssignmentAsExpression(assignment);
+            }
+
+            return new AssignmentExpression(
+                this.TranslateAssignmentTarget(assignment.Left),
+                this.TranslateAssignmentValue(assignment),
+                assignment.OperatorToken.Text);
+        }
+
+        private GExpression TranslateCoalescingAssignmentAsExpression(
+            AssignmentExpressionSyntax assignment)
+        {
+            var statements = new List<GStatement>();
+            GExpression target = this.MakeDuplicationSafeTarget(
+                this.TranslateAssignmentTarget(assignment.Left),
+                statements,
+                assignment.Left);
+            GExpression current = this.SpillOperand(target, statements);
+            var value = new IfExpression(
+                new BinaryExpression(current, "==", LiteralExpression.Null()),
+                new AssignmentExpression(
+                    target,
+                    this.TranslateAssignmentValue(assignment)),
+                current);
+            GExpression result =
+                this.context.GetTypeInfo(assignment).Nullability.FlowState == NullableFlowState.NotNull
+                || !this.NullableReferenceValueMayBeNull(assignment.Right)
+                ? new NonNullAssertionExpression(value)
+                : value;
+            return statements.Count == 0
+                ? result
+                : new BlockExpression(statements, result);
         }
 
         private GExpression TranslateSizeOf(SizeOfExpressionSyntax sizeOf)

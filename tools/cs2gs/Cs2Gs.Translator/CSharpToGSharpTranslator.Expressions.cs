@@ -991,6 +991,15 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateIndexArgumentWithNullForgiveness(ArgumentSyntax argument)
         {
             GExpression translated = this.TranslateExpression(argument.Expression);
+            if (argument.Expression is PrefixUnaryExpressionSyntax bitwiseNot
+                && bitwiseNot.IsKind(SyntaxKind.BitwiseNotExpression))
+            {
+                // G# spells bitwise complement as `^x`, but a leading `^` in
+                // bracket position means from-end indexing. Parentheses retain
+                // the value-expression interpretation.
+                translated = new ParenthesizedExpression(translated);
+            }
+
             if (!this.IndexArgumentTargetsNonNullableReference(argument)
                 || !this.IndexArgumentValueNeedsNullForgiveness(argument.Expression))
             {

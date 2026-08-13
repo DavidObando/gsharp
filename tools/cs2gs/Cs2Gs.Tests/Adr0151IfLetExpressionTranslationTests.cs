@@ -497,10 +497,8 @@ namespace Demo
     }
 
     [Fact]
-    public void TypedDeclarationPattern_KeepsTheSpillBasedFallback()
+    public void TypedDeclarationPattern_UsesTestingIfLet()
     {
-        // `is string s` is a TYPE TEST, not just a nullable strip — an
-        // `if let` binding cannot express it.
         string printed = TranslateUnit(@"
 #nullable enable
 using System;
@@ -514,11 +512,12 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.Contains("if let s = Find() as string", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void PropertySubpattern_KeepsTheSpillBasedFallback()
+    public void PropertySubpattern_UsesIfLetGuard()
     {
         // `is { Length: > 0 } s` adds a member test to the null check.
         string printed = TranslateUnit(@"
@@ -534,14 +533,16 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.Contains("if let s = Find()", printed, StringComparison.Ordinal);
+        Assert.Contains("s is { Length: > 0 }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void NonNullableReceiver_KeepsTheSpillBasedFallback()
+    public void NonNullableReceiver_UsesScopedAuthorBinding()
     {
-        // gsc rejects a non-nullable `if let` initializer with GS0296, so a
-        // receiver that is not nullable in G# must keep the old lowering.
+        // gsc rejects a non-nullable `if let` initializer with GS0296, so the
+        // translator uses a scoped local carrying the author's binder name.
         string printed = TranslateUnit(@"
 #nullable enable
 using System;
@@ -556,6 +557,8 @@ namespace Demo
 }");
 
         Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.Contains("let n = Find()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     [Fact]

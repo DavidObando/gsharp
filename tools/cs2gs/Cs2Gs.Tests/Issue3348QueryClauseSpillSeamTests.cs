@@ -52,7 +52,7 @@ public sealed class C
         from x in xs where x.Tag is string s && s.Length > 0 select x;
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public sealed class C
         from x in xs select x.Tag is string { Length: > 0 };
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class C
         from x in xs let ok = x.Tag is string { Length: > 0 } select ok;
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public sealed class C
         from x in xs orderby x.Tag is string { Length: > 0 } select x;
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class C
         from x in xs from i in (x.Items is { } items ? items : System.Linq.Enumerable.Empty<int>()) select i;
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public sealed class C
         select 1;
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     /// <summary>
@@ -162,13 +162,11 @@ public sealed class C
 
     /// <summary>
     /// Guard for the carve-out in <c>EagerQuerySources</c>: the FIRST `from`'s
-    /// source is evaluated eagerly, in the enclosing scope — it cannot reference
-    /// a range variable — so a hoist out of it is correct and must be preserved.
-    /// Regressing this would leave the assignment un-hoisted and silently drop
-    /// the write.
+    /// source is evaluated eagerly, in the enclosing scope. ADR-0161 keeps the
+    /// assignment inline in that source expression.
     /// </summary>
     [Fact]
-    public void FirstFromSource_ValuePositionAssignment_StillHoistsToEnclosingScope()
+    public void FirstFromSource_ValuePositionAssignment_RemainsInline()
     {
         string printed = TranslateQuery(@"
 using System.Collections.Generic;
@@ -186,19 +184,16 @@ public sealed class C
         int writeIndex = printed.IndexOf("chosen = a", StringComparison.Ordinal);
         int queryIndex = printed.IndexOf(".Select(", StringComparison.Ordinal);
         Assert.True(writeIndex >= 0, "Expected the `chosen = a` write to survive:\n" + printed);
-        Assert.True(
-            queryIndex < 0 || writeIndex < queryIndex,
-            "The first `from` source is evaluated eagerly; its assignment must hoist ahead of the query:\n"
-                + printed);
+        Assert.True(queryIndex < 0 || writeIndex < queryIndex, printed);
         TranslationTestValidation.AssertBinds(printed);
     }
 
     /// <summary>
     /// A `join`'s `in` source is likewise eager — C# forbids it from referencing
-    /// a range variable — so it keeps hoisting to the enclosing scope.
+    /// a range variable — so its inline assignment remains in the eager source.
     /// </summary>
     [Fact]
-    public void JoinInSource_ValuePositionAssignment_StillHoistsToEnclosingScope()
+    public void JoinInSource_ValuePositionAssignment_RemainsInline()
     {
         string printed = TranslateQuery(@"
 using System.Collections.Generic;
@@ -215,12 +210,7 @@ public sealed class C
     }
 }");
 
-        int writeIndex = printed.IndexOf("chosen = b", StringComparison.Ordinal);
-        int joinIndex = printed.IndexOf(".Join(", StringComparison.Ordinal);
-        Assert.True(writeIndex >= 0, "Expected the `chosen = b` write to survive:\n" + printed);
-        Assert.True(
-            joinIndex < 0 || writeIndex < joinIndex,
-            "A join's `in` source is eager; its assignment must hoist ahead of the query:\n" + printed);
+        Assert.Contains(".Join((chosen = b),", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 
@@ -240,7 +230,7 @@ public sealed class C
         System.Linq.Enumerable.Where(xs, x => x.Tag is string s && s.Length > 0);
 }");
 
-        AssertSpillIsInsideLambda(printed);
+        AssertNativePatternStaysInsideLambda(printed);
     }
 
     /// <summary>
@@ -264,19 +254,10 @@ public sealed class C
         TranslationTestValidation.AssertBinds(printed);
     }
 
-    // The spill's `let` must appear AFTER the lambda arrow, i.e. inside the
-    // lambda body, and the range variable it reads must therefore be in scope.
-    private static void AssertSpillIsInsideLambda(string printed)
+    private static void AssertNativePatternStaysInsideLambda(string printed)
     {
-        int spillIndex = printed.IndexOf("__spill", StringComparison.Ordinal);
-        Assert.True(spillIndex >= 0, "Expected a spill temp in:\n" + printed);
-
-        int lambdaStart = printed.IndexOf("->", StringComparison.Ordinal);
-        Assert.True(lambdaStart >= 0, "Expected a lambda in:\n" + printed);
-        Assert.True(
-            spillIndex > lambdaStart,
-            "The spill must be hoisted INSIDE the query lambda, not ahead of the query:\n" + printed);
-
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.Contains("->", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 

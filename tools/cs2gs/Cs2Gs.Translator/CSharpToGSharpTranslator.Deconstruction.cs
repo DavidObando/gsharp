@@ -23,19 +23,9 @@ public sealed partial class CSharpToGSharpTranslator
     private sealed partial class DeclarationVisitor
     {
         /// <summary>
-        /// Translates an expression that may embed VALUE-POSITION assignments
-        /// (`M(x = 5)`, `while ((line = r.ReadLine()) != null)`, `if ((x = f()) >
-        /// 0)`), hoisting each into a preceding assignment statement. G# models
-        /// assignment as a statement, not a value-yielding expression, so a
-        /// naive translation drops the write and keeps only the read (issue
-        /// #1723). <paramref name="includeSelf"/> controls whether
-        /// <paramref name="expression"/> ITSELF counts as a hoist candidate when
-        /// it is an assignment: statement-position callers (where the whole
-        /// expression already IS the statement, e.g. `a += 5;`) pass <c>false</c>
-        /// so only assignments NESTED inside it (e.g. `a += (b = c);`) are
-        /// hoisted; condition callers (`if`/`while`/`for`, where the whole
-        /// condition can itself be a bare assignment, e.g. `if (x = f())`) pass
-        /// <c>true</c>.
+        /// Hosts value-position deconstruction assignments, the lone assignment
+        /// shape without a native G# expression form. Ordinary and compound
+        /// assignments remain in place as ADR-0161 assignment expressions.
         /// </summary>
         private IEnumerable<GStatement> WithHoistedAssignments(
             ExpressionSyntax expression,
@@ -77,18 +67,14 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Translates <paramref name="expression"/> (typically a condition:
-        /// `if`/`while`/`for`), hoisting any embedded value-position assignment
-        /// into <paramref name="prologue"/> as a preceding assignment statement
-        /// and returning the condition with each hoisted assignment read as its
-        /// already-written target (issue #1723). The whole expression counts as
-        /// a hoist candidate (a bare `if (x = f())` condition IS the assignment).
+        /// Translates a condition while redirecting any spill or embedded
+        /// deconstruction-assignment statements into <paramref name="prologue"/>.
         /// </summary>
         private GExpression TranslateConditionWithHoist(ExpressionSyntax expression, List<GStatement> prologue)
         {
             // Any spill hoisted while translating `expression` (issue #1731) is
             // redirected into `prologue` — the SAME preceding-statement list an
-            // embedded assignment hoists into below — rather than the enclosing
+            // embedded deconstruction assignment uses — rather than the enclosing
             // statement's own ambient prologue, so both kinds of hoist land in
             // the same list in evaluation order.
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
@@ -135,12 +121,10 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Finds the outermost value-position assignment nodes in
+        /// Finds value-position deconstruction-assignment nodes in
         /// <paramref name="expression"/> (in evaluation/document order),
         /// excluding ones inside a nested lambda/local function (their own
-        /// statement seam) and — for chained links (`a = b = c`) — excluding the
-        /// inner links of a chain already captured by the outer node (see
-        /// <see cref="FlattenChainedAssignment"/>). Assignments inside a conditional
+        /// statement seam). Assignments inside a conditional
         /// (`?:`) arm are left for that arm's native G# block-expression seam.
         /// Assignments hidden inside any other short-circuited operand would change
         /// evaluation COUNT/order if hoisted, so they are flagged unsupported
@@ -216,10 +200,23 @@ public sealed partial class CSharpToGSharpTranslator
                         yield break;
                     }
 
-                    // Outermost assignment: its own descendants are NOT scanned
-                    // further here — a chained link (`a = b = c`) is walked by
-                    // FlattenChainedAssignment instead.
-                    yield return assignment;
+                    // ADR-0161 / issue #3347: ordinary assignment expressions,
+                    // including `??=`, stay where C# put them. Only
+                    // deconstruction still requires statement-hosting fallback.
+                    if (AssignmentRequiresStatementLowering(assignment))
+                    {
+                        yield return assignment;
+                        yield break;
+                    }
+
+                    foreach (SyntaxNode child in assignment.ChildNodes())
+                    {
+                        foreach (AssignmentExpressionSyntax found in Scan(child))
+                        {
+                            yield return found;
+                        }
+                    }
+
                     yield break;
                 }
 
@@ -264,6 +261,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             return safe;
         }
+
+        private static bool AssignmentRequiresStatementLowering(
+            AssignmentExpressionSyntax assignment) =>
+            assignment.Left is TupleExpressionSyntax;
 
         // Issue #3348: the sub-expressions of `query` that are evaluated EAGERLY, in
         // the scope enclosing the query, rather than inside one of the lambdas its
@@ -429,11 +430,10 @@ public sealed partial class CSharpToGSharpTranslator
             // still has to be read back for the next link; that read is real
             // C# semantics, unrelated to the #1845 divergence, and is left as
             // it was under the #1731/#1842 fix (the target was already made
-            // safe to re-embed above). BUT when a compound link itself has an
-            // outer `=` link depending on its result (`a = b = c.P += d`), G#
-            // assignment is statement-only (no expression form), so the only
-            // way to hand the produced value up the chain is to re-embed the
-            // target. Re-embedding the target expression as-is re-reads its
+            // safe to re-embed above). This fallback is now reached only by a
+            // chain containing a tuple-valued link, which has no native
+            // assignment-expression form. Re-embedding a compound target
+            // expression as-is would re-read its
             // getter once per outer link (issue #1875) — instead of doing
             // that, the read/combine/store is expanded manually (mirroring
             // exactly what the compound operator does) so the combined value

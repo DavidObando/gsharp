@@ -134,13 +134,12 @@ namespace Demo
 
     /// <summary>
     /// Standalone positive bare pattern (<c>if (x is { } v) { ... }</c>, no
-    /// trailing <c>&amp;&amp;</c>) is unaffected by this fix: it already
-    /// compiles via the existing smart-cast/null-forgive lowering.
+    /// trailing <c>&amp;&amp;</c>) uses a scoped author-named local.
     /// <para>
     /// Issue #3359 does NOT apply here: the scrutinee <c>s</c> is a NON-nullable
     /// <c>string</c>, and ADR-0071's <c>if let</c> requires a nullable
     /// initializer (GS0296). C# still treats <c>s is { }</c> as a runtime null
-    /// test, so the smart-cast form is retained — and is already spill-free.
+    /// test, so cs2gs binds <c>text</c> directly and tests that local.
     /// </para>
     /// </summary>
     [Fact]
@@ -163,8 +162,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("s != nil", printed);
+        Assert.Contains("let text = s", printed);
+        Assert.Contains("text != nil", printed);
         Assert.DoesNotContain("if let", printed);
+        Assert.DoesNotContain("__spill", printed);
 
         CompileAndRun(printed, "C().G(\"hi\")");
     }

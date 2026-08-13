@@ -92,22 +92,22 @@ namespace Corpus.Compound
     }
 
     [Fact]
-    public void ExpressionBodiedCompoundAssignmentOperator_TranslatesToABlockBody()
+    public void ExpressionBodiedCompoundAssignmentOperator_StaysExpressionBodied()
     {
         // `public void operator -=(int amount) => _total = _total - amount;`
-        // is a void statement body, so it normalises to a G# block rather than
-        // an arrow-expression body -- same as any other expression-bodied void
-        // member.
+        // remains a direct G# assignment body.
         CompilationUnit unit = Translate(Source);
         TypeDeclaration bag = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "TallyBag");
         MethodDeclaration op = bag.Members.OfType<MethodDeclaration>().Single(m => m.Name == "operator -=");
 
         Assert.Null(op.Receiver);
         Assert.Null(op.ReturnType);
-        Assert.NotNull(op.Body);
+        Assert.Null(op.Body);
+        Assert.NotNull(op.ExpressionBody);
 
         string rendered = GSharpPrinter.Print(unit);
-        Assert.Contains("func operator -=(amount int32) {", rendered, StringComparison.Ordinal);
+        Assert.Contains("func operator -=(amount int32) ->", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]

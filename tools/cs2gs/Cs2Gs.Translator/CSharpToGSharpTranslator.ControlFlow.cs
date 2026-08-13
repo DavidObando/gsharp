@@ -268,19 +268,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        // A loop-condition clause needs hoisting when it is an `is`-pattern whose
-        // lowering would duplicate a side-effecting scrutinee (an `and`/`or`
-        // combinator re-emits the receiver), declare an `out var` more than once
-        // (GS0102), or bind a pattern variable the G# loop body cannot see
-        // (GS0125); or when it contains a value-position assignment (`(line =
-        // r.ReadLine()) != null`) — G# assignment is a statement, so the write
-        // must be hoisted into the loop body, run once per iteration (issue
-        // #1723).
+        // A loop-condition clause needs hoisting when it declares an `out var`
+        // more than once (GS0102), or binds a pattern variable the G# loop body
+        // cannot see (GS0125); or when it contains one of the few assignment
+        // shapes that still lacks a native value-position form.
         private bool ClauseRequiresConditionHoist(ExpressionSyntax clause)
         {
             return (clause is IsPatternExpressionSyntax isPattern &&
                 (PatternIntroducesBinding(isPattern.Pattern) ||
-                 PatternDuplicatesScrutinee(isPattern.Pattern) ||
                  ExpressionDeclaresOutVar(isPattern.Expression))) ||
                 ClauseContainsAssignment(clause);
         }
@@ -292,25 +287,16 @@ public sealed partial class CSharpToGSharpTranslator
             clause.DescendantNodesAndSelf(descendIntoChildren: node =>
                     node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
                 .OfType<AssignmentExpressionSyntax>()
-                .Any();
+                .Any(AssignmentRequiresStatementLowering);
 
         private static bool PatternIntroducesBinding(PatternSyntax pattern) =>
             pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any();
 
-        private static bool PatternDuplicatesScrutinee(PatternSyntax pattern) =>
-            pattern.DescendantNodesAndSelf().OfType<BinaryPatternSyntax>().Any();
-
         private static bool ExpressionDeclaresOutVar(ExpressionSyntax expression) =>
             expression.DescendantNodesAndSelf().OfType<DeclarationExpressionSyntax>().Any();
 
-        // Emits the hoisted statements for a single loop-condition clause: a pure
-        // clause becomes a negated `break` guard; a clause carrying a
-        // value-position assignment (`(line = r.ReadLine()) != null`) hoists the
-        // assignment(s) as preceding statement(s) — re-run every iteration, exactly
-        // where C# would re-evaluate them — then becomes a negated `break` guard
-        // over the now-hoisted read (issue #1723); an `is`-pattern clause evaluates
-        // its scrutinee once into a local and turns the pattern's must-hold tests
-        // into `break` guards (issue #914).
+        // Emits the fallback statements for a loop-condition clause that still
+        // needs body scope: deconstruction assignments and binding patterns.
         private void HoistLoopConditionClause(ExpressionSyntax clause, List<GStatement> into)
         {
             // Any spill hoisted while translating `clause` (issue #1731 — e.g. a
@@ -548,6 +534,19 @@ public sealed partial class CSharpToGSharpTranslator
             return new[] { this.TranslateIf(ifStatement) };
         }
 
+        private GStatement TranslateElseStatement(StatementSyntax statement)
+        {
+            if (statement is not IfStatementSyntax elseIf)
+            {
+                return this.TranslateStatementAsBlock(statement);
+            }
+
+            List<GStatement> translated = this.TranslateIfStatements(elseIf).ToList();
+            return translated.Count == 1
+                ? translated[0]
+                : new BlockStatement(translated);
+        }
+
         /// <summary>
         /// Lowers a C# positive type-pattern guard <c>if (receiver is T t) { … }</c>
         /// to a smart-cast-friendly G# local that preserves the declaration
@@ -627,9 +626,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             // gsc narrows `local` throughout the guarded block, but does not carry
@@ -702,9 +699,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             GStatement elseBranch = ifStatement.Else == null
                 ? null
-                : ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                : this.TranslateElseStatement(ifStatement.Else.Statement);
 
             var statements = new List<GStatement>();
             if (hoist != null)
@@ -905,9 +900,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
@@ -943,9 +936,8 @@ public sealed partial class CSharpToGSharpTranslator
             // Translate the condition first so any `x is T t` declaration pattern
             // registers its Kotlin-style smart-cast binding before the guarded
             // block is translated; the binding is scoped to the then-block only.
-            // A value-position assignment in the condition (`if ((x = f()) > 0)`,
-            // `if (x = f())`) is hoisted into a preceding assignment statement — it
-            // runs once, exactly where C# would evaluate it (issue #1723).
+            // Native assignment expressions stay in the condition; only an
+            // embedded deconstruction assignment can populate the prologue.
             var bindingsBefore = new HashSet<ISymbol>(this.state.PatternBindings.Keys, SymbolEqualityComparer.Default);
             var conditionPrologue = new List<GStatement>();
             GExpression condition = GuardBlockCondition(
@@ -964,14 +956,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                if (ifStatement.Else.Statement is IfStatementSyntax elseIf)
-                {
-                    elseBranch = this.TranslateIf(elseIf);
-                }
-                else
-                {
-                    elseBranch = this.TranslateStatementAsBlock(ifStatement.Else.Statement);
-                }
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
             GStatement result = new IfStatement(condition, then, elseBranch);

@@ -16,8 +16,9 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Issue #3355 replaces issue #1849's synthesized <c>__initN(__pN)</c>
-/// helpers and issue #1731's double-evaluation fallback with native G# block
-/// expressions at field/property and constructor-initializer seams.
+/// helpers with native block expressions when statements remain necessary.
+/// Issue #3347 removes those blocks too when a native boolean pattern can
+/// evaluate the scrutinee once.
 /// </summary>
 public class Issue3355NullSeamBlockExpressionLoweringTests
 {
@@ -43,8 +44,8 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             """);
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains("private var flag bool = {", printed, StringComparison.Ordinal);
-        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.Contains("private var flag bool = C.GetA() is { X: 1, Y: 2 }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
     }
 
@@ -77,8 +78,8 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             """);
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains("P = {", printed, StringComparison.Ordinal);
-        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.Contains("C.GetA() is { X: > 0 }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -119,7 +120,7 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             """);
 
         Assert.Equal(3, CountOccurrences(printed, "GetA()"));
-        Assert.True(CountOccurrences(printed, "let __spill") >= 2, printed);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -157,8 +158,9 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             "Named base-constructor arguments remain a known G# binding gap; this test isolates block lowering.");
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains(": base(flag: {", printed, StringComparison.Ordinal);
-        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.Contains(": base(flag:", printed, StringComparison.Ordinal);
+        Assert.Contains("GetA() is { X: 1, Y: 2 }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
     }
 
@@ -238,8 +240,9 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             """);
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains(": base(&{", printed, StringComparison.Ordinal);
-        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.Contains(": base(&", printed, StringComparison.Ordinal);
+        Assert.Contains("GetA() is { X: 1, Y: 2 }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -268,7 +271,7 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             }
             """);
 
-        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__p", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
     }

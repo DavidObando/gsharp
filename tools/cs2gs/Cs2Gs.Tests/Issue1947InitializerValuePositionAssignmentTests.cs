@@ -13,23 +13,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Regression tests for issue #1947: issue #1892's descend guard stops
-/// <see cref="CSharpToGSharpTranslator"/>'s embedded-assignment hoist (issue
-/// #1723) from walking INTO an object/array/collection initializer at all, so
-/// each `Field = value` member is skipped correctly, but it ALSO skips a
-/// GENUINE value-position assignment nested inside a member's VALUE (`new T {
-/// A = (x = 3) }`) or inside an array/collection-initializer element itself
-/// (`new int[] { x = 5, 2 }`, `new Dictionary&lt;string, int&gt; { ["k"] = (x
-/// = 5) }`) — that inner assignment must still be hoisted. The fix only skips
-/// the TOP-LEVEL `AssignmentExpressionSyntax` member of an object/`with`
-/// initializer (the `Field = value` shape), while still scanning its RHS, and
-/// treats an array/collection-initializer element's assignment as a genuine
-/// hoist candidate (it has no "member" shape to protect).
+/// Regression tests for assignments nested in initializer values. ADR-0161
+/// keeps genuine value-position assignments inline while object-initializer
+/// member syntax remains structural.
 /// </summary>
 public class Issue1947InitializerValuePositionAssignmentTests
 {
     [Fact]
-    public void ObjectInitializerMemberValue_EmbeddedAssignment_IsHoistedAndMemberReadsTarget()
+    public void ObjectInitializerMemberValue_EmbeddedAssignment_RemainsInline()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -51,15 +42,11 @@ namespace Demo
     }
 }");
 
-        // The embedded write is hoisted as its own statement, ahead of the
-        // object-initializer statement that reads the (now up-to-date) `x`.
-        int hoistIndex = printed.IndexOf("x = 3", StringComparison.Ordinal);
-        int widgetIndex = printed.IndexOf("Widget{A: (x)}", StringComparison.Ordinal);
-        Assert.True(hoistIndex >= 0 && widgetIndex >= 0 && hoistIndex < widgetIndex, printed);
+        Assert.Contains("Widget{A: (x = 3)}", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ArrayInitializerElement_EmbeddedAssignment_IsHoistedAndElementReadsTarget()
+    public void ArrayInitializerElement_EmbeddedAssignment_RemainsInline()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -76,13 +63,11 @@ namespace Demo
     }
 }");
 
-        int hoistIndex = printed.IndexOf("x = 5", StringComparison.Ordinal);
-        int arrayIndex = printed.IndexOf("{x, 2}", StringComparison.Ordinal);
-        Assert.True(hoistIndex >= 0 && arrayIndex >= 0 && hoistIndex < arrayIndex, printed);
+        Assert.Contains("[]int32{(x = 5), 2}", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void DictionaryIndexInitializerElement_EmbeddedAssignment_IsHoistedAndElementReadsTarget()
+    public void DictionaryIndexInitializerElement_EmbeddedAssignment_RemainsInline()
     {
         // `["k"] = value` (a C# 6 index/collection initializer) is also an
         // `AssignmentExpressionSyntax` initializer element, but its LHS is an
@@ -109,14 +94,11 @@ namespace Demo
     }
 }");
 
-        int hoistIndex = printed.IndexOf("x = 5", StringComparison.Ordinal);
-        int dictIndex = printed.IndexOf("\"k\"", StringComparison.Ordinal);
-        Assert.True(hoistIndex >= 0 && dictIndex >= 0 && hoistIndex < dictIndex, printed);
-        Assert.Contains("(x)", printed);
+        Assert.Contains("[\"k\"] = (x = 5)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void NestedObjectInitializer_EmbeddedAssignmentInInnerMemberValue_IsHoisted()
+    public void NestedObjectInitializer_EmbeddedAssignmentInInnerMemberValue_RemainsInline()
     {
         // A genuine assignment nested two initializer levels deep (inside the
         // VALUE of another object-initializer member) must still be found —
@@ -146,9 +128,7 @@ namespace Demo
     }
 }");
 
-        int hoistIndex = printed.IndexOf("x = 7", StringComparison.Ordinal);
-        int innerIndex = printed.IndexOf("Inner{A: (x)}", StringComparison.Ordinal);
-        Assert.True(hoistIndex >= 0 && innerIndex >= 0 && hoistIndex < innerIndex, printed);
+        Assert.Contains("Inner{A: (x = 7)}", printed, StringComparison.Ordinal);
     }
 
     /// <summary>

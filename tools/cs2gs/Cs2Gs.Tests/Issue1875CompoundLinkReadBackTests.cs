@@ -13,16 +13,9 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Regression tests for issue #1875, a follow-up to #1845/#1731. #1845 made a
-/// run of plain `=` links in a chained assignment reuse a single spilled RHS
-/// value instead of re-reading an inner target's getter for each outer link.
-/// One case was left over: a COMPOUND link (`+=`, …) followed by outer plain
-/// `=` links. `a = b = c.P += d` legitimately reads `c.P`'s getter once as
-/// part of the compound operation, but the outer `=` links (`b =`, `a =`)
-/// used to re-embed the target expression `c.P` itself as their value
-/// source — re-running the getter once per outer link. The fix expands the
-/// compound link into read-old/combine/store-new, capturing the combined
-/// value directly so every outer `=` link reuses that value instead of
-/// re-reading the target.
+/// run of plain or compound links from re-reading inner targets. ADR-0161 now
+/// preserves the native nested assignment expression, whose compiler lowering
+/// evaluates each target once and yields the stored value.
 /// </summary>
 public class Issue1875CompoundLinkReadBackTests
 {
@@ -66,8 +59,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __spill0 = ^index", printed);
-        Assert.Contains("values[__spill0]", printed);
+        Assert.Contains("values[(^index)]", printed);
+        Assert.DoesNotContain("__spill", printed);
         Assert.DoesNotContain("values[^index]", printed);
     }
 
@@ -106,9 +99,7 @@ namespace Demo
         // itself never calls the getter a second time for the outer `a =`/
         // `b =` links.
         Assert.Equal(1, CountOccurrences(printed, "\"get\""));
-        Assert.Contains("c.P =", printed);
-        Assert.Contains("b =", printed);
-        Assert.Contains("a =", printed);
+        Assert.Contains("a = (b = (c.P += 3))", printed);
     }
 
     [Fact]
@@ -141,20 +132,8 @@ namespace Demo
     }
 }");
 
-        // The combined value is spilled once into a shared temp; `c.P`'s
-        // setter is assigned that temp, and both outer links (`b`, `a`) are
-        // assigned the SAME temp — never `c.P` itself.
-        // The combined value is spilled once into a shared temp; `c.P`'s
-        // setter is assigned that temp, and both outer links (`b`, `a`) are
-        // assigned the SAME temp — never `c.P` itself.
-        int assignIndex = printed.IndexOf("c.P = __spill", System.StringComparison.Ordinal);
-        Assert.True(assignIndex >= 0, "Expected `c.P = __spillN` in:\n" + printed);
-        string spillTemp = ExtractSpillTempName(printed.Substring(assignIndex));
-        Assert.Contains($"c.P = {spillTemp}", printed);
-        Assert.Contains($"b = {spillTemp}", printed);
-        Assert.Contains($"a = {spillTemp}", printed);
-        Assert.DoesNotContain("b = c.P", printed);
-        Assert.DoesNotContain("a = c.P", printed);
+        Assert.DoesNotContain("__spill", printed);
+        Assert.Contains("a = (b = (c.P += 3))", printed);
     }
 
     [Fact]
@@ -254,8 +233,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("b += c", printed);
-        Assert.Contains("a = b", printed);
+        Assert.Contains("a = (b += c)", printed);
     }
 
     [Fact]
@@ -279,21 +257,8 @@ namespace Demo
 }");
 
         Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
-        string spillTemp = ExtractSpillTempName(printed);
-        Assert.Equal(4, CountOccurrences(printed, spillTemp));
-    }
-
-    private static string ExtractSpillTempName(string printed)
-    {
-        int start = printed.IndexOf("__spill", System.StringComparison.Ordinal);
-        Assert.True(start >= 0, "Expected a __spill temp in:\n" + printed);
-        int end = start;
-        while (end < printed.Length && (char.IsLetterOrDigit(printed[end]) || printed[end] == '_'))
-        {
-            end++;
-        }
-
-        return printed.Substring(start, end - start);
+        Assert.DoesNotContain("__spill", printed);
+        Assert.Contains("a = (b = (c = C.Next()))", printed);
     }
 
     private static int CountOccurrences(string haystack, string needle)

@@ -575,7 +575,10 @@ public static class GSharpPrinter
                 }
 
             case NonNullAssertionExpression nonNull:
-                return $"{RenderExpression(nonNull.Operand, indent, UnaryPrecedence)}!!";
+                var asserted = RenderExpression(nonNull.Operand, indent, UnaryPrecedence);
+                return nonNull.Operand is IfExpression or IfLetExpression or SwitchExpression or BlockExpression
+                    ? $"({asserted})!!"
+                    : $"{asserted}!!";
 
             case IncrementDecrementExpression incDec:
                 return incDec.IsPrefix
@@ -612,6 +615,15 @@ public static class GSharpPrinter
                 return "(" + RenderExpression(assignmentExpression.Target, indent)
                     + " " + assignmentExpression.Operator + " "
                     + RenderExpression(assignmentExpression.Value, indent) + ")";
+
+            case PatternTestExpression patternTest:
+                var patternText =
+                    RenderExpression(patternTest.Value, indent, GetBinaryPrecedence("is"))
+                    + " is "
+                    + RenderPattern(patternTest.Pattern, indent, includeTypeDesignator: false);
+                return patternTest.Pattern is BinaryPattern
+                    ? $"({patternText})"
+                    : patternText;
 
             case CheckedExpression checkedExpr:
                 return $"{(checkedExpr.IsChecked ? "checked" : "unchecked")}({RenderExpression(checkedExpr.Inner, indent)})";
@@ -710,7 +722,7 @@ public static class GSharpPrinter
         // branch block (`else { switch … }`) is re-parsed as a switch STATEMENT
         // (whose arms use `{ … }` bodies, not `case …:`), so it is parenthesized
         // to keep it in expression position. Other expressions are unaffected.
-        if (expression is SwitchExpression)
+        if (expression is SwitchExpression or IfExpression or IfLetExpression)
         {
             return $"({RenderExpression(expression, indent)})";
         }
@@ -899,7 +911,10 @@ public static class GSharpPrinter
         return sb.ToString();
     }
 
-    private static string RenderPattern(GPattern pattern, int indent)
+    private static string RenderPattern(
+        GPattern pattern,
+        int indent,
+        bool includeTypeDesignator = true)
     {
         switch (pattern)
         {
@@ -910,31 +925,36 @@ public static class GSharpPrinter
                 return $"{relational.Operator} {RenderExpression(relational.Value, indent)}";
 
             case TypePattern type:
-                return $"{type.Designator} is {RenderType(type.Type)}";
+                return includeTypeDesignator
+                    ? $"{type.Designator} is {RenderType(type.Type)}"
+                    : RenderType(type.Type);
 
             case PropertyPattern property:
-                var fields = string.Join(", ", property.Fields.Select(f => $"{f.Name}: {RenderPattern(f.Pattern, indent)}"));
+                var fields = string.Join(
+                    ", ",
+                    property.Fields.Select(
+                        f => $"{f.Name}: {RenderPattern(f.Pattern, indent, includeTypeDesignator)}"));
                 return $"{{ {fields} }}";
 
             case DiscardPattern _:
                 return "_";
 
             case BinaryPattern binary:
-                return $"{RenderPattern(binary.Left, indent)} {(binary.IsConjunction ? "and" : "or")} {RenderPattern(binary.Right, indent)}";
+                return $"{RenderPattern(binary.Left, indent, includeTypeDesignator)} {(binary.IsConjunction ? "and" : "or")} {RenderPattern(binary.Right, indent, includeTypeDesignator)}";
 
             case NotPattern not:
-                return $"not {RenderPattern(not.Pattern, indent)}";
+                return $"not {RenderPattern(not.Pattern, indent, includeTypeDesignator)}";
 
             case ParenthesizedPattern paren:
-                return $"({RenderPattern(paren.Pattern, indent)})";
+                return $"({RenderPattern(paren.Pattern, indent, includeTypeDesignator)})";
 
             case ListPattern list:
-                return $"[{string.Join(", ", list.Elements.Select(e => RenderPattern(e, indent)))}]";
+                return $"[{string.Join(", ", list.Elements.Select(e => RenderPattern(e, indent, includeTypeDesignator)))}]";
 
             case SlicePattern slice:
                 if (slice.Pattern != null)
                 {
-                    return $"..{RenderPattern(slice.Pattern, indent)}";
+                    return $"..{RenderPattern(slice.Pattern, indent, includeTypeDesignator)}";
                 }
 
                 return slice.Designator != null ? $"..{slice.Designator}" : "..";

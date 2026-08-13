@@ -205,6 +205,54 @@ Console.WriteLine(b.raw)
         Assert.Equal("20", lines[4]);
     }
 
+    [Fact]
+    public void UserIndexerAssignmentExpression_YieldsAssignedValue_WithSetOnlyIndexer()
+    {
+        const string Source = @"package P1_2_IndexExpr
+import System
+
+var receiverCalls = 0
+var indexCalls = 0
+var valueCalls = 0
+
+class Box {
+    var raw []int32 = [1]int32
+    prop this[index int32] int32 {
+        set(v) { this.raw[index] = v }
+    }
+}
+
+var box = Box{}
+
+func receiver() Box {
+    receiverCalls++
+    return box
+}
+
+func nextIndex() int32 {
+    indexCalls++
+    return 0
+}
+
+func nextValue() int32 {
+    valueCalls++
+    return 42
+}
+
+Console.WriteLine(receiver()[nextIndex()] = nextValue())
+Console.WriteLine(receiverCalls)
+Console.WriteLine(indexCalls)
+Console.WriteLine(valueCalls)
+Console.WriteLine(box.raw[0])
+";
+        var lines = SplitLines(CompileLoadInvokeCaptureStdout(Source, "P1_2-IndexExpr"));
+        Assert.Equal("42", lines[0]);
+        Assert.Equal("1", lines[1]);
+        Assert.Equal("1", lines[2]);
+        Assert.Equal("1", lines[3]);
+        Assert.Equal("42", lines[4]);
+    }
+
     private static string[] SplitLines(string output) =>
         output.ReplaceLineEndings(Environment.NewLine).TrimEnd(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
 

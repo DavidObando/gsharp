@@ -46,10 +46,49 @@ public sealed partial class CSharpToGSharpTranslator
             // duplicated diagnostics behind.
             DecomposeConjunction(conditional.Condition, out ExpressionSyntax leftmost, out List<ExpressionSyntax> guards);
 
-            if (leftmost is not IsPatternExpressionSyntax isPattern
-                || !IsBareNonNullDeclarationPattern(isPattern.Pattern, out SingleVariableDesignationSyntax designation))
+            if (leftmost is not IsPatternExpressionSyntax isPattern)
             {
                 return false;
+            }
+
+            SingleVariableDesignationSyntax designation;
+            RecursivePatternSyntax residualPattern;
+            GTypeReference asTarget = null;
+            if (!TryExtractSingleTopLevelIfLetPattern(
+                isPattern.Pattern,
+                out TypeSyntax typeSyntax,
+                out designation,
+                out residualPattern))
+            {
+                return false;
+            }
+
+            bool bareNonNullPattern = typeSyntax == null;
+            if (!bareNonNullPattern && IsTrivialPatternReceiver(isPattern.Expression))
+            {
+                return false;
+            }
+
+            if (!bareNonNullPattern)
+            {
+                ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+                if (targetSymbol == null ||
+                    targetSymbol.TypeKind == TypeKind.Error ||
+                    targetSymbol.IsRefLikeType ||
+                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                {
+                    return false;
+                }
+
+                asTarget = this.MapTypeSyntax(typeSyntax);
+                if (targetSymbol.IsValueType)
+                {
+                    asTarget = MakeNullable(asTarget);
+                }
+                else if (!targetSymbol.IsReferenceType)
+                {
+                    return false;
+                }
             }
 
             if (this.context.GetDeclaredSymbol(designation) is not { } binder)
@@ -64,12 +103,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // gsc rejects a non-nullable `if let` initializer with GS0296, so
-            // only a receiver that lands in G# as `T?` is representable.
-            if (!this.IsNullableIfLetReceiver(isPattern.Expression))
-            {
-                return false;
-            }
+            bool directBinding =
+                bareNonNullPattern && !this.IsNullableIfLetReceiver(isPattern.Expression);
 
             // A guard/true-arm construct that hoists a spill `let` keeps the
             // conservative fallback: the true arm can depend on the if-let
@@ -85,6 +120,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
             // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
             // designation has no canonical G# type, and this rewrite bypasses
             // that entry point — report the gap here so the diagnostic surfaces
@@ -92,7 +135,9 @@ public sealed partial class CSharpToGSharpTranslator
             this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
-            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression initializer = asTarget == null
+                ? receiver
+                : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
 
             // While the guard and the true arm are translated, every reference
             // to the C# pattern local reads as the bare G# binding — no `!!`,
@@ -100,10 +145,18 @@ public sealed partial class CSharpToGSharpTranslator
             bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
 
-            GExpression guard = null;
+            GExpression guard = residualGuard;
             GExpression whenTrue;
             try
             {
+                if (residualPattern == null && directBinding)
+                {
+                    guard = new BinaryExpression(
+                        new IdentifierExpression(name),
+                        "!=",
+                        LiteralExpression.Null());
+                }
+
                 foreach (ExpressionSyntax conjunct in guards)
                 {
                     GExpression translated = this.TranslateExpression(conjunct);
@@ -130,11 +183,24 @@ public sealed partial class CSharpToGSharpTranslator
 
             (whenTrue, whenFalse) = this.CoerceConditionalArms(conditional, whenTrue, whenFalse);
 
-            result = new IfLetExpression(
-                new List<IfLetBinding> { new IfLetBinding(name, receiver) },
-                guard,
-                whenTrue,
-                whenFalse);
+            result = directBinding
+                ? new BlockExpression(
+                    new GStatement[]
+                    {
+                        new LocalDeclarationStatement(
+                            BindingKind.Let,
+                            name,
+                            initializer: initializer),
+                    },
+                    new IfExpression(
+                        guard ?? LiteralExpression.Bool(true),
+                        whenTrue,
+                        whenFalse))
+                : new IfLetExpression(
+                    new List<IfLetBinding> { new IfLetBinding(name, initializer) },
+                    guard,
+                    whenTrue,
+                    whenFalse);
             return true;
         }
 
@@ -167,10 +233,52 @@ public sealed partial class CSharpToGSharpTranslator
             // bail-out would leave a half-emitted spill prologue behind.
             DecomposeConjunction(ifStatement.Condition, out ExpressionSyntax leftmost, out List<ExpressionSyntax> guards);
 
-            if (leftmost is not IsPatternExpressionSyntax isPattern
-                || !IsBareNonNullDeclarationPattern(isPattern.Pattern, out SingleVariableDesignationSyntax designation))
+            if (leftmost is not IsPatternExpressionSyntax isPattern)
             {
                 return false;
+            }
+
+            SingleVariableDesignationSyntax designation;
+            RecursivePatternSyntax residualPattern;
+            GTypeReference asTarget = null;
+            if (!TryExtractSingleTopLevelIfLetPattern(
+                isPattern.Pattern,
+                out TypeSyntax typeSyntax,
+                out designation,
+                out residualPattern))
+            {
+                return false;
+            }
+
+            bool bareNonNullPattern = typeSyntax == null;
+            if (!bareNonNullPattern)
+            {
+                ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+                if (targetSymbol == null ||
+                    targetSymbol.TypeKind == TypeKind.Error ||
+                    targetSymbol.IsRefLikeType ||
+                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                {
+                    return false;
+                }
+
+                if (IsTrivialPatternReceiver(isPattern.Expression)
+                    || (residualPattern == null
+                        && guards.Count == 0
+                        && !targetSymbol.IsValueType))
+                {
+                    return false;
+                }
+
+                asTarget = this.MapTypeSyntax(typeSyntax);
+                if (targetSymbol.IsValueType)
+                {
+                    asTarget = MakeNullable(asTarget);
+                }
+                else if (!targetSymbol.IsReferenceType)
+                {
+                    return false;
+                }
             }
 
             if (this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder)
@@ -182,10 +290,13 @@ public sealed partial class CSharpToGSharpTranslator
             // strip the nullability. C# allows `s is { } text` on a non-nullable
             // reference too (it is still a runtime null test), but there the
             // translated receiver is `string`, not `string?`, and `if let` is
-            // rejected with GS0296. Those keep the existing lowering, which is
-            // already spill-free for this shape.
+            // rejected with GS0296. Bind the author's name in a scoped block
+            // instead.
             GTypeReference receiverType = this.ResolveExpressionType(isPattern.Expression);
-            if (receiverType is not { IsNullable: true })
+            bool directBinding =
+                bareNonNullPattern && receiverType is not { IsNullable: true };
+
+            if (!directBinding && this.IsLocalReassigned(binder))
             {
                 return false;
             }
@@ -194,18 +305,6 @@ public sealed partial class CSharpToGSharpTranslator
             // ahead of the `if`, but the spill may read the binding — which is
             // only in scope inside the `if let`. Leave those to the general path.
             if (guards.Any(ContainsSpillHoistingConstruct))
-            {
-                return false;
-            }
-
-            // The ADR-0071 STATEMENT grammar has no `&& guard` clause — gsc
-            // swallows a trailing `&& …` into the binding's initializer (only
-            // ADR-0151's value-position form takes a guard). A guard is therefore
-            // nested inside the then-branch, which is equivalent ONLY when there
-            // is no else: with one, `if let t = x { if g { THEN } } else { ELSE }`
-            // would skip ELSE when the binding succeeds but the guard fails,
-            // whereas C# runs it. Decline that combination.
-            if (guards.Count > 0 && ifStatement.Else != null)
             {
                 return false;
             }
@@ -219,13 +318,23 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
             // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
             // designation has no canonical G# type. Report here so the gap
             // surfaces exactly once on this path too.
             this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
-            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression initializer = asTarget == null
+                ? receiver
+                : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
 
             // Inside the guard and the then-branch every reference to the C#
             // pattern local reads as the bare G# binding — no `!!`, no `as`
@@ -233,10 +342,18 @@ public sealed partial class CSharpToGSharpTranslator
             bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
 
-            GExpression guard = null;
+            GExpression guard = residualGuard;
             BlockStatement then;
             try
             {
+                if (residualPattern == null && directBinding)
+                {
+                    guard = new BinaryExpression(
+                        new IdentifierExpression(name),
+                        "!=",
+                        LiteralExpression.Null());
+                }
+
                 foreach (ExpressionSyntax conjunct in guards)
                 {
                     GExpression translated = this.TranslateExpression(conjunct);
@@ -244,13 +361,6 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 then = this.TranslateStatementAsBlock(ifStatement.Statement);
-
-                // Nest the guard inside the binding's scope — the only place it
-                // can read the bound name.
-                if (guard != null)
-                {
-                    then = new BlockStatement(new GStatement[] { new IfStatement(guard, then) });
-                }
             }
             finally
             {
@@ -268,15 +378,44 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement elseBranch = null;
             if (ifStatement.Else != null)
             {
-                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
-                    ? this.TranslateIf(elseIf)
-                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+                elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
+            }
+
+            if (directBinding)
+            {
+                result = new GStatement[]
+                {
+                    new BlockStatement(
+                        new GStatement[]
+                        {
+                            new LocalDeclarationStatement(
+                                this.IsLocalReassigned(binder)
+                                    ? BindingKind.Var
+                                    : BindingKind.Let,
+                                name,
+                                initializer: initializer),
+                            new IfStatement(
+                                guard ?? LiteralExpression.Bool(true),
+                                then,
+                                elseBranch),
+                        }),
+                };
+                return true;
+            }
+
+            // Statement-form `if let` has no guard clause. Nest the residual
+            // test/extra conjuncts inside its binding scope. Reuse the same else
+            // branch both when binding fails and when the nested guard fails.
+            if (guard != null)
+            {
+                then = new BlockStatement(
+                    new GStatement[] { new IfStatement(guard, then, elseBranch) });
             }
 
             result = new GStatement[]
             {
                 new IfLetStatement(
-                    new List<IfLetBinding> { new IfLetBinding(name, receiver) },
+                    new List<IfLetBinding> { new IfLetBinding(name, initializer) },
                     then,
                     elseBranch),
             };
@@ -313,8 +452,23 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             SingleVariableDesignationSyntax designation;
+            RecursivePatternSyntax residualPattern;
             GTypeReference asTarget = null;
-            if (IsBareNonNullDeclarationPattern(isPattern.Pattern, out designation))
+            if (!TryExtractSingleTopLevelIfLetPattern(
+                    isPattern.Pattern,
+                    out TypeSyntax typeSyntax,
+                    out designation,
+                    out residualPattern))
+            {
+                return false;
+            }
+
+            if (residualPattern != null && IsTrivialPatternReceiver(isPattern.Expression))
+            {
+                return false;
+            }
+
+            if (typeSyntax == null)
             {
                 // A direct `while let name = receiver` needs an existing
                 // nullable layer to strip. Non-nullable receivers keep the
@@ -324,10 +478,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
                 }
             }
-            else if (TryExtractSingleVarTypePattern(
-                isPattern.Pattern,
-                out TypeSyntax typeSyntax,
-                out designation))
+            else
             {
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
@@ -352,15 +503,19 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
                 }
             }
-            else
-            {
-                return false;
-            }
 
             if (this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder ||
                 this.IsLocalReassigned(binder) ||
                 guards.Any(ContainsSpillHoistingConstruct) ||
                 ContainsSpillHoistingConstruct(isPattern.Expression))
+            {
+                return false;
+            }
+
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
             {
                 return false;
             }
@@ -371,7 +526,6 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression initializer = asTarget == null
                 ? receiver
                 : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
-            string name = SanitizeIdentifier(designation.Identifier.Text);
 
             bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
             this.state.PatternBindings[binder] = new IdentifierExpression(name);
@@ -379,7 +533,7 @@ public sealed partial class CSharpToGSharpTranslator
             BlockStatement body;
             try
             {
-                GExpression guard = null;
+                GExpression guard = residualGuard;
                 foreach (ExpressionSyntax conjunct in guards)
                 {
                     GExpression translated = this.TranslateExpression(conjunct);
@@ -420,6 +574,128 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
+        private bool TryTranslateIfLetBooleanExpression(
+            ExpressionSyntax expression,
+            out GExpression result)
+        {
+            result = null;
+            DecomposeConjunction(
+                expression,
+                out ExpressionSyntax leftmost,
+                out List<ExpressionSyntax> guards);
+            if (leftmost is not IsPatternExpressionSyntax isPattern
+                || !TryExtractSingleTopLevelIfLetPattern(
+                    isPattern.Pattern,
+                    out TypeSyntax typeSyntax,
+                    out SingleVariableDesignationSyntax designation,
+                    out RecursivePatternSyntax residualPattern)
+                || this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder
+                || this.IsLocalReassigned(binder)
+                || IsTrivialPatternReceiver(isPattern.Expression)
+                || guards.Any(ContainsSpillHoistingConstruct))
+            {
+                return false;
+            }
+
+            GTypeReference asTarget = null;
+            bool directBinding = false;
+            if (typeSyntax == null)
+            {
+                if (!this.IsNullableIfLetReceiver(isPattern.Expression))
+                {
+                    directBinding = true;
+                }
+            }
+            else
+            {
+                ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+                if (targetSymbol == null ||
+                    targetSymbol.TypeKind == TypeKind.Error ||
+                    targetSymbol.IsRefLikeType ||
+                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                {
+                    return false;
+                }
+
+                asTarget = this.MapTypeSyntax(typeSyntax);
+                if (targetSymbol.IsValueType)
+                {
+                    asTarget = MakeNullable(asTarget);
+                }
+                else if (!targetSymbol.IsReferenceType)
+                {
+                    return false;
+                }
+            }
+
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+            GExpression residualGuard = null;
+            if (residualPattern != null
+                && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
+            {
+                return false;
+            }
+
+            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
+
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            GExpression initializer = asTarget == null
+                ? receiver
+                : new BinaryExpression(receiver, "as", new TypeExpression(asTarget));
+
+            bool hadPrevious = this.state.PatternBindings.TryGetValue(
+                binder,
+                out GExpression previous);
+            this.state.PatternBindings[binder] = new IdentifierExpression(name);
+            GExpression guard = residualGuard;
+            try
+            {
+                if (residualPattern == null && directBinding)
+                {
+                    guard = new BinaryExpression(
+                        new IdentifierExpression(name),
+                        "!=",
+                        LiteralExpression.Null());
+                }
+
+                foreach (ExpressionSyntax conjunct in guards)
+                {
+                    GExpression translated = this.TranslateExpression(conjunct);
+                    guard = guard == null
+                        ? translated
+                        : new BinaryExpression(guard, "&&", translated);
+                }
+            }
+            finally
+            {
+                if (hadPrevious)
+                {
+                    this.state.PatternBindings[binder] = previous;
+                }
+                else
+                {
+                    this.state.PatternBindings.Remove(binder);
+                }
+            }
+
+            result = directBinding
+                ? new BlockExpression(
+                    new GStatement[]
+                    {
+                        new LocalDeclarationStatement(
+                            BindingKind.Let,
+                            name,
+                            initializer: initializer),
+                    },
+                    guard ?? LiteralExpression.Bool(true))
+                : new IfLetExpression(
+                    new List<IfLetBinding> { new IfLetBinding(name, initializer) },
+                    guard,
+                    LiteralExpression.Bool(true),
+                    LiteralExpression.Bool(false));
+            return true;
+        }
+
         // True when `node` reads `symbol` anywhere. Used to keep an `if let` from
         // swallowing a shape whose ELSE branch reads the pattern binder — legal in
         // C# when the then-branch exits, but out of scope for a G# `if let`.
@@ -447,7 +723,9 @@ public sealed partial class CSharpToGSharpTranslator
                     assignment.Parent is not InitializerExpressionSyntax initializer ||
                     (!initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
                      !initializer.IsKind(SyntaxKind.WithInitializerExpression)))
-                .Any(assignment => !IsInsideConditionalExpressionBranch(assignment, branch));
+                .Any(assignment =>
+                    AssignmentRequiresStatementLowering(assignment)
+                    && !IsInsideConditionalExpressionBranch(assignment, branch));
         }
 
         /// <summary>
@@ -481,29 +759,86 @@ public sealed partial class CSharpToGSharpTranslator
             return expression;
         }
 
-        /// <summary>
-        /// True for exactly <c>x is { } name</c>: an empty property-pattern
-        /// clause, no type prefix, no positional clause, and a single variable
-        /// designation. Any other pattern shape changes the TEST (a type test,
-        /// member tests, a positional deconstruction), which an
-        /// <c>if let</c> binding cannot express.
-        /// </summary>
-        private static bool IsBareNonNullDeclarationPattern(
+        private static bool IsTrivialPatternReceiver(ExpressionSyntax expression) =>
+            Unparenthesize(expression) is
+                IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax;
+
+        private static bool TryExtractSingleTopLevelIfLetPattern(
             PatternSyntax pattern,
-            out SingleVariableDesignationSyntax designation)
+            out TypeSyntax typeSyntax,
+            out SingleVariableDesignationSyntax designation,
+            out RecursivePatternSyntax residualPattern)
         {
+            typeSyntax = null;
             designation = null;
-            if (pattern is not RecursivePatternSyntax recursive
-                || recursive.Type != null
-                || recursive.PositionalPatternClause != null
-                || recursive.PropertyPatternClause == null
-                || recursive.PropertyPatternClause.Subpatterns.Count > 0
-                || recursive.Designation is not SingleVariableDesignationSyntax single)
+            residualPattern = null;
+
+            if (pattern.DescendantNodesAndSelf()
+                    .OfType<SingleVariableDesignationSyntax>()
+                    .Count() != 1)
             {
                 return false;
             }
 
-            designation = single;
+            switch (pattern)
+            {
+                case DeclarationPatternSyntax declaration
+                    when declaration.Designation is SingleVariableDesignationSyntax single:
+                    typeSyntax = declaration.Type;
+                    designation = single;
+                    return true;
+
+                case RecursivePatternSyntax recursive
+                    when recursive.Designation is SingleVariableDesignationSyntax single:
+                    typeSyntax = recursive.Type;
+                    designation = single;
+                    if (recursive.PositionalPatternClause != null
+                        || recursive.PropertyPatternClause is { Subpatterns.Count: > 0 })
+                    {
+                        residualPattern = recursive;
+                    }
+
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        private bool TryTranslateIfLetResidualPattern(
+            RecursivePatternSyntax pattern,
+            string bindingName,
+            out GExpression result)
+        {
+            result = null;
+            var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
+            var guards = new List<GExpression>();
+            bool outerBooleanPattern = this.state.TranslatingBooleanPattern;
+            this.state.TranslatingBooleanPattern = true;
+            GPattern translated;
+            try
+            {
+                translated = this.TranslateRecursivePattern(
+                    pattern,
+                    new IdentifierExpression(bindingName),
+                    bindings,
+                    new HashSet<string>(System.StringComparer.Ordinal),
+                    guards,
+                    treatAsUntyped: true);
+            }
+            finally
+            {
+                this.state.TranslatingBooleanPattern = outerBooleanPattern;
+            }
+
+            if (translated == null || bindings.Count != 0 || guards.Count != 0)
+            {
+                return false;
+            }
+
+            result = new PatternTestExpression(
+                new IdentifierExpression(bindingName),
+                translated);
             return true;
         }
 
@@ -541,14 +876,13 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 switch (descendant)
                 {
-                    // A nested pattern spills its scrutinee; `out var` and
-                    // ranges spill their operands; a value-position assignment,
-                    // `++`/`--`, or `switch` arm is hoisted into a preceding
-                    // statement by the enclosing seam.
-                    case IsPatternExpressionSyntax:
-                    case AssignmentExpressionSyntax:
+                    // Binding patterns, `out var`, deconstruction assignments,
+                    // `++`/`--`, and switch arms can still open a seam.
+                    case IsPatternExpressionSyntax isPattern
+                        when PatternIntroducesBinding(isPattern.Pattern):
+                    case AssignmentExpressionSyntax assignment
+                        when AssignmentRequiresStatementLowering(assignment):
                     case DeclarationExpressionSyntax:
-                    case RangeExpressionSyntax:
                     case SwitchExpressionSyntax:
                         return true;
 

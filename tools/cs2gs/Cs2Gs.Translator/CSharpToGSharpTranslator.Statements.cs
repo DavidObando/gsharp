@@ -45,10 +45,8 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 else
                 {
-                    // `int y = (x = 5) + 1;` — a value-position assignment nested in
-                    // the initializer is hoisted into a preceding assignment
-                    // statement; it runs once, exactly where C# would evaluate it
-                    // (issue #1723).
+                    // Value-position deconstruction assignments still need a
+                    // statement seam; ordinary assignments remain inline.
                     List<AssignmentExpressionSyntax> initializerEmbedded =
                         this.CollectEmbeddedAssignments(declarator.Initializer.Value, includeSelf: true);
                     foreach (AssignmentExpressionSyntax node in initializerEmbedded)
@@ -295,6 +293,12 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private GExpression TranslateBinaryExpression(BinaryExpressionSyntax binary)
         {
+            if (binary.IsKind(SyntaxKind.LogicalAndExpression)
+                && this.TryTranslateIfLetBooleanExpression(binary, out GExpression ifLet))
+            {
+                return ifLet;
+            }
+
             GExpression left = this.TranslateExpression(binary.Left);
             string op = binary.OperatorToken.Text;
             GExpression right = this.TranslateExpression(binary.Right);
@@ -1799,49 +1803,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return new RawStatement($"// unsupported: delegate multicast '{combineOp}'");
 
                 case AssignmentExpressionSyntax assignment:
-                    string op = assignment.OperatorToken.Text;
-                    GExpression assignRhs = this.CoerceConstantToUnsigned(
-                        assignment.Right,
-                        this.TranslateExpression(assignment.Right));
-                    assignRhs = this.CoerceCompoundAssignmentRhs(assignment, assignRhs);
-                    assignRhs = this.CoercePointerConversion(assignment.Right, assignRhs);
-                    assignRhs = this.ForgiveEventSubscriptionRhs(assignment, assignRhs);
-                    assignRhs = this.ForgiveElementAccessAssignmentRhs(assignment, assignRhs);
-                    assignRhs = this.ForgiveObliviousExternalAssignmentRhs(assignment, assignRhs);
-                    if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
-                    {
-                        ISymbol assignmentTarget = this.context.GetSymbolInfo(assignment.Left).Symbol;
-                        ITypeSymbol assignmentTargetType = assignmentTarget switch
-                        {
-                            ILocalSymbol local => local.Type,
-                            IParameterSymbol parameter => parameter.Type,
-                            IFieldSymbol field => field.Type,
-                            IPropertySymbol property => property.Type,
-                            _ => this.context.GetTypeInfo(assignment.Left).Type,
-                        };
-                        ISymbol promotionTarget = assignmentTarget;
-                        if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
-                            && inferredAssignmentLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                                is VariableDeclaratorSyntax { Initializer.Value: { } initializer } declarator
-                            && declarator.Ancestors().OfType<VariableDeclarationSyntax>()
-                                .FirstOrDefault()?.Type.IsVar == true)
-                        {
-                            assignmentTargetType = this.context.GetTypeInfo(initializer).Type;
-                            promotionTarget = null;
-                        }
-
-                        assignRhs = this.ForgiveNullableReferenceValue(
-                            assignment.Right,
-                            assignRhs,
-                            assignmentTargetType,
-                            promotionTarget,
-                            includePromotedValue: true);
-                    }
-
                     return new AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
-                        assignRhs,
-                        op);
+                        this.TranslateAssignmentValue(assignment),
+                        assignment.OperatorToken.Text);
 
                 case PostfixUnaryExpressionSyntax postfix
                     when postfix.IsKind(SyntaxKind.PostIncrementExpression)
@@ -1877,6 +1842,49 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return new ExpressionStatement(this.TranslateExpression(expression));
             }
+        }
+
+        private GExpression TranslateAssignmentValue(AssignmentExpressionSyntax assignment)
+        {
+            GExpression value = this.CoerceConstantToUnsigned(
+                assignment.Right,
+                this.TranslateExpression(assignment.Right));
+            value = this.CoerceCompoundAssignmentRhs(assignment, value);
+            value = this.CoercePointerConversion(assignment.Right, value);
+            value = this.ForgiveEventSubscriptionRhs(assignment, value);
+            value = this.ForgiveElementAccessAssignmentRhs(assignment, value);
+            value = this.ForgiveObliviousExternalAssignmentRhs(assignment, value);
+            if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            {
+                return value;
+            }
+
+            ISymbol assignmentTarget = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ITypeSymbol assignmentTargetType = assignmentTarget switch
+            {
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => this.context.GetTypeInfo(assignment.Left).Type,
+            };
+            ISymbol promotionTarget = assignmentTarget;
+            if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
+                && inferredAssignmentLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer } declarator
+                && declarator.Ancestors().OfType<VariableDeclarationSyntax>()
+                    .FirstOrDefault()?.Type.IsVar == true)
+            {
+                assignmentTargetType = this.context.GetTypeInfo(initializer).Type;
+                promotionTarget = null;
+            }
+
+            return this.ForgiveNullableReferenceValue(
+                assignment.Right,
+                value,
+                assignmentTargetType,
+                promotionTarget,
+                includePromotedValue: true);
         }
 
         // Translates the target (left-hand side) of an assignment. Two member-access
@@ -1958,9 +1966,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// Translates an expression-statement that may expand into several G#
-        /// statements: a tuple deconstruction (<c>var (a, b) = e</c>) or a chained
-        /// assignment (<c>a = b = c</c>), neither of which has a single-statement G#
-        /// form. Everything else delegates to <see cref="TranslateExpressionStatement"/>.
+        /// statements: tuple declaration/deconstruction forms may expand, while
+        /// ordinary chained assignments remain native nested expressions.
         /// </summary>
         private IEnumerable<GStatement> TranslateExpressionStatements(ExpressionSyntax expression)
         {
@@ -2016,12 +2023,11 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            // `a = b = c`, `a = b += c`, `a += b = c`, … — any assignment whose
-            // RHS is itself an assignment (any operator, optionally parenthesized)
-            // has no single-statement G# form; flatten innermost-first so every
-            // link's write is preserved (issue #1723).
+            // Ordinary chains, including `??=`, are native G# assignment
+            // expressions. Keep legacy flattening only when a link is
+            // tuple-valued and still needs statement-hosting lowering.
             if (expression is AssignmentExpressionSyntax outerAssignment &&
-                Unwrap(outerAssignment.Right) is AssignmentExpressionSyntax)
+                AssignmentChainRequiresStatementLowering(outerAssignment))
             {
                 return this.FlattenChainedAssignment(outerAssignment, preserveValue: false);
             }
@@ -2043,6 +2049,18 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return expression;
+        }
+
+        private static bool AssignmentChainRequiresStatementLowering(
+            AssignmentExpressionSyntax assignment)
+        {
+            if (AssignmentRequiresStatementLowering(assignment))
+            {
+                return true;
+            }
+
+            return Unwrap(assignment.Right) is AssignmentExpressionSyntax nested
+                && AssignmentChainRequiresStatementLowering(nested);
         }
 
         /// <summary>
