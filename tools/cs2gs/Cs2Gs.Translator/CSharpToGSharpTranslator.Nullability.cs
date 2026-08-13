@@ -49,14 +49,19 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool ComputeIsUsedAsNullable(ISymbol symbol, SyntaxNode scope)
         {
-            // The scope is scanned with the current document's semantic model, so a
-            // node from another syntax tree (e.g. an inherited field declared in a
-            // different file) cannot be queried here — `GetSymbolInfo` would throw
-            // "Syntax node is not within syntax tree". Such a symbol is promoted (if
-            // applicable) while its own document is translated; skip it here.
-            if (scope.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            // A source-backed ProjectReference can expose declaration syntax
+            // owned by the referenced project's separate compilation. Its
+            // whole-program taint result was already checked by the caller;
+            // this local syntax scan is valid only for this compilation.
+            if (!this.context.Compilation.ContainsSyntaxTree(scope.SyntaxTree))
             {
                 return false;
+            }
+
+            if (scope.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(scope.SyntaxTree);
+                return this.ComputeIsUsedAsNullable(symbol, scope);
             }
 
             foreach (SyntaxNode node in scope.DescendantNodes())

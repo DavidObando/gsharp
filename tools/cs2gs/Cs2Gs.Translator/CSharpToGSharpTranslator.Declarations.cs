@@ -1000,7 +1000,9 @@ public sealed partial class CSharpToGSharpTranslator
             // Synthetic instance helpers are scoped to their owning aggregate;
             // nested type translation must not leak them outward.
             List<MethodDeclaration> outerInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers;
+            List<MethodDeclaration> outerStaticSynthHelpers = this.state.PendingStaticSynthHelpers;
             this.state.PendingInstanceSynthHelpers = new List<MethodDeclaration>();
+            this.state.PendingStaticSynthHelpers = new List<MethodDeclaration>();
             try
             {
                 return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
@@ -1008,6 +1010,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingInstanceSynthHelpers = outerInstanceSynthHelpers;
+                this.state.PendingStaticSynthHelpers = outerStaticSynthHelpers;
             }
         }
 
@@ -1234,11 +1237,17 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
+                    if (translated is NamedDelegateDeclaration)
+                    {
+                        this.state.PendingTopLevelDeclarations.Add(translated);
+                        continue;
+                    }
+
                     // A nested type declaration (`class`/`struct`/`enum`/...) maps
                     // to a directly-nested G# type member; the parser does not allow
                     // a type declaration inside a `shared { }` block, so it is always
                     // placed in the enclosing type body regardless of staticness.
-                    if (translated is TypeDeclaration or EnumDeclaration or NamedDelegateDeclaration)
+                    if (translated is TypeDeclaration or EnumDeclaration)
                     {
                         instanceMembers.Add(translated);
                         continue;
@@ -1256,6 +1265,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             instanceMembers.AddRange(this.state.PendingInstanceSynthHelpers);
+            sharedMembers.AddRange(this.state.PendingStaticSynthHelpers);
 
             // OD-T1: if get-only auto-property initializers needed to move into a
             // constructor but the type declares no designated instance constructor,

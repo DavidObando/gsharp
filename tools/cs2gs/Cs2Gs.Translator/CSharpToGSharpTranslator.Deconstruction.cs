@@ -862,7 +862,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // (mirrors the plain-declaration path's mutability rule).
                     string name = declaration.Designation switch
                     {
-                        SingleVariableDesignationSyntax single => single.Identifier.Text,
+                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
                         _ => "_",
                     };
 
@@ -936,7 +936,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     collected.Add(designation switch
                     {
-                        SingleVariableDesignationSyntax single => single.Identifier.Text,
+                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
                         _ => "_",
                     });
 
@@ -962,7 +962,7 @@ public sealed partial class CSharpToGSharpTranslator
                     var declaration = (DeclarationExpressionSyntax)argument.Expression;
                     collected.Add(declaration.Designation switch
                     {
-                        SingleVariableDesignationSyntax single => single.Identifier.Text,
+                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
                         _ => "_",
                     });
 
@@ -1041,12 +1041,14 @@ public sealed partial class CSharpToGSharpTranslator
             return this.TranslateWithBlockSpillSeam(() => this.TranslateExpression(expression));
         }
 
-        private List<GExpression> TranslateNullSeamArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
+        private List<GExpression> TranslateNullSeamArguments(
+            SeparatedSyntaxList<ArgumentSyntax> arguments,
+            bool preserveNames = true)
         {
-            return arguments.Select(this.TranslateNullSeamArgument).ToList();
+            return arguments.Select(argument => this.TranslateNullSeamArgument(argument, preserveNames)).ToList();
         }
 
-        private GExpression TranslateNullSeamArgument(ArgumentSyntax argument)
+        private GExpression TranslateNullSeamArgument(ArgumentSyntax argument, bool preserveName)
         {
             GExpression value;
             if (argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword
@@ -1066,7 +1068,7 @@ public sealed partial class CSharpToGSharpTranslator
                     () => this.TranslateArgumentValue(argument));
             }
 
-            return argument.NameColon == null
+            return argument.NameColon == null || !preserveName
                 ? value
                 : new NamedArgumentExpression(
                     SanitizeIdentifier(argument.NameColon.Name.Identifier.Text),
@@ -1194,6 +1196,36 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            if (localFunction.Modifiers.Any(SyntaxKind.StaticKeyword)
+                && this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol staticLocal
+                && this.state.LiftedStaticLocalFunctions.TryGetValue(staticLocal, out string liftedName)
+                && this.state.PendingStaticSynthHelpers != null)
+            {
+                bool liftedIsAsync = localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
+                List<Parameter> liftedParameters = this.MapParameters(
+                    staticLocal,
+                    localFunction.ParameterList,
+                    skipFirst: false);
+                GTypeReference liftedReturnType = this.MapDelegateLikeReturnType(
+                    staticLocal,
+                    liftedIsAsync,
+                    localFunction.ReturnType.GetLocation());
+                List<TypeParameter> liftedTypeParameters = this.MapMethodTypeParameters(staticLocal);
+                BlockStatement liftedBody = this.TranslateBody(
+                    localFunction,
+                    $"static local function '{localFunction.Identifier.Text}'");
+                this.state.PendingStaticSynthHelpers.Add(new MethodDeclaration(
+                    liftedName,
+                    liftedParameters,
+                    liftedReturnType,
+                    liftedBody,
+                    liftedTypeParameters,
+                    visibility: Visibility.Private,
+                    isAsync: liftedIsAsync,
+                    isRefReturn: staticLocal.ReturnsByRef));
+                return new RawStatement($"// lifted static local function {liftedName}");
+            }
+
             // Issue #1900: a ref-returning local function (`static ref int
             // Pick(...)`) has no G# canonical form. A C# local function lowers to
             // a G# `func` LITERAL bound via `let` (ParseFunctionLiteralExpression
@@ -1252,13 +1284,16 @@ public sealed partial class CSharpToGSharpTranslator
             // inside a block body still opens its own fresh seam via
             // <see cref="TranslateStatement"/>.
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            SyntaxNode previousBodyScope = this.state.CurrentBodyScope;
             this.state.PendingSpillPrologue = null;
+            this.state.CurrentBodyScope = localFunction;
             LambdaExpression lambda;
             try
             {
                 if (localFunction.Body != null)
                 {
                     BlockStatement innerBody = this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body));
+                    innerBody = AddIteratorExitLabel(localFunction, innerBody);
                     lambda = isAsyncVoidHandler
                         ? new LambdaExpression(parameters, blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, localFunction.GetLocation()), isAsync: false, returnType: null, isFunctionLiteral: true)
                         : new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
@@ -1292,6 +1327,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.CurrentBodyScope = previousBodyScope;
             }
 
             // Issue #1886: a generic local function (`T First<T>(a, b) { ... }`)

@@ -158,7 +158,8 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             "Named base-constructor arguments remain a known G# binding gap; this test isolates block lowering.");
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains(": base(flag:", printed, StringComparison.Ordinal);
+        Assert.Contains("init() : base(", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(": base(flag:", printed, StringComparison.Ordinal);
         Assert.Contains("GetA() is { X: 1, Y: 2 }", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);

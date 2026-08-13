@@ -161,7 +161,20 @@ public sealed partial class CSharpToGSharpTranslator
 
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
-            if (invocation.Expression is GenericNameSyntax generic)
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.LocalFunction } localFunction
+                && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
+                && localFunction.ContainingType is { } containingType)
+            {
+                target = new MemberAccessExpression(
+                    this.StaticQualifierReceiver(containingType, invocation.GetLocation()),
+                    liftedName);
+                if (invocation.Expression is GenericNameSyntax liftedGeneric)
+                {
+                    typeArguments = this.MapTypeArguments(liftedGeneric);
+                }
+            }
+            else if (invocation.Expression is GenericNameSyntax generic)
             {
                 target = new IdentifierExpression(SanitizeIdentifier(generic.Identifier.Text));
                 typeArguments = this.MapTypeArguments(generic);
@@ -1036,8 +1049,14 @@ public sealed partial class CSharpToGSharpTranslator
                     return new OutArgumentExpression("out", "_");
                 }
 
-                // `out existingVar` (pre-declared): pass by address (legacy form).
-                return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
+                GExpression translatedExisting = this.TranslateExpression(argument.Expression);
+                if (translatedExisting is IdentifierExpression identifier)
+                {
+                    return new OutArgumentExpression("out", identifier.Name);
+                }
+
+                // Non-identifier lvalues keep the universal address form.
+                return new UnaryExpression("&", translatedExisting);
             }
 
             if (refKind == SyntaxKind.RefKeyword)
@@ -2417,7 +2436,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 // Typed null keeps overload selection without an unparseable
                 // array conversion such as `[]char(nil)`.
-                return new DefaultValueExpression(targetType);
+                GTypeReference defaultType = cast.Type is NullableTypeSyntax && !targetType.IsNullable
+                    ? MakeNullable(targetType)
+                    : targetType;
+                return new DefaultValueExpression(defaultType);
             }
 
             GExpression operand = this.TranslateExpression(cast.Expression);
@@ -2436,11 +2458,31 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.IsObliviousCompilation()
                 && targetSymbol is { IsReferenceType: true }
                 && targetSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && cast.Type is not NullableTypeSyntax
                 && !IsNullOrSuppressedNull(cast.Expression)
                 && cast.Expression is not PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 && this.IsNullablePromotedValue(cast.Expression))
             {
                 operand = new NonNullAssertionExpression(operand);
+            }
+
+            Microsoft.CodeAnalysis.CSharp.Conversion conversion =
+                sourceSymbol == null || targetSymbol == null
+                    ? default
+                    : this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol);
+            if (conversion.IsBoxing)
+            {
+                string localName = $"__cast{this.state.SpillCounter++}";
+                return new BlockExpression(
+                    new GStatement[]
+                    {
+                        new LocalDeclarationStatement(
+                            BindingKind.Let,
+                            localName,
+                            targetType,
+                            operand),
+                    },
+                    new IdentifierExpression(localName));
             }
 
             // Issue #914: a CLR REFERENCE conversion `(T)expr` (a downcast such as
@@ -2464,7 +2506,9 @@ public sealed partial class CSharpToGSharpTranslator
             // may be nil and is left unasserted.
             if (targetSymbol is { IsReferenceType: true }
                 && sourceSymbol != null
-                && this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol).IsReference)
+                && !conversion.IsUserDefined
+                && (conversion.IsReference
+                    || (sourceSymbol.IsReferenceType && conversion.Exists)))
             {
                 GExpression converted = new BinaryExpression(operand, "as", new TypeExpression(targetType));
 
@@ -2481,7 +2525,11 @@ public sealed partial class CSharpToGSharpTranslator
                     : new NonNullAssertionExpression(new ParenthesizedExpression(converted));
             }
 
-            return new ConversionExpression(targetType, operand);
+            GTypeReference conversionTargetType = cast.Type is NullableTypeSyntax
+                && !targetType.IsNullable
+                    ? MakeNullable(targetType)
+                    : targetType;
+            return new ConversionExpression(conversionTargetType, operand);
         }
 
         private GExpression TranslateWith(WithExpressionSyntax with)

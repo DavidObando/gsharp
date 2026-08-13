@@ -108,6 +108,31 @@ namespace Corpus.Issue1734
     }
 
     [Fact]
+    public void TupleDeconstruction_KeywordCollision_IsSanitizedConsistently()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1734
+{
+    public class Holder
+    {
+        private (int, int) Pair() => (1, 2);
+
+        public int Compute()
+        {
+            var (value, guard) = Pair();
+            return value + guard;
+        }
+    }
+}
+");
+
+        Assert.Contains("let (value, guard_)", rendered, StringComparison.Ordinal);
+        Assert.Contains("return value + guard_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "guard");
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void DeclarationPatternDesignator_KeywordCollision_IsSanitizedConsistently()
     {
         string rendered = Render(@"

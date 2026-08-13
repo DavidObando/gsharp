@@ -1418,7 +1418,23 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression BuildPatternNarrowingReplacement(
             GExpression receiver, ExpressionSyntax receiverSyntax, TypeSyntax narrowedTypeSyntax)
         {
-            if (receiverSyntax != null && this.IsSmartCastableScrutinee(receiverSyntax))
+            if (narrowedTypeSyntax == null
+                && receiverSyntax != null
+                && this.context.GetTypeInfo(receiverSyntax).Type is INamedTypeSymbol nullableReceiver
+                && nullableReceiver.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            {
+                return new NonNullAssertionExpression(receiver);
+            }
+
+            bool bindingUsedInsideCondition = narrowedTypeSyntax?.Ancestors().Any(node =>
+                node is WhenClauseSyntax
+                || (node is BinaryExpressionSyntax binary
+                    && (binary.IsKind(SyntaxKind.LogicalAndExpression)
+                        || binary.IsKind(SyntaxKind.LogicalOrExpression)))) == true;
+            if (!bindingUsedInsideCondition
+                && receiverSyntax != null
+                && this.IsSmartCastableScrutinee(receiverSyntax)
+                && this.context.GetTypeInfo(receiverSyntax).Type is not ITypeParameterSymbol)
             {
                 return receiver;
             }
@@ -1445,6 +1461,8 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateArrayCreation(ArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, creation.Type.ElementType);
+            ITypeSymbol elementTypeSymbol =
+                (this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol)?.ElementType;
 
             if (creation.Type.RankSpecifiers.Count > 0 && creation.Type.RankSpecifiers[0].Sizes.Count > 1)
             {
@@ -1484,7 +1502,8 @@ public sealed partial class CSharpToGSharpTranslator
                     return new ArrayAllocationExpression(
                         elementType,
                         dimensions,
-                        leaves.Select(this.TranslateExpression).ToList());
+                        leaves.Select(expression =>
+                            this.TranslateArrayInitializerElement(expression, elementTypeSymbol)).ToList());
                 }
 
                 return new ArrayAllocationExpression(
@@ -1500,7 +1519,10 @@ public sealed partial class CSharpToGSharpTranslator
                 // initializer) → the slice literal `[]T{a, b}`.
                 return new ArrayLiteralExpression(
                     elementType,
-                    creation.Initializer.Expressions.Select(this.TranslateExpression).ToList());
+                    creation.Initializer.Expressions
+                        .Select(expression =>
+                            this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                        .ToList());
             }
 
             // `new T[n]` (runtime/constant length, no initializer) → the native
@@ -1659,17 +1681,67 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateImplicitStackAlloc(ImplicitStackAllocArrayCreationExpressionSyntax node)
         {
             GTypeReference elementType = this.GetArrayElementType(node, null);
-            List<GExpression> elements = node.Initializer.Expressions.Select(this.TranslateExpression).ToList();
+            ITypeSymbol elementTypeSymbol = GetCollectionElementTypeSymbol(
+                this.context.GetTypeInfo(node).ConvertedType ?? this.context.GetTypeInfo(node).Type);
+            List<GExpression> elements = node.Initializer.Expressions
+                .Select(expression =>
+                    this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                .ToList();
             GExpression count = LiteralExpression.Int(
                 node.Initializer.Expressions.Count.ToString(CultureInfo.InvariantCulture));
 
             return new StackAllocExpression(elementType, count, elements);
         }
 
+        private GExpression TranslateArrayInitializerElement(
+            ExpressionSyntax expression,
+            ITypeSymbol elementType)
+        {
+            GExpression translated = this.TranslateExpression(expression);
+            translated = this.ForgiveNullableReferenceValue(
+                expression,
+                translated,
+                elementType,
+                targetSymbol: null);
+            if (translated is NonNullAssertionExpression
+                || !this.TargetWillRemainNonNullableReference(elementType, targetSymbol: null)
+                || IsNullOrSuppressedNull(expression))
+            {
+                return translated;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            ITypeSymbol sourceType = symbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
+            return sourceType is { IsReferenceType: true }
+                && (sourceType.NullableAnnotation == NullableAnnotation.Annotated
+                    || this.ShouldPromoteToNullableReference(symbol))
+                ? new NonNullAssertionExpression(translated)
+                : translated;
+        }
+
+        private static ITypeSymbol GetCollectionElementTypeSymbol(ITypeSymbol type) =>
+            type switch
+            {
+                IArrayTypeSymbol array => array.ElementType,
+                IPointerTypeSymbol pointer => pointer.PointedAtType,
+                INamedTypeSymbol { TypeArguments.Length: > 0 } named => named.TypeArguments[0],
+                _ => null,
+            };
+
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, null);
-            if (this.context.GetTypeInfo(creation).Type is IArrayTypeSymbol { Rank: > 1 } arrayType)
+            IArrayTypeSymbol arrayType = this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol;
+            ITypeSymbol elementTypeSymbol = arrayType?.ElementType;
+            if (arrayType is { Rank: > 1 })
             {
                 var dims = new int[arrayType.Rank];
                 var leaves = new List<ExpressionSyntax>();
@@ -1683,12 +1755,16 @@ public sealed partial class CSharpToGSharpTranslator
                     elementType,
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
-                    leaves.Select(this.TranslateExpression).ToList());
+                    leaves.Select(expression =>
+                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol)).ToList());
             }
 
             return new ArrayLiteralExpression(
                 elementType,
-                creation.Initializer.Expressions.Select(this.TranslateExpression).ToList());
+                creation.Initializer.Expressions
+                    .Select(expression =>
+                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                    .ToList());
         }
 
         private GExpression TranslateInitializerExpression(InitializerExpressionSyntax initializer)
@@ -1708,7 +1784,8 @@ public sealed partial class CSharpToGSharpTranslator
                     rectangularElementType,
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
-                    leaves.Select(this.TranslateExpression).ToList());
+                    leaves.Select(expression =>
+                        this.TranslateArrayInitializerElement(expression, arrayType.ElementType)).ToList());
             }
 
             // A bare `{ a, b, c }` array initializer (a field/local of array type
@@ -1716,9 +1793,15 @@ public sealed partial class CSharpToGSharpTranslator
             // list reaching value position maps to the slice literal `[]T{ … }`,
             // using the bound (converted) element type.
             GTypeReference elementType = this.GetArrayElementType(initializer, null);
+            ITypeSymbol elementTypeSymbol = GetCollectionElementTypeSymbol(
+                this.context.GetTypeInfo(initializer).ConvertedType ??
+                this.context.GetTypeInfo(initializer).Type);
             return new ArrayLiteralExpression(
                 elementType,
-                initializer.Expressions.Select(this.TranslateExpression).ToList());
+                initializer.Expressions
+                    .Select(expression =>
+                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                    .ToList());
         }
 
         // ADR-0161 / issue #3350: translates a C# assignment used in VALUE position

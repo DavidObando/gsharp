@@ -88,7 +88,7 @@ public class BodyTranslationTests
         Assert.Contains("} catch (ex InsufficientStockException) {", printed);
         Assert.Contains("} finally {", printed);
         Assert.Contains("throw ex", printed);
-        Assert.Contains("let available = if _stock.TryGetValue(sku, &qty) {", printed);
+        Assert.Contains("let available = if _stock.TryGetValue(sku, out qty) {", printed);
         Assert.Contains("threshold ?? 0", printed);
     }
 
@@ -361,7 +361,7 @@ public class BodyTranslationTests
               n = v;",
             extraLocals: "var d = new System.Collections.Generic.Dictionary<string,int>();");
         Assert.Contains("var v int32", body);
-        Assert.Contains("d.TryGetValue(\"a\", &v)", body);
+        Assert.Contains("d.TryGetValue(\"a\", out v)", body);
     }
 
     /// <summary>A C# <c>using</c> statement maps to a scoped block whose resource

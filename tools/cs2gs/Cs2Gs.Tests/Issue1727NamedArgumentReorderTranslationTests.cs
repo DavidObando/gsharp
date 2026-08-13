@@ -228,6 +228,110 @@ namespace Demo
         Assert.Contains("Merge(additionalCapacity: 8, a, b)", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ConstructorInitializerNames_InParameterOrder_LowerToPositionalArguments()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Base
+    {
+        public Base(int value, bool enabled) { }
+    }
+
+    public class Derived : Base
+    {
+        public Derived()
+            : base(value: 1, enabled: true)
+        {
+        }
+    }
+}");
+
+        Assert.Contains("base(1, true)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("value:", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("enabled:", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstructorInitializer_TrailingOptionalArgument_IsMaterialized()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Base
+    {
+        public Base(int value, string label = null) { }
+    }
+
+    public class Derived : Base
+    {
+        public Derived()
+            : base(1)
+        {
+        }
+    }
+}");
+
+        Assert.Contains("base(1, nil)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstructorInitializerNames_SkippingOptionalParameters_MaterializeDefaults()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Base
+    {
+        public Base(
+            int first,
+            int skipped = 2,
+            bool enabled = false,
+            string label = ""default"")
+        {
+        }
+    }
+
+    public class Derived : Base
+    {
+        public Derived()
+            : base(1, enabled: true, label: ""chosen"")
+        {
+        }
+    }
+}");
+
+        Assert.Contains("base(1, 2, true, \"chosen\")", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("enabled:", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("label:", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstructorInitializerNames_ReorderedTrivialValues_LowerPositionally()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Base
+    {
+        public Base(int first = 0, int second = 0, int third = 0) { }
+    }
+
+    public class Derived : Base
+    {
+        public Derived()
+            : base(third: 3, first: 1)
+        {
+        }
+    }
+}");
+
+        Assert.Contains("base(1, 0, 3)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("first:", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("third:", printed, StringComparison.Ordinal);
+    }
+
     private static string TranslateUnit(string source)
     {
         (CompilationUnit unit, _) = Translate(source);

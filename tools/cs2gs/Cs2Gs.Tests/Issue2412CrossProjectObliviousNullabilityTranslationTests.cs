@@ -171,6 +171,44 @@ namespace LibA
     }
 
     [Fact]
+    public void CrossProject_MethodArgumentPosition_FromUnpromotedReferencedProperty_DoesNotSwitchToForeignSyntaxTree()
+    {
+        const string libB = @"
+namespace LibB
+{
+    public class Widget
+    {
+        public string Name => ""fixed"";
+    }
+}";
+        const string libA = @"
+using LibB;
+
+namespace LibA
+{
+    public class Sink
+    {
+        public void Accept(string value) { }
+    }
+
+    public class Consumer
+    {
+        public void Run(Widget widget, Sink sink)
+        {
+            sink.Accept(widget.Name);
+        }
+    }
+}";
+
+        (_, string printedA) = TranslateTwoProjects(libB, libA);
+
+        // Referenced oblivious members use the existing conservative external
+        // member assertion policy. The regression is reaching that policy
+        // without asking LibA's compilation for LibB's foreign syntax tree.
+        Assert.Contains("sink.Accept(widget.Name!!)", Compact(printedA));
+    }
+
+    [Fact]
     public void CrossProject_ArgumentToPromotedSiblingParameter_DoesNotInsertRuntimeAssertion()
     {
         const string libB = @"

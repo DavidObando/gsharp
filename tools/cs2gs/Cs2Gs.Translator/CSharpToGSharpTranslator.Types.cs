@@ -334,7 +334,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return new NamedTypeReference(unboundName, placeholders);
             }
 
-            return this.MapTypeSyntax(type);
+            ITypeSymbol symbol = this.context.GetTypeInfo(type).Type;
+            return symbol != null
+                ? this.typeMapper.MapTypeOf(symbol, this.context, type.GetLocation())
+                : new NamedTypeReference(type.ToString());
         }
 
         private static bool IsUnboundGeneric(TypeSyntax type, out string name, out int arity)
@@ -942,7 +945,7 @@ public sealed partial class CSharpToGSharpTranslator
             // the end of the nearest iterator body regardless of nested loops.
             if (node.Expression == null)
             {
-                SyntaxNode target = GetBreakTarget(node);
+                SyntaxNode target = this.state.CurrentBodyScope ?? GetBreakTarget(node);
                 return new[] { (GStatement)new GotoStatement(IteratorExitLabelName(target)) };
             }
 
@@ -950,7 +953,9 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)
-            => node.Ancestors().First(n => n is MethodDeclarationSyntax or LocalFunctionStatementSyntax);
+            => node.Ancestors().FirstOrDefault(
+                n => n is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax or LocalFunctionStatementSyntax)
+                ?? node;
 
         private static string IteratorExitLabelName(SyntaxNode node)
             => $"__iteratorExit{node.SpanStart}";
@@ -1464,22 +1469,28 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                 {
-                    if (sub.NameColon != null &&
-                        sub.Pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax bound } &&
-                        this.context.GetDeclaredSymbol(bound) is { } boundSymbol)
-                    {
-                        bindings.Add((
-                            boundSymbol,
-                            new MemberAccessExpression(
-                                new IdentifierExpression(designator),
-                                SanitizeIdentifier(sub.NameColon.Name.Identifier.Text))));
-                    }
-                    else
+                    List<string> memberPath = sub.NameColon != null
+                        ? new List<string> { sub.NameColon.Name.Identifier.Text }
+                        : sub.ExpressionColon != null
+                            ? SplitMemberPath(sub.ExpressionColon.Expression)
+                            : null;
+                    if (memberPath == null)
                     {
                         this.context.ReportUnsupported(
                             sub,
-                            "typed property subpattern other than a 'var' binding has no canonical G# form yet (ADR-0115 §B).");
+                            "typed property subpattern has no member path (ADR-0115 §B).");
+                        continue;
                     }
+
+                    GExpression memberAccess = new IdentifierExpression(designator);
+                    foreach (string memberName in memberPath)
+                    {
+                        memberAccess = new MemberAccessExpression(
+                            memberAccess,
+                            SanitizeIdentifier(memberName));
+                    }
+
+                    this.AddTypedSubpatternTest(sub.Pattern, memberAccess, bindings, guards);
                 }
             }
 
@@ -1526,41 +1537,49 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    if (sub.Pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax posBound } &&
-                        this.context.GetDeclaredSymbol(posBound) is { } posBoundSymbol)
-                    {
-                        bindings.Add((
-                            posBoundSymbol,
-                            new MemberAccessExpression(
-                                new IdentifierExpression(designator),
-                                SanitizeIdentifier(memberName))));
-                        continue;
-                    }
-
                     GExpression memberAccess = new MemberAccessExpression(
                         new IdentifierExpression(designator), SanitizeIdentifier(memberName));
-                    var bindingsBefore = new HashSet<ISymbol>(this.state.PatternBindings.Keys, SymbolEqualityComparer.Default);
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
-                    foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
-                    {
-                        if (!bindingsBefore.Contains(added))
-                        {
-                            // A nested subpattern (e.g. `Point(Sub(var a, 0), _)`)
-                            // binds its own designator directly into
-                            // `patternBindings` (the same mechanism an `is`
-                            // expression uses). Route it through `bindings` too so
-                            // the caller's install/remove-around-guard-and-body
-                            // scoping (mirroring the `is`-expression pattern
-                            // above) cleans it up like every other arm binding.
-                            bindings.Add((added, this.state.PatternBindings[added]));
-                        }
-                    }
-
-                    guards.Add(memberTest);
+                    this.AddTypedSubpatternTest(sub.Pattern, memberAccess, bindings, guards);
                 }
             }
 
             return new TypePattern(designator, this.MapTypeSyntax(recursive.Type));
+        }
+
+        private void AddTypedSubpatternTest(
+            PatternSyntax pattern,
+            GExpression memberAccess,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            List<GExpression> guards)
+        {
+            if (pattern is DiscardPatternSyntax)
+            {
+                return;
+            }
+
+            if (pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax bound } &&
+                this.context.GetDeclaredSymbol(bound) is { } boundSymbol)
+            {
+                bindings.Add((boundSymbol, memberAccess));
+                return;
+            }
+
+            var bindingsBefore = new HashSet<ISymbol>(
+                this.state.PatternBindings.Keys,
+                SymbolEqualityComparer.Default);
+            GExpression memberTest = this.TranslatePatternTest(
+                memberAccess,
+                pattern,
+                isNestedPatternMember: true);
+            foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
+            {
+                if (!bindingsBefore.Contains(added))
+                {
+                    bindings.Add((added, this.state.PatternBindings[added]));
+                }
+            }
+
+            guards.Add(memberTest);
         }
 
         private static string LowerCamel(string name)

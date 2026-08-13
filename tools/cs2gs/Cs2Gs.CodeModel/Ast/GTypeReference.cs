@@ -34,10 +34,15 @@ public sealed class NamedTypeReference : GTypeReference
     /// </summary>
     /// <param name="name">The (possibly dotted) type name.</param>
     /// <param name="typeArguments">The bracket type arguments, if any.</param>
-    public NamedTypeReference(string name, IReadOnlyList<GTypeReference> typeArguments = null)
+    /// <param name="containingType">The constructed containing type for a nested type, if any.</param>
+    public NamedTypeReference(
+        string name,
+        IReadOnlyList<GTypeReference> typeArguments = null,
+        GTypeReference containingType = null)
     {
         Name = name;
         TypeArguments = typeArguments ?? new List<GTypeReference>();
+        ContainingType = containingType;
     }
 
     /// <summary>Gets the (possibly dotted) type name.</summary>
@@ -45,6 +50,9 @@ public sealed class NamedTypeReference : GTypeReference
 
     /// <summary>Gets the bracket type arguments.</summary>
     public IReadOnlyList<GTypeReference> TypeArguments { get; }
+
+    /// <summary>Gets the constructed containing type for a nested type, if any.</summary>
+    public GTypeReference ContainingType { get; }
 }
 
 /// <summary>

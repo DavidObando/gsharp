@@ -331,8 +331,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // form `init(params) : base(args) { ... }` (sample
                     // ExplicitConstructor.gs; ADR-0115 §B.13). This is how a custom
                     // exception forwards its message to System.Exception's ctor.
-                    baseArguments = this.TranslateNullSeamArguments(
-                        node.Initializer.ArgumentList.Arguments);
+                    baseArguments = this.TranslateConstructorInitializerArguments(node.Initializer);
                 }
                 else
                 {
@@ -340,8 +339,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // `convenience init(params) { init(args); ... }`: the delegated
                     // arguments are retained on the constructor model so its
                     // canonical lowering always emits `init(args)` first.
-                    delegatingArguments = this.TranslateNullSeamArguments(
-                        node.Initializer.ArgumentList.Arguments);
+                    delegatingArguments = this.TranslateConstructorInitializerArguments(node.Initializer);
                 }
             }
 
@@ -369,6 +367,101 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists),
                 delegatingArguments: delegatingArguments);
+        }
+
+        private List<GExpression> TranslateConstructorInitializerArguments(
+            ConstructorInitializerSyntax initializer)
+        {
+            SeparatedSyntaxList<ArgumentSyntax> arguments = initializer.ArgumentList.Arguments;
+            if (this.context.GetSymbolInfo(initializer).Symbol is not IMethodSymbol constructor
+                || arguments.Count > constructor.Parameters.Length)
+            {
+                this.context.ReportUnsupported(
+                    initializer,
+                    "named constructor-initializer arguments could not be mapped to positional parameter order.");
+                return this.TranslateNullSeamArguments(arguments);
+            }
+
+            bool hasNamedArguments = arguments.Any(argument => argument.NameColon != null);
+            if (!hasNamedArguments && arguments.Count == constructor.Parameters.Length)
+            {
+                return this.TranslateNullSeamArguments(arguments);
+            }
+
+            var explicitArguments = new Dictionary<int, ArgumentSyntax>();
+            int lastOrdinal = -1;
+            bool reordersArguments = false;
+            for (int i = 0; i < arguments.Count; i++)
+            {
+                ArgumentSyntax argument = arguments[i];
+                IParameterSymbol parameter = argument.NameColon == null
+                    ? constructor.Parameters[i]
+                    : constructor.Parameters.FirstOrDefault(candidate =>
+                        candidate.Name == argument.NameColon.Name.Identifier.Text);
+                if (parameter == null || !explicitArguments.TryAdd(parameter.Ordinal, argument))
+                {
+                    this.context.ReportUnsupported(
+                        initializer,
+                        "named constructor-initializer arguments could not be mapped uniquely to parameters.");
+                    return this.TranslateNullSeamArguments(arguments);
+                }
+
+                reordersArguments |= parameter.Ordinal <= lastOrdinal;
+                lastOrdinal = parameter.Ordinal;
+            }
+
+            if (hasNamedArguments
+                && reordersArguments
+                && arguments.Any(argument => !IsTrivialConstructorInitializerArgument(argument.Expression)))
+            {
+                this.context.ReportUnsupported(
+                    initializer,
+                    "named constructor-initializer arguments reorder side-effecting expressions; no faithful positional G# lowering is available.");
+                return this.TranslateNullSeamArguments(arguments);
+            }
+
+            var translated = new List<GExpression>(constructor.Parameters.Length);
+            for (int ordinal = 0; ordinal < constructor.Parameters.Length; ordinal++)
+            {
+                if (explicitArguments.TryGetValue(ordinal, out ArgumentSyntax argument))
+                {
+                    translated.Add(this.TranslateNullSeamArgument(argument, preserveName: false));
+                    continue;
+                }
+
+                IParameterSymbol parameter = constructor.Parameters[ordinal];
+                if (!parameter.HasExplicitDefaultValue)
+                {
+                    this.context.ReportUnsupported(
+                        initializer,
+                        $"named constructor-initializer argument skips required parameter '{parameter.Name}'.");
+                    return this.TranslateNullSeamArguments(arguments);
+                }
+
+                GExpression defaultValue = this.MapConstantDefault(parameter, initializer);
+                if (defaultValue == null)
+                {
+                    defaultValue = parameter.Type.IsValueType
+                        ? new DefaultValueExpression(
+                            this.typeMapper.Map(parameter.Type, this.context, initializer.GetLocation()))
+                        : LiteralExpression.Null();
+                }
+
+                translated.Add(defaultValue);
+            }
+
+            return translated;
+        }
+
+        private static bool IsTrivialConstructorInitializerArgument(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            return expression is IdentifierNameSyntax or ThisExpressionSyntax
+                or BaseExpressionSyntax or LiteralExpressionSyntax;
         }
 
         /// <summary>
@@ -971,7 +1064,8 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static bool HasYieldBreak(SyntaxNode bodyOwner)
-            => bodyOwner.DescendantNodes(n => n is not LocalFunctionStatementSyntax)
+            => bodyOwner.DescendantNodes(
+                    n => ReferenceEquals(n, bodyOwner) || n is not LocalFunctionStatementSyntax)
                 .OfType<YieldStatementSyntax>()
                 .Any(y => y.Expression == null);
 
@@ -1134,21 +1228,26 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
                 body = this.WithParameterShadows(bodyOwner, body);
-                if (HasYieldBreak(bodyOwner))
-                {
-                    var statements = body.Statements.ToList();
-                    statements.Add(new LabeledStatement(
-                        IteratorExitLabelName(bodyOwner),
-                        new BlockStatement(new List<GStatement>())));
-                    body = new BlockStatement(statements, body.IsUnsafe);
-                }
-
-                return body;
+                return AddIteratorExitLabel(bodyOwner, body);
             }
             finally
             {
                 this.state.CurrentBodyScope = previousScope;
             }
+        }
+
+        private static BlockStatement AddIteratorExitLabel(SyntaxNode bodyOwner, BlockStatement body)
+        {
+            if (!HasYieldBreak(bodyOwner))
+            {
+                return body;
+            }
+
+            var statements = body.Statements.ToList();
+            statements.Add(new LabeledStatement(
+                IteratorExitLabelName(bodyOwner),
+                new BlockStatement(new List<GStatement>())));
+            return new BlockStatement(statements, body.IsUnsafe);
         }
 
         // Issue #1278 / ADR-0131: a C# expression-bodied member (`=> expr`)
@@ -1385,12 +1484,118 @@ public sealed partial class CSharpToGSharpTranslator
         private BlockStatement TranslateBlock(BlockSyntax block)
         {
             var statements = new List<GStatement>();
-            foreach (StatementSyntax statement in this.HoistCallBeforeDeclLocalFunctions(block))
+            IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(block);
+            this.RegisterStaticLocalFunctionLifts(ordered);
+            foreach (StatementSyntax statement in ordered)
             {
                 statements.AddRange(this.TranslateStatement(statement));
             }
 
             return new BlockStatement(statements);
+        }
+
+        private void RegisterStaticLocalFunctionLifts(IEnumerable<StatementSyntax> statements)
+        {
+            var staticLocals = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
+            foreach (LocalFunctionStatementSyntax localFunction in statements
+                .OfType<LocalFunctionStatementSyntax>()
+                .Where(candidate => candidate.Modifiers.Any(SyntaxKind.StaticKeyword)))
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree);
+                if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol)
+                {
+                    staticLocals.Add((localFunction, symbol));
+                }
+            }
+
+            var symbols = new HashSet<IMethodSymbol>(
+                staticLocals.Select(pair => pair.Symbol),
+                SymbolEqualityComparer.Default);
+            var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(
+                SymbolEqualityComparer.Default);
+            foreach (var pair in staticLocals)
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(pair.Syntax.SyntaxTree);
+                var dependencies = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                foreach (SyntaxNode node in pair.Syntax.DescendantNodes())
+                {
+                    if (this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency
+                        && symbols.Contains(dependency))
+                    {
+                        dependencies.Add(dependency);
+                    }
+                }
+
+                edges[pair.Symbol] = dependencies;
+            }
+
+            bool IsRecursive(IMethodSymbol start, IMethodSymbol current, HashSet<IMethodSymbol> visited)
+            {
+                if (!edges.TryGetValue(current, out HashSet<IMethodSymbol> dependencies))
+                {
+                    return false;
+                }
+
+                foreach (IMethodSymbol dependency in dependencies)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(dependency, start))
+                    {
+                        return true;
+                    }
+
+                    if (visited.Add(dependency)
+                        && IsRecursive(start, dependency, visited))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            var toLift = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            foreach (var pair in staticLocals)
+            {
+                if (IsRecursive(
+                    pair.Symbol,
+                    pair.Symbol,
+                    new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default)))
+                {
+                    toLift.Add(pair.Symbol);
+                }
+            }
+
+            var pending = new Stack<IMethodSymbol>(toLift);
+            while (pending.Count > 0)
+            {
+                IMethodSymbol current = pending.Pop();
+                if (!edges.TryGetValue(current, out HashSet<IMethodSymbol> dependencies))
+                {
+                    continue;
+                }
+
+                foreach (IMethodSymbol dependency in dependencies)
+                {
+                    if (toLift.Add(dependency))
+                    {
+                        pending.Push(dependency);
+                    }
+                }
+            }
+
+            foreach (var pair in staticLocals)
+            {
+                if (this.state.LiftedStaticLocalFunctions.ContainsKey(pair.Symbol)
+                    || !toLift.Contains(pair.Symbol))
+                {
+                    continue;
+                }
+
+                string ownerName = SanitizeIdentifier(pair.Symbol.ContainingSymbol?.Name ?? "scope");
+                string localName = SanitizeIdentifier(pair.Syntax.Identifier.Text);
+                this.state.LiftedStaticLocalFunctions[pair.Symbol] =
+                    $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}";
+            }
         }
 
         // C# local functions are hoisted (callable before their lexical

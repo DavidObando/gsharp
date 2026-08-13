@@ -98,7 +98,7 @@ public sealed class Issue3083WithLambdaRoundTripTests
         string printed = Translate(TypedNullSource);
 
         Assert.Contains(
-            "Split(default([]char), StringSplitOptions.RemoveEmptyEntries)",
+            "Split(default([]?char), StringSplitOptions.RemoveEmptyEntries)",
             printed,
             StringComparison.Ordinal);
         AssertRoundTrip(printed);

@@ -66,6 +66,27 @@ namespace Corpus.Issue1894
     }
 
     [Fact]
+    public void TypeOfIndexAndRange_UseMetadataTypeNamesWithoutValueGap()
+    {
+        string rendered = Render(@"
+using System;
+namespace Corpus.Issue1894
+{
+    public class Holder
+    {
+        public Type IndexType() => typeof(Index);
+
+        public Type RangeType() => typeof(Range);
+    }
+}
+");
+
+        Assert.Contains("typeof(Index)", rendered, StringComparison.Ordinal);
+        Assert.Contains("typeof(Range)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void InlineRangeSlice_FromEndBound_StaysCanonicalNoGap()
     {
         // `a[1..^2]`, `a[^2..]`, `a[..^1]`: the `^n` bound is nested inside a

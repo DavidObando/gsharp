@@ -163,6 +163,41 @@ namespace Demo
         Assert.DoesNotContain("return r", printed);
     }
 
+    [Fact]
+    public void TypedPropertyConstraints_LowerToArmGuards()
+    {
+        string printed = TranslateUnit(ShapesPrelude + @"
+    public class Center
+    {
+        public int X;
+    }
+
+    public class DetailedCircle : Shape
+    {
+        public int Radius;
+        public Center Center;
+    }
+
+    public static class Shapes
+    {
+        public static int Describe(Shape shape)
+        {
+            switch (shape)
+            {
+                case DetailedCircle { Radius: > 0, Center.X: 0 }:
+                    return 1;
+                default:
+                    return 0;
+            }
+        }
+    }
+}");
+
+        Assert.Contains("case detailedCircle is DetailedCircle when", printed);
+        Assert.Contains("detailedCircle.Radius > 0", printed);
+        Assert.Contains("detailedCircle.Center.X == 0", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
@@ -174,6 +209,9 @@ namespace Demo
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
         RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
