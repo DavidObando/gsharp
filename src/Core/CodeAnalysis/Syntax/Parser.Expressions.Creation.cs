@@ -828,6 +828,11 @@ public partial class Parser
 
         if (nextKind == SyntaxKind.OpenBraceToken)
         {
+            if (IsTokenOnNewLineAfter(Peek(pos), Peek(pos - 1)))
+            {
+                return false;
+            }
+
             // Issue #1023: in a statement-header controlling expression
             // (`if`/`while`/`for` clauses, `switch`/`match` subject, …) the
             // trailing `{` opens the statement body, not a composite literal.
@@ -933,6 +938,10 @@ public partial class Parser
             }
 
             pos++;
+            if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+            {
+                pos++;
+            }
         }
 
         if (!CanStartTypeClause(Peek(pos)))

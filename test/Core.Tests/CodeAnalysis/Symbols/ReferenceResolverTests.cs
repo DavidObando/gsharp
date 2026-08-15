@@ -206,6 +206,30 @@ public class ReferenceResolverTests
     }
 
     [Fact]
+    public void MapClrTypeToReferences_Projects_NonPublicNestedInfrastructureType()
+    {
+        Type section = typeof(System.Reflection.PortableExecutable.PEBuilder)
+            .GetNestedType("Section", BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.NotNull(section);
+
+        var paths = new[]
+        {
+            typeof(object).Assembly.Location,
+            typeof(System.Reflection.PortableExecutable.PEBuilder).Assembly.Location,
+        }
+        .Where(path => !string.IsNullOrEmpty(path))
+        .Distinct(StringComparer.OrdinalIgnoreCase);
+        var resolver = ReferenceResolver.WithReferences(paths);
+
+        Assert.False(resolver.TryResolveType(section.FullName, out _));
+
+        Type projected = resolver.MapClrTypeToReferences(section);
+
+        Assert.NotSame(section, projected);
+        Assert.Equal(section.FullName, projected.FullName);
+    }
+
+    [Fact]
     public void MapClrTypeToReferences_Projects_ByRef_Types()
     {
         var resolver = BuildMetadataLoadContextResolver();

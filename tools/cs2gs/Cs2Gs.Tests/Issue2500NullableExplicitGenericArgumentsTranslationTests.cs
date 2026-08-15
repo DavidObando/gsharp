@@ -19,6 +19,25 @@ namespace Cs2Gs.Tests;
 public sealed class Issue2500NullableExplicitGenericArgumentsTranslationTests
 {
     [Fact]
+    public void TypedNullCast_PreservesNamedReferenceNullability()
+    {
+        string printed = Translate("""
+            #nullable enable
+
+            namespace Demo;
+
+            public class Base {}
+
+            public static class C
+            {
+                public static Base? M() => (Base?)null;
+            }
+            """);
+
+        Assert.Contains("default(Base?)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SemanticTypeArguments_PreserveNullableWrappersAcrossCallAndTypeShapes()
     {
         string printed = Translate("""

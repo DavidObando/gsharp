@@ -287,7 +287,8 @@ internal sealed partial class OverloadResolver
         ref bool hasErrors)
     {
         var trailingCount = boundArguments.Length - fixedCount;
-        var passThrough = trailingCount == 1 && boundArguments[fixedCount].Type == sliceType;
+        var passThrough = trailingCount == 1
+            && Conversion.Classify(boundArguments[fixedCount].Type, sliceType).IsImplicit;
 
         var result = ImmutableArray.CreateBuilder<BoundExpression>(fixedCount + 1);
         for (var i = 0; i < fixedCount; i++)
@@ -297,7 +298,10 @@ internal sealed partial class OverloadResolver
 
         if (passThrough)
         {
-            result.Add(boundArguments[fixedCount]);
+            result.Add(conversions.BindConversion(
+                locationAt(fixedCount),
+                boundArguments[fixedCount],
+                sliceType));
             return result.MoveToImmutable();
         }
 

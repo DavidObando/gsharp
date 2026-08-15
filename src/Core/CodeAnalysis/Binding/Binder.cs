@@ -205,7 +205,11 @@ public sealed class Binder
             bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
-            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            createErasedFunctionLiteralAdapter: (literal, targetFunctionType, exactTargetReturnType) =>
+                Lambdas.CreateErasedFunctionLiteralAdapter(
+                    literal,
+                    targetFunctionType,
+                    exactTargetReturnType: exactTargetReturnType),
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
             createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
@@ -4982,6 +4986,18 @@ public sealed class Binder
             && pr.Rank == ar.Rank)
         {
             InferTypeArguments(pr.ElementType, ar.ElementType, substitution);
+        }
+        else if (parameterType is TupleTypeSymbol parameterTuple
+            && argumentType is TupleTypeSymbol argumentTuple
+            && parameterTuple.Arity == argumentTuple.Arity)
+        {
+            for (var i = 0; i < parameterTuple.Arity; i++)
+            {
+                InferTypeArguments(
+                    parameterTuple.ElementTypes[i],
+                    argumentTuple.ElementTypes[i],
+                    substitution);
+            }
         }
         else if (parameterType is SequenceTypeSymbol pseq)
         {

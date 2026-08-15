@@ -1,0 +1,101 @@
+// <copyright file="Issue3394NestedGenericTypeTranslationTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Collections.Immutable;
+using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Translator;
+using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
+using Xunit;
+
+namespace Cs2Gs.Tests;
+
+/// <summary>
+/// Issue #3394: nested metadata types retain type arguments carried by their
+/// constructed containing type.
+/// </summary>
+public class Issue3394NestedGenericTypeTranslationTests
+{
+    [Fact]
+    public void ImmutableArrayBuilder_RetainsContainingElementType()
+    {
+        const string source = @"
+#nullable enable
+using System.Collections.Immutable;
+namespace Demo
+{
+    public class C
+    {
+        public int Count(ImmutableArray<int>.Builder? builder) => builder?.Count ?? 0;
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string rendered = GSharpPrinter.Print(unit);
+
+        Assert.Contains("ImmutableArray[int32].Builder?", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void SourceNestedBaseType_InsideGenericContainer_RemainsDirectlyInScope()
+    {
+        const string source = @"
+namespace Demo
+{
+    public class Outer<T>
+    {
+        private abstract class Format
+        {
+        }
+
+        private class TextFormat : Format
+        {
+            public TextFormat() : base()
+            {
+            }
+        }
+
+        private Format Make() => new TextFormat();
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string rendered = GSharpPrinter.Print(unit);
+
+        Assert.Contains("class TextFormat : Format", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Outer[T].Format", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var tree = SyntaxTree.Parse(SourceText.From(rendered));
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree));
+        Assert.DoesNotContain(
+            scope.Diagnostics,
+            diagnostic => diagnostic.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+    }
+}

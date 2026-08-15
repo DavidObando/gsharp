@@ -1002,13 +1002,16 @@ internal sealed class LambdaBinder
     /// adapter must present to the delegate-typed parameter.</param>
     /// <param name="exactTargetParameterSlots">Parameter slots that must use
     /// their target type without generic-erasure preservation.</param>
+    /// <param name="exactTargetReturnType">Whether the adapter must expose the
+    /// target return type exactly instead of preserving symbolic erasure.</param>
     /// <returns>The adapter literal; its
     /// <see cref="BoundFunctionLiteralExpression.CapturedVariables"/>
     /// match the original literal's captures.</returns>
     public BoundFunctionLiteralExpression CreateErasedFunctionLiteralAdapter(
         BoundFunctionLiteralExpression literal,
         FunctionTypeSymbol targetFunctionType,
-        ImmutableArray<bool> exactTargetParameterSlots = default)
+        ImmutableArray<bool> exactTargetParameterSlots = default,
+        bool exactTargetReturnType = false)
     {
         // ADR-0087 §3 R6: if the literal's declared signature already
         // matches the (possibly substituted) target, the adapter would
@@ -1097,7 +1100,9 @@ internal sealed class LambdaBinder
 
         var adapterReturnType = targetFunctionType.ReturnType == TypeSymbol.Void
             ? TypeSymbol.Void
-            : GetAdapterSlotType(literal.Function.Type, targetFunctionType.ReturnType);
+            : exactTargetReturnType
+                ? targetFunctionType.ReturnType
+                : GetAdapterSlotType(literal.Function.Type, targetFunctionType.ReturnType);
 
         // Issue #2180: an async literal carries a DUAL return shape — the
         // FunctionSymbol's result type is the UNWRAPPED value (`T`), while its

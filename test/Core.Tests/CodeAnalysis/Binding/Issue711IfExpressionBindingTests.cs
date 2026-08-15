@@ -121,6 +121,24 @@ let x = if true { a } else { b }
     }
 
     [Fact]
+    public void IfExpression_TypeTestNarrowsThenBranch()
+    {
+        var result = Evaluate(@"
+open class Base { }
+class Derived : Base {
+    prop Value int32 -> 42
+}
+func Read(value Base) int32 {
+    return if value is Derived { value.Value } else { 0 }
+}
+let answer = Read(Derived())
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.ReadGlobal("answer"));
+    }
+
+    [Fact]
     public void IfExpression_NilAndReferenceBranches_BindNullableResult()
     {
         // `nil` on one arm and a nullable reference on the other unifies

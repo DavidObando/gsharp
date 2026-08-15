@@ -129,6 +129,27 @@ class C { func F() int32 { return Pair[int32, string].Make(5) } }
     }
 
     [Fact]
+    public void TupleTypeArg_WithNullableArrayElement_ParsesAsGenericConstruction()
+    {
+        const string source = """
+            package p
+            import System.Collections.Generic
+            func F() {
+                let values = List[(int32, []string, []?int32, bool)]()
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var call = Descendants(tree.Root).OfType<CallExpressionSyntax>().Single();
+        var tuple = Assert.IsType<TypeClauseSyntax>(Assert.Single(call.TypeArgumentList.Arguments));
+        Assert.True(tuple.IsTuple);
+        Assert.Equal(4, tuple.TupleElements.Count);
+        Assert.True(tuple.TupleElements[2].IsArrayNullable);
+    }
+
+    [Fact]
     public void SimpleTypeArg_StaticCall_StillParsesAsIndexerThenMember()
     {
         // Regression guard: a single SIMPLE-name bracketed argument followed by

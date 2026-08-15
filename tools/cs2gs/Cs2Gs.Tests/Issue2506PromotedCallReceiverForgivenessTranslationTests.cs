@@ -104,7 +104,7 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
         Assert.Contains("FindGeneric[Item]()!!.Name", printed, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(printed, "Repro.FindFactory()!!().Name"));
         Assert.Contains("(Repro.Find())!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("(Item(Repro.Find()!!)).Name", printed, StringComparison.Ordinal);
+        Assert.Contains("((Repro.Find()!! as Item)!!).Name", printed, StringComparison.Ordinal);
         Assert.Contains(
             "(if condition { Repro.Find() } else { Repro.Always() })!!.Name",
             printed,

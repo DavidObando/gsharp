@@ -179,7 +179,7 @@ public sealed class Issue3090AwaitInvocationArgumentTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Scenario.SetOutAsync(&b, value: await Scenario.InnerAsync())",
+            "Scenario.SetOutAsync(out b, value: await Scenario.InnerAsync())",
             printed,
             StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);

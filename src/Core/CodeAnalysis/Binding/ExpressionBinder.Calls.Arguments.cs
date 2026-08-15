@@ -1385,7 +1385,11 @@ internal sealed partial class ExpressionBinder
 
         var extensionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
             receiver.Type,
-            ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
+            ImmutableArray.CreateRange(arguments.Select(argument =>
+                argument is BoundMethodGroupExpression userGroup
+                    && TryGetSymbolicUserMethodGroupType(userGroup, out var symbolicGroupType)
+                        ? Invariant.Required(symbolicGroupType, "a symbolic method-group type was resolved")
+                        : argument.Type)));
         var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
             this.memberLookup.CollectImportedExtensionMethods(methodName),
             extensionSymbolicArgs,
@@ -1500,7 +1504,11 @@ internal sealed partial class ExpressionBinder
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
-            deferredInferenceArgs: deferredInferenceArgs);
+            deferredInferenceArgs: deferredInferenceArgs,
+            functionLiteralArgumentCheck: argumentIndex =>
+                argumentIndex > 0
+                && argumentIndex - 1 < arguments.Length
+                && arguments[argumentIndex - 1] is BoundFunctionLiteralExpression);
 
         switch (resolution.Outcome)
         {
@@ -1619,6 +1627,9 @@ internal sealed partial class ExpressionBinder
             extensionDelegateRebindMode,
             out var extensionHandlerPrelude,
             out var extensionUpdatedReceiver,
+            method: best,
+            symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall,
+            receiverType: receiver.Type,
             receiverArgCount: 1);
         if (extensionUpdatedReceiver != null && extensionUpdatedReceiver != receiver)
         {
@@ -1791,19 +1802,36 @@ internal sealed partial class ExpressionBinder
         TypeSymbol? receiverType = null,
         bool hasConversionReceiverTypeOverride = false,
         TypeSymbol? conversionReceiverType = null,
-        int receiverArgCount = 0)
+        int receiverArgCount = 0,
+        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null)
     {
         var rebound = RebindFormattableInterpolationArguments(arguments, argumentSyntax, parameters, parameterMapping, receiverArgCount);
         var handlerArgs = ApplyInterpolatedStringHandlers(parameters, rebound, receiver, location, parameterMapping, out preludeStatements, out updatedReceiver);
         var delegateArgs = delegateRebindMode == ClrCallDelegateRebindMode.Full
-            ? RebindFunctionLiteralDelegateArguments(handlerArgs, parameters, parameterMapping, method, symbolicMethodTypeArgs, receiverType)
+            ? RebindFunctionLiteralDelegateArguments(
+                handlerArgs,
+                parameters,
+                parameterMapping,
+                method,
+                symbolicMethodTypeArgs,
+                receiverType,
+                parameterTypeOverrides)
             : RebindNumericReturnWideningDelegateArguments(handlerArgs, parameters, parameterMapping);
         var effectiveConversionReceiverType = hasConversionReceiverTypeOverride ? conversionReceiverType : receiverType;
         var conversionSymbolicMethodTypeArgs = symbolicMethodTypeArgs.IsDefault
             ? default
             : ImmutableArray.CreateRange<TypeSymbol?>(
                 symbolicMethodTypeArgs.Select(symbol => symbol ?? TypeSymbol.Error));
-        return conversions.BindClrParameterConversions(delegateArgs, parameters, call, parameterMapping, receiverArgCount, method, effectiveConversionReceiverType, conversionSymbolicMethodTypeArgs);
+        return conversions.BindClrParameterConversions(
+            delegateArgs,
+            parameters,
+            call,
+            parameterMapping,
+            receiverArgCount,
+            method,
+            effectiveConversionReceiverType,
+            conversionSymbolicMethodTypeArgs,
+            parameterTypeOverrides);
     }
 
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
@@ -1812,7 +1840,8 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<int> parameterMapping = default,
         MethodInfo? method = null,
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
-        TypeSymbol? receiverType = null)
+        TypeSymbol? receiverType = null,
+        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -1820,11 +1849,26 @@ internal sealed partial class ExpressionBinder
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             var argument = arguments[i];
             var rebound = argument;
+            TypeSymbol? parameterTypeOverride = null;
+            if (parameterTypeOverrides != null)
+            {
+                parameterTypeOverrides.TryGetValue(paramIndex, out parameterTypeOverride);
+            }
+
+            FunctionTypeSymbol? targetFunctionType = null;
+            var hasTargetFunctionType = parameterTypeOverride != null
+                ? MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeOverride, out targetFunctionType)
+                : paramIndex < parameters.Length
+                    && MemberLookup.TryGetLambdaTargetFunctionType(parameters[paramIndex].ParameterType, out targetFunctionType);
             if (paramIndex < parameters.Length
                 && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
-                && MemberLookup.TryGetLambdaTargetFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
+                && hasTargetFunctionType
                 && literal.FunctionType != targetFunctionType)
             {
+                targetFunctionType = Invariant.Required(
+                    targetFunctionType,
+                    "successful delegate target lookup returns a function type");
+
                 // Issue #1512: when the call is a generic method whose delegate
                 // parameter mentions a method type parameter, the closed CLR
                 // parameter type erases that slot to `object`, so the literal
@@ -3010,10 +3054,11 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #943: binds an instance call dispatched through a type parameter's
-    /// imported CLR interface constraint (e.g. <c>a.CompareTo(b)</c> where
-    /// <c>a : T</c> and <c>T : IComparable[T]</c>). The method is resolved
-    /// against the constraint interface's (type-erased) CLR type; the resulting
+    /// Issue #943 / #3394: binds an instance call dispatched through a type
+    /// parameter's imported CLR interface or base-class constraint (for example,
+    /// <c>a.CompareTo(b)</c> with <c>T : IComparable[T]</c>, or
+    /// <c>m.GetParameters()</c> with <c>T : MethodBase</c>). The method is
+    /// resolved against the constraint's CLR type; the resulting
     /// <see cref="BoundImportedInstanceCallExpression"/> carries the constrained
     /// type parameter and the symbolic interface type so the emitter produces a
     /// verifiable <c>constrained. !!T  callvirt</c> sequence with the
@@ -3021,14 +3066,14 @@ internal sealed partial class ExpressionBinder
     /// (<c>IComparable`1&lt;!!T&gt;::CompareTo(!0)</c>).
     /// </summary>
     /// <param name="receiver">The bound receiver (its type is the constrained type parameter).</param>
-    /// <param name="tp">The receiver's type parameter, carrying the CLR interface constraint.</param>
+    /// <param name="tp">The receiver's type parameter, carrying the CLR constraint.</param>
     /// <param name="methodName">The invoked method name.</param>
     /// <param name="arguments">The bound argument expressions.</param>
     /// <param name="ce">The originating call-expression syntax.</param>
     /// <param name="argumentNames">Optional named-argument labels in source order.</param>
     /// <param name="result">The bound constrained call on success.</param>
-    /// <returns><see langword="true"/> when a matching interface method was found and bound.</returns>
-    private bool TryBindConstrainedClrInterfaceCall(
+    /// <returns><see langword="true"/> when a matching constrained method was found and bound.</returns>
+    private bool TryBindConstrainedClrCall(
         BoundExpression receiver,
         TypeParameterSymbol tp,
         string methodName,
@@ -3038,9 +3083,9 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
-        var constraintInterface = tp.ClrInterfaceConstraint;
-        var clrType = constraintInterface?.ClrType;
-        if (constraintInterface == null || clrType is not { IsInterface: true })
+        var constraintType = tp.ClrInterfaceConstraint ?? tp.ClassConstraint;
+        var clrType = constraintType?.ClrType;
+        if (constraintType == null || clrType == null)
         {
             return false;
         }
@@ -3097,13 +3142,13 @@ internal sealed partial class ExpressionBinder
 
         var parameters = method.GetParameters();
 
-        // Return type: a return that names the interface type-variable is
-        // recovered by projecting through the constructed constraint interface;
+        // Return type: a return that names the constraint type-variable is
+        // recovered by projecting through the constructed constraint;
         // a concrete return (e.g. IComparable.CompareTo -> int32) falls back to
         // the direct CLR mapping.
-        var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintInterface, method);
-        var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
-            constraintInterface,
+        var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
+        var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+            constraintType,
             method);
 
         // Issue #1852: re-lower each interpolated-string argument whose
@@ -3140,7 +3185,7 @@ internal sealed partial class ExpressionBinder
             refKinds,
             default,
             constrainedReceiverTypeParameter: tp,
-            constrainedInterfaceType: declaringInterface);
+            constrainedInterfaceType: declaringConstraint);
         return true;
     }
 
@@ -3207,7 +3252,7 @@ internal sealed partial class ExpressionBinder
         // declares an IFormattable/FormattableString/handler parameter, so an
         // interpolated-string argument could never take the Tier-4
         // (ADR-0055) conversion path against any candidate here regardless of
-        // the flag. Unlike TryBindConstrainedClrInterfaceCall above, this path
+        // the flag. Unlike TryBindConstrainedClrCall above, this path
         // does run the full CLR parameter-conversion pass afterward, but that
         // fact is irrelevant given no candidate parameter shape could match.
         // Constant-narrowing is intentionally omitted for the same reason:

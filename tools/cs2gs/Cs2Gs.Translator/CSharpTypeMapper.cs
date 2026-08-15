@@ -359,10 +359,10 @@ public sealed class CSharpTypeMapper
                 List<GTypeReference> delegateArgs = named.TypeArguments
                     .Select(a => this.Map(a, context, location))
                     .ToList();
-                return new NamedTypeReference(this.QualifiedTypeName(named, context, location), delegateArgs);
+                return new NamedTypeReference(this.DelegateTypeName(named, context, location), delegateArgs);
             }
 
-            return new NamedTypeReference(this.QualifiedTypeName(named, context, location));
+            return new NamedTypeReference(this.DelegateTypeName(named, context, location));
         }
 
         return this.Map(type, context, location);
@@ -460,6 +460,17 @@ public sealed class CSharpTypeMapper
         type is INamedTypeSymbol { ContainingNamespace.Name: "System", ContainingNamespace.ContainingNamespace.IsGlobalNamespace: true } named
             && (named.Name == "Index" || named.Name == "Range");
 
+    internal static string LiftedNestedDelegateName(INamedTypeSymbol named)
+    {
+        var parts = new List<string>();
+        for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
+        {
+            parts.Insert(0, CSharpToGSharpTranslator.SanitizeIdentifier(current.Name));
+        }
+
+        return string.Join("_", parts);
+    }
+
     /// <summary>
     /// Issue #2222: strips a leading `global::` alias-qualifier from a
     /// dotted namespace/type name (e.g. <c>using global::Foo.Bar;</c> yields
@@ -474,6 +485,13 @@ public sealed class CSharpTypeMapper
     /// <returns><paramref name="name"/> with any leading `global::` removed.</returns>
     internal static string StripGlobalPrefix(string name) =>
         name.StartsWith("global::", System.StringComparison.Ordinal) ? name.Substring("global::".Length) : name;
+
+    internal GTypeReference MapTypeOf(ITypeSymbol type, TranslationContext context, Location location)
+    {
+        return IsSystemIndexOrRange(type)
+            ? this.MapCore(type, context, location)
+            : this.Map(type, context, location);
+    }
 
     /// <summary>
     /// Issue #1906: maps a C# function-pointer type (<c>delegate*&lt;...&gt;</c>)
@@ -569,9 +587,12 @@ public sealed class CSharpTypeMapper
         switch (reference)
         {
             case NamedTypeReference named:
-                return new NamedTypeReference(named.Name, named.TypeArguments) { IsNullable = isNullable };
+                return new NamedTypeReference(named.Name, named.TypeArguments, named.ContainingType)
+                {
+                    IsNullable = isNullable,
+                };
             case ArrayTypeReference array:
-                return new ArrayTypeReference(array.ElementType) { IsNullable = isNullable };
+                return new ArrayTypeReference(array.ElementType, array.Rank) { IsNullable = isNullable };
             case PointerTypeReference pointer:
                 return new PointerTypeReference(pointer.ElementType) { IsNullable = isNullable };
             case TupleTypeReference tuple:
@@ -702,12 +723,40 @@ public sealed class CSharpTypeMapper
                 {
                     return named.IsGenericType
                         ? new NamedTypeReference(
-                            this.QualifiedTypeName(named, context, location),
+                            this.DelegateTypeName(named, context, location),
                             named.TypeArguments.Select(a => this.Map(a, context, location)).ToList())
-                        : new NamedTypeReference(this.QualifiedTypeName(named, context, location));
+                        : new NamedTypeReference(this.DelegateTypeName(named, context, location));
                 }
 
                 return this.MapDelegate(named.DelegateInvokeMethod, context, location);
+            }
+
+            if (HasGenericContainingType(named))
+            {
+                IReadOnlyList<ITypeSymbol> ownTypeArguments = named.Arity == 0
+                    ? System.Array.Empty<ITypeSymbol>()
+                    : named.TypeArguments.Skip(named.TypeArguments.Length - named.Arity).ToArray();
+                List<GTypeReference> mappedOwnTypeArguments = ownTypeArguments
+                    .Select(argument => this.Map(argument, context, location))
+                    .ToList();
+
+                // A source nested type used from inside its own generic
+                // containing type remains directly in scope. Qualifying it
+                // through Outer[T] makes gsc treat the inherited nested type
+                // as an external constructed lookup and fail to resolve it.
+                if (named.Locations.Any(candidate => candidate.IsInSource)
+                    && !this.HasSourceHomonym(named, context)
+                    && IsWithinContainingType(named, context, location))
+                {
+                    return new NamedTypeReference(
+                        CSharpToGSharpTranslator.SanitizeIdentifier(named.Name),
+                        mappedOwnTypeArguments);
+                }
+
+                return new NamedTypeReference(
+                    CSharpToGSharpTranslator.SanitizeIdentifier(named.Name),
+                    mappedOwnTypeArguments,
+                    this.Map(named.ContainingType, context, location));
             }
 
             if (named.IsGenericType)
@@ -722,6 +771,31 @@ public sealed class CSharpTypeMapper
         }
 
         return new NamedTypeReference(CSharpToGSharpTranslator.SanitizeIdentifier(type.Name));
+    }
+
+    private string DelegateTypeName(
+        INamedTypeSymbol named,
+        TranslationContext context,
+        Location location)
+    {
+        return IsSourceDeclaredDelegate(named) && named.ContainingType != null
+            ? LiftedNestedDelegateName(named)
+            : this.QualifiedTypeName(named, context, location);
+    }
+
+    private static bool HasGenericContainingType(INamedTypeSymbol named)
+    {
+        for (INamedTypeSymbol containing = named.ContainingType;
+            containing != null;
+            containing = containing.ContainingType)
+        {
+            if (containing.Arity > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // A nested type is referenced through its containing type(s)

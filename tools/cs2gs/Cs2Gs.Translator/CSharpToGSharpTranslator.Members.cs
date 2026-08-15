@@ -960,12 +960,30 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapDelegateLikeReturnType(invoke, isAsync: false, node.ReturnType.GetLocation())
                 : this.MapTypeSyntax(node.ReturnType);
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
+            bool isNested = symbol?.ContainingType != null;
+            string name = isNested
+                ? CSharpTypeMapper.LiftedNestedDelegateName(symbol)
+                : SanitizeIdentifier(node.Identifier.Text);
+            Visibility visibility = MapVisibility(symbol, this.context, node);
+            if (isNested)
+            {
+                if (visibility == Visibility.Private)
+                {
+                    visibility = Visibility.Internal;
+                }
+
+                this.context.Report(new TranslationDiagnostic(
+                    nameof(SyntaxKind.DelegateDeclaration),
+                    $"nested delegate '{symbol.ToDisplayString()}' lifted to top-level '{name}' because G# named delegate declarations are top-level-only; non-public visibility is emitted as internal (ADR-0059/ADR-0110).",
+                    node.GetLocation(),
+                    TranslationSeverity.Info));
+            }
 
             return new NamedDelegateDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                name,
                 parameters,
                 returnType,
-                MapVisibility(symbol, this.context, node),
+                visibility,
                 this.MapAttributes(node.AttributeLists),
                 typeParameters);
         }

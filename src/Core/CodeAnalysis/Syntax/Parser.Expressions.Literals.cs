@@ -424,9 +424,15 @@ public partial class Parser
                     // After the receiver clause a method declaration continues
                     // with its name followed by either a value-parameter list
                     // `Name(` or a type-parameter list `Name[` (generic method).
-                    return Peek(i + 1).Kind == SyntaxKind.IdentifierToken
-                        && (Peek(i + 2).Kind == SyntaxKind.OpenParenthesisToken
-                            || Peek(i + 2).Kind == SyntaxKind.OpenSquareBracketToken);
+                    if (Peek(i + 1).Kind == SyntaxKind.IdentifierToken)
+                    {
+                        return Peek(i + 2).Kind is
+                            SyntaxKind.OpenParenthesisToken or SyntaxKind.OpenSquareBracketToken;
+                    }
+
+                    return Peek(i + 1).Kind == SyntaxKind.OperatorKeyword
+                        && Peek(i + 2).Kind != SyntaxKind.EndOfFileToken
+                        && Peek(i + 3).Kind == SyntaxKind.OpenParenthesisToken;
                 }
             }
         }

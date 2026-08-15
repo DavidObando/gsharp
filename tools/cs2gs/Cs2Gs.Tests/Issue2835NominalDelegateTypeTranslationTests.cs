@@ -6,6 +6,7 @@ using System;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -137,6 +138,42 @@ namespace Corpus.Delegates
         EventDeclaration message = broadcaster.Members.OfType<EventDeclaration>().Single(e => e.Name == "Message");
 
         Assert.Equal("MessageHandler", ((NamedTypeReference)message.Type).Name);
+    }
+
+    [Fact]
+    public void NestedDelegates_LiftToDistinctTopLevelNominalTypes()
+    {
+        const string nestedSource = @"
+namespace Corpus.Delegates
+{
+    public class First
+    {
+        internal delegate int Transform(int value);
+        private Transform transform = value => value + 1;
+
+        public int Apply(int value) => transform(value);
+    }
+
+    public class Second
+    {
+        internal delegate int Transform(int value);
+        private Transform transform = value => value + 2;
+
+        public int Apply(int value) => transform(value);
+    }
+}
+";
+
+        CompilationUnit unit = Translate(nestedSource);
+        string rendered = GSharpPrinter.Print(unit);
+
+        Assert.Contains("type First_Transform = delegate func", rendered, StringComparison.Ordinal);
+        Assert.Contains("type Second_Transform = delegate func", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("First.Transform", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Second.Transform", rendered, StringComparison.Ordinal);
+
+        RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
     }
 
     private static string Render() => GSharpPrinter.Print(Translate(Source));

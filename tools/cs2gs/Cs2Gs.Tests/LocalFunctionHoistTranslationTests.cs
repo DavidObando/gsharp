@@ -244,6 +244,35 @@ namespace Demo
     }
 
     [Fact]
+    public void StaticRecursiveLocalFunction_IsLiftedToSharedHelper()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public int Factorial(int value)
+        {
+            static bool IsBaseCase(int current) => current <= 1;
+
+            static int Visit(int current)
+            {
+                return IsBaseCase(current) ? 1 : current * Visit(current - 1);
+            }
+
+            return Visit(value);
+        }
+    }
+}");
+
+        Assert.DoesNotContain("let Visit", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let IsBaseCase", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Factorial_Visit_", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Factorial_IsBaseCase_", printed, StringComparison.Ordinal);
+        CompileAndRun(printed, "C().Factorial(5)");
+    }
+
+    [Fact]
     public void Issue2231MutualRecursionRemainsUnsupportedByGscLetBindings()
     {
         // Documents a pre-existing, separate gsc limitation (not addressed by

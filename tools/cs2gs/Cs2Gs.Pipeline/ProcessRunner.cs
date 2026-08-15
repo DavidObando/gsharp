@@ -36,13 +36,15 @@ public static class ProcessRunner
     /// <param name="arguments">The argument list, passed unquoted via <see cref="ProcessStartInfo.ArgumentList"/>.</param>
     /// <param name="workingDirectory">The working directory, or <see langword="null"/> to inherit the current one.</param>
     /// <param name="timeout">The maximum wall-clock time to wait before killing the process tree; defaults to <see cref="DefaultTimeout"/>.</param>
+    /// <param name="environment">Environment variables to set or override for the child process.</param>
     /// <returns>The exit code, captured output, and whether the run timed out.</returns>
     public static ProcessRunResult Run(
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory = null,
-        TimeSpan? timeout = null) =>
-        RunAsync(fileName, arguments, workingDirectory, timeout).GetAwaiter().GetResult();
+        TimeSpan? timeout = null,
+        IReadOnlyDictionary<string, string> environment = null) =>
+        RunAsync(fileName, arguments, workingDirectory, timeout, environment: environment).GetAwaiter().GetResult();
 
     /// <summary>The async form of <see cref="Run"/>; see its remarks for behavior.</summary>
     /// <param name="fileName">The executable to launch (e.g. <c>dotnet</c>).</param>
@@ -50,13 +52,15 @@ public static class ProcessRunner
     /// <param name="workingDirectory">The working directory, or <see langword="null"/> to inherit the current one.</param>
     /// <param name="timeout">The maximum wall-clock time to wait before killing the process tree; defaults to <see cref="DefaultTimeout"/>.</param>
     /// <param name="cancellationToken">A token that, when canceled, also kills the process tree early.</param>
+    /// <param name="environment">Environment variables to set or override for the child process.</param>
     /// <returns>The exit code, captured output, and whether the run timed out.</returns>
     public static async Task<ProcessRunResult> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory = null,
         TimeSpan? timeout = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string> environment = null)
     {
         if (string.IsNullOrEmpty(fileName))
         {
@@ -80,6 +84,14 @@ public static class ProcessRunner
         foreach (string arg in arguments ?? Array.Empty<string>())
         {
             psi.ArgumentList.Add(arg);
+        }
+
+        if (environment is not null)
+        {
+            foreach ((string name, string value) in environment)
+            {
+                psi.Environment[name] = value;
+            }
         }
 
         using var process = new Process { StartInfo = psi };

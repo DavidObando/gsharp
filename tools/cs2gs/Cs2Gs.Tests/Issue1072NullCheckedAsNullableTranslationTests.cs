@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -129,6 +130,62 @@ namespace Demo
 }");
 
         Assert.Contains("F(s string)", printed);
+    }
+
+    [Fact]
+    public void FlowNarrowedNullableValue_IsAssertedAtNonNullSinks()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+
+namespace Demo
+{
+    public class C
+    {
+        private static void Use(Type value) { }
+
+        public static void M(Type? next)
+        {
+            if (next == null) return;
+
+            Use(next);
+            Type current = typeof(string);
+            current = next;
+            Type[] values = new Type[1];
+            values[0] = next;
+        }
+    }
+}");
+
+        Assert.Contains("Use(next!!)", printed);
+        Assert.Contains("current = next!!", printed);
+        Assert.Contains("values[0] = next!!", printed);
+    }
+
+    [Fact]
+    public void NotNullIfNotNullResult_IsAssertedAtNonNullSink()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+
+namespace Demo
+{
+    public class C
+    {
+        [return: NotNullIfNotNull(""value"")]
+        private static string? Echo(string? value) => value;
+
+        public static string M(string? value)
+        {
+            if (value == null) return """";
+            return Echo(value);
+        }
+    }
+}");
+
+        Assert.Contains("return C.Echo(value)!!", printed);
         Assert.DoesNotContain("s string?", printed);
     }
 
@@ -217,6 +274,71 @@ namespace Demo
 
         Assert.Contains("found Box? =", printed);
         Assert.DoesNotContain("let found =", printed);
+    }
+
+    [Fact]
+    public void CrossFilePromotedPropertyReceiver_GetsNonNullAssertion()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Scope.cs", @"
+namespace Demo
+{
+    public class Resolver { public void Run() { } }
+    public class Scope
+    {
+        public Resolver References { get; } = new Resolver();
+        public bool Missing() => References == null;
+    }
+}"),
+            ("Use.cs", @"
+namespace Demo
+{
+    public class Use
+    {
+        private Scope scope = new Scope();
+        public void Run() => scope.References.Run();
+    }
+}"),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        var translator = new CSharpToGSharpTranslator();
+        string[] printed = project.Documents
+            .Select(document =>
+            {
+                var context = new TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath);
+                return GSharpPrinter.Print(translator.TranslateDocument(document, context));
+            })
+            .ToArray();
+
+        Assert.Contains("References Resolver?", printed[0], StringComparison.Ordinal);
+        Assert.Contains("scope_.References!!.Run()", printed[1], StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void FlowNarrowedProperty_InArrayInitializer_GetsNonNullAssertion()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Box { public string? Value { get; set; } }
+    public class C
+    {
+        public string[] Read(Box box)
+        {
+            if (box.Value is null) return System.Array.Empty<string>();
+            return new[] { box.Value };
+        }
+    }
+}");
+
+        Assert.Contains("[]string{box.Value!!}", printed, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)

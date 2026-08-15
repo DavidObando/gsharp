@@ -683,7 +683,11 @@ internal static class ClrOverloadResolution
     /// therefore must not contribute erased evidence to generic inference.
     /// Their original CLR types still participate in applicability and ranking.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null)
+    /// <param name="functionLiteralArgumentCheck">
+    /// Optional callback identifying function-literal arguments whose body
+    /// return may be implicitly converted to the candidate delegate return.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
@@ -707,7 +711,7 @@ internal static class ClrOverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, deferredInferenceArgs);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, deferredInferenceArgs, functionLiteralArgumentCheck);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -2319,7 +2323,7 @@ internal static class ClrOverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null)
         where T : MethodBase
     {
         {
@@ -2653,6 +2657,12 @@ internal static class ClrOverloadResolution
                         && structuralProjectionArgumentCheck(i, paramTypes[i]))
                     {
                         conv = ImplicitConversionKind.StructuralProjection;
+                    }
+                    else if (functionLiteralArgumentCheck?.Invoke(i) == true
+                        && argTypes[i] != null
+                        && IsLambdaBodyConvertibleToDelegate(paramTypes[i], argTypes[i]!, supplementaryInterfaceCheck))
+                    {
+                        conv = ImplicitConversionKind.DelegateReturnCovariance;
                     }
                     else
                     {
@@ -3886,6 +3896,11 @@ internal static class ClrOverloadResolution
             return CompareReferenceTargets(paramA, paramB);
         }
 
+        if (ka == ImplicitConversionKind.UserDefinedImplicit)
+        {
+            return CompareReferenceTargets(paramA, paramB);
+        }
+
         // Issue #1150: when two candidates both convert a delegate argument by
         // numeric return-type widening, prefer the one whose delegate return is
         // the "better conversion target" for the source's return type — so a
@@ -3941,6 +3956,20 @@ internal static class ClrOverloadResolution
 
     private static bool IsAtLeastAsSpecific(MethodBase a, MethodBase b)
     {
+        // Compare generic definitions rather than their inferred closed forms.
+        // Closing can erase the distinction that makes one overload more
+        // specific, e.g. Enumerable.Min<T>(..., Func<T, int>) versus
+        // Min<T, TResult>(..., Func<T, TResult>) after TResult infers as int.
+        if (a is MethodInfo { IsGenericMethod: true } aGeneric)
+        {
+            a = aGeneric.GetGenericMethodDefinition();
+        }
+
+        if (b is MethodInfo { IsGenericMethod: true } bGeneric)
+        {
+            b = bGeneric.GetGenericMethodDefinition();
+        }
+
         var pa = a.GetParameters();
         var pb = b.GetParameters();
 
@@ -3954,13 +3983,71 @@ internal static class ClrOverloadResolution
             // a is "at least as specific" parameter-wise when each of its
             // parameter types is assignable to b's (i.e. a's parameter is
             // more derived or equal).
-            if (!ClrTypeUtilities.IsAssignableByName(pb[i].ParameterType, pa[i].ParameterType))
+            if (!IsParameterTypeAtLeastAsSpecific(pa[i].ParameterType, pb[i].ParameterType))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool IsParameterTypeAtLeastAsSpecific(Type candidate, Type other)
+    {
+        candidate = PeelByRef(candidate) ?? candidate;
+        other = PeelByRef(other) ?? other;
+
+        if (ClrTypeUtilities.AreSame(candidate, other))
+        {
+            return true;
+        }
+
+        // C# better-member specificity treats a concrete type as more specific
+        // than a method type parameter. Two type-parameter slots are tied.
+        if (other.IsGenericParameter)
+        {
+            return true;
+        }
+
+        if (candidate.IsGenericParameter)
+        {
+            return false;
+        }
+
+        if (candidate.IsArray && other.IsArray
+            && candidate.GetArrayRank() == other.GetArrayRank())
+        {
+            var candidateElement = candidate.GetElementType();
+            var otherElement = other.GetElementType();
+            return candidateElement != null
+                && otherElement != null
+                && IsParameterTypeAtLeastAsSpecific(candidateElement, otherElement);
+        }
+
+        if (candidate.IsGenericType && other.IsGenericType
+            && ClrTypeUtilities.AreSame(
+                candidate.GetGenericTypeDefinition(),
+                other.GetGenericTypeDefinition()))
+        {
+            var candidateArguments = candidate.GetGenericArguments();
+            var otherArguments = other.GetGenericArguments();
+            if (candidateArguments.Length != otherArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < candidateArguments.Length; i++)
+            {
+                if (!IsParameterTypeAtLeastAsSpecific(candidateArguments[i], otherArguments[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return ClrTypeUtilities.IsAssignableByName(other, candidate);
     }
 
     private static bool TryRecoverErasedTypeArguments(

@@ -99,6 +99,22 @@ public class PatternParserTests
         Assert.Equal(SyntaxKind.BinaryExpression, theCase.Guard.Kind);
     }
 
+    [Fact]
+    public void SwitchStatement_WhenCallGuard_DoesNotConsumeCaseBodyAsInitializer()
+    {
+        var tree = SyntaxTree.Parse(
+            "switch v { case > 0 when object.ReferenceEquals(v, other) { } case _ { } }");
+
+        Assert.Empty(tree.Diagnostics);
+        var statement = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(member => member.Statement)
+            .OfType<SwitchStatementSyntax>()
+            .Single();
+        Assert.Equal(2, statement.Cases.Length);
+        Assert.Equal(SyntaxKind.AccessorExpression, statement.Cases[0].Guard.Kind);
+    }
+
     [Theory]
     [InlineData("[..]", 1, 0)]
     [InlineData("[1, .., 3]", 3, 1)]

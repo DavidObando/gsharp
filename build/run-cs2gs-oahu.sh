@@ -31,6 +31,11 @@ git -C "$source_dir" fetch --quiet origin "$ref"
 git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
 actual_commit=$(git -C "$source_dir" rev-parse HEAD)
 
+# Keep MSBuild from importing Directory.Build.* files above the isolated clone
+# when OAHU_GATE_ROOT is placed under this repository.
+[[ -e "$source_dir/Directory.Build.props" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.props"
+[[ -e "$source_dir/Directory.Build.targets" ]] || printf '<Project />\n' > "$source_dir/Directory.Build.targets"
+
 if [[ "$ref" == "$pinned_commit" && "$actual_commit" != "$pinned_commit" ]]; then
   echo "Expected pinned Oahu commit $pinned_commit, got $actual_commit." >&2
   exit 1

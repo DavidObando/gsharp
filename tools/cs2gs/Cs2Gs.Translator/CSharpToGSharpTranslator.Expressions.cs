@@ -45,6 +45,16 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
         {
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.LocalFunction } localFunction
+                && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
+                && localFunction.ContainingType is { } containingType)
+            {
+                return new MemberAccessExpression(
+                    this.StaticQualifierReceiver(containingType, identifier.GetLocation()),
+                    liftedName);
+            }
+
             // A switch-expression property-pattern binding (`Circle { Radius: var r }`)
             // has no G# equivalent; references to the bound local are rewritten to a
             // member access on the arm's type-pattern designator (`circle.Radius`).
@@ -858,6 +868,18 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol targetSymbol,
             bool includePromotedValue = false)
         {
+            if (this.IsActivePatternBinding(value))
+            {
+                return translated;
+            }
+
+            if (value is ConditionalExpressionSyntax
+                && translated is IfLetExpression or BlockExpression
+                && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull)
+            {
+                return translated;
+            }
+
             ILocalSymbol valueLocal = this.context.GetSymbolInfo(value).Symbol as ILocalSymbol
                 ?? GetReferencedLocal(this.context.SemanticModel.GetOperation(value));
             bool isFlowNarrowedLocal = valueLocal != null
@@ -870,12 +892,24 @@ public sealed partial class CSharpToGSharpTranslator
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || targetSymbol is IFieldSymbol { IsConst: true } or ILocalSymbol { IsConst: true }
                 || this.IsWithinExpressionTreeLambda(value)
-                || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol)
-                || (!this.NullableReferenceValueMayBeNull(value)
+                || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
+            {
+                return translated;
+            }
+
+            TypeInfo valueTypeInfo = this.context.GetTypeInfo(value);
+            bool flowNarrowedAnnotatedValue =
+                valueTypeInfo.Nullability.FlowState == NullableFlowState.NotNull
+                && (valueTypeInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                    || valueTypeInfo.Type?.NullableAnnotation == NullableAnnotation.Annotated);
+            bool flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(value)
+                || flowNarrowedAnnotatedValue;
+            if (!flowRequiresAssertion
+                && !this.NullableReferenceValueMayBeNull(value)
                     && !(includePromotedValue
                         && !isFlowNarrowedLocal
                         && this.IsObliviousCompilation()
-                        && this.IsNullablePromotedValue(value))))
+                        && this.IsNullablePromotedValue(value)))
             {
                 return translated;
             }
@@ -933,9 +967,8 @@ public sealed partial class CSharpToGSharpTranslator
             };
 
             return nullableByShape
-                || (typeInfo.Nullability.FlowState == NullableFlowState.MaybeNull
-                && (type.NullableAnnotation == NullableAnnotation.Annotated
-                    || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated));
+                || type.NullableAnnotation == NullableAnnotation.Annotated
+                || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated;
         }
 
         private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)

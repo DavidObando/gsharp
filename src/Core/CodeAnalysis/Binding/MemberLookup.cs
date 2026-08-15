@@ -1119,7 +1119,9 @@ internal sealed class MemberLookup
             // symbolic slice here the call's return would collapse to the
             // erased `object[]` and fail to convert to `[]Foo` (GS0155). Mirror
             // the generic-type branch below, which already honours #903.
-            if (TypeSymbol.RequiresSymbolicProjection(mappedElement))
+            if (TypeSymbol.RequiresSymbolicProjection(mappedElement)
+                || (openElement?.ContainsGenericParameters == true
+                    && mappedElement.ClrType?.ContainsGenericParameters == false))
             {
                 return SliceTypeSymbol.Get(mappedElement);
             }
@@ -1134,7 +1136,9 @@ internal sealed class MemberLookup
         {
             var openPointee = openClr.GetElementType();
             var mappedPointee = MapOpenClrTypeToSymbolic(openPointee, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
-            if (TypeSymbol.RequiresSymbolicProjection(mappedPointee))
+            if (TypeSymbol.RequiresSymbolicProjection(mappedPointee)
+                || (openPointee?.ContainsGenericParameters == true
+                    && mappedPointee.ClrType?.ContainsGenericParameters == false))
             {
                 return ByRefTypeSymbol.Get(mappedPointee);
             }
@@ -1159,19 +1163,14 @@ internal sealed class MemberLookup
                 openMethodDefinition,
                 methodTypeArguments);
 
-            if (TypeSymbol.RequiresSymbolicProjection(mappedUnderlying))
-            {
-                return NullableTypeSymbol.Get(mappedUnderlying);
-            }
-
-            return TypeSymbol.FromClrType(openClr);
+            return NullableTypeSymbol.Get(mappedUnderlying);
         }
 
-        if (openClr.IsGenericType && !openClr.IsGenericTypeDefinition)
+        if (openClr.IsGenericType)
         {
             var openArgs = openClr.GetGenericArguments();
             var symbolic = ImmutableArray.CreateBuilder<TypeSymbol>(openArgs.Length);
-            var anyParam = false;
+            var anyParam = openClr.IsGenericTypeDefinition && !typeArguments.IsDefaultOrEmpty;
             foreach (var a in openArgs)
             {
                 var mapped = MapOpenClrTypeToSymbolic(a, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
@@ -1185,7 +1184,9 @@ internal sealed class MemberLookup
                 // receiver keep the `Check` element identity instead of
                 // collapsing to the type-erased `IEnumerable<object>` (which
                 // for a value-type element is not even a legal up-cast).
-                if (TypeSymbol.RequiresSymbolicProjection(mapped))
+                if (TypeSymbol.RequiresSymbolicProjection(mapped)
+                    || (a.ContainsGenericParameters
+                        && mapped.ClrType?.ContainsGenericParameters == false))
                 {
                     anyParam = true;
                 }
@@ -2193,7 +2194,8 @@ internal sealed class MemberLookup
             return false;
         }
 
-        if (getEnumerator.Type is StructSymbol enumeratorType)
+        var effectiveEnumeratorType = type.SubstituteMemberType(getEnumerator.Type);
+        if (effectiveEnumeratorType is StructSymbol enumeratorType)
         {
             if (TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
                 moveNext.Parameters.Length == 0 &&
@@ -2207,7 +2209,8 @@ internal sealed class MemberLookup
             return false;
         }
 
-        return TryGetClrEnumeratorElementType(getEnumerator.Type, out elementType);
+        return effectiveEnumeratorType != null
+            && TryGetClrEnumeratorElementType(effectiveEnumeratorType, out elementType);
     }
 
     /// <summary>

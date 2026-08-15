@@ -197,6 +197,12 @@ internal sealed class DocumentTranslationState
     // Instance helpers synthesized while translating the current aggregate.
     public List<MethodDeclaration> PendingInstanceSynthHelpers { get; set; }
 
+    // Shared helpers synthesized from capture-free static local functions.
+    public List<MethodDeclaration> PendingStaticSynthHelpers { get; set; }
+
+    public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
+        new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+
     // The exception variable bound by the innermost enclosing `catch` clause,
     // used to translate a C# re-throw (`throw;`) — which has no bare G# form —
     // to `throw <caughtVar>` (ADR-0115 §B).

@@ -74,6 +74,30 @@ class C {
     }
 
     [Fact]
+    public void ForIn_ConstructedGenericClass_SubstitutesEnumeratorElementType()
+    {
+        const string source = @"
+package p
+import System.Collections.Generic
+class Item {
+    prop Name string { get; init; }
+}
+class Bag[T any] {
+    private let items List[T]
+    init() { items = List[T]() }
+    func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+}
+class C {
+    func FirstName(b Bag[Item]) string {
+        for item in b { return item.Name }
+        return """"
+    }
+}
+";
+        Assert.Empty(GetDiagnostics(source));
+    }
+
+    [Fact]
     public void ForIn_ClassWithUserDeclaredEnumerator_StillBinds()
     {
         // Control: the pre-existing user-declared-enumerator shape

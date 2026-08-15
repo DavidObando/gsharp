@@ -61,7 +61,7 @@ public partial class Parser
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
         var value = ParsePattern(PatternParseContext.SwitchStatement);
-        var (whenKeyword, guard) = ParseOptionalWhenGuard();
+        var (whenKeyword, guard) = ParseOptionalWhenGuard(bodyFollows: true);
         var caseBody = ParseBlockStatement();
         return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard, caseBody);
     }
@@ -71,12 +71,12 @@ public partial class Parser
     // contextually as an identifier whose text is "when"; this keeps existing
     // identifiers named `when` usable everywhere else. Returns (null, null) when
     // no guard is present.
-    private (SyntaxToken? WhenKeyword, ExpressionSyntax? Guard) ParseOptionalWhenGuard()
+    private (SyntaxToken? WhenKeyword, ExpressionSyntax? Guard) ParseOptionalWhenGuard(bool bodyFollows = false)
     {
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when")
         {
             var whenKeyword = NextToken();
-            var guard = ParseExpression();
+            var guard = bodyFollows ? ParseExpressionInBodyHeader() : ParseExpression();
             return (whenKeyword, guard);
         }
 
@@ -487,6 +487,14 @@ public partial class Parser
     private PropertyPatternSyntax? TryParseTypePropertyPattern()
     {
         if (Current.Kind != SyntaxKind.OpenBraceToken)
+        {
+            return null;
+        }
+
+        if (patternParseContext == PatternParseContext.IsExpressionBodyHeader
+            && patternNestingDepth == 0
+            && Peek(1).Kind != SyntaxKind.CloseBraceToken
+            && (Peek(1).Kind != SyntaxKind.IdentifierToken || Peek(2).Kind != SyntaxKind.ColonToken))
         {
             return null;
         }

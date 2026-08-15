@@ -411,16 +411,7 @@ internal sealed partial class ExpressionBinder
 
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, imp.OpenDefinition, imp.TypeArguments);
 
-        // Issue #1100: keep the symbolic projection when the recovered return
-        // type references a same-compilation user type as well (not only an
-        // in-scope type parameter). A constructed BCL generic over a
-        // same-compilation class — e.g. `Queue[Entry].Dequeue()` — projects the
-        // open `T` return to the user `Entry` symbol (whose `ClrType` is null
-        // while being emitted). Without this the result type-erases to `object`
-        // and an `Entry`-typed target fails to bind (GS0155).
-        return TypeSymbol.RequiresSymbolicProjection(mapped)
-            ? mapped
-            : null;
+        return mapped;
     }
 
     /// <summary>
@@ -475,10 +466,10 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openPointee, imp.OpenDefinition, imp.TypeArguments);
-        return TypeSymbol.RequiresSymbolicProjection(mapped)
-            ? mapped
-            : null;
+        return MemberLookup.MapOpenClrTypeToSymbolic(
+            openPointee,
+            imp.OpenDefinition,
+            imp.TypeArguments);
     }
 
     /// <summary>
@@ -2006,7 +1997,8 @@ internal sealed partial class ExpressionBinder
                     // branch above only runs once a prior iteration set both).
                     if (agreedReturnTypes!.TryGetValue(idx, out var existingReturn))
                     {
-                        if (!slotReturnTypes.TryGetValue(idx, out var otherReturn) || !Equals(existingReturn, otherReturn))
+                        if (!slotReturnTypes.TryGetValue(idx, out var otherReturn)
+                            || !DeclarationBinder.TypeSignaturesEquivalent(existingReturn, otherReturn))
                         {
                             agreedReturnTypes.Remove(idx);
                         }
@@ -2072,7 +2064,9 @@ internal sealed partial class ExpressionBinder
 
             for (var i = 0; i < kv.Value.ParameterTypes.Length; i++)
             {
-                if (!Equals(kv.Value.ParameterTypes[i], other.ParameterTypes[i]))
+                if (!DeclarationBinder.TypeSignaturesEquivalent(
+                        kv.Value.ParameterTypes[i],
+                        other.ParameterTypes[i]))
                 {
                     return false;
                 }
@@ -2838,13 +2832,12 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            // Issue #943: dispatch through a type parameter's *imported CLR*
-            // interface constraint (generic or not), e.g. `a.CompareTo(b)` where
-            // `a : T` and `T : IComparable[T]`. Emitted as a verifiable
-            // `constrained. !!T  callvirt IComparable`1<!!T>::CompareTo(!0)`.
+            // Issue #943 / #3394: dispatch through a type parameter's imported
+            // CLR interface or base-class constraint. Both shapes require a
+            // constrained call because the receiver's stack type remains !!T.
             if (receiver != null && receiver.Type is TypeParameterSymbol tpClrRecv
-                && tpClrRecv.ClrInterfaceConstraint != null
-                && TryBindConstrainedClrInterfaceCall(receiver, tpClrRecv, methodName, arguments, ce, argumentNames, out var constrainedCall))
+                && (tpClrRecv.ClrInterfaceConstraint != null || tpClrRecv.ClassConstraint?.ClrType != null)
+                && TryBindConstrainedClrCall(receiver, tpClrRecv, methodName, arguments, ce, argumentNames, out var constrainedCall))
             {
                 return constrainedCall;
             }
@@ -3404,8 +3397,8 @@ internal sealed partial class ExpressionBinder
                             constrainedReceiverTypeParameter: tpRecv));
                 }
 
-                if (tpRecv.ClrInterfaceConstraint != null
-                    && TryBindConstrainedClrInterfaceCall(narrowedReceiver, tpRecv, methodName, arguments, ce, argumentNames, out var constrainedCall))
+                if ((tpRecv.ClrInterfaceConstraint != null || tpRecv.ClassConstraint?.ClrType != null)
+                    && TryBindConstrainedClrCall(narrowedReceiver, tpRecv, methodName, arguments, ce, argumentNames, out var constrainedCall))
                 {
                     return Succeeded(constrainedCall);
                 }

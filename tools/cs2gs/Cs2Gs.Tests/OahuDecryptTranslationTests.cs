@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -324,6 +325,71 @@ namespace Demo
         Assert.Contains("__iteratorExit", printed);
         Assert.DoesNotContain("yield break", printed);
         Assert.DoesNotContain("unsupported", printed);
+    }
+
+    /// <summary>
+    /// Issue #3394: iterator accessors and local functions use their own body
+    /// as the synthesized <c>yield break</c> target.
+    /// </summary>
+    [Fact]
+    public void YieldBreak_InGetterAndLocalFunction_UsesMatchingExitLabels()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public sealed class C
+    {
+        private bool stop;
+
+        public System.Collections.Generic.IEnumerable<int> Values
+        {
+            get
+            {
+                if (this.stop)
+                {
+                    yield break;
+                }
+
+                yield return 1;
+            }
+        }
+
+        public System.Collections.Generic.IEnumerable<int> Local()
+        {
+            System.Collections.Generic.IEnumerable<int> Inner()
+            {
+                if (this.stop)
+                {
+                    yield break;
+                }
+
+                yield return 2;
+            }
+
+            return Inner();
+        }
+    }
+}");
+
+        string[] exits = printed.Split('\n')
+            .Where(line => line.Contains("__iteratorExit", StringComparison.Ordinal))
+            .Select(line =>
+            {
+                int start = line.IndexOf("__iteratorExit", StringComparison.Ordinal);
+                int end = start + "__iteratorExit".Length;
+                while (end < line.Length && char.IsDigit(line[end]))
+                {
+                    end++;
+                }
+
+                return line.Substring(start, end - start);
+            })
+            .ToArray();
+
+        Assert.Equal(4, exits.Length);
+        Assert.Equal(2, exits.Distinct().Count());
+        Assert.All(exits.Distinct(), exit => Assert.Equal(2, exits.Count(candidate => candidate == exit)));
+        Assert.DoesNotContain("yield break", printed);
     }
 
     /// <summary>

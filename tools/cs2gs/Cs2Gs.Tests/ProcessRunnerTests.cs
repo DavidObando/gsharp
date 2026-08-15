@@ -103,6 +103,22 @@ public class ProcessRunnerTests
         Assert.Equal(args, lines);
     }
 
+    [Fact]
+    public void Run_EnvironmentOverrides_AreVisibleToChild()
+    {
+        ProcessRunResult result = ProcessRunner.Run(
+            "/bin/sh",
+            new[] { "-c", "printf '%s' \"$GSHARP_PROCESS_RUNNER_TEST\"" },
+            timeout: TimeSpan.FromSeconds(10),
+            environment: new System.Collections.Generic.Dictionary<string, string>
+            {
+                ["GSHARP_PROCESS_RUNNER_TEST"] = "current-package",
+            });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("current-package", result.Stdout);
+    }
+
     /// <summary>
     /// Stage 4 (and every other stage) must never let a child inherit our
     /// console's stdin: <c>cat</c> with no input reads until EOF, so it only

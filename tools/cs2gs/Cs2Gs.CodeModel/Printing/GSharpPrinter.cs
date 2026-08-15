@@ -155,12 +155,15 @@ public static class GSharpPrinter
         switch (type)
         {
             case NamedTypeReference named:
+                var name = named.ContainingType == null
+                    ? named.Name
+                    : $"{RenderType(named.ContainingType)}.{named.Name}";
                 if (named.TypeArguments.Count == 0)
                 {
-                    return named.Name;
+                    return name;
                 }
 
-                return $"{named.Name}[{string.Join(", ", named.TypeArguments.Select(RenderType))}]";
+                return $"{name}[{string.Join(", ", named.TypeArguments.Select(RenderType))}]";
 
             case ArrayTypeReference array:
                 return $"[{new string(',', array.Rank - 1)}]{RenderType(array.ElementType)}";

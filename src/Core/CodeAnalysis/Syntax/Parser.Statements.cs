@@ -447,6 +447,11 @@ public partial class Parser
 
     private bool LooksLikeMultiAssignment()
     {
+        if (!HasTopLevelCommaBeforeAssignment())
+        {
+            return false;
+        }
+
         var savedPosition = position;
         var savedTokens = tokens;
         var savedDiagnosticCount = Diagnostics.Count;
@@ -473,6 +478,75 @@ public partial class Parser
             tokens = savedTokens;
             Diagnostics.TruncateTo(savedDiagnosticCount);
         }
+    }
+
+    private bool HasTopLevelCommaBeforeAssignment()
+    {
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (var offset = 0; offset <= LookaheadMaxScan; offset++)
+        {
+            var kind = Peek(offset).Kind;
+            switch (kind)
+            {
+                case SyntaxKind.OpenParenthesisToken:
+                    parenthesisDepth++;
+                    break;
+                case SyntaxKind.CloseParenthesisToken:
+                    if (parenthesisDepth == 0)
+                    {
+                        return false;
+                    }
+
+                    parenthesisDepth--;
+                    break;
+                case SyntaxKind.OpenSquareBracketToken:
+                case SyntaxKind.QuestionOpenBracketToken:
+                    bracketDepth++;
+                    break;
+                case SyntaxKind.CloseSquareBracketToken:
+                    if (bracketDepth == 0)
+                    {
+                        return false;
+                    }
+
+                    bracketDepth--;
+                    break;
+                case SyntaxKind.OpenBraceToken:
+                    braceDepth++;
+                    break;
+                case SyntaxKind.CloseBraceToken:
+                    if (braceDepth == 0)
+                    {
+                        return false;
+                    }
+
+                    braceDepth--;
+                    break;
+            }
+
+            if (parenthesisDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+            {
+                continue;
+            }
+
+            if (kind == SyntaxKind.CommaToken)
+            {
+                return true;
+            }
+
+            if (kind is SyntaxKind.EqualsToken
+                or SyntaxKind.ColonEqualsToken
+                or SyntaxKind.SemicolonToken
+                or SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private StatementSyntax ParseMultiAssignmentStatement()

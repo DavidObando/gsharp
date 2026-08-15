@@ -789,47 +789,53 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            var extraGuards = new Stack<ExpressionSyntax>();
-            ExpressionSyntax condition = ifStatement.Condition;
-            while (condition is BinaryExpressionSyntax binary &&
-                   binary.IsKind(SyntaxKind.LogicalOrExpression))
+            var terms = new List<ExpressionSyntax>();
+            CollectLogicalOrTerms(ifStatement.Condition, terms);
+            int negatedPatternCount = terms.Count(term =>
+                TryExtractNegatedGuardPattern(term, out _, out _, out _, out _));
+            if (negatedPatternCount > 1)
             {
-                condition = binary.Left;
-                extraGuards.Push(binary.Right);
+                return this.TryBuildMultipleNegatedGuardHoists(ifStatement, terms, out result);
             }
 
-            if (condition is not IsPatternExpressionSyntax isPattern ||
-                isPattern.Pattern is not UnaryPatternSyntax notPattern ||
-                !notPattern.IsKind(SyntaxKind.NotPattern))
+            IsPatternExpressionSyntax isPattern = null;
+            TypeSyntax typeSyntax = null;
+            VariableDesignationSyntax designation = null;
+            RecursivePatternSyntax residualPattern = null;
+            int patternIndex = -1;
+            for (int i = 0; i < terms.Count; i++)
+            {
+                if (!TryExtractNegatedGuardPattern(
+                        terms[i],
+                        out IsPatternExpressionSyntax candidatePattern,
+                        out TypeSyntax candidateType,
+                        out VariableDesignationSyntax candidateDesignation,
+                        out RecursivePatternSyntax candidateResidualPattern))
+                {
+                    continue;
+                }
+
+                if (patternIndex >= 0)
+                {
+                    return false;
+                }
+
+                isPattern = candidatePattern;
+                typeSyntax = candidateType;
+                designation = candidateDesignation;
+                residualPattern = candidateResidualPattern;
+                patternIndex = i;
+            }
+
+            if (patternIndex < 0)
             {
                 return false;
             }
 
-            TypeSyntax typeSyntax;
-            VariableDesignationSyntax designation;
-            switch (notPattern.Pattern)
+            if (patternIndex > 0
+                && (ifStatement.Else != null || !StatementAlwaysExits(ifStatement.Statement)))
             {
-                case DeclarationPatternSyntax declaration:
-                    typeSyntax = declaration.Type;
-                    designation = declaration.Designation;
-                    break;
-
-                case RecursivePatternSyntax { Type: { } recursiveType } recursive
-                    when recursive.PropertyPatternClause is null or { Subpatterns.Count: 0 }:
-                    typeSyntax = recursiveType;
-                    designation = recursive.Designation;
-                    break;
-
-                case RecursivePatternSyntax { Type: null } bareRecursive
-                    when bareRecursive.PropertyPatternClause is null or { Subpatterns.Count: 0 }:
-                    // `is not { } t` — no explicit type test; the target type is
-                    // the receiver's own (non-null) type (issue #2233).
-                    typeSyntax = null;
-                    designation = bareRecursive.Designation;
-                    break;
-
-                default:
-                    return false;
+                return false;
             }
 
             if (designation is not SingleVariableDesignationSyntax single)
@@ -848,13 +854,28 @@ public sealed partial class CSharpToGSharpTranslator
                 // reference type (or nullable value type); a non-nullable value-type
                 // target keeps the existing then-block binding behaviour.
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
-                if (targetSymbol == null || targetSymbol.IsValueType)
+                if (targetSymbol == null)
                 {
                     return false;
                 }
 
                 targetType = this.MapTypeSyntax(typeSyntax);
-                hoistInitializer = new BinaryExpression(receiver, "as", new TypeExpression(targetType));
+                if (targetSymbol.IsValueType)
+                {
+                    if (this.context.GetTypeInfo(isPattern.Expression).Type is not INamedTypeSymbol receiverType
+                        || receiverType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
+                        || receiverType.TypeArguments.Length != 1
+                        || !SymbolEqualityComparer.Default.Equals(receiverType.TypeArguments[0], targetSymbol))
+                    {
+                        return false;
+                    }
+
+                    hoistInitializer = receiver;
+                }
+                else
+                {
+                    hoistInitializer = new BinaryExpression(receiver, "as", new TypeExpression(targetType));
+                }
             }
             else
             {
@@ -877,8 +898,15 @@ public sealed partial class CSharpToGSharpTranslator
             // `== nil` guard and the subsequent smart cast both type-check, while the
             // `as` cast (when present) keeps its non-nullable reference target (a
             // nullable `as T?` target is rejected at emit time).
+            ISymbol designationSymbol = this.context.GetDeclaredSymbol(single);
+            BindingKind binding = designationSymbol != null
+                && this.IsSymbolReassigned(
+                    designationSymbol,
+                    this.state.CurrentBodyScope ?? ifStatement)
+                    ? BindingKind.Var
+                    : BindingKind.Let;
             var hoist = new LocalDeclarationStatement(
-                BindingKind.Let,
+                binding,
                 localName,
                 MakeNullable(targetType),
                 hoistInitializer);
@@ -887,12 +915,25 @@ public sealed partial class CSharpToGSharpTranslator
             // fails the local is nil, so the original then-block runs.
             GExpression guard = new BinaryExpression(
                 new IdentifierExpression(localName), "==", LiteralExpression.Null());
-            while (extraGuards.Count > 0)
+            if (residualPattern != null)
+            {
+                if (!this.TryTranslateIfLetResidualPattern(
+                        residualPattern,
+                        localName,
+                        out GExpression residualGuard))
+                {
+                    return false;
+                }
+
+                guard = new BinaryExpression(guard, "||", Negate(residualGuard));
+            }
+
+            for (int i = patternIndex + 1; i < terms.Count; i++)
             {
                 guard = new BinaryExpression(
                     guard,
                     "||",
-                    this.TranslateExpression(extraGuards.Pop()));
+                    this.TranslateExpression(terms[i]));
             }
 
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
@@ -903,9 +944,234 @@ public sealed partial class CSharpToGSharpTranslator
                 elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
-            result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
+            var statements = new List<GStatement>();
+            if (patternIndex > 0)
+            {
+                GExpression prefixGuard = null;
+                for (int i = 0; i < patternIndex; i++)
+                {
+                    GExpression translated = this.TranslateExpression(terms[i]);
+                    prefixGuard = prefixGuard == null
+                        ? translated
+                        : new BinaryExpression(prefixGuard, "||", translated);
+                }
+
+                statements.Add(new IfStatement(prefixGuard, then));
+            }
+
+            statements.Add(hoist);
+            statements.Add(new IfStatement(guard, then, elseBranch));
+            result = statements;
             return true;
         }
+
+        private bool TryBuildMultipleNegatedGuardHoists(
+            IfStatementSyntax ifStatement,
+            IReadOnlyList<ExpressionSyntax> terms,
+            out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+            if (ifStatement.Else != null || !StatementAlwaysExits(ifStatement.Statement))
+            {
+                return false;
+            }
+
+            BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
+            var statements = new List<GStatement>();
+            foreach (ExpressionSyntax term in terms)
+            {
+                if (!TryExtractNegatedGuardPattern(
+                        term,
+                        out IsPatternExpressionSyntax isPattern,
+                        out TypeSyntax typeSyntax,
+                        out VariableDesignationSyntax designation,
+                        out RecursivePatternSyntax residualPattern))
+                {
+                    statements.Add(new IfStatement(this.TranslateExpression(term), then));
+                    continue;
+                }
+
+                if (designation is not SingleVariableDesignationSyntax single)
+                {
+                    return false;
+                }
+
+                string localName = SanitizeIdentifier(single.Identifier.Text);
+                GExpression receiver = this.TranslateExpression(isPattern.Expression);
+                GExpression initializer;
+                GTypeReference targetType;
+                if (typeSyntax != null)
+                {
+                    ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
+                    if (targetSymbol == null)
+                    {
+                        return false;
+                    }
+
+                    targetType = this.MapTypeSyntax(typeSyntax);
+                    if (targetSymbol.IsValueType)
+                    {
+                        if (this.context.GetTypeInfo(isPattern.Expression).Type is not INamedTypeSymbol receiverType
+                            || receiverType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
+                            || receiverType.TypeArguments.Length != 1
+                            || !SymbolEqualityComparer.Default.Equals(receiverType.TypeArguments[0], targetSymbol))
+                        {
+                            return false;
+                        }
+
+                        initializer = receiver;
+                    }
+                    else
+                    {
+                        initializer = new BinaryExpression(receiver, "as", new TypeExpression(targetType));
+                    }
+                }
+                else
+                {
+                    ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
+                    if (receiverType == null)
+                    {
+                        return false;
+                    }
+
+                    targetType = this.typeMapper.Map(
+                        UnwrapNullable(receiverType),
+                        this.context,
+                        isPattern.Expression.GetLocation());
+                    initializer = receiver;
+                }
+
+                ISymbol designationSymbol = this.context.GetDeclaredSymbol(single);
+                BindingKind binding = designationSymbol != null
+                    && this.IsSymbolReassigned(
+                        designationSymbol,
+                        this.state.CurrentBodyScope ?? ifStatement)
+                        ? BindingKind.Var
+                        : BindingKind.Let;
+                statements.Add(new LocalDeclarationStatement(
+                    binding,
+                    localName,
+                    MakeNullable(targetType),
+                    initializer));
+
+                GExpression guard = new BinaryExpression(
+                    new IdentifierExpression(localName),
+                    "==",
+                    LiteralExpression.Null());
+                if (residualPattern != null)
+                {
+                    if (!this.TryTranslateIfLetResidualPattern(
+                            residualPattern,
+                            localName,
+                            out GExpression residualGuard))
+                    {
+                        return false;
+                    }
+
+                    guard = new BinaryExpression(guard, "||", Negate(residualGuard));
+                }
+
+                statements.Add(new IfStatement(guard, then));
+            }
+
+            result = statements;
+            return true;
+        }
+
+        private static void CollectLogicalOrTerms(
+            ExpressionSyntax expression,
+            List<ExpressionSyntax> terms)
+        {
+            if (expression is BinaryExpressionSyntax binary
+                && binary.IsKind(SyntaxKind.LogicalOrExpression))
+            {
+                CollectLogicalOrTerms(binary.Left, terms);
+                CollectLogicalOrTerms(binary.Right, terms);
+                return;
+            }
+
+            terms.Add(expression);
+        }
+
+        private static bool TryExtractNegatedGuardPattern(
+            ExpressionSyntax condition,
+            out IsPatternExpressionSyntax isPattern,
+            out TypeSyntax typeSyntax,
+            out VariableDesignationSyntax designation,
+            out RecursivePatternSyntax residualPattern)
+        {
+            condition = Unparenthesize(condition);
+            PatternSyntax negatedPattern;
+            if (condition is IsPatternExpressionSyntax directPattern
+                && directPattern.Pattern is UnaryPatternSyntax notPattern
+                && notPattern.IsKind(SyntaxKind.NotPattern))
+            {
+                isPattern = directPattern;
+                negatedPattern = notPattern.Pattern;
+            }
+            else if (condition is PrefixUnaryExpressionSyntax logicalNot
+                && logicalNot.IsKind(SyntaxKind.LogicalNotExpression)
+                && Unparenthesize(logicalNot.Operand) is IsPatternExpressionSyntax parenthesizedPattern)
+            {
+                isPattern = parenthesizedPattern;
+                negatedPattern = parenthesizedPattern.Pattern;
+            }
+            else
+            {
+                isPattern = null;
+                negatedPattern = null;
+            }
+
+            typeSyntax = null;
+            designation = null;
+            residualPattern = null;
+            if (isPattern == null)
+            {
+                return false;
+            }
+
+            switch (negatedPattern)
+            {
+                case DeclarationPatternSyntax declaration:
+                    typeSyntax = declaration.Type;
+                    designation = declaration.Designation;
+                    return true;
+
+                case RecursivePatternSyntax { Type: { } recursiveType } recursive:
+                    typeSyntax = recursiveType;
+                    designation = recursive.Designation;
+                    if (recursive.PositionalPatternClause != null
+                        || recursive.PropertyPatternClause is { Subpatterns.Count: > 0 })
+                    {
+                        residualPattern = recursive;
+                    }
+
+                    return true;
+
+                case RecursivePatternSyntax { Type: null } bareRecursive:
+                    designation = bareRecursive.Designation;
+                    if (bareRecursive.PositionalPatternClause != null
+                        || bareRecursive.PropertyPatternClause is { Subpatterns.Count: > 0 })
+                    {
+                        residualPattern = bareRecursive;
+                    }
+
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        private static bool StatementAlwaysExits(StatementSyntax statement) =>
+            statement switch
+            {
+                ReturnStatementSyntax or ThrowStatementSyntax or BreakStatementSyntax
+                    or ContinueStatementSyntax or GotoStatementSyntax => true,
+                BlockSyntax { Statements.Count: > 0 } block =>
+                    StatementAlwaysExits(block.Statements[block.Statements.Count - 1]),
+                _ => false,
+            };
 
         // Returns a nullable (`T?`) copy of a type reference, preserving the
         // concrete reference kind (named/array/pointer/tuple). Used when hoisting a

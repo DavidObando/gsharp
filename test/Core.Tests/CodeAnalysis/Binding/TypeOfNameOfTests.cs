@@ -72,6 +72,17 @@ var t = typeof(int32?)
     }
 
     [Fact]
+    public void TypeOf_FunctionType_Resolves_To_DelegateType()
+    {
+        var (eval, vars) = EvaluateWithVariables(@"
+var t = typeof((object) -> void)
+");
+
+        Assert.Empty(eval.Diagnostics);
+        Assert.Equal(typeof(System.Action<object>), vars["t"]);
+    }
+
+    [Fact]
     public void NameOf_Local_Returns_Identifier()
     {
         var (eval, vars) = EvaluateWithVariables(@"

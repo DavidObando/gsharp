@@ -984,12 +984,12 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        // Issue #2516: slice-to-array/interface compatibility is deliberately
-        // narrower than CLR array covariance. Reuse the binder's classification
-        // before the general CLR assignability shortcuts below: exact array and
-        // invariant-interface elements remain required, while covariant
-        // read-only interfaces may widen their reference element.
-        if ((a is SliceTypeSymbol or RectangularArrayTypeSymbol
+        // Issue #2516: slice/fixed-array-to-array/interface compatibility is
+        // deliberately narrower than CLR array covariance. Reuse the binder's
+        // classification before the general CLR assignability shortcuts below:
+        // exact array and invariant-interface elements remain required, while
+        // covariant read-only interfaces may widen their reference element.
+        if ((a is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol
                 || a is ImportedTypeSymbol { ClrType: { IsArray: true } })
             && (b is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol
                 || b?.ClrType?.IsArray == true
@@ -1023,8 +1023,8 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        // Issue #2140 / #3354: a G# slice or rectangular array (any element
-        // type) is CLR array-backed. Upcasting it to the base
+        // Issue #2140 / #3354: a G# slice, fixed array, or rectangular array
+        // (any element type) is CLR array-backed. Upcasting it to the base
         // class `System.Array` — or to any of the element-INDEPENDENT non-
         // generic array supertype interfaces (IEnumerable, ICollection,
         // IList, ICloneable, IStructuralComparable, IStructuralEquatable) —
@@ -1034,7 +1034,7 @@ internal sealed partial class MethodBodyEmitter
         // #570 CLR arms above; these arms additionally recognise the
         // generic-type-parameter / same-compilation-user element case whose
         // backing `ClrType` is null during emit.
-        if (a is SliceTypeSymbol or RectangularArrayTypeSymbol)
+        if (a is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol)
         {
             var bClr = b?.ClrType;
             if (bClr != null
