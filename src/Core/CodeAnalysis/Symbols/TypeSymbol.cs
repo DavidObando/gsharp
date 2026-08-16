@@ -980,76 +980,103 @@ public class TypeSymbol : Symbol
     /// <returns>The type's immediate inner type(s); empty for a leaf kind.</returns>
     internal static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
     {
+        var wrapped = new List<TypeSymbol>();
         switch (type)
         {
             case NullableTypeSymbol n:
-                yield return n.UnderlyingType;
+                if (n.UnderlyingType != null)
+                {
+                    wrapped.Add(n.UnderlyingType);
+                }
+
                 break;
             case SliceTypeSymbol s:
-                yield return s.ElementType;
+                wrapped.Add(s.ElementType);
                 break;
             case ArrayTypeSymbol a:
-                yield return a.ElementType;
+                wrapped.Add(a.ElementType);
                 break;
             case RectangularArrayTypeSymbol a:
-                yield return a.ElementType;
+                wrapped.Add(a.ElementType);
                 break;
             case PinnedTypeSymbol p:
-                yield return p.UnderlyingType;
+                wrapped.Add(p.UnderlyingType);
                 break;
             case NullabilityAnnotatedTypeSymbol na:
-                yield return na.BaseType;
+                wrapped.Add(na.BaseType);
                 break;
             case SequenceTypeSymbol seq:
-                yield return seq.ElementType;
+                wrapped.Add(seq.ElementType);
                 break;
             case AsyncSequenceTypeSymbol aseq:
-                yield return aseq.ElementType;
+                wrapped.Add(aseq.ElementType);
                 break;
             case ChannelTypeSymbol ch:
-                yield return ch.ElementType;
+                wrapped.Add(ch.ElementType);
                 break;
             case ByRefTypeSymbol br:
-                yield return br.PointeeType;
+                wrapped.Add(br.PointeeType);
                 break;
             case PointerTypeSymbol ptr:
-                yield return ptr.PointeeType;
+                wrapped.Add(ptr.PointeeType);
                 break;
             case MapTypeSymbol m:
-                yield return m.KeyType;
-                yield return m.ValueType;
+                wrapped.Add(m.KeyType);
+                wrapped.Add(m.ValueType);
                 break;
             case FunctionTypeSymbol fn:
                 foreach (var param in fn.ParameterTypes)
                 {
-                    yield return param;
+                    if (param != null)
+                    {
+                        wrapped.Add(param);
+                    }
                 }
 
-                yield return fn.ReturnType;
+                if (fn.ReturnType != null)
+                {
+                    wrapped.Add(fn.ReturnType);
+                }
+
                 break;
             case FunctionPointerTypeSymbol fp:
                 foreach (var param in fp.ParameterTypes)
                 {
-                    yield return param;
+                    if (param != null)
+                    {
+                        wrapped.Add(param);
+                    }
                 }
 
-                yield return fp.ReturnType;
+                if (fp.ReturnType != null)
+                {
+                    wrapped.Add(fp.ReturnType);
+                }
+
                 break;
             case TupleTypeSymbol tup:
                 foreach (var elem in tup.ElementTypes)
                 {
-                    yield return elem;
+                    if (elem != null)
+                    {
+                        wrapped.Add(elem);
+                    }
                 }
 
                 break;
             case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in it.TypeArguments)
                 {
-                    yield return arg;
+                    if (arg != null)
+                    {
+                        wrapped.Add(arg);
+                    }
                 }
 
                 break;
         }
+
+        return wrapped;
     }
 
     /// <summary>

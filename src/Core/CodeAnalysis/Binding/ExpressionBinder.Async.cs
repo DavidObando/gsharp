@@ -365,17 +365,20 @@ internal sealed partial class ExpressionBinder
             flags = BindingFlags.Public | BindingFlags.Instance;
         }
 
-        var eventInfo = isEventCapableOperator
-            ? boundReceiver != null
+        EventInfo? eventInfo = null;
+        if (isEventCapableOperator && receiverClrType != null)
+        {
+            eventInfo = boundReceiver != null
                 ? MemberLookup.SafeGetEventIncludingSelfAndInterfaces(receiverClrType, eventName)
-                : ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags)
-            : null;
+                : ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags);
+        }
+
         if (eventInfo == null)
         {
             // Issue #648 (generalized by #2154): compound assignment fallback for
             // chained CLR member access (e.g. `obj.Prop += 1`, `obj.Prop *= 2` where
             // Prop is a field/property, not an event).
-            if (boundReceiver != null)
+            if (boundReceiver != null && receiverClrType != null)
             {
                 var clrCompound = TryBindChainedClrCompoundAssignment(
                     boundReceiver, receiverClrType, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);

@@ -515,7 +515,7 @@ public sealed class ImportedClassSymbol : Symbol
             | BindingFlags.Instance
             | BindingFlags.DeclaredOnly;
 
-        for (var current = ClassType; current != null; current = GetBaseTypeSafe(current))
+        for (Type? current = ClassType; current != null; current = GetBaseTypeSafe(current))
         {
             var methods = ClrTypeUtilities.SafeGetMethods(current, Flags)
                 .Where(m =>

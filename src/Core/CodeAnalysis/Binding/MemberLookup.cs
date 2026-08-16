@@ -2921,22 +2921,24 @@ internal sealed class MemberLookup
     public static List<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
     {
         var result = new List<ClrInterfaceSlot>();
-        Type declared;
-        ImmutableArray<TypeSymbol> symbolicArgs;
+        Type? declared = null;
+        var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
         if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
             && openDefinition != null)
         {
             declared = openDefinition;
             symbolicArgs = args;
         }
-        else if (ifaceSym?.ClrType is Type clr && clr.IsInterface)
+
+        if (declared == null)
         {
+            var clr = ifaceSym?.ClrType;
+            if (clr == null || !clr.IsInterface)
+            {
+                return result;
+            }
+
             declared = clr;
-            symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
-        }
-        else
-        {
-            return result;
         }
 
         foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))

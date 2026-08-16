@@ -865,7 +865,8 @@ internal sealed partial class ExpressionBinder
     {
         for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
-            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed))
+            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed)
+                && narrowed != null)
             {
                 return narrowed;
             }
@@ -892,76 +893,108 @@ internal sealed partial class ExpressionBinder
             return node;
         }
 
-        switch (node)
+        var fieldAccess = node as BoundFieldAccessExpression;
+        if (fieldAccess != null && fieldAccess.NarrowedType == null)
         {
-            case BoundFieldAccessExpression fa when fa.NarrowedType == null:
+                if (!SmartCastStability.TryGetStableMemberPath(fieldAccess, out var path, out _)
+                    || path == null)
                 {
-                    if (!SmartCastStability.TryGetStableMemberPath(fa, out var path, out _))
-                    {
-                        return node;
-                    }
-
-                    var narrowed = TryGetNarrowedType(path);
-                    return narrowed == null
-                        ? node
-                        : BuildNarrowedRead(
-                            new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field),
-                            fa.Field.Type,
-                            narrowed,
-                            nt => new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field, nt));
+                    return node;
                 }
 
-            case BoundPropertyAccessExpression pa when pa.NarrowedType == null:
+                var narrowed = TryGetNarrowedType(path);
+                if (narrowed == null)
                 {
-                    if (!SmartCastStability.TryGetStableMemberPath(pa, out var path, out _))
-                    {
-                        return node;
-                    }
-
-                    var narrowed = TryGetNarrowedType(path);
-                    return narrowed == null
-                        ? node
-                        : BuildNarrowedRead(
-                            new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property),
-                            pa.Property.Type,
-                            narrowed,
-                            nt => new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property, nt));
+                    return node;
                 }
 
-            case BoundClrPropertyAccessExpression ca:
-                {
-                    if (!SmartCastStability.TryGetStableMemberPath(ca, out var path, out _))
-                    {
-                        return node;
-                    }
+                var baseRead = new BoundFieldAccessExpression(
+                    null,
+                    fieldAccess.Receiver,
+                    fieldAccess.StructType,
+                    fieldAccess.Field);
+                return BuildNarrowedRead(
+                    baseRead,
+                    fieldAccess.Field.Type,
+                    narrowed,
+                    nt => new BoundFieldAccessExpression(
+                        null,
+                        fieldAccess.Receiver,
+                        fieldAccess.StructType,
+                        fieldAccess.Field,
+                        nt));
+        }
 
-                    var narrowed = TryGetNarrowedType(path);
-                    return narrowed == null
-                        ? node
-                        : BuildNarrowedRead(
-                            new BoundClrPropertyAccessExpression(
-                                null,
-                                ca.Receiver,
-                                ca.Member,
-                                ca.Type,
-                                ca.StaticContainerType,
-                                ca.ConstrainedReceiverTypeParameter,
-                                ca.ConstrainedInterfaceType),
-                            ca.Type,
-                            narrowed,
-                            nt => new BoundClrPropertyAccessExpression(
-                                null,
-                                ca.Receiver,
-                                ca.Member,
-                                nt,
-                                ca.StaticContainerType,
-                                ca.ConstrainedReceiverTypeParameter,
-                                ca.ConstrainedInterfaceType));
+        var propertyAccess = node as BoundPropertyAccessExpression;
+        if (propertyAccess != null && propertyAccess.NarrowedType == null)
+        {
+                if (!SmartCastStability.TryGetStableMemberPath(propertyAccess, out var path, out _)
+                    || path == null)
+                {
+                    return node;
                 }
 
-            default:
+                var narrowed = TryGetNarrowedType(path);
+                if (narrowed == null)
+                {
+                    return node;
+                }
+
+                var baseRead = new BoundPropertyAccessExpression(
+                    null,
+                    propertyAccess.Receiver,
+                    propertyAccess.StructType,
+                    propertyAccess.Property);
+                return BuildNarrowedRead(
+                    baseRead,
+                    propertyAccess.Property.Type,
+                    narrowed,
+                    nt => new BoundPropertyAccessExpression(
+                        null,
+                        propertyAccess.Receiver,
+                        propertyAccess.StructType,
+                        propertyAccess.Property,
+                        nt));
+        }
+
+        var clrAccess = node as BoundClrPropertyAccessExpression;
+        if (clrAccess == null)
+        {
                 return node;
         }
+
+        if (!SmartCastStability.TryGetStableMemberPath(clrAccess, out var clrPath, out _)
+                || clrPath == null)
+        {
+                return node;
+        }
+
+        var clrNarrowed = TryGetNarrowedType(clrPath);
+        if (clrNarrowed == null)
+        {
+                return node;
+        }
+
+        var clrBaseRead = new BoundClrPropertyAccessExpression(
+                null,
+                clrAccess.Receiver,
+                clrAccess.Member,
+                clrAccess.Type,
+                clrAccess.StaticContainerType,
+                clrAccess.ConstrainedReceiverTypeParameter,
+                clrAccess.ConstrainedInterfaceType);
+        return BuildNarrowedRead(
+                clrBaseRead,
+                clrAccess.Type,
+                clrNarrowed,
+                nt => new BoundClrPropertyAccessExpression(
+                    null,
+                    clrAccess.Receiver,
+                    clrAccess.Member,
+                    nt,
+                    clrAccess.StaticContainerType,
+                    clrAccess.ConstrainedReceiverTypeParameter,
+                    clrAccess.ConstrainedInterfaceType));
     }
 
     /// <summary>
@@ -2166,12 +2199,16 @@ internal sealed partial class ExpressionBinder
     /// <returns>The inherited CLR base type, or <see langword="null"/> when there is none.</returns>
     internal static Type? GetInheritedClrBaseType(StructSymbol structSymbol)
     {
-        for (var c = structSymbol; c != null; c = c.BaseClass)
+        StructSymbol? current = structSymbol;
+        while (current != null)
         {
-            if (c.ImportedBaseType?.ClrType is Type clr)
+            var clr = current.ImportedBaseType?.ClrType;
+            if (clr != null)
             {
                 return clr;
             }
+
+            current = current.BaseClass;
         }
 
         return null;

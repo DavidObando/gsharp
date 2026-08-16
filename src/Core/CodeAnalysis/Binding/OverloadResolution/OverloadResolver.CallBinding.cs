@@ -682,7 +682,7 @@ internal sealed partial class OverloadResolver
                 var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
 
                 // The callback uses null to mean that no explicit type arguments were supplied.
-                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs!, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
                 {
                     return implicitInheritedCall;
                 }
@@ -925,7 +925,9 @@ internal sealed partial class OverloadResolver
         // variable goes through the `calli` path. Sites like `fp(1, 2)` where
         // `fp` is `let fp *func(int32, int32) int32 = &Add` reduce to a
         // BoundFunctionPointerInvocationExpression.
-        if (symbol is VariableSymbol fpVar && fpVar.Type is FunctionPointerTypeSymbol fpSym)
+        var fpVar = symbol as VariableSymbol;
+        var fpSym = fpVar?.Type as FunctionPointerTypeSymbol;
+        if (fpVar != null && fpSym != null)
         {
             if (syntax.Arguments.Count != fpSym.Arity)
             {
@@ -1008,7 +1010,10 @@ internal sealed partial class OverloadResolver
         // Phase 4.7: invoking a function-typed variable goes through the
         // indirect-call path. Sites like `add(1, 2)` where `add` is `let
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
-        if (symbol is VariableSymbol variable && (narrowedCallTargetType ?? variable.Type) is FunctionTypeSymbol fnType)
+        var variable = symbol as VariableSymbol;
+        var callableType = narrowedCallTargetType ?? variable?.Type;
+        var fnType = callableType as FunctionTypeSymbol;
+        if (variable != null && fnType != null)
         {
             if (!TryBindFunctionTypeArguments(
                     variable.Name,
@@ -1032,7 +1037,10 @@ internal sealed partial class OverloadResolver
         // ADR-0059 / issue #255: direct call syntax `h(args)` on a variable
         // of a user-declared named delegate type. Mirrors the CLR-delegate
         // branch below — both end up dispatching through Invoke.
-        if (symbol is VariableSymbol namedDelegateVar && (narrowedCallTargetType ?? namedDelegateVar.Type) is DelegateTypeSymbol namedDelegateSym)
+        var namedDelegateVar = symbol as VariableSymbol;
+        var namedDelegateSym =
+            (narrowedCallTargetType ?? namedDelegateVar?.Type) as DelegateTypeSymbol;
+        if (namedDelegateVar != null && namedDelegateSym != null)
         {
             if (!TryBindNamedDelegateArguments(
                 namedDelegateVar.Name,
@@ -1059,9 +1067,12 @@ internal sealed partial class OverloadResolver
         // mirroring native func-typed variables. Lower the call to an
         // invocation of the delegate's `Invoke` method, identical in behavior
         // to the explicit `f.Invoke(x)` form.
-        if (symbol is VariableSymbol delegateVar
-            && (narrowedCallTargetType ?? delegateVar.Type) is TypeSymbol delegateTargetType
-            && delegateTargetType.ClrType is System.Type delegateClrType
+        var delegateVar = symbol as VariableSymbol;
+        var delegateTargetType = narrowedCallTargetType ?? delegateVar?.Type;
+        var delegateClrType = delegateTargetType?.ClrType;
+        if (delegateVar != null
+            && delegateTargetType != null
+            && delegateClrType != null
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
             // Issue #2799 follow-up: the receiver load must honor every

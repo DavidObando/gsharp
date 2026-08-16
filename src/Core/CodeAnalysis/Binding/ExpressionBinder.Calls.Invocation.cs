@@ -2543,7 +2543,9 @@ internal sealed partial class ExpressionBinder
             // a target so the established GS0304 diagnostic still surfaces.
             foreach (var idx in deferredArrowLambdaIndices)
             {
-                if (mutableArgs[idx] is BoundErrorExpression placeholder && placeholder.Syntax is LambdaExpressionSyntax pendingLambda)
+                var placeholder = mutableArgs[idx] as BoundErrorExpression;
+                var pendingLambda = placeholder?.Syntax as LambdaExpressionSyntax;
+                if (pendingLambda != null)
                 {
                     mutableArgs[idx] = lambdas.BindLambdaExpression(pendingLambda);
                 }
@@ -2918,11 +2920,25 @@ internal sealed partial class ExpressionBinder
             // without this check protected inherited members would be
             // callable through any receiver expression, leaking accessibility.
             var allowProtectedInherited = IsCurrentThisReceiver(receiver);
-            if (receiver != null && receiver.Type is StructSymbol inheritedDerived
-                && (GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)) is System.Type inheritedBaseClr
-                && TryBindInheritedClrInstanceCall(receiver, inheritedBaseClr, methodName, arguments, ce, out var inheritedCall, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited))
+            var inheritedDerived = receiver?.Type as StructSymbol;
+            if (inheritedDerived != null)
             {
-                return inheritedCall;
+                var inheritedBaseClr =
+                    GetInheritedClrBaseType(inheritedDerived) ?? typeof(object);
+                if (TryBindInheritedClrInstanceCall(
+                    receiver!,
+                    inheritedBaseClr,
+                    methodName,
+                    arguments,
+                    ce,
+                    out var inheritedCall,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames,
+                    allowProtectedInherited: allowProtectedInherited))
+                {
+                    return inheritedCall;
+                }
             }
 
             // Issue #1218: an enum value is a CLR value type whose base chain is

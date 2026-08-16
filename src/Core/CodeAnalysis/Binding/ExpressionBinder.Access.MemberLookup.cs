@@ -383,7 +383,8 @@ internal sealed partial class ExpressionBinder
                     // unaffected.
                     if (IsWithinType(structSym))
                     {
-                        for (var evtDeclType = structSym; evtDeclType != null; evtDeclType = evtDeclType.BaseClass)
+                        StructSymbol? evtDeclType = structSym;
+                        while (evtDeclType != null)
                         {
                             var evt = evtDeclType.Events.FirstOrDefault(e =>
                                 e.Name == ne.IdentifierToken.Text && e.IsFieldLike && e.BackingField != null);
@@ -391,6 +392,8 @@ internal sealed partial class ExpressionBinder
                             {
                                 return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, evtDeclType, evt.BackingField!));
                             }
+
+                            evtDeclType = evtDeclType.BaseClass;
                         }
                     }
 
@@ -1251,45 +1254,51 @@ internal sealed partial class ExpressionBinder
         // matches the single argument by assignability).
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
-        if (target.Type is TypeParameterSymbol tpIndexTarget
-            && tpIndexTarget.ClrInterfaceConstraint is TypeSymbol clrIndexConstraint
-            && clrIndexConstraint.ClrType is System.Type clrConstraintType)
+        if (target.Type is TypeParameterSymbol tpIndexTarget)
         {
-            var idxArgs = ImmutableArray.Create(BoundIndexArg());
-            if (this.memberLookup.TryResolveClrIndexer(
-                clrIndexConstraint,
-                clrConstraintType,
-                idxArgs,
-                out var idxProp,
-                out var resolvedIdxArgs))
+            var clrIndexConstraint = tpIndexTarget.ClrInterfaceConstraint;
+            var clrConstraintType = clrIndexConstraint?.ClrType;
+            if (clrIndexConstraint != null && clrConstraintType != null)
             {
-                if (idxProp!.GetGetMethod(nonPublic: false) == null)
+                var idxArgs = ImmutableArray.Create(BoundIndexArg());
+                if (this.memberLookup.TryResolveClrIndexer(
+                    clrIndexConstraint,
+                    clrConstraintType,
+                    idxArgs,
+                    out var idxProp,
+                    out var resolvedIdxArgs))
                 {
-                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
-                    return new BoundErrorExpression(null);
-                }
+                    if (idxProp!.GetGetMethod(nonPublic: false) == null)
+                    {
+                        Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                        return new BoundErrorExpression(null);
+                    }
 
-                var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
-                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
-                    clrIndexConstraint,
-                    idxProp);
-                var convertedIdxArgs = BindClrIndexerArguments(
-                    clrIndexConstraint,
-                    idxProp!,
-                    resolvedIdxArgs,
-                    indexSyntax.Location);
-                return ConversionClassifier.AutoDereferenceRefReturn(
-                    new BoundClrIndexExpression(
-                        null,
-                        target,
-                        idxProp,
-                        convertedIdxArgs,
-                        elementType,
-                        tpIndexTarget,
-                        declaringInterface));
+                    var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
+                    var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                        clrIndexConstraint,
+                        idxProp);
+                    var convertedIdxArgs = BindClrIndexerArguments(
+                        clrIndexConstraint,
+                        idxProp!,
+                        resolvedIdxArgs,
+                        indexSyntax.Location);
+                    return ConversionClassifier.AutoDereferenceRefReturn(
+                        new BoundClrIndexExpression(
+                            null,
+                            target,
+                            idxProp,
+                            convertedIdxArgs,
+                            elementType,
+                            tpIndexTarget,
+                            declaringInterface));
+                }
             }
         }
-        else if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
+
+        var annotIdx = target.Type as NullabilityAnnotatedTypeSymbol;
+        var clrAnnotIdx = annotIdx?.ClrType;
+        if (annotIdx != null && clrAnnotIdx != null)
         {
             var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
@@ -1310,7 +1319,10 @@ internal sealed partial class ExpressionBinder
                 return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, convertedIdxArgsAnnot, elemTypeAnnot));
             }
         }
-        else if ((target.Type is ImportedTypeSymbol || target.Type is StructSymbol) && target.Type.ClrType is System.Type clrTarget)
+
+        var clrTarget = target.Type.ClrType;
+        if ((target.Type is ImportedTypeSymbol || target.Type is StructSymbol)
+            && clrTarget != null)
         {
             var idxArgs = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))

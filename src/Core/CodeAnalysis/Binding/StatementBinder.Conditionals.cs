@@ -790,11 +790,13 @@ internal sealed partial class StatementBinder
 
             // [NotNullWhen(rv)]: narrow a nullable argument to its underlying
             // non-nullable type on the arm where the call returns rv.
-            if (notNullWhenReturnValue is bool returnValue
-                && argExpr is BoundVariableExpression narrowVarExpr
-                && narrowVarExpr.Variable.Type is NullableTypeSymbol nullable)
+            var narrowVarExpr = argExpr as BoundVariableExpression;
+            var nullable = narrowVarExpr?.Variable.Type as NullableTypeSymbol;
+            if (notNullWhenReturnValue.HasValue
+                && narrowVarExpr != null
+                && nullable != null)
             {
-                var narrowThen = returnValue != negate;
+                var narrowThen = notNullWhenReturnValue.Value != negate;
                 var frame = narrowThen
                     ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
                     : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
@@ -803,12 +805,13 @@ internal sealed partial class StatementBinder
 
             // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
             // counterpart on the arm where the call returns rv.
-            if (maybeNullWhenReturnValue is bool widenReturnValue
-                && argExpr is BoundVariableExpression widenVarExpr
+            var widenVarExpr = argExpr as BoundVariableExpression;
+            if (maybeNullWhenReturnValue.HasValue
+                && widenVarExpr != null
                 && widenVarExpr.Variable.Type is not NullableTypeSymbol
                 && widenVarExpr.Variable.Type != TypeSymbol.Null)
             {
-                var widenThen = widenReturnValue != negate;
+                var widenThen = maybeNullWhenReturnValue.Value != negate;
                 var widenFrame = widenThen
                     ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
                     : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());

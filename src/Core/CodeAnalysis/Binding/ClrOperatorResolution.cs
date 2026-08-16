@@ -195,7 +195,7 @@ internal static class ClrOperatorResolution
             return;
         }
 
-        for (var t = type; t != null; t = SafeBaseType(t))
+        for (Type? t = type; t != null; t = SafeBaseType(t))
         {
             MethodInfo[] candidates;
             try

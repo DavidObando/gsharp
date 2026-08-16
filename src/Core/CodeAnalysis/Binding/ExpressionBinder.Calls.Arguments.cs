@@ -293,7 +293,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var selected = candidates[0];
+        FunctionSymbol? selected = candidates[0];
         if (candidates.Length > 1)
         {
             var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
@@ -320,7 +320,12 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        result = overloads.BindExtensionFunctionCall(receiver, selected, arguments, ce, argumentNames);
+        result = overloads.BindExtensionFunctionCall(
+            receiver,
+            Invariant.Required(selected, "a non-empty extension candidate set selects a function"),
+            arguments,
+            ce,
+            argumentNames);
         return true;
     }
 
@@ -389,8 +394,10 @@ internal sealed partial class ExpressionBinder
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames)
     {
-        for (var c = receiverClass; c != null; c = c.BaseClass)
+        StructSymbol? current = receiverClass;
+        while (current != null)
         {
+            var c = current;
             foreach (var iface in c.Interfaces)
             {
                 if (iface == null)
@@ -419,6 +426,8 @@ internal sealed partial class ExpressionBinder
                     return selected;
                 }
             }
+
+            current = c.BaseClass;
         }
 
         return null;
@@ -450,14 +459,17 @@ internal sealed partial class ExpressionBinder
         {
             // Walk the base chain so an inherited delegate field on a base class
             // is invokable on a derived instance.
-            for (var c = receiverStruct; c != null; c = c.BaseClass)
+            StructSymbol? current = receiverStruct;
+            while (current != null)
             {
-                if (c.TryGetField(methodName, out var f))
+                if (current.TryGetField(methodName, out var f))
                 {
                     matchedField = f;
-                    declaringType = c;
+                    declaringType = current;
                     break;
                 }
+
+                current = current.BaseClass;
             }
         }
 
@@ -2045,7 +2057,8 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private static bool UserClassImplementsInterface(StructSymbol ss, System.Type target)
     {
-        for (var current = ss; current != null; current = current.BaseClass)
+        StructSymbol? current = ss;
+        while (current != null)
         {
             foreach (var iface in current.ImplementedClrInterfaces)
             {
@@ -2066,6 +2079,8 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
             }
+
+            current = current.BaseClass;
         }
 
         // Also check the imported CLR base type (if any) — it may implement
@@ -2708,12 +2723,16 @@ internal sealed partial class ExpressionBinder
     /// <returns>The CLR base type for inherited-member lookup.</returns>
     private static System.Type ResolveClrBaseSearchType(StructSymbol from)
     {
-        for (var t = from; t != null; t = t.BaseClass)
+        StructSymbol? current = from;
+        while (current != null)
         {
-            if (t.ImportedBaseType?.ClrType is System.Type clr)
+            var clr = current.ImportedBaseType?.ClrType;
+            if (clr != null)
             {
                 return clr;
             }
+
+            current = current.BaseClass;
         }
 
         return typeof(object);
@@ -3044,13 +3063,16 @@ internal sealed partial class ExpressionBinder
     private static bool IsBaseClassOf(StructSymbol derived, StructSymbol candidate)
     {
         var candidateDef = candidate.Definition ?? candidate;
-        for (var t = derived.BaseClass; t != null; t = t.BaseClass)
+        var current = derived.BaseClass;
+        while (current != null)
         {
-            var tDef = t.Definition ?? t;
-            if (ReferenceEquals(tDef, candidateDef) || ReferenceEquals(t, candidate))
+            var currentDef = current.Definition ?? current;
+            if (ReferenceEquals(currentDef, candidateDef) || ReferenceEquals(current, candidate))
             {
                 return true;
             }
+
+            current = current.BaseClass;
         }
 
         return false;

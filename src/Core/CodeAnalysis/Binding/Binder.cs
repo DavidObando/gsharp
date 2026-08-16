@@ -369,8 +369,10 @@ public sealed class Binder
                 // also accessible via bare name. Derived shadowing wins.
                 if (function.ReceiverType is StructSymbol receiverStruct)
                 {
-                    for (var t = receiverStruct; t != null; t = t.BaseClass)
+                    StructSymbol? currentReceiverType = receiverStruct;
+                    while (currentReceiverType != null)
                     {
+                        var t = currentReceiverType;
                         if (!t.Fields.IsDefaultOrEmpty)
                         {
                             foreach (var fld in t.Fields)
@@ -466,6 +468,8 @@ public sealed class Binder
                                 }
                             }
                         }
+
+                        currentReceiverType = t.BaseClass;
                     }
                 }
             }
@@ -3211,13 +3215,19 @@ public sealed class Binder
                 {
                     ret = AsyncSequenceTypeSymbol.Get(seq.ElementType);
                 }
-                else if (ret is NullableTypeSymbol nt && nt.UnderlyingType is SequenceTypeSymbol innerSeq)
+                else
                 {
-                    ret = NullableTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(innerSeq.ElementType));
-                }
-                else if (!IsAsyncIteratorReturnType(ret))
-                {
-                    ret = lambdas.WrapAsTask(ret);
+                    var nt = ret as NullableTypeSymbol;
+                    var innerSeq = nt?.UnderlyingType as SequenceTypeSymbol;
+                    if (innerSeq != null)
+                    {
+                        ret = NullableTypeSymbol.Get(
+                            AsyncSequenceTypeSymbol.Get(innerSeq.ElementType));
+                    }
+                    else if (!IsAsyncIteratorReturnType(ret))
+                    {
+                        ret = lambdas.WrapAsTask(ret);
+                    }
                 }
             }
 
@@ -4647,7 +4657,9 @@ public sealed class Binder
             return AsyncSequenceTypeSymbol.Get(seq.ElementType);
         }
 
-        if (bound is NullableTypeSymbol nt && nt.UnderlyingType is SequenceTypeSymbol innerSeq)
+        var nt = bound as NullableTypeSymbol;
+        var innerSeq = nt?.UnderlyingType as SequenceTypeSymbol;
+        if (innerSeq != null)
         {
             return NullableTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(innerSeq.ElementType));
         }
@@ -5893,9 +5905,14 @@ public sealed class Binder
             return true;
         }
 
-        if (type is ImportedTypeSymbol it && it.ClrType is { } clr)
+        var importedType = type as ImportedTypeSymbol;
+        if (importedType != null)
         {
-            return !clr.IsValueType;
+            var clr = importedType.ClrType;
+            if (clr != null)
+            {
+                return !clr.IsValueType;
+            }
         }
 
         return false;
