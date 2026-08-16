@@ -5185,6 +5185,12 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
+        if (type is NullableTypeSymbol symbolicNullable
+            && NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullable))
+        {
+            return true;
+        }
+
         // Issue #2335: a bare (non-nullable) value-type-constrained generic
         // type parameter (`where T : struct`, optionally combined with an
         // `Enum`/other constraint) lowers to an unboxed CLR value on the

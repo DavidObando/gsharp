@@ -1935,7 +1935,7 @@ internal sealed partial class ExpressionBinder
             if (string.Equals(parameterFullName, "System.Delegate", StringComparison.Ordinal)
                 || string.Equals(parameterFullName, "System.MulticastDelegate", StringComparison.Ordinal))
             {
-                target = null;
+                target = default;
                 nominalTarget = null;
                 blockedByOpenGenericParameter = false;
                 sawOpenGenericParameter = false;
@@ -1955,7 +1955,7 @@ internal sealed partial class ExpressionBinder
             {
                 // Candidates disagree on the delegate shape — leave the lambda
                 // to be bound without a target (overload resolution decides).
-                target = null;
+                target = default;
                 nominalTarget = null;
                 blockedByOpenGenericParameter = false;
                 sawOpenGenericParameter = false;
@@ -2013,7 +2013,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<TypeSymbol> symbolicTypeArgs,
         int sourceArgIndex,
         string? argName,
-        [NotNullWhen(true)] out (TypeSymbol DelegateType, FunctionTypeSymbol FunctionType)? target)
+        [NotNullWhen(true)] out SymbolicDelegateTarget? target)
     {
         target = null;
         if (openGenericDefinition == null || symbolicTypeArgs.IsDefaultOrEmpty)
@@ -2073,13 +2073,13 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (target is null)
+            if (target == null)
             {
-                target = (mappedDelegate, candidate);
+                target = new SymbolicDelegateTarget(mappedDelegate, candidate);
             }
-            else if (!SameDelegateIdentity(target.Value.DelegateType, mappedDelegate)
-                || (!ReferenceEquals(target.Value.FunctionType, candidate)
-                    && !target.Value.FunctionType.Equals(candidate)))
+            else if (!SameDelegateIdentity(target.DelegateType, mappedDelegate)
+                || (!ReferenceEquals(target.FunctionType, candidate)
+                    && !target.FunctionType.Equals(candidate)))
             {
                 target = null;
                 return false;
@@ -2173,5 +2173,20 @@ internal sealed partial class ExpressionBinder
             out var noApplicableOverload);
         return bound || FinishClrConstructorBindingFailure(
             syntax, nestedType.Name, noApplicableOverload, ref result);
+    }
+
+    private sealed class SymbolicDelegateTarget
+    {
+        public SymbolicDelegateTarget(
+            TypeSymbol delegateType,
+            FunctionTypeSymbol functionType)
+        {
+            DelegateType = delegateType;
+            FunctionType = functionType;
+        }
+
+        public TypeSymbol DelegateType { get; }
+
+        public FunctionTypeSymbol FunctionType { get; }
     }
 }

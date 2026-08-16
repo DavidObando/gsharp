@@ -1741,6 +1741,9 @@ internal sealed class ConversionClassifier
             }
 
             candidateReturn = getMethodGroupObservableReturnType(candidate, candidateReturn);
+            var canonicalCandidateReturn = Invariant.Required(
+                candidateReturn,
+                "a successfully closed method-group candidate has a return type");
             var parameterOffset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
             if (candidate.ReturnRefKind != targetReturnRefKind)
             {
@@ -1767,9 +1770,9 @@ internal sealed class ConversionClassifier
             }
 
             if (!TryCanonicalizeMethodGroupType(
-                candidateReturn,
+                canonicalCandidateReturn,
                 targetReturnType,
-                out candidateReturn))
+                out canonicalCandidateReturn))
             {
                 continue;
             }
@@ -1800,7 +1803,7 @@ internal sealed class ConversionClassifier
             pickOwner = candidateOwner;
             pickMethodTypeArguments = candidateMethodTypeArguments;
             pickParameterTypes = candidateParameterTypes;
-            pickReturnType = candidateReturn;
+            pickReturnType = canonicalCandidateReturn;
         }
 
         if (pick == null)
@@ -1813,7 +1816,7 @@ internal sealed class ConversionClassifier
         }
 
         var pickFnType = FunctionTypeSymbol.Get(
-            ImmutableArray.Create(Invariant.Required(pickParameterTypes, "a selected method group has parameter types")),
+            ImmutableArray.CreateRange(Invariant.Required(pickParameterTypes, "a selected method group has parameter types")),
             Invariant.Required(pickReturnType, "a selected method group has a return type"));
         var resolvedGroup = new BoundMethodGroupExpression(
             group.Syntax,
@@ -2871,8 +2874,8 @@ internal sealed class ConversionClassifier
             && TryGetIntegralMetadataTarget(parameterType, out var integralTarget))
         {
             if (integralTarget == TypeSymbol.Char
-                && integerValue >= char.MinValue
-                && integerValue <= char.MaxValue)
+                && integerValue >= (long)char.MinValue
+                && integerValue <= (long)char.MaxValue)
             {
                 value = (char)(ushort)integerValue;
                 return true;

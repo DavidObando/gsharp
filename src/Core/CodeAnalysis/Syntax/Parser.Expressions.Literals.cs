@@ -1497,11 +1497,10 @@ public partial class Parser
 
         // MatchToken(InterpolatedStringToken) guarantees the lexer attached the
         // fragment array as the token's value.
-        if (token.Value is not ImmutableArray<InterpolationFragment> fragments)
-        {
-            throw new InvalidOperationException(
-                "An interpolated-string token must carry its lexer fragment array.");
-        }
+        var fragments = Invariant.Required(
+            token.Value as InterpolationFragments,
+            "an interpolated-string token carries its lexer fragment wrapper")
+            .Items;
 
         var segments = ImmutableArray.CreateBuilder<InterpolatedStringSegment>(fragments.Length);
         foreach (var fragment in fragments)

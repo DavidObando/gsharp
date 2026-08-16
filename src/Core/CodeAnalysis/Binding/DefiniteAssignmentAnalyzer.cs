@@ -1401,8 +1401,8 @@ internal static class DefiniteAssignmentAnalyzer
                         lowered.PreEmitAnalysisBody ?? lowered,
                         literal.Function,
                         diagnostics,
-                        literal.CapturedVariables.Where(assigned.Contains),
-                        literal.CapturedVariables.Where(tracked.Contains));
+                        literal.CapturedVariables.Where(variable => assigned.Contains(variable)),
+                        literal.CapturedVariables.Where(variable => tracked.Contains(variable)));
                     return;
                 }
 

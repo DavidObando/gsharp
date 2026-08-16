@@ -3296,7 +3296,7 @@ internal sealed class MemberLookup
 
             if (applicable.Count != 0)
             {
-                (PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)? winner = default;
+                PropertyInfo? winnerProperty = null;
                 foreach (var candidate in applicable)
                 {
                     var betterThanAll = true;
@@ -3316,14 +3316,14 @@ internal sealed class MemberLookup
 
                     if (betterThanAll)
                     {
-                        winner = candidate;
+                        winnerProperty = candidate.Property;
                         break;
                     }
                 }
 
-                if (winner.HasValue)
+                if (winnerProperty != null)
                 {
-                    indexer = winner.Value.Property;
+                    indexer = winnerProperty;
                     resolvedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
                         boundArguments,
                         indexer.GetIndexParameters());

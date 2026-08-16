@@ -687,7 +687,7 @@ internal static class ClrOverloadResolution
     /// Optional callback identifying function-literal arguments whose body
     /// return may be implicitly converted to the candidate delegate return.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
@@ -1107,7 +1107,7 @@ internal static class ClrOverloadResolution
         MethodInfo openMethod,
         IReadOnlyList<Type?> argTypes,
         [NotNullWhen(true)] out Type[]? typeArgs,
-        Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null)
+        Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null)
     {
         typeArgs = null;
         if (openMethod is null || !openMethod.IsGenericMethodDefinition)
@@ -1440,7 +1440,7 @@ internal static class ClrOverloadResolution
         Type delegateType,
         int argumentIndex,
         Dictionary<string, Type> bounds,
-        Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?> methodGroupInference)
+        Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?> methodGroupInference)
     {
         if (!TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn))
         {
@@ -1460,9 +1460,9 @@ internal static class ClrOverloadResolution
         }
 
         var signature = methodGroupInference(argumentIndex, closedInputs);
-        if (signature?.Item1 is null
-            || signature.Item1.Length != delegateParameters.Length
-            || signature.Item2 is null)
+        if (!signature.HasValue
+            || signature.Value.Parameters.Length != delegateParameters.Length
+            || signature.Value.Return is null)
         {
             return false;
         }
@@ -1470,13 +1470,13 @@ internal static class ClrOverloadResolution
         var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
         for (var i = 0; i < delegateParameters.Length; i++)
         {
-            if (!UnifyForInference(delegateParameters[i], signature.Item1[i], inferred))
+            if (!UnifyForInference(delegateParameters[i], signature.Value.Parameters[i], inferred))
             {
                 return false;
             }
         }
 
-        if (!UnifyForInference(delegateReturn, signature.Item2, inferred))
+        if (!UnifyForInference(delegateReturn, signature.Value.Return, inferred))
         {
             return false;
         }
@@ -2323,7 +2323,7 @@ internal static class ClrOverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null)
         where T : MethodBase
     {
         {
@@ -2688,30 +2688,30 @@ internal static class ClrOverloadResolution
     }
 
     private static bool IsMethodGroupSignatureCompatible(
-        Tuple<Type[], Type>? signature,
+        (Type[] Parameters, Type Return)? signature,
         IReadOnlyList<Type> delegateParameters,
         Type delegateReturn)
     {
-        if (signature?.Item1 is null
-            || signature.Item1.Length != delegateParameters.Count
-            || signature.Item2 is null)
+        if (!signature.HasValue
+            || signature.Value.Parameters.Length != delegateParameters.Count
+            || signature.Value.Return is null)
         {
             return false;
         }
 
         for (var i = 0; i < delegateParameters.Count; i++)
         {
-            if (ClassifyImplicit(signature.Item1[i], delegateParameters[i]) == ImplicitConversionKind.None)
+            if (ClassifyImplicit(signature.Value.Parameters[i], delegateParameters[i]) == ImplicitConversionKind.None)
             {
                 return false;
             }
         }
 
-        var methodVoid = string.Equals(signature.Item2.FullName, "System.Void", StringComparison.Ordinal);
+        var methodVoid = string.Equals(signature.Value.Return.FullName, "System.Void", StringComparison.Ordinal);
         var delegateVoid = string.Equals(delegateReturn?.FullName, "System.Void", StringComparison.Ordinal);
         return methodVoid || delegateVoid
             ? methodVoid && delegateVoid
-            : ClassifyImplicit(delegateReturn, signature.Item2) != ImplicitConversionKind.None;
+            : ClassifyImplicit(delegateReturn, signature.Value.Return) != ImplicitConversionKind.None;
     }
 
     /// <summary>

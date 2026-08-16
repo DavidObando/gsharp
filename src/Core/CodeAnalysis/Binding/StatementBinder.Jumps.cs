@@ -228,7 +228,11 @@ internal sealed partial class StatementBinder
         RestoreDictionary(binderCtx.PendingSwitchExitFrames, pendingSwitchExitFrames);
         RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels);
         userGotoHandlerRegions.Clear();
-        userGotoHandlerRegions.AddRange(userGotoHandlerSnapshot);
+        foreach (var region in userGotoHandlerSnapshot)
+        {
+            userGotoHandlerRegions.Add(region);
+        }
+
         binderCtx.SyntheticLocalCounter = syntheticLocalCounter;
 
         InvalidateInheritedNarrowings(narrowingInvalidations);

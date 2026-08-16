@@ -1889,7 +1889,7 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    internal static Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? MakeMethodGroupInference(
+    internal static Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? MakeMethodGroupInference(
         IReadOnlyList<BoundExpression> arguments,
         Func<TypeSymbol, Type?> projectType,
         int argumentOffset = 0)
@@ -1929,7 +1929,7 @@ internal sealed partial class ExpressionBinder
         };
     }
 
-    private static Tuple<Type[], Type>? ResolveMethodGroupInferenceSignature(
+    private static (Type[] Parameters, Type Return)? ResolveMethodGroupInferenceSignature(
         BoundExpression argument,
         IReadOnlyList<Type> delegateParameterTypes,
         Func<TypeSymbol, Type?> projectType)
@@ -1973,7 +1973,7 @@ internal sealed partial class ExpressionBinder
                 signatureParameters[i - parameterOffset] = parameters[i].ParameterType;
             }
 
-            return Tuple.Create(signatureParameters, method.ReturnType);
+            return (signatureParameters, method.ReturnType);
         }
 
         if (argument is not BoundMethodGroupExpression { FunctionType: null } userGroup)
@@ -1981,7 +1981,7 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var matches = new List<(Tuple<Type[], Type> Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
+        var matches = new List<((Type[] Parameters, Type Return) Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
         foreach (var candidate in userGroup.Candidates)
         {
             var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
@@ -2033,12 +2033,12 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            matches.Add((Tuple.Create(parameterTypes, returnType), conversions));
+            matches.Add(((parameterTypes, returnType), conversions));
         }
 
         var best = matches.Where(candidate =>
             !matches.Any(other =>
-                !ReferenceEquals(candidate.Signature, other.Signature)
+                !ReferenceEquals(candidate.Signature.Parameters, other.Signature.Parameters)
                 && IsBetterMethodGroupConversion(other.Conversions, candidate.Conversions))).ToList();
         return best.Count == 1 ? best[0].Signature : null;
     }
