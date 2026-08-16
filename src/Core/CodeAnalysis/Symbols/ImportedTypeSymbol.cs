@@ -764,9 +764,18 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         try
         {
-            return parameter.GetRequiredCustomModifiers()
-                .Any(m => string.Equals(m.FullName, "System.Runtime.InteropServices.InAttribute", StringComparison.Ordinal))
-                || parameter.IsIn;
+            foreach (var modifier in parameter.GetRequiredCustomModifiers())
+            {
+                if (string.Equals(
+                    modifier.FullName,
+                    "System.Runtime.InteropServices.InAttribute",
+                    StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return parameter.IsIn;
         }
         catch
         {
