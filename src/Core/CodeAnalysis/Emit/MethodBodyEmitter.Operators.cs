@@ -429,7 +429,9 @@ internal sealed partial class MethodBodyEmitter
             // `Nullable<T>::get_Value()` (when the result type is the
             // underlying `T`); both shapes leave a verifiable stack
             // matching the operator's declared result type.
-            if (b.Left.Type is NullableTypeSymbol leftNullable
+            var leftNullable = b.Left.Type as NullableTypeSymbol;
+            if (leftNullable != null
+                && !NullableLifting.RequiresSymbolicNullableGetValue(leftNullable)
                 && leftNullable.UnderlyingType?.ClrType is { IsValueType: true } innerClr)
             {
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var slot))
