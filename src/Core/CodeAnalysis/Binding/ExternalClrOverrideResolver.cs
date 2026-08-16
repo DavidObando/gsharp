@@ -291,7 +291,7 @@ internal static class ExternalClrOverrideResolver
             }
         }
 
-        return abstractSlots.MoveToImmutable();
+        return abstractSlots.ToImmutable();
     }
 
     private static bool SlotSignaturesMatch(
