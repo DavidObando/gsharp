@@ -537,7 +537,7 @@ internal sealed class SignatureEncoder
             // Compiled metadata must retain symbolic element identity under
             // generic invariance. The interpreter can independently keep its
             // object fallback because channel values are boxed there.
-            var channelOpen = typeof(System.Threading.Channels.Channel<>);
+            var channelOpen = typeof(System.Threading.Channels.Channel<object>).GetGenericTypeDefinition();
             if (MethodBodyEmitter.ChannelElementNeedsSymbolicType(chType.ElementType))
             {
                 var genericInst = encoder.GenericInstantiation(
