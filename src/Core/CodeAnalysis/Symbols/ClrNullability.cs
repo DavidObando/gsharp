@@ -110,7 +110,18 @@ public static class ClrNullability
             ? parameter.ParameterType.GetElementType()
             : parameter.ParameterType;
         var baseSymbol = TypeSymbol.FromClrType(parameterType);
-        return ApplyReferenceNullabilityFull(baseSymbol, parameterType, parameter, parameter.Member);
+        var mapped = ApplyReferenceNullabilityFull(baseSymbol, parameterType, parameter, parameter.Member);
+        var rawDefault = parameter.HasDefaultValue || parameter.IsOptional
+            ? parameter.RawDefaultValue
+            : null;
+        return parameterType?.IsValueType == false
+            && (parameter.HasDefaultValue || parameter.IsOptional)
+            && (rawDefault == null
+                || ReferenceEquals(rawDefault, Missing.Value)
+                || ReferenceEquals(rawDefault, System.DBNull.Value))
+            && mapped is not NullableTypeSymbol
+                ? NullableTypeSymbol.Get(mapped)
+                : mapped;
     }
 
     internal static bool TryGetNotNullWhen(ParameterInfo parameter, out bool returnValue)

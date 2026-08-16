@@ -121,6 +121,23 @@ internal sealed partial class ExpressionBinder
                 return overloads.BindConstructorCallExpression(nestedCall, nestedClassDef);
             }
 
+            var nestedAccess = syntax.RightPart as AccessorExpressionSyntax;
+            var nestedAccessCall = nestedAccess?.LeftPart as CallExpressionSyntax;
+            if (nestedAccess != null
+                && nestedAccessCall != null
+                && scope.TryLookupNestedTypeAlias(
+                    enclosingAliasType,
+                    headIdentifier,
+                    -1,
+                    out var nestedAccessType)
+                && nestedAccessType is StructSymbol nestedAccessClassDef)
+            {
+                var constructed = overloads.BindConstructorCallExpression(nestedAccessCall, nestedAccessClassDef);
+                return constructed is BoundErrorExpression
+                    ? constructed
+                    : BindAccessorStep(constructed, classSymbol: null, nestedAccess.RightPart);
+            }
+
             // Issue #1174: when a top-level type shares the nested type's simple
             // name, re-binding the right part by simple name would resolve to the
             // top-level homonym (which holds the simple key). Resolve the nested
@@ -172,13 +189,55 @@ internal sealed partial class ExpressionBinder
         // be a chain of accessors (e.g. Guid.NewGuid().ToString()).
         var leftPart = syntax.LeftPart;
         var rightPart = syntax.RightPart;
+        var leftName = leftPart as NameExpressionSyntax;
         BoundExpression? receiver = null;
         ImportedClassSymbol? classSymbol = null;
         EnumSymbol? enumSymbol = null;
         StructSymbol? userStructSymbol = null;
         InterfaceSymbol? userInterfaceSymbol = null;
 
-        if (leftPart is NameExpressionSyntax leftName)
+        if (leftName is null)
+        {
+            var genericTypeIndex = leftPart as IndexExpressionSyntax;
+            if (genericTypeIndex is not null
+                && !genericTypeIndex.IsNullConditional
+                && TryResolveConstructedGenericTypeReceiver(
+                    genericTypeIndex,
+                    out var indexedStruct,
+                    out var indexedInterface,
+                    out var indexedImported))
+            {
+                return BindConstructedGenericTypeAccessorStep(
+                    indexedStruct,
+                    indexedInterface,
+                    indexedImported,
+                    rightPart,
+                    leftPart);
+            }
+
+            var genericTypeName = leftPart as GenericNameExpressionSyntax;
+            if (genericTypeName is not null
+                && TryResolveConstructedGenericTypeReceiver(
+                    genericTypeName,
+                    out var namedStruct,
+                    out var namedInterface,
+                    out var namedImported))
+            {
+                return BindConstructedGenericTypeAccessorStep(
+                    namedStruct,
+                    namedInterface,
+                    namedImported,
+                    rightPart,
+                    leftPart);
+            }
+        }
+
+        if (leftName is null)
+        {
+            receiver = BindExpression(leftPart);
+        }
+
+        if (leftName is not null)
         {
             var name = leftName.IdentifierToken.Text;
             var variableHit = scope.TryLookupSymbol(name) as VariableSymbol;
@@ -270,6 +329,13 @@ internal sealed partial class ExpressionBinder
                     // Issue #208: apply any [MemberNotNull] narrowing so that
                     // chained access like `_name.Length` after a [MemberNotNull]
                     // call is accepted without a nil-guard.
+                    Func<TypeSymbol, BoundExpression> makeNarrowedField = narrowedType =>
+                        new BoundFieldAccessExpression(
+                            null,
+                            new BoundVariableExpression(null, implicitField.Receiver),
+                            implicitField.StructType,
+                            implicitField.Field,
+                            narrowedType);
                     receiver = BuildNarrowedRead(
                         new BoundFieldAccessExpression(
                             null,
@@ -278,12 +344,7 @@ internal sealed partial class ExpressionBinder
                             implicitField.Field),
                         implicitField.Field.Type,
                         TryGetNarrowedType(implicitField),
-                        nt => new BoundFieldAccessExpression(
-                            null,
-                            new BoundVariableExpression(null, implicitField.Receiver),
-                            implicitField.StructType,
-                            implicitField.Field,
-                            nt));
+                        makeNarrowedField);
                 }
                 else if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
                 {
@@ -357,11 +418,13 @@ internal sealed partial class ExpressionBinder
                 }
                 else
                 {
+                    Func<TypeSymbol, BoundExpression> makeNarrowedVariable =
+                        narrowedType => new BoundVariableExpression(null, variable, narrowedType);
                     receiver = BuildNarrowedRead(
                         new BoundVariableExpression(null, variable),
                         variable.Type,
                         TryGetNarrowedType(variable),
-                        narrowed => new BoundVariableExpression(null, variable, narrowed));
+                        makeNarrowedVariable);
                 }
             }
             else if (TryBindInheritedClrInstanceMemberByBareName(name, out var inheritedClrHead))
@@ -644,10 +707,6 @@ internal sealed partial class ExpressionBinder
                     break;
             }
         }
-        else
-        {
-            receiver = BindExpression(leftPart);
-        }
 
         if (enumSymbol != null)
         {
@@ -665,6 +724,31 @@ internal sealed partial class ExpressionBinder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart, leftPart);
+    }
+
+    private BoundExpression BindConstructedGenericTypeAccessorStep(
+        StructSymbol? constructedStruct,
+        InterfaceSymbol? constructedInterface,
+        ImportedClassSymbol? constructedImported,
+        ExpressionSyntax rightPart,
+        ExpressionSyntax leftPart)
+    {
+        if (constructedInterface is not null)
+        {
+            return BindInterfaceStaticAccessorStep(constructedInterface, rightPart);
+        }
+
+        if (constructedStruct is not null)
+        {
+            return BindUserTypeStaticAccessorStep(constructedStruct, rightPart);
+        }
+
+        if (constructedImported is not null)
+        {
+            return BindAccessorStep(null, constructedImported, rightPart, leftPart);
+        }
+
+        return new BoundErrorExpression(null);
     }
 
     private bool TryResolveInheritedImportedNestedType(
@@ -1512,7 +1596,12 @@ internal sealed partial class ExpressionBinder
 
             switch (currentRight)
             {
-                case AccessorExpressionSyntax nested when nested.LeftPart is NameExpressionSyntax leftName:
+                case AccessorExpressionSyntax nested:
+                    if (nested.LeftPart is not NameExpressionSyntax leftName)
+                    {
+                        return false;
+                    }
+
                     typeNameSyntax = leftName;
                     remainder = nested.RightPart;
                     hasMoreChain = true;
@@ -1564,7 +1653,14 @@ internal sealed partial class ExpressionBinder
     {
         switch (segment)
         {
-            case IndexExpressionSyntax index when !index.IsNullConditional && index.Target is NameExpressionSyntax indexName:
+            case IndexExpressionSyntax index:
+                if (index.IsNullConditional || index.Target is not NameExpressionSyntax indexName)
+                {
+                    name = string.Empty;
+                    arity = 0;
+                    return false;
+                }
+
                 name = indexName.IdentifierToken.Text;
                 arity = index.Indices.Count;
                 return true;
@@ -3161,22 +3257,27 @@ internal sealed partial class ExpressionBinder
         foreach (var argument in ce.Arguments)
         {
             var inner = OverloadResolver.UnwrapNamedArgumentValue(argument);
-            if (inner is RefArgumentExpressionSyntax refArg)
+            BoundExpression? boundArgument = null;
+            var refArgument = inner as RefArgumentExpressionSyntax;
+            if (refArgument is not null)
             {
-                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
+                boundArgument = BindRefArgumentExpression(refArgument, parameter: null);
             }
-            else if (IsUntypedArrowLambda(inner))
+
+            if (boundArgument is null && IsUntypedArrowLambda(inner))
             {
                 // Issue #951: defer un-typed arrow lambdas until the static
                 // method overload (and its delegate-typed parameters) is known.
                 (deferredStaticLambdaIndices ??= new List<int>()).Add(staticArgIndex);
-                boundArguments.Add(new BoundErrorExpression(inner));
-            }
-            else
-            {
-                boundArguments.Add(BindExpression(inner));
+                boundArgument = new BoundErrorExpression(inner);
             }
 
+            if (boundArgument is null)
+            {
+                boundArgument = BindExpression(inner);
+            }
+
+            boundArguments.Add(boundArgument);
             staticArgIndex++;
         }
 
@@ -3280,6 +3381,10 @@ internal sealed partial class ExpressionBinder
             // argument before the per-position conversion loop.
             var isVariadic = method.Parameters.Length > 0 && method.Parameters[method.Parameters.Length - 1].IsVariadic;
             var fixedParamCount = isVariadic ? method.Parameters.Length - 1 : method.Parameters.Length;
+            Func<int, string> methodParameterNameAt =
+                parameterIndex => method.Parameters[parameterIndex].Name;
+            Func<int, bool> methodParameterIsOptional =
+                parameterIndex => method.Parameters[parameterIndex].HasExplicitDefaultValue;
 
             // ADR-0063 / issue #936: count the leading non-optional parameters.
             // A static (`shared`) call may omit any trailing parameter that
@@ -3317,7 +3422,7 @@ internal sealed partial class ExpressionBinder
                 !overloads.ValidateExpandedVariadicNamedArguments(
                     argumentNames,
                     fixedParamCount,
-                    p => method.Parameters[p].Name,
+                    methodParameterNameAt,
                     method.Name,
                     ce))
             {
@@ -3331,8 +3436,8 @@ internal sealed partial class ExpressionBinder
                         ce.Arguments,
                         arguments,
                         method.Parameters.Length,
-                        p => method.Parameters[p].Name,
-                        p => method.Parameters[p].HasExplicitDefaultValue,
+                        methodParameterNameAt,
+                        methodParameterIsOptional,
                         method.Name,
                         out parameterSyntax,
                         out arguments))
@@ -3485,6 +3590,8 @@ internal sealed partial class ExpressionBinder
                 // uncoerced elements here). Coerce against the SUBSTITUTED
                 // slice's element type since generic type arguments may have
                 // been inferred/substituted above.
+                Func<int, TextLocation> variadicArgumentLocation =
+                    i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Identifier.Location;
                 permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
                     conversions,
                     Diagnostics,
@@ -3493,7 +3600,7 @@ internal sealed partial class ExpressionBinder
                     fixedParamCount,
                     substitutedSlice,
                     variadicParam.Name,
-                    i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Identifier.Location,
+                    variadicArgumentLocation,
                     ref hasVariadicErrors);
 
                 if (hasVariadicErrors)
@@ -3620,7 +3727,7 @@ internal sealed partial class ExpressionBinder
             var finalArguments = overloads.PreserveNamedArgumentEvaluationOrder(
                 ce.Arguments,
                 convertedArgs.ToImmutable(),
-                p => method.Parameters[p].Name);
+                methodParameterNameAt);
 
             BoundCallExpression MakeStaticGenericCall(TypeSymbol? substitutedReturnOverride)
             {

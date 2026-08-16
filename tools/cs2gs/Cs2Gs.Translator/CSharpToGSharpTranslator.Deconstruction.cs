@@ -945,6 +945,11 @@ public sealed partial class CSharpToGSharpTranslator
                     if (designation is SingleVariableDesignationSyntax indexCheckSingle)
                     {
                         this.ReportIfIndexOrRangeTypedDesignation(indexCheckSingle);
+                        if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
+                            && this.IsLocalReassigned(local))
+                        {
+                            binding = BindingKind.Var;
+                        }
                     }
                 }
 
@@ -971,6 +976,11 @@ public sealed partial class CSharpToGSharpTranslator
                     if (declaration.Designation is SingleVariableDesignationSyntax indexCheckSingle)
                     {
                         this.ReportIfIndexOrRangeTypedDesignation(indexCheckSingle);
+                        if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
+                            && this.IsLocalReassigned(local))
+                        {
+                            binding = BindingKind.Var;
+                        }
                     }
                 }
 

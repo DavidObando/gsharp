@@ -97,6 +97,7 @@ internal sealed class ImportedMemberRefFactory
         // the `element.ClrType != null` branch via the NullableTypeSymbol
         // ctor that copies `underlying.ClrType`).
         if (element is NullableTypeSymbol nullableElement
+            && !NullableLifting.RequiresSymbolicNullableGetValue(nullableElement)
             && nullableElement.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr)
         {
             // Issue #571: route Nullable<T> through the ReferenceResolver so the
@@ -655,8 +656,17 @@ internal sealed class ImportedMemberRefFactory
         }
 
         var parameters = ctor.GetParameters();
-        var fallback = open.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(candidate => candidate.GetParameters().Length == parameters.Length);
+        ConstructorInfo? fallback = null;
+        foreach (var candidate in open.GetConstructors(
+                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.GetParameters().Length == parameters.Length)
+            {
+                fallback = candidate;
+                break;
+            }
+        }
+
         if (fallback != null)
         {
             return fallback;
@@ -808,7 +818,6 @@ internal sealed class ImportedMemberRefFactory
         var openForMethodGenerics = openMethod.IsGenericMethod
             ? openMethod.GetGenericMethodDefinition()
             : openMethod;
-
         var sigBlob = new BlobBuilder();
         var sigEncoder = new BlobEncoder(sigBlob).MethodSignature(
             isInstanceMethod: !method.IsStatic,
@@ -1050,7 +1059,6 @@ internal sealed class ImportedMemberRefFactory
         var openForMethodGenerics = openMethod.IsGenericMethod
             ? openMethod.GetGenericMethodDefinition()
             : openMethod;
-
         var sigBlob = new BlobBuilder();
         var sigEncoder = new BlobEncoder(sigBlob).MethodSignature(
             isInstanceMethod: !method.IsStatic,
@@ -1169,14 +1177,14 @@ internal sealed class ImportedMemberRefFactory
                 openDefinition = typeof(System.Collections.Generic.IAsyncEnumerable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(aseq.ElementType);
                 return true;
-            case NullableTypeSymbol nul when nul.UnderlyingType is TypeParameterSymbol nullableTp && nullableTp.HasValueTypeConstraint:
+            case NullableTypeSymbol nul when nul.UnderlyingType is TypeParameterSymbol && ((TypeParameterSymbol)nul.UnderlyingType).HasValueTypeConstraint:
                 // Issue #806: a `T?` receiver where T is an open value-type
                 // type parameter has no constructed CLR `Nullable<T>` here —
                 // route member-ref encoding through the symbolic container
                 // path so the MemberRef parent is `Nullable<!!T>` against
                 // System.Runtime, not against the current assembly.
                 openDefinition = typeof(System.Nullable<>);
-                typeArguments = ImmutableArray.Create<TypeSymbol>(nullableTp);
+                typeArguments = ImmutableArray.Create<TypeSymbol>((TypeParameterSymbol)nul.UnderlyingType);
                 return true;
             case MapTypeSymbol map when map.ClrType == null:
                 // Issue #3311: a `map[K, V]` receiver over type-parameter (or
@@ -1484,8 +1492,17 @@ internal sealed class ImportedMemberRefFactory
             }
         }
 
-        var fallback = openDefinition.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(candidate => candidate.GetParameters().Length == ctor.GetParameters().Length);
+        ConstructorInfo? fallback = null;
+        foreach (var candidate in openDefinition.GetConstructors(
+                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.GetParameters().Length == ctor.GetParameters().Length)
+            {
+                fallback = candidate;
+                break;
+            }
+        }
+
         return fallback ?? ctor;
     }
 

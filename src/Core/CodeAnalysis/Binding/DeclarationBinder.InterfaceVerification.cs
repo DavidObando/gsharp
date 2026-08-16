@@ -256,40 +256,6 @@ internal sealed partial class DeclarationBinder
                 }
             }
 
-            static bool ExplicitClrPropertyMatches(
-                PropertySymbol property,
-                TypeSymbol target,
-                PropertyInfo slot)
-            {
-                if (slot.Name != property.Name
-                    || (slot.GetMethod != null) != property.HasGetter
-                    || (slot.SetMethod != null) != property.HasSetter
-                    || !TypeSignaturesEquivalent(
-                        property.Type,
-                        MemberLookup.GetClrPropertyTypeSymbol(target, slot)))
-                {
-                    return false;
-                }
-
-                var slotParameters = slot.GetIndexParameters();
-                if (slotParameters.Length != property.Parameters.Length)
-                {
-                    return false;
-                }
-
-                for (var i = 0; i < slotParameters.Length; i++)
-                {
-                    if (!ClrTypeUtilities.AreSame(
-                        NullableLifting.GetEffectiveClrType(property.Parameters[i].Type),
-                        slotParameters[i].ParameterType))
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-
             SynthesizePositionalInterfaceProperties(structSymbol, positionalInterfaceProps);
             VerifyClrInterfaceImplementations(syntax, structSymbol);
             VerifyInheritedClrInterfaceSlots(syntax, structSymbol);
@@ -298,6 +264,40 @@ internal sealed partial class DeclarationBinder
             VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
             VerifyExplicitInterfaceClauseResolution(syntax, structSymbol);
         }
+    }
+
+    private static bool ExplicitClrPropertyMatches(
+        PropertySymbol property,
+        TypeSymbol target,
+        PropertyInfo slot)
+    {
+        if (slot.Name != property.Name
+            || (slot.GetMethod != null) != property.HasGetter
+            || (slot.SetMethod != null) != property.HasSetter
+            || !TypeSignaturesEquivalent(
+                property.Type,
+                MemberLookup.GetClrPropertyTypeSymbol(target, slot)))
+        {
+            return false;
+        }
+
+        var slotParameters = slot.GetIndexParameters();
+        if (slotParameters.Length != property.Parameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < slotParameters.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(
+                NullableLifting.GetEffectiveClrType(property.Parameters[i].Type),
+                slotParameters[i].ParameterType))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void VerifyInterfaceMethodImplementationsAndDefaultConflicts(
@@ -1830,7 +1830,7 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, in MemberLookup.ClrInterfaceSlot slot)
+    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, MemberLookup.ClrInterfaceSlot slot)
     {
         // Note: do NOT route through GetMethodsIncludingInherited here — it
         // dedups same-name overloads by parameter signature (ignoring return
@@ -2309,15 +2309,15 @@ internal sealed partial class DeclarationBinder
                 return TryEvaluateConstant(conv.Expression, out value);
 
             case BoundFieldAccessExpression fieldAccess
-                when fieldAccess.Field is { IsConst: true } constField
-                && constField.ConstantValue != null:
+                when fieldAccess.Field.IsConst
+                && fieldAccess.Field.ConstantValue != null:
                 // Issue #1193: a `const` field initializer composed of other
                 // `const` fields folds by reading the referenced field's
                 // already-computed compile-time value. Sibling const fields are
                 // folded in dependency order (see the fixpoint loop in the
                 // const-binding pass), so a referenced const's value is present
                 // by the time this initializer is evaluated.
-                value = constField.ConstantValue;
+                value = fieldAccess.Field.ConstantValue;
                 return true;
 
             case BoundUnaryExpression unary

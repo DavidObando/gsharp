@@ -142,14 +142,16 @@ internal sealed partial class DeclarationBinder
                 // `Dispose` hard-resets `binderCtx.RootScope`, discarding the
                 // child scope created above regardless of any assignment here).
                 // See the matching comment in BindConstructorBaseInitializerCore.
+                System.Func<int, TextLocation> argumentLocation = i => baseArguments[i].Location;
+                System.Func<int, ExpressionSyntax> argumentSyntax = i => baseArguments[i];
                 if (importedBaseType?.ClrType is System.Type clrBase)
                 {
-                    clrInit = ResolveClrBaseConstructor(i => baseArguments[i].Location, clrBase, boundArguments, location, i => baseArguments[i]);
+                    clrInit = ResolveClrBaseConstructor(argumentLocation, clrBase, boundArguments, location, argumentSyntax);
                 }
                 else
                 {
                     gsharpInit = ResolveGSharpBaseConstructor(
-                        i => baseArguments[i].Location,
+                        argumentLocation,
                         structSymbol.Name,
                         Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
                         boundArguments,
@@ -185,9 +187,18 @@ internal sealed partial class DeclarationBinder
         TextLocation location,
         System.Func<int, ExpressionSyntax>? argSyntax = null)
     {
-        var ctors = ClrTypeUtilities.SafeGetConstructors(clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-            .Where(c => c.IsPublic || c.IsFamily || c.IsFamilyOrAssembly)
-            .ToArray();
+        var visibleConstructors = new List<ConstructorInfo>();
+        foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(
+                     clrBase,
+                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            if (constructor.IsPublic || constructor.IsFamily || constructor.IsFamilyOrAssembly)
+            {
+                visibleConstructors.Add(constructor);
+            }
+        }
+
+        var ctors = visibleConstructors.ToArray();
 
         RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments);
 
@@ -218,7 +229,7 @@ internal sealed partial class DeclarationBinder
             // interpolated-string literals (base-ctor arguments are always
             // positional, never named).
             var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(argSyntax, boundArguments.Count);
-            var resolution = ClrOverloadResolution.Resolve(
+            var resolution = ClrOverloadResolution.Resolve<ConstructorInfo>(
                 ctors,
                 argTypes,
                 interpolatedStringArgs: interpolatedStringArgs,
@@ -347,7 +358,7 @@ internal sealed partial class DeclarationBinder
             }
 
             refKindsBuilder.Add(RefKind.None);
-            var targetType = TypeSymbol.FromClrType(clrParamType);
+            var targetType = ClrNullability.GetParameterTypeSymbol(ctorParams[i]);
             var argLoc = isExpanded && i == ctorParams.Length - 1
                 ? location
                 : argLocation(i);
@@ -398,15 +409,21 @@ internal sealed partial class DeclarationBinder
         ConstructorInfo[] constructors,
         ImmutableArray<BoundExpression>.Builder boundArguments)
     {
-        var deferred = Enumerable.Range(0, boundArguments.Count)
-            .Where(index => ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out _))
-            .ToArray();
-        if (deferred.Length == 0)
+        var deferred = new List<int>();
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[i], out _))
+            {
+                deferred.Add(i);
+            }
+        }
+
+        if (deferred.Count == 0)
         {
             return;
         }
 
-        var deferredSet = deferred.ToHashSet();
+        var deferredSet = new HashSet<int>(deferred);
         var applicabilityArgumentTypes = new System.Type?[boundArguments.Count];
         for (var i = 0; i < boundArguments.Count; i++)
         {
@@ -426,43 +443,80 @@ internal sealed partial class DeclarationBinder
         }
 
         var delegateRefKindCheck = ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments);
-        var compatible = constructors
-            .Select(constructor => (Constructor: constructor, Parameters: constructor.GetParameters()))
-            .Where(candidate => candidate.Parameters.Length == boundArguments.Count)
-            .Where(candidate => deferred.All(index =>
+        var compatible = new List<(ConstructorInfo Constructor, ParameterInfo[] Parameters)>();
+        foreach (var constructor in constructors)
+        {
+            var parameters = constructor.GetParameters();
+            if (parameters.Length != boundArguments.Count)
             {
-                var targetClrType = candidate.Parameters[index].ParameterType;
+                continue;
+            }
+
+            var deferredTargetsMatch = true;
+            foreach (var index in deferred)
+            {
+                var targetClrType = parameters[index].ParameterType;
                 if (targetClrType.IsByRef)
                 {
                     targetClrType = targetClrType.GetElementType() ?? targetClrType;
                 }
 
-                return ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out var syntax)
-                    && ExpressionBinder.CanTargetDependentBlockArgument(syntax, TypeSymbol.FromClrType(targetClrType));
-            }))
-            .Where(candidate => ClrOverloadResolution.Resolve(
-                [candidate.Constructor],
-                applicabilityArgumentTypes,
-                constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
-                structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments),
-                delegateRefKindArgumentCheck: (index, targetType) =>
-                    deferredSet.Contains(index) ? true : delegateRefKindCheck?.Invoke(index, targetType)).Outcome
-                == ClrOverloadResolution.ResolutionOutcome.Resolved)
-            .ToArray();
+                if (!ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out var syntax)
+                    || !ExpressionBinder.CanTargetDependentBlockArgument(syntax, TypeSymbol.FromClrType(targetClrType)))
+                {
+                    deferredTargetsMatch = false;
+                    break;
+                }
+            }
 
-        foreach (var index in deferred)
-        {
-            var targetTypes = compatible
-                .Select(candidate => candidate.Parameters[index].ParameterType)
-                .Select(type => type.IsByRef ? type.GetElementType() ?? type : type)
-                .Distinct()
-                .ToArray();
-            if (targetTypes.Length != 1)
+            if (!deferredTargetsMatch)
             {
                 continue;
             }
 
-            var targetType = TypeSymbol.FromClrType(targetTypes[0]);
+            System.Func<int, System.Type, bool?> refKindCheck = (index, targetType) =>
+                deferredSet.Contains(index) ? true : delegateRefKindCheck?.Invoke(index, targetType);
+            var resolution = ClrOverloadResolution.Resolve<ConstructorInfo>(
+                [constructor],
+                applicabilityArgumentTypes,
+                constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
+                structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments),
+                delegateRefKindArgumentCheck: refKindCheck);
+            if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
+            {
+                compatible.Add((constructor, parameters));
+            }
+        }
+
+        foreach (var index in deferred)
+        {
+            System.Type? commonTargetType = null;
+            var targetsDisagree = false;
+            foreach (var candidate in compatible)
+            {
+                var candidateTargetType = candidate.Parameters[index].ParameterType;
+                if (candidateTargetType.IsByRef)
+                {
+                    candidateTargetType = candidateTargetType.GetElementType() ?? candidateTargetType;
+                }
+
+                if (commonTargetType is null)
+                {
+                    commonTargetType = candidateTargetType;
+                }
+                else if (!ClrTypeUtilities.AreSame(commonTargetType, candidateTargetType))
+                {
+                    targetsDisagree = true;
+                    break;
+                }
+            }
+
+            if (commonTargetType is null || targetsDisagree)
+            {
+                continue;
+            }
+
+            var targetType = TypeSymbol.FromClrType(commonTargetType);
             boundArguments[index] = conversions.BindConversion(
                 boundArguments[index].Syntax?.Location ?? default,
                 boundArguments[index],
@@ -1113,12 +1167,15 @@ internal sealed partial class DeclarationBinder
                 }
                 else if (importedBaseType?.ClrType is System.Type clrBase)
                 {
-                    init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location, i => ctorSyntax.BaseArguments[i]);
+                    System.Func<int, TextLocation> argumentLocation = i => ctorSyntax.BaseArguments[i].Location;
+                    System.Func<int, ExpressionSyntax> argumentSyntax = i => ctorSyntax.BaseArguments[i];
+                    init = ResolveClrBaseConstructor(argumentLocation, clrBase, boundArguments, location, argumentSyntax);
                 }
                 else
                 {
+                    System.Func<int, TextLocation> argumentLocation = i => ctorSyntax.BaseArguments[i].Location;
                     init = ResolveGSharpBaseConstructor(
-                        i => ctorSyntax.BaseArguments[i].Location,
+                        argumentLocation,
                         structSymbol.Name,
                         Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
                         boundArguments,

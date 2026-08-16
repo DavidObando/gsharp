@@ -285,7 +285,9 @@ internal sealed partial class MethodBodyEmitter
             return null;
         }
 
-        return receiver.FindConstructedGenericBase(def => ReferenceEquals(def, declaringDef));
+        bool IsDeclaringDefinition(StructSymbol definition) =>
+            ReferenceEquals(definition, declaringDef);
+        return receiver.FindConstructedGenericBase(IsDeclaringDefinition);
     }
 
     // ADR-0087 R5 / issue #765: bridges from a substituted FunctionSymbol on
@@ -770,7 +772,9 @@ internal sealed partial class MethodBodyEmitter
             && call.Receiver.Type is StructSymbol baseReceiver)
         {
             var baseDef = baseClass.Definition ?? baseClass;
-            var constructedBase = baseReceiver.FindConstructedGenericBase(d => ReferenceEquals(d, baseDef));
+            bool IsBaseDefinition(StructSymbol definition) =>
+                ReferenceEquals(definition, baseDef);
+            var constructedBase = baseReceiver.FindConstructedGenericBase(IsBaseDefinition);
             if (constructedBase != null)
             {
                 baseClass = constructedBase;

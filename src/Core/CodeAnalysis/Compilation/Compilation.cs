@@ -232,7 +232,7 @@ public class Compilation
                 PrepareReferencesForBinding(assemblyName);
                 var globalScope = ReusedGlobalScope
                     ?? Binder.BindGlobalScope(previous: null, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary, Submission);
-                Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
+                Interlocked.CompareExchange<BoundGlobalScope?>(ref this.globalScope, globalScope, null);
             }
 
             return globalScope;
@@ -263,7 +263,7 @@ public class Compilation
             if (boundProgram == null)
             {
                 var bp = Binder.BindProgram(GlobalScope, References, BodyCache, DirtyBodyTrees);
-                Interlocked.CompareExchange(ref this.boundProgram, bp, null);
+                Interlocked.CompareExchange<BoundProgram?>(ref this.boundProgram, bp, null);
             }
 
             return boundProgram;
@@ -305,7 +305,7 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit()
     {
-        var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
+        var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics.AsEnumerable());
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
         var program = BoundProgram;
@@ -434,7 +434,7 @@ public class Compilation
         string? targetFrameworkMoniker = null)
     {
         AssemblyName = assemblyName ?? AssemblyName;
-        var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
+        var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics.AsEnumerable());
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
         var program = BoundProgram;

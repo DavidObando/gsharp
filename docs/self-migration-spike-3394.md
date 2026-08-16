@@ -19,10 +19,11 @@ The spike proves that cs2gs can translate the complete Core source tree:
 - zero unsupported translation diagnostics;
 - every emitted file round-trip parses.
 
-Core does not yet compile. The semantic frontier moved from 1,126 diagnostics
-in cycle 14 to 291 in cycle 49, removing 835 diagnostics (74.2%). Because Core
-does not compile, this spike did not claim Core IL verification, test parity,
-self-hosted recompilation, or migration of gsc, gsi, gsgen, or cs2gs.
+Continuation through cycle 111 proves complete Core translation and semantic
+compilation. The semantic frontier moved from 1,126 diagnostics in cycle 14 to
+zero. Core IL verification now fails with 163 diagnostics, so test parity,
+self-hosted recompilation, and migration of gsc, gsi, gsgen, or cs2gs remain
+blocked behind the emitted generic-ABI defect tracked by #3407.
 
 The independent Oahu gate reached full parity: all 15 projects pass
 translation, compilation, IL verification, and test parity.
@@ -419,6 +420,63 @@ Durable fixes include:
 
 Cycle 83's largest IDs are GS0159 (10), GS0155 (8), GS0158 (8), GS0125 (6),
 and GS0154 (4). The largest file remains
-`ExpressionBinder.Access.Accessor.gs` with 13 diagnostics. Core still does not
-compile; ILVerify, test parity, self-hosted Core recompilation, and downstream
-project migrations remain gated.
+`ExpressionBinder.Access.Accessor.gs` with 13 diagnostics.
+
+## Continuation through cycle 111
+
+Branch `oats/3394-core-compile-continuation-3`, based on `ed0f00f4`, removed
+the final 60 semantic diagnostics and then continued through the newly exposed
+emit failures:
+
+| Cycle | Result | Milestone |
+|---:|---:|---|
+| 85 | compile fail (60) | Fresh-main baseline |
+| 86–89 | 55 → 53 → 46 → 22 | Nested construction, mutable deconstruction, pattern/source shaping |
+| 90–95 | 1–4 diagnostics | Final semantic clusters |
+| 96–104 | emit failures | Latent iterator/tuple emit paths exposed after semantic diagnostics reached zero |
+| 105 | compile pass | First complete Core semantic compile |
+| 111 | compile pass | Final-tree confirmation; ILVerify fail (163) |
+
+Final run:
+
+```text
+artifacts/issue-3394/core-cycle-111-final/2026-08-16T08-23-34Z_24caa3
+translate: PASS
+compile:  PASS
+ilverify: FAIL(163)
+test parity: skipped
+```
+
+The original semantic frontier is therefore **1,126 → 0**. Durable fixes
+cover qualified nested constructor continuations, mutable by-ref
+deconstruction locals, pattern-variable scope-safe source shaping,
+nullable/default imported parameters, binding-context state, definite
+assignment, nested rewriter placement, unsupported migrated iterator/tuple
+helpers, and runtime-equivalent conversion emission.
+
+The ILVerify frontier is dominated by symbolic generic ABI mismatches:
+
+- 121 `StackUnexpected`;
+- 40 `PathStackUnexpected`;
+- one `DelegateCtor`;
+- one `ValueTypeExpected`;
+- 80 failures involving erased `ImmutableArray<object>` paths;
+- large concrete-enumerator versus open `IEnumerator<!0>` families.
+
+Issue #3407 tracks this proven emitted-metadata blocker. A direct symbolic
+MemberRef experiment reduced 163 failures to 79, but broke seven existing
+emitted-runtime generic call regressions (`List<Source>.Add`,
+`ConcurrentDictionary.GetOrAdd`, `Dictionary.TryGetValue`, and related
+families), proving that TypeSpec parenting, VAR/MVAR signature encoding, and
+call-site symbolic projection must be repaired together.
+
+Final focused validation:
+
+- Core migration/binder, SyntaxTree, and CLR utility regressions: 63 passed;
+- cs2gs nested-generic/deconstruction regressions: 7 passed;
+- SDK and cs2gs CLI Release builds passed;
+- `git diff --check` passed.
+
+Per the required sequence, test parity, self-hosted Core recompilation, and
+gsc/gsi/gsgen/cs2gs migration remain gated behind #3407 rather than running
+against unverifiable IL.

@@ -54,6 +54,8 @@ public sealed class BoundScope
     // Issue #2342: the ambient "current declaring package" (see
     // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
     // of the chain, exactly like anonymousTypeCache above.
+    // Empty string is the AsyncLocal storage sentinel for null; setter and
+    // getter normalize null <-> empty so save/restore preserves the contract.
     private AsyncLocal<string?> currentDeclaringPackageName = new AsyncLocal<string?>();
 
     // Issue #2456 (per-file import scoping / #2395 follow-up): the ambient
@@ -62,8 +64,8 @@ public sealed class BoundScope
     // single member body, mirroring currentDeclaringPackageName exactly.
     // Import enumeration consults this to expose only imports declared in the
     // same file as the reference being resolved, plus implicit imports.
-    private AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?> currentReferencingSyntaxTree =
-        new AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?>();
+    private AsyncLocal<object?> currentReferencingSyntaxTree =
+        new AsyncLocal<object?>();
 
     // Issue #2455: the ambient "qualified construction package hint" (see
     // SetQualifiedConstructionPackageHint), set only while re-binding the
@@ -735,11 +737,12 @@ public sealed class BoundScope
     /// hoist.
     /// </summary>
     /// <returns>The distinct imported static-import CLR types, in import order.</returns>
-    public IEnumerable<System.Type> EnumerateStaticImportClrTypes()
+    public List<System.Type> EnumerateStaticImportClrTypes()
     {
+        var result = new List<System.Type>();
         if (References == null)
         {
-            yield break;
+            return result;
         }
 
         System.Collections.Generic.HashSet<System.Type>? seen = null;
@@ -753,7 +756,7 @@ public sealed class BoundScope
             if (!References.TryResolveType(import.Target, out var type))
             {
                 References.TryResolveType(
-                    import.Target + "." + SubmissionImports.ProgramTypeName,
+                    SubmissionImports.GetProgramTypeName(import.Target),
                     out type);
             }
 
@@ -762,10 +765,12 @@ public sealed class BoundScope
                 seen ??= new System.Collections.Generic.HashSet<System.Type>();
                 if (seen.Add(type))
                 {
-                    yield return type;
+                    result.Add(type);
                 }
             }
         }
+
+        return result;
     }
 
     /// <summary>
@@ -1438,8 +1443,9 @@ public sealed class BoundScope
             return Parent.SetCurrentDeclaringPackage(packageName);
         }
 
-        var previous = currentDeclaringPackageName.Value;
-        currentDeclaringPackageName.Value = packageName;
+        var stored = currentDeclaringPackageName.Value;
+        var previous = string.IsNullOrEmpty(stored) ? null : stored;
+        currentDeclaringPackageName.Value = packageName ?? string.Empty;
         return previous;
     }
 
@@ -1467,8 +1473,8 @@ public sealed class BoundScope
             return Parent.SetCurrentReferencingSyntaxTree(tree);
         }
 
-        var previous = currentReferencingSyntaxTree.Value;
-        currentReferencingSyntaxTree.Value = tree;
+        var previous = (currentReferencingSyntaxTree.Value as ReferencingSyntaxTreeState)?.Tree;
+        currentReferencingSyntaxTree.Value = new ReferencingSyntaxTreeState(tree);
         return previous;
     }
 
@@ -1515,8 +1521,9 @@ public sealed class BoundScope
             return Parent.SetQualifiedConstructionPackageHint(packageName);
         }
 
-        var previous = qualifiedConstructionPackageHint.Value;
-        qualifiedConstructionPackageHint.Value = packageName;
+        var stored = qualifiedConstructionPackageHint.Value;
+        var previous = string.IsNullOrEmpty(stored) ? null : stored;
+        qualifiedConstructionPackageHint.Value = packageName ?? string.Empty;
         return previous;
     }
 
@@ -1526,7 +1533,15 @@ public sealed class BoundScope
     /// none is set.
     /// </summary>
     private string? GetCurrentDeclaringPackage()
-        => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName.Value;
+    {
+        if (Parent != null)
+        {
+            return Parent.GetCurrentDeclaringPackage();
+        }
+
+        var packageName = currentDeclaringPackageName.Value;
+        return string.IsNullOrEmpty(packageName) ? null : packageName;
+    }
 
     /// <summary>
     /// Issue #2456: gets the ambient "current referencing syntax tree" set by
@@ -1535,7 +1550,9 @@ public sealed class BoundScope
     /// import-based disambiguation this fix adds simply does not fire).
     /// </summary>
     private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? GetCurrentReferencingSyntaxTree()
-        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree.Value;
+        => Parent != null
+            ? Parent.GetCurrentReferencingSyntaxTree()
+            : (currentReferencingSyntaxTree.Value as ReferencingSyntaxTreeState)?.Tree;
 
     /// <summary>
     /// Issue #2455: gets the ambient qualified-construction package hint set
@@ -1543,7 +1560,15 @@ public sealed class BoundScope
     /// <see langword="null"/> when none is set.
     /// </summary>
     private string? GetQualifiedConstructionPackageHint()
-        => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint.Value;
+    {
+        if (Parent != null)
+        {
+            return Parent.GetQualifiedConstructionPackageHint();
+        }
+
+        var packageName = qualifiedConstructionPackageHint.Value;
+        return string.IsNullOrEmpty(packageName) ? null : packageName;
+    }
 
     /// <summary>
     /// Issue #2455: tries to resolve (<paramref name="name"/>, <paramref name="arity"/>)
@@ -1645,27 +1670,35 @@ public sealed class BoundScope
     /// </summary>
     private bool TryGetAliasDeclaringPackageInChain(string key, [NotNullWhen(true)] out string? declaringPackageName)
     {
-        for (var s = this; s != null; s = s.Parent)
+        declaringPackageName = null;
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.aliasDeclaringPackages != null && s.aliasDeclaringPackages.TryGetValue(key, out declaringPackageName))
+            if (scope.aliasDeclaringPackages != null
+                && scope.aliasDeclaringPackages.TryGetValue(key, out var foundPackage))
             {
+                declaringPackageName = foundPackage;
                 return true;
             }
+
+            scope = scope.Parent;
         }
 
-        declaringPackageName = null;
         return false;
     }
 
     /// <summary>Whether <paramref name="key"/> is visible anywhere in this scope chain.</summary>
     private bool TypeAliasVisible(string key)
     {
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.typeAliases != null && s.typeAliases.ContainsKey(key))
+            if (scope.typeAliases != null && scope.typeAliases.ContainsKey(key))
             {
                 return true;
             }
+
+            scope = scope.Parent;
         }
 
         return false;
@@ -1678,15 +1711,19 @@ public sealed class BoundScope
     /// </summary>
     private bool TryGetTypeAliasInChain(string key, [NotNullWhen(true)] out TypeSymbol? value)
     {
-        for (var s = this; s != null; s = s.Parent)
+        value = null;
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.typeAliases != null && s.typeAliases.TryGetValue(key, out value))
+            if (scope.typeAliases != null && scope.typeAliases.TryGetValue(key, out var foundValue))
             {
+                value = foundValue;
                 return true;
             }
+
+            scope = scope.Parent;
         }
 
-        value = null;
         return false;
     }
 
@@ -1695,24 +1732,28 @@ public sealed class BoundScope
     /// scope first, yielding each key only once (the nearest-scope value wins,
     /// matching <see cref="TryGetTypeAliasInChain"/>).
     /// </summary>
-    private IEnumerable<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
+    private List<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
     {
+        var result = new List<KeyValuePair<string, TypeSymbol>>();
         var seen = new HashSet<string>();
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.typeAliases == null)
+            if (scope.typeAliases != null)
             {
-                continue;
-            }
-
-            foreach (var pair in s.typeAliases)
-            {
-                if (seen.Add(pair.Key))
+                foreach (var pair in scope.typeAliases)
                 {
-                    yield return pair;
+                    if (seen.Add(pair.Key))
+                    {
+                        result.Add(pair);
+                    }
                 }
             }
+
+            scope = scope.Parent;
         }
+
+        return result;
     }
 
     /// <summary>
@@ -1851,13 +1892,16 @@ public sealed class BoundScope
     private ImmutableArray<FunctionSymbol> CollectFunctionBucket(string key)
     {
         ImmutableArray<FunctionSymbol>.Builder? builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.functions != null && s.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
+            if (scope.functions != null && scope.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
             {
                 builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
                 builder.AddRange(bucket);
             }
+
+            scope = scope.Parent;
         }
 
         return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
@@ -2003,50 +2047,51 @@ public sealed class BoundScope
     private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatches(string key, TypeSymbol receiverType)
     {
         ImmutableArray<FunctionSymbol>.Builder? builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.extensionFunctionsByName == null
-                || !s.extensionFunctionsByName.TryGetValue(key, out var bucket))
+            if (scope.extensionFunctionsByName != null
+                && scope.extensionFunctionsByName.TryGetValue(key, out var bucket))
             {
-                continue;
+                foreach (var ext in bucket)
+                {
+                    var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
+                    if (!matches
+                        && !ext.TypeParameters.IsDefaultOrEmpty
+                        && ext.ExtensionReceiverType != null
+                        && ext.ExtensionReceiverType != TypeSymbol.Error
+                        && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
+                        && TryUnifyAndCheckConstraints(ext, receiverType, out _))
+                    {
+                        matches = true;
+                    }
+
+                    // Issue #1548: broaden to implicitly-convertible (subtype)
+                    // receivers with a CONCRETE declared receiver type. Open
+                    // receivers (those mentioning the function's own type
+                    // parameters) are handled by the unification pass above; a
+                    // concrete `R` is applicable whenever the call-site receiver is
+                    // implicitly convertible to it. Every applicable candidate is
+                    // collected so the caller's overload resolution — which scores
+                    // the receiver as parameter 0 — picks the most specific one.
+                    if (!matches
+                        && (ext.TypeParameters.IsDefaultOrEmpty
+                            || ext.ExtensionReceiverType == null
+                            || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                        && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+                    {
+                        matches = true;
+                    }
+
+                    if (matches)
+                    {
+                        builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                        builder.Add(ext);
+                    }
+                }
             }
 
-            foreach (var ext in bucket)
-            {
-                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
-                if (!matches
-                    && !ext.TypeParameters.IsDefaultOrEmpty
-                    && ext.ExtensionReceiverType != null
-                    && ext.ExtensionReceiverType != TypeSymbol.Error
-                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
-                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
-                {
-                    matches = true;
-                }
-
-                // Issue #1548: broaden to implicitly-convertible (subtype)
-                // receivers with a CONCRETE declared receiver type. Open
-                // receivers (those mentioning the function's own type
-                // parameters) are handled by the unification pass above; a
-                // concrete `R` is applicable whenever the call-site receiver is
-                // implicitly convertible to it. Every applicable candidate is
-                // collected so the caller's overload resolution — which scores
-                // the receiver as parameter 0 — picks the most specific one.
-                if (!matches
-                    && (ext.TypeParameters.IsDefaultOrEmpty
-                        || ext.ExtensionReceiverType == null
-                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
-                {
-                    matches = true;
-                }
-
-                if (matches)
-                {
-                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                    builder.Add(ext);
-                }
-            }
+            scope = scope.Parent;
         }
 
         return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
@@ -2077,24 +2122,25 @@ public sealed class BoundScope
     {
         var suffix = "#" + name;
         HashSet<string>? otherKeys = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.extensionFunctionsByName == null)
+            if (scope.extensionFunctionsByName != null)
             {
-                continue;
-            }
-
-            foreach (var key in s.extensionFunctionsByName.Keys)
-            {
-                if (string.Equals(key, excludeKey, StringComparison.Ordinal)
-                    || !key.EndsWith(suffix, StringComparison.Ordinal))
+                foreach (var key in scope.extensionFunctionsByName.Keys)
                 {
-                    continue;
-                }
+                    if (string.Equals(key, excludeKey, StringComparison.Ordinal)
+                        || !key.EndsWith(suffix, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
 
-                otherKeys ??= new HashSet<string>(StringComparer.Ordinal);
-                otherKeys.Add(key);
+                    otherKeys ??= new HashSet<string>(StringComparer.Ordinal);
+                    otherKeys.Add(key);
+                }
             }
+
+            scope = scope.Parent;
         }
 
         if (otherKeys == null)
@@ -2805,4 +2851,14 @@ public sealed class BoundScope
         EnumSymbol e => e.Accessibility == Accessibility.Private,
         _ => false,
     };
+
+    private sealed class ReferencingSyntaxTreeState
+    {
+        public ReferencingSyntaxTreeState(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? tree)
+        {
+            Tree = tree;
+        }
+
+        public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? Tree { get; }
+    }
 }

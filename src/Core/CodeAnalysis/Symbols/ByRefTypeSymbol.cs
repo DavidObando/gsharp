@@ -19,7 +19,7 @@ public sealed class ByRefTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation pointee types.
-        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakeByRefType()!)
+        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakeByRefType())
     {
         PointeeType = pointeeType;
     }

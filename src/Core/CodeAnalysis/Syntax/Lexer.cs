@@ -951,7 +951,7 @@ public sealed class Lexer
             }
 
             kind = SyntaxKind.InterpolatedStringToken;
-            value = fragments.ToImmutableArray();
+            value = new InterpolationFragments(fragments.ToImmutableArray());
         }
     }
 

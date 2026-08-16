@@ -28,7 +28,7 @@ public sealed class SliceTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation element types.
-        : base($"[]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType()!)
+        : base($"[]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType())
     {
         ElementType = elementType;
     }

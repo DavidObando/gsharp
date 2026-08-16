@@ -6,7 +6,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// A raw fragment produced by the lexer for an interpolated string literal.
-/// Stored as the <c>Value</c> of an <see cref="SyntaxKind.InterpolatedStringToken"/>.
+/// Stored inside the <see cref="InterpolationFragments"/> wrapper attached to an
+/// <see cref="SyntaxKind.InterpolatedStringToken"/>.
 /// Expression fragments still hold un-parsed text; the parser is responsible
 /// for lexing+parsing them into <see cref="ExpressionSyntax"/> nodes when it
 /// builds an <see cref="InterpolatedStringExpressionSyntax"/>.

@@ -359,15 +359,34 @@ internal sealed partial class ExpressionBinder
         // Preserve the regular conversion diagnostic for nullable delegate
         // targets instead of replacing it with target-parameter diagnostics.
         bound = null;
-        if (syntax is not LambdaExpressionSyntax lambda
-            || targetType == null
-            || (targetType is NullableTypeSymbol && lambda.Parameters.All(p => p.Type != null))
-            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType))
+        var lambda = syntax as LambdaExpressionSyntax;
+        if (lambda is null || targetType is null)
         {
             return false;
         }
 
-        bound = lambdas.BindLambdaExpression(lambda, targetFunctionType);
+        if (targetType is NullableTypeSymbol)
+        {
+            var allParametersTyped = true;
+            foreach (var parameter in lambda.Parameters)
+            {
+                allParametersTyped &= parameter.Type is not null;
+            }
+
+            if (allParametersTyped)
+            {
+                return false;
+            }
+        }
+
+        if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType))
+        {
+            return false;
+        }
+
+        bound = lambdas.BindLambdaExpression(
+            Invariant.Required(lambda, "lambda target typing requires lambda syntax"),
+            targetFunctionType);
         return true;
     }
 
@@ -687,6 +706,13 @@ internal sealed partial class ExpressionBinder
             // `field.Member` accesses after a [MemberNotNull] helper call are
             // accepted without a nil-guard.
             var narrowedFieldType = TryGetNarrowedType(implicitField);
+            Func<TypeSymbol, BoundExpression> makeNarrowedField = narrowedType =>
+                new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field,
+                    narrowedType);
             return BuildNarrowedRead(
                 new BoundFieldAccessExpression(
                     null,
@@ -695,12 +721,7 @@ internal sealed partial class ExpressionBinder
                     implicitField.Field),
                 implicitField.Field.Type,
                 narrowedFieldType,
-                nt => new BoundFieldAccessExpression(
-                    null,
-                    new BoundVariableExpression(null, implicitField.Receiver),
-                    implicitField.StructType,
-                    implicitField.Field,
-                    nt));
+                makeNarrowedField);
         }
 
         // Issue #261: bare static field name inside a shared method body.
@@ -769,11 +790,13 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BuildNarrowedVariableRead(VariableSymbol variable)
     {
+        Func<TypeSymbol, BoundExpression> makeNarrowedVariable =
+            narrowedType => new BoundVariableExpression(null, variable, narrowedType);
         return BuildNarrowedRead(
             new BoundVariableExpression(null, variable),
             variable.Type,
             TryGetNarrowedType(variable),
-            narrowed => new BoundVariableExpression(null, variable, narrowed));
+            makeNarrowedVariable);
     }
 
     /// <summary>
@@ -865,7 +888,8 @@ internal sealed partial class ExpressionBinder
     {
         for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
-            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed))
+            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed)
+                && narrowed != null)
             {
                 return narrowed;
             }
@@ -892,76 +916,114 @@ internal sealed partial class ExpressionBinder
             return node;
         }
 
-        switch (node)
+        var fieldAccess = node as BoundFieldAccessExpression;
+        if (fieldAccess != null && fieldAccess.NarrowedType == null)
         {
-            case BoundFieldAccessExpression fa when fa.NarrowedType == null:
+                if (!SmartCastStability.TryGetStableMemberPath(fieldAccess, out var path, out _)
+                    || path == null)
                 {
-                    if (!SmartCastStability.TryGetStableMemberPath(fa, out var path, out _))
-                    {
-                        return node;
-                    }
-
-                    var narrowed = TryGetNarrowedType(path);
-                    return narrowed == null
-                        ? node
-                        : BuildNarrowedRead(
-                            new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field),
-                            fa.Field.Type,
-                            narrowed,
-                            nt => new BoundFieldAccessExpression(null, fa.Receiver, fa.StructType, fa.Field, nt));
+                    return node;
                 }
 
-            case BoundPropertyAccessExpression pa when pa.NarrowedType == null:
+                var narrowed = TryGetNarrowedType(path);
+                if (narrowed == null)
                 {
-                    if (!SmartCastStability.TryGetStableMemberPath(pa, out var path, out _))
-                    {
-                        return node;
-                    }
-
-                    var narrowed = TryGetNarrowedType(path);
-                    return narrowed == null
-                        ? node
-                        : BuildNarrowedRead(
-                            new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property),
-                            pa.Property.Type,
-                            narrowed,
-                            nt => new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property, nt));
+                    return node;
                 }
 
-            case BoundClrPropertyAccessExpression ca:
-                {
-                    if (!SmartCastStability.TryGetStableMemberPath(ca, out var path, out _))
-                    {
-                        return node;
-                    }
+                var baseRead = new BoundFieldAccessExpression(
+                    null,
+                    fieldAccess.Receiver,
+                    fieldAccess.StructType,
+                    fieldAccess.Field);
+                Func<TypeSymbol, BoundExpression> makeNarrowedField = narrowedType =>
+                    new BoundFieldAccessExpression(
+                        null,
+                        fieldAccess.Receiver,
+                        fieldAccess.StructType,
+                        fieldAccess.Field,
+                        narrowedType);
+                return BuildNarrowedRead(
+                    baseRead,
+                    fieldAccess.Field.Type,
+                    narrowed,
+                    makeNarrowedField);
+        }
 
-                    var narrowed = TryGetNarrowedType(path);
-                    return narrowed == null
-                        ? node
-                        : BuildNarrowedRead(
-                            new BoundClrPropertyAccessExpression(
-                                null,
-                                ca.Receiver,
-                                ca.Member,
-                                ca.Type,
-                                ca.StaticContainerType,
-                                ca.ConstrainedReceiverTypeParameter,
-                                ca.ConstrainedInterfaceType),
-                            ca.Type,
-                            narrowed,
-                            nt => new BoundClrPropertyAccessExpression(
-                                null,
-                                ca.Receiver,
-                                ca.Member,
-                                nt,
-                                ca.StaticContainerType,
-                                ca.ConstrainedReceiverTypeParameter,
-                                ca.ConstrainedInterfaceType));
+        var propertyAccess = node as BoundPropertyAccessExpression;
+        if (propertyAccess != null && propertyAccess.NarrowedType == null)
+        {
+                if (!SmartCastStability.TryGetStableMemberPath(propertyAccess, out var path, out _)
+                    || path == null)
+                {
+                    return node;
                 }
 
-            default:
+                var narrowed = TryGetNarrowedType(path);
+                if (narrowed == null)
+                {
+                    return node;
+                }
+
+                var baseRead = new BoundPropertyAccessExpression(
+                    null,
+                    propertyAccess.Receiver,
+                    propertyAccess.StructType,
+                    propertyAccess.Property);
+                Func<TypeSymbol, BoundExpression> makeNarrowedProperty = narrowedType =>
+                    new BoundPropertyAccessExpression(
+                        null,
+                        propertyAccess.Receiver,
+                        propertyAccess.StructType,
+                        propertyAccess.Property,
+                        narrowedType);
+                return BuildNarrowedRead(
+                    baseRead,
+                    propertyAccess.Property.Type,
+                    narrowed,
+                    makeNarrowedProperty);
+        }
+
+        var clrAccess = node as BoundClrPropertyAccessExpression;
+        if (clrAccess == null)
+        {
                 return node;
         }
+
+        if (!SmartCastStability.TryGetStableMemberPath(clrAccess, out var clrPath, out _)
+                || clrPath == null)
+        {
+                return node;
+        }
+
+        var clrNarrowed = TryGetNarrowedType(clrPath);
+        if (clrNarrowed == null)
+        {
+                return node;
+        }
+
+        var clrBaseRead = new BoundClrPropertyAccessExpression(
+                null,
+                clrAccess.Receiver,
+                clrAccess.Member,
+                clrAccess.Type,
+                clrAccess.StaticContainerType,
+                clrAccess.ConstrainedReceiverTypeParameter,
+                clrAccess.ConstrainedInterfaceType);
+        Func<TypeSymbol, BoundExpression> makeNarrowedClrProperty = narrowedType =>
+            new BoundClrPropertyAccessExpression(
+                null,
+                clrAccess.Receiver,
+                clrAccess.Member,
+                narrowedType,
+                clrAccess.StaticContainerType,
+                clrAccess.ConstrainedReceiverTypeParameter,
+                clrAccess.ConstrainedInterfaceType);
+        return BuildNarrowedRead(
+                clrBaseRead,
+                clrAccess.Type,
+                clrNarrowed,
+                makeNarrowedClrProperty);
     }
 
     /// <summary>
@@ -1082,7 +1144,10 @@ internal sealed partial class ExpressionBinder
         // StatementBinder.TryClassifyNilGuard.
         if (SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: true, referenceNullableOnly: true, out var nilTarget, out var nilUnderlying, out var nonNilWhenTrue))
         {
-            var nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [nilTarget] = nilUnderlying };
+            var nonNilFrame = new Dictionary<AccessPath, TypeSymbol>
+            {
+                [nilTarget] = Invariant.Required(nilUnderlying, "a classified nil guard has an underlying type"),
+            };
             return nonNilWhenTrue ? (nonNilFrame, null) : (null, nonNilFrame);
         }
 
@@ -1251,7 +1316,15 @@ internal sealed partial class ExpressionBinder
             case DefaultExpressionSyntax { TypeClause: null }:
                 return true;
             case LambdaExpressionSyntax lambda:
-                return lambda.Parameters.Any(parameter => parameter.Type == null);
+                foreach (var parameter in lambda.Parameters)
+                {
+                    if (parameter.Type == null)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             case ConditionalExpressionSyntax conditional:
                 return IsTargetDependentExpressionSyntax(conditional.WhenTrue)
                     || IsTargetDependentExpressionSyntax(conditional.WhenFalse);
@@ -1308,19 +1381,35 @@ internal sealed partial class ExpressionBinder
             case DefaultExpressionSyntax { TypeClause: null }:
                 return targetType != TypeSymbol.Error && targetType != TypeSymbol.Void;
             case LambdaExpressionSyntax lambda:
-                if (lambda.Parameters.All(parameter => parameter.Type != null))
+                var allParametersTyped = true;
+                foreach (var parameter in lambda.Parameters)
+                {
+                    allParametersTyped &= parameter.Type != null;
+                }
+
+                if (allParametersTyped)
                 {
                     return true;
                 }
 
-                return MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var functionType)
-                    && functionType != null
-                    && functionType.Arity == lambda.Parameters.Count
-                    && lambda.Parameters
-                        .Select((parameter, index) =>
-                            parameter.IsVariadic
-                            == (!functionType.IsVariadic.IsDefaultOrEmpty && functionType.IsVariadic[index]))
-                        .All(matches => matches);
+                if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var functionType)
+                    || functionType == null
+                    || functionType.Arity != lambda.Parameters.Count)
+                {
+                    return false;
+                }
+
+                for (var i = 0; i < lambda.Parameters.Count; i++)
+                {
+                    var targetIsVariadic =
+                        !functionType.IsVariadic.IsDefaultOrEmpty && functionType.IsVariadic[i];
+                    if (lambda.Parameters[i].IsVariadic != targetIsVariadic)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             case ConditionalExpressionSyntax conditional:
                 return CanTargetDependentExpression(conditional.WhenTrue, targetType)
                     && CanTargetDependentExpression(conditional.WhenFalse, targetType);
@@ -1886,7 +1975,7 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    internal static Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? MakeMethodGroupInference(
+    internal static Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? MakeMethodGroupInference(
         IReadOnlyList<BoundExpression> arguments,
         Func<TypeSymbol, Type?> projectType,
         int argumentOffset = 0)
@@ -1926,7 +2015,7 @@ internal sealed partial class ExpressionBinder
         };
     }
 
-    private static Tuple<Type[], Type>? ResolveMethodGroupInferenceSignature(
+    private static (Type[] Parameters, Type Return)? ResolveMethodGroupInferenceSignature(
         BoundExpression argument,
         IReadOnlyList<Type> delegateParameterTypes,
         Func<TypeSymbol, Type?> projectType)
@@ -1934,8 +2023,12 @@ internal sealed partial class ExpressionBinder
         if (argument is BoundClrMethodGroupExpression { ResolvedMethod: null } clrGroup)
         {
             var receiver = clrGroup.Receiver;
-            var closesExtensionReceiver = receiver != null
-                && clrGroup.Candidates.All(candidate => candidate.IsStatic);
+            var closesExtensionReceiver = receiver != null;
+            foreach (var candidate in clrGroup.Candidates)
+            {
+                closesExtensionReceiver &= candidate.IsStatic;
+            }
+
             var resolutionArguments = new Type[delegateParameterTypes.Count + (closesExtensionReceiver ? 1 : 0)];
             if (closesExtensionReceiver)
             {
@@ -1970,7 +2063,7 @@ internal sealed partial class ExpressionBinder
                 signatureParameters[i - parameterOffset] = parameters[i].ParameterType;
             }
 
-            return Tuple.Create(signatureParameters, method.ReturnType);
+            return (signatureParameters, method.ReturnType);
         }
 
         if (argument is not BoundMethodGroupExpression { FunctionType: null } userGroup)
@@ -1978,7 +2071,7 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var matches = new List<(Tuple<Type[], Type> Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
+        var matches = new List<((Type[] Parameters, Type Return) Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
         foreach (var candidate in userGroup.Candidates)
         {
             var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
@@ -2030,12 +2123,12 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            matches.Add((Tuple.Create(parameterTypes, returnType), conversions));
+            matches.Add(((parameterTypes, returnType), conversions));
         }
 
         var best = matches.Where(candidate =>
             !matches.Any(other =>
-                !ReferenceEquals(candidate.Signature, other.Signature)
+                !ReferenceEquals(candidate.Signature.Parameters, other.Signature.Parameters)
                 && IsBetterMethodGroupConversion(other.Conversions, candidate.Conversions))).ToList();
         return best.Count == 1 ? best[0].Signature : null;
     }
@@ -2163,12 +2256,16 @@ internal sealed partial class ExpressionBinder
     /// <returns>The inherited CLR base type, or <see langword="null"/> when there is none.</returns>
     internal static Type? GetInheritedClrBaseType(StructSymbol structSymbol)
     {
-        for (var c = structSymbol; c != null; c = c.BaseClass)
+        StructSymbol? current = structSymbol;
+        while (current != null)
         {
-            if (c.ImportedBaseType?.ClrType is Type clr)
+            var clr = current.ImportedBaseType?.ClrType;
+            if (clr != null)
             {
                 return clr;
             }
+
+            current = current.BaseClass;
         }
 
         return null;

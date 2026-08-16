@@ -171,7 +171,17 @@ public sealed class InteractiveSessionHost : IDisposable
     {
         loadedByName = new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
         loadContext = new AssemblyLoadContext($"gsi-session-{Guid.NewGuid():N}", isCollectible: true);
-        loadContext.Resolving += ResolveDependency;
+        Func<AssemblyLoadContext, AssemblyName, Assembly?> resolver =
+            (context, assemblyName) => ResolveDependency(context, assemblyName);
+        AddResolvingHandler(loadContext, resolver);
+    }
+
+    private static void AddResolvingHandler(
+        AssemblyLoadContext context,
+        Func<AssemblyLoadContext, AssemblyName, Assembly?> resolver)
+    {
+        var resolvingEvent = typeof(AssemblyLoadContext).GetEvent("Resolving");
+        resolvingEvent?.AddEventHandler(context, resolver);
     }
 
     private Assembly? ResolveDependency(AssemblyLoadContext context, AssemblyName assemblyName)
@@ -192,10 +202,18 @@ public sealed class InteractiveSessionHost : IDisposable
 
         // User-supplied references win over any same-named host assembly so
         // the submission binds against exactly what it was compiled against.
-        var match = referencePaths.FirstOrDefault(path =>
-            !string.IsNullOrWhiteSpace(path)
-            && string.Equals(Path.GetFileNameWithoutExtension(path), assemblyName.Name, StringComparison.OrdinalIgnoreCase)
-            && File.Exists(path));
+        string? match = null;
+        foreach (var path in referencePaths)
+        {
+            if (!string.IsNullOrWhiteSpace(path)
+                && string.Equals(Path.GetFileNameWithoutExtension(path), assemblyName.Name, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(path))
+            {
+                match = path;
+                break;
+            }
+        }
+
         if (match is not null)
         {
             return context.LoadFromAssemblyPath(Path.GetFullPath(match));

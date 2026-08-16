@@ -1164,20 +1164,22 @@ internal sealed partial class ExpressionBinder
         // base to the derived type, breaking bound-node parity. Left as a manual walk.
         if (isEventOperator && function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
         {
-            for (var t = receiverStruct; t != null; t = t.BaseClass)
+            StructSymbol? current = receiverStruct;
+            while (current != null)
             {
-                if (t.Events.IsDefaultOrEmpty)
+                var t = current;
+                if (!t.Events.IsDefaultOrEmpty)
                 {
-                    continue;
+                    var ev = t.Events.FirstOrDefault(e => e.Name == name);
+                    if (ev != null)
+                    {
+                        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+                        var handler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
+                        return new BoundEventSubscriptionExpression(null, receiver, t, ev, handler, isAdd);
+                    }
                 }
 
-                var ev = t.Events.FirstOrDefault(e => e.Name == name);
-                if (ev != null)
-                {
-                    var receiver = new BoundVariableExpression(null, function.ThisParameter);
-                    var handler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
-                    return new BoundEventSubscriptionExpression(null, receiver, t, ev, handler, isAdd);
-                }
+                current = t.BaseClass;
             }
         }
 
@@ -1879,16 +1881,19 @@ internal sealed partial class ExpressionBinder
             // honour the user-given identifier.
             bool isReadOnly = syntax.DeclarationKeyword != null
                 && string.Equals(syntax.DeclarationKeyword.Text, "let", System.StringComparison.Ordinal);
-            string localName;
+            string? localName = null;
             if (syntax.DiscardToken != null)
             {
                 localName = $"<>out_discard_{binderCtx.OutDiscardCounter++}";
             }
-            else if (syntax.DeclarationIdentifier is { } identifierForName)
+
+            var identifierForName = syntax.DeclarationIdentifier;
+            if (syntax.DiscardToken == null && identifierForName != null)
             {
                 localName = identifierForName.Text;
             }
-            else
+
+            if (localName == null)
             {
                 return new BoundErrorExpression(null);
             }
@@ -2469,10 +2474,12 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (receiverType is TypeParameterSymbol tpReceiver
-            && tpReceiver.ClrInterfaceConstraint is TypeSymbol clrInterfaceConstraint
-            && clrInterfaceConstraint.ClrType is Type constraintClrType
-            && constraintClrType.IsInterface)
+        var tpReceiver = receiverType as TypeParameterSymbol;
+        var clrInterfaceConstraint = tpReceiver?.ClrInterfaceConstraint;
+        var constraintClrType = clrInterfaceConstraint?.ClrType;
+        if (tpReceiver != null
+            && clrInterfaceConstraint != null
+            && constraintClrType?.IsInterface == true)
         {
             var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
                 constraintClrType,

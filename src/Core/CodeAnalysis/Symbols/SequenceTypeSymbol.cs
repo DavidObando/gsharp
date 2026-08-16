@@ -19,7 +19,7 @@ public sealed class SequenceTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation element types.
-        : base($"sequence[{elementType.Name}]", MakeClrType(elementType)!)
+        : base($"sequence[{elementType.Name}]", MakeClrType(elementType))
     {
         ElementType = elementType;
     }

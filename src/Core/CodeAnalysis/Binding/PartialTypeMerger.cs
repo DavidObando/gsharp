@@ -198,9 +198,15 @@ internal static class PartialTypeMerger
         var sealedKeyword = parts.Select(p => p.SealedKeyword).FirstOrDefault(t => t != null);
 
         // GS0479: data / inline / ref must appear on every part or none.
-        RequireOnEveryPart(parts, p => p.DataKeyword != null, "data", name, diagnostics);
-        RequireOnEveryPart(parts, p => p.InlineKeyword != null, "inline", name, diagnostics);
-        RequireOnEveryPart(parts, p => p.RefModifier != null, "ref", name, diagnostics);
+        System.Func<StructDeclarationSyntax, bool> hasData =
+            part => part.DataKeyword != null;
+        System.Func<StructDeclarationSyntax, bool> hasInline =
+            part => part.InlineKeyword != null;
+        System.Func<StructDeclarationSyntax, bool> hasRef =
+            part => part.RefModifier != null;
+        RequireOnEveryPart(parts, hasData, "data", name, diagnostics);
+        RequireOnEveryPart(parts, hasInline, "inline", name, diagnostics);
+        RequireOnEveryPart(parts, hasRef, "ref", name, diagnostics);
 
         // GS0480: identical type-parameter lists (names + arity + constraints).
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
@@ -268,10 +274,10 @@ internal static class PartialTypeMerger
             baseInfo.BaseTypeIdentifier,
             baseInfo.AdditionalBaseTypeIdentifiers,
             primary.OpenBraceToken,
-            Concat(parts, p => p.Fields),
-            Concat(parts, p => p.Properties),
-            Concat(parts, p => p.Events),
-            Concat(parts, p => p.Methods),
+            Concat<StructDeclarationSyntax, FieldDeclarationSyntax>(parts, p => p.Fields),
+            Concat<StructDeclarationSyntax, PropertyDeclarationSyntax>(parts, p => p.Properties),
+            Concat<StructDeclarationSyntax, EventDeclarationSyntax>(parts, p => p.Events),
+            Concat<StructDeclarationSyntax, FunctionDeclarationSyntax>(parts, p => p.Methods),
             primary.CloseBraceToken)
         {
             BaseTypeClauses = baseInfo.BaseTypeClauses,
@@ -279,9 +285,11 @@ internal static class PartialTypeMerger
             BaseConstructorOpenParenthesisToken = baseInfo.BaseConstructorOpenParenthesisToken,
             BaseConstructorArguments = baseInfo.BaseConstructorArguments,
             BaseConstructorCloseParenthesisToken = baseInfo.BaseConstructorCloseParenthesisToken,
-            Constructors = Concat(parts, p => p.Constructors),
+            Constructors = Concat<StructDeclarationSyntax, ConstructorDeclarationSyntax>(parts, p => p.Constructors),
             Deinitializer = deinit,
-            NestedTypes = MergePartialNestedTypes(Concat(parts, p => p.NestedTypes), diagnostics),
+            NestedTypes = MergePartialNestedTypes(
+                Concat<StructDeclarationSyntax, MemberSyntax>(parts, p => p.NestedTypes),
+                diagnostics),
             TypeParameterList = primary.TypeParameterList,
             RefModifier = parts.Select(p => p.RefModifier).FirstOrDefault(t => t != null),
             UnsafeModifier = parts.Select(p => p.UnsafeModifier).FirstOrDefault(t => t != null),
@@ -572,7 +580,15 @@ internal static class PartialTypeMerger
         string name,
         DiagnosticBag diagnostics)
     {
-        var withCount = parts.Count(hasModifier);
+        var withCount = 0;
+        foreach (var part in parts)
+        {
+            if (hasModifier(part))
+            {
+                withCount++;
+            }
+        }
+
         if (withCount == 0 || withCount == parts.Count)
         {
             return;
@@ -735,11 +751,11 @@ internal static class PartialTypeMerger
             tree,
             first.SharedKeyword,
             first.OpenBraceToken,
-            Concat(nonNullPresent, b => b.Fields),
-            Concat(nonNullPresent, b => b.Properties),
-            Concat(nonNullPresent, b => b.Events),
-            Concat(nonNullPresent, b => b.Methods),
-            Concat(nonNullPresent, b => b.InitBlocks),
+            Concat<SharedBlockSyntax, FieldDeclarationSyntax>(nonNullPresent, b => b.Fields),
+            Concat<SharedBlockSyntax, PropertyDeclarationSyntax>(nonNullPresent, b => b.Properties),
+            Concat<SharedBlockSyntax, EventDeclarationSyntax>(nonNullPresent, b => b.Events),
+            Concat<SharedBlockSyntax, FunctionDeclarationSyntax>(nonNullPresent, b => b.Methods),
+            Concat<SharedBlockSyntax, StaticInitializerBlockSyntax>(nonNullPresent, b => b.InitBlocks),
             first.CloseBraceToken);
     }
 

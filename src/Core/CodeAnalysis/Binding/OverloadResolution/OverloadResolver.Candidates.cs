@@ -54,15 +54,30 @@ internal sealed partial class OverloadResolver
             }
 
             boundTypeArguments = explicitTypeArguments.MoveToImmutable();
-            var constraintMatches = overloads
-                .Where(candidate => candidate.TypeParameters.Length == boundTypeArguments.Length)
-                .Where(candidate => candidate.TypeParameters
-                    .Select((typeParameter, index) => satisfiesConstraint(boundTypeArguments[index], typeParameter))
-                    .All(matches => matches))
-                .ToImmutableArray();
-            if (!constraintMatches.IsDefaultOrEmpty)
+            var constraintMatches = ImmutableArray.CreateBuilder<FunctionSymbol>();
+            foreach (var candidate in overloads)
             {
-                overloads = constraintMatches;
+                if (candidate.TypeParameters.Length != boundTypeArguments.Length)
+                {
+                    continue;
+                }
+
+                var constraintsSatisfied = true;
+                for (var i = 0; i < candidate.TypeParameters.Length; i++)
+                {
+                    constraintsSatisfied &=
+                        satisfiesConstraint(boundTypeArguments[i], candidate.TypeParameters[i]);
+                }
+
+                if (constraintsSatisfied)
+                {
+                    constraintMatches.Add(candidate);
+                }
+            }
+
+            if (constraintMatches.Count > 0)
+            {
+                overloads = constraintMatches.ToImmutable();
             }
         }
 
@@ -1448,8 +1463,10 @@ internal sealed partial class OverloadResolver
 
             var specializedTarget = candidate.Type switch
             {
-                SequenceTypeSymbol { ElementType: NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target } } => target,
-                AsyncSequenceTypeSymbol { ElementType: NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target } } => target,
+                SequenceTypeSymbol sequence when sequence.ElementType is NullableTypeSymbol
+                    => ((NullableTypeSymbol)sequence.ElementType).UnderlyingType as TypeParameterSymbol,
+                AsyncSequenceTypeSymbol sequence when sequence.ElementType is NullableTypeSymbol
+                    => ((NullableTypeSymbol)sequence.ElementType).UnderlyingType as TypeParameterSymbol,
                 _ => null,
             };
             if (specializedTarget == null)

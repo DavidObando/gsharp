@@ -728,8 +728,13 @@ public static class AsyncExceptionHandlerRewriter
                 return collector.labels;
             }
 
-            public override void VisitStatement(BoundStatement node)
+            public override void VisitStatement(BoundStatement? node)
             {
+                if (node == null)
+                {
+                    return;
+                }
+
                 if (node is BoundLabelStatement labelStatement)
                 {
                     labels.Add(labelStatement.Label);

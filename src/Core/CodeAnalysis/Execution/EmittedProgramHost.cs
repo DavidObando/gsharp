@@ -121,7 +121,9 @@ public static class EmittedProgramHost
     {
         var loadContext = new AssemblyLoadContext($"gsharp-emitted-{Guid.NewGuid():N}", isCollectible: true);
         var weakReference = new WeakReference(loadContext);
-        loadContext.Resolving += (context, assemblyName) => ResolveDependency(context, assemblyName, referencePaths);
+        Func<AssemblyLoadContext, AssemblyName, Assembly?> resolver =
+            (context, assemblyName) => ResolveDependency(context, assemblyName, referencePaths);
+        AddResolvingHandler(loadContext, resolver);
 
         try
         {
@@ -187,6 +189,14 @@ public static class EmittedProgramHost
         }
     }
 
+    private static void AddResolvingHandler(
+        AssemblyLoadContext loadContext,
+        Func<AssemblyLoadContext, AssemblyName, Assembly?> resolver)
+    {
+        var resolvingEvent = typeof(AssemblyLoadContext).GetEvent("Resolving");
+        resolvingEvent?.AddEventHandler(loadContext, resolver);
+    }
+
     private static Assembly? ResolveDependency(
         AssemblyLoadContext context,
         AssemblyName assemblyName,
@@ -196,10 +206,18 @@ public static class EmittedProgramHost
         // the program binds against exactly what it was compiled against.
         if (referencePaths is not null && assemblyName.Name is not null)
         {
-            var match = referencePaths.FirstOrDefault(path =>
-                !string.IsNullOrWhiteSpace(path)
-                && string.Equals(Path.GetFileNameWithoutExtension(path), assemblyName.Name, StringComparison.OrdinalIgnoreCase)
-                && File.Exists(path));
+            string? match = null;
+            foreach (var path in referencePaths)
+            {
+                if (!string.IsNullOrWhiteSpace(path)
+                    && string.Equals(Path.GetFileNameWithoutExtension(path), assemblyName.Name, StringComparison.OrdinalIgnoreCase)
+                    && File.Exists(path))
+                {
+                    match = path;
+                    break;
+                }
+            }
+
             if (match is not null)
             {
                 return context.LoadFromAssemblyPath(Path.GetFullPath(match));

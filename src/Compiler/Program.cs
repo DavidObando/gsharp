@@ -262,12 +262,12 @@ public class Program
 
     internal static int ReportUnhandledException(Exception ex)
     {
-        Console.Out.WriteDiagnostics(new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
         if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
         {
             Console.Out.WriteLine(ex.ToString());
         }
 
+        DiagnosticWriter.WriteDiagnostics(Console.Out, new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
         return Error;
     }
 
@@ -323,7 +323,7 @@ public class Program
         if (result.Diagnostics.Any())
         {
             var effective = ApplySuppressPromote(result.Diagnostics, args);
-            Console.Out.WriteDiagnostics(effective);
+            DiagnosticWriter.WriteDiagnostics(Console.Out, effective);
             if (effective.Any(d => d.IsError))
             {
                 Console.Error.WriteLine("Failed.");
@@ -422,7 +422,7 @@ public class Program
         // Always print diagnostics (errors and warnings).
         if (effectiveDiagnostics.Any())
         {
-            Console.Out.WriteDiagnostics(effectiveDiagnostics);
+            DiagnosticWriter.WriteDiagnostics(Console.Out, effectiveDiagnostics);
         }
 
         bool hasErrors = !result.Success || effectiveDiagnostics.Any(d => d.IsError);

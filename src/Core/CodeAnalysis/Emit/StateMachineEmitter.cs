@@ -730,10 +730,25 @@ internal sealed class StateMachineEmitter
                     thisProxyField,
                     getEnumeratorObjectThisProxy)))));
 
-            this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
-                ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(kickoffSmType, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
-                    thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
+            Func<ParameterSymbol, BoundExpression> parameterValueFactory =
+                parameter => new BoundVariableExpression(null, parameter);
+            BoundExpression? thisProxyValue = plan.Function.ThisParameter != null
+                ? new BoundVariableExpression(null, plan.Function.ThisParameter)
+                : null;
+            this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(
+                new BoundBlockStatement(
+                    null,
+                    ImmutableArray.Create<BoundStatement>(
+                        new BoundReturnStatement(
+                            null,
+                            this.CreateIteratorStateMachineLiteral(
+                                kickoffSmType,
+                                stateField,
+                                parameterFields,
+                                plan.Function.Parameters,
+                                parameterValueFactory,
+                                thisProxyField,
+                                thisProxyValue)))));
             this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, scopeTPs, classTPs);
 
             // Issue #2907: closure materialization inside the SYNC MoveNext body is

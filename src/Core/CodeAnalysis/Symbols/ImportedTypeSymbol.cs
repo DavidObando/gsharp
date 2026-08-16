@@ -175,10 +175,16 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             return Invariant.Required(ClrType, "an imported type always has a CLR representation");
         }
 
-        var contextObject = OpenDefinition.GetGenericArguments()
-            .Select(static parameter => parameter.BaseType)
-            .FirstOrDefault(static baseType =>
-                string.Equals(baseType?.FullName, "System.Object", StringComparison.Ordinal));
+        Type? contextObject = null;
+        foreach (var parameter in OpenDefinition.GetGenericArguments())
+        {
+            if (string.Equals(parameter.BaseType?.FullName, "System.Object", StringComparison.Ordinal))
+            {
+                contextObject = parameter.BaseType;
+                break;
+            }
+        }
+
         var args = new Type[TypeArguments.Length];
         for (var i = 0; i < args.Length; i++)
         {
@@ -335,7 +341,18 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         try
         {
             var requiredModifiers = setter.ReturnParameter.GetRequiredCustomModifiers();
-            return requiredModifiers.Any(m => string.Equals(m.FullName, "System.Runtime.CompilerServices.IsExternalInit", StringComparison.Ordinal));
+            foreach (var modifier in requiredModifiers)
+            {
+                if (string.Equals(
+                        modifier.FullName,
+                        "System.Runtime.CompilerServices.IsExternalInit",
+                        StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
         catch
         {

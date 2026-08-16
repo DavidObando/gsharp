@@ -545,7 +545,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The properties whose signatures load cleanly.</returns>
     public static PropertyInfo[] SafeGetProperties(Type type, BindingFlags flags)
-        => SafeEnumerate(type, flags, t => t.GetProperties(flags));
+        => SafeEnumerate<PropertyInfo>(type, flags, t => t.GetProperties(flags));
 
     /// <summary>
     /// Enumerates a type's fields tolerantly (issue #338): fields whose type
@@ -555,7 +555,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The fields whose signatures load cleanly.</returns>
     public static FieldInfo[] SafeGetFields(Type type, BindingFlags flags)
-        => SafeEnumerate(type, flags, t => t.GetFields(flags));
+        => SafeEnumerate<FieldInfo>(type, flags, t => t.GetFields(flags));
 
     /// <summary>
     /// Enumerates a type's events tolerantly (issue #338): events whose handler
@@ -565,7 +565,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The events whose signatures load cleanly.</returns>
     public static EventInfo[] SafeGetEvents(Type type, BindingFlags flags)
-        => SafeEnumerate(type, flags, t => t.GetEvents(flags));
+        => SafeEnumerate<EventInfo>(type, flags, t => t.GetEvents(flags));
 
     /// <summary>
     /// Enumerates a type's constructors tolerantly (issue #338): constructors
@@ -576,7 +576,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The constructors whose signatures load cleanly.</returns>
     public static ConstructorInfo[] SafeGetConstructors(Type type, BindingFlags flags)
-        => SafeEnumerate(type, flags, t => t.GetConstructors(flags));
+        => SafeEnumerate<ConstructorInfo>(type, flags, t => t.GetConstructors(flags));
 
     /// <summary>
     /// Enumerates a type's methods tolerantly (issue #338): methods whose
@@ -587,7 +587,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The methods whose signatures load cleanly.</returns>
     public static MethodInfo[] SafeGetMethods(Type type, BindingFlags flags)
-        => SafeEnumerate(type, flags, t => t.GetMethods(flags));
+        => SafeEnumerate<MethodInfo>(type, flags, t => t.GetMethods(flags));
 
     /// <summary>
     /// Looks up a single property by name tolerantly (issue #338). When the
@@ -1223,25 +1223,41 @@ public static class ClrTypeUtilities
         Type[] openTypeArguments,
         Type[] typeArguments)
     {
-        var matches = openType.GetMethods()
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .Where(method =>
+        var matches = new List<MethodInfo>(2);
+        foreach (var method in openType.GetMethods())
+        {
+            if (!string.Equals(method.Name, name, StringComparison.Ordinal))
             {
-                var parameters = method.GetParameters();
-                return parameters.Length == parameterTypes.Length
-                    && parameters.Select(parameter => parameter.ParameterType)
-                    .Zip(parameterTypes, (open, constructed) =>
-                        MatchesConstructedParameterType(
-                            open,
-                            constructed,
-                            openTypeArguments,
-                            typeArguments))
-                    .All(matches => matches);
-            })
-            .Take(2)
-            .ToArray();
+                continue;
+            }
 
-        return matches.Length switch
+            var parameters = method.GetParameters();
+            if (parameters.Length != parameterTypes.Length)
+            {
+                continue;
+            }
+
+            var parametersMatch = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                parametersMatch &= MatchesConstructedParameterType(
+                    parameters[i].ParameterType,
+                    parameterTypes[i],
+                    openTypeArguments,
+                    typeArguments);
+            }
+
+            if (parametersMatch)
+            {
+                matches.Add(method);
+                if (matches.Count == 2)
+                {
+                    break;
+                }
+            }
+        }
+
+        return matches.Count switch
         {
             0 => null,
             1 => matches[0],
@@ -1306,19 +1322,33 @@ public static class ClrTypeUtilities
 
         if (open.IsConstructedGenericType || constructed.IsConstructedGenericType)
         {
-            return open.IsConstructedGenericType
-                && constructed.IsConstructedGenericType
-                && open.GetGenericTypeDefinition() == constructed.GetGenericTypeDefinition()
-                && open.GetGenericArguments()
-                    .Zip(
-                        constructed.GetGenericArguments(),
-                        (openArgument, constructedArgument) =>
-                            MatchesConstructedParameterType(
-                                openArgument,
-                                constructedArgument,
-                                openTypeArguments,
-                                typeArguments))
-                    .All(matches => matches);
+            if (!open.IsConstructedGenericType
+                || !constructed.IsConstructedGenericType
+                || open.GetGenericTypeDefinition() != constructed.GetGenericTypeDefinition())
+            {
+                return false;
+            }
+
+            var openArguments = open.GetGenericArguments();
+            var constructedArguments = constructed.GetGenericArguments();
+            if (openArguments.Length != constructedArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < openArguments.Length; i++)
+            {
+                if (!MatchesConstructedParameterType(
+                        openArguments[i],
+                        constructedArguments[i],
+                        openTypeArguments,
+                        typeArguments))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         return open == constructed;

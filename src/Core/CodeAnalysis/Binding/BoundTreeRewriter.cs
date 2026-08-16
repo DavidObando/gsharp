@@ -1395,10 +1395,21 @@ public abstract class BoundTreeRewriter
             builder?.Add(newElement);
         }
 
-        var newElements = builder?.MoveToImmutable() ?? node.InitializerElements;
-        return newCount == node.Count && newElements == node.InitializerElements
-            ? node
-            : new BoundStackAllocExpression(node.Syntax, node.ResultType, node.ElementType, newCount, node.IsPointerForm, newElements);
+        var newElements = builder == null
+            ? node.InitializerElements
+            : ImmutableArray.CreateRange<BoundExpression>(builder);
+        if (newCount == node.Count && builder == null)
+        {
+            return node;
+        }
+
+        return new BoundStackAllocExpression(
+            node.Syntax,
+            node.ResultType,
+            node.ElementType,
+            newCount,
+            node.IsPointerForm,
+            newElements);
     }
 
     /// <summary>Rewrites a map literal expression.</summary>

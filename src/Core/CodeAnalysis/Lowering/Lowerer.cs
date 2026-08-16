@@ -1295,7 +1295,7 @@ public sealed class Lowerer : BoundTreeRewriter
             userType.TryGetMethodIncludingInherited("GetEnumerator", out var userGetEnumerator) &&
             userGetEnumerator.Parameters.Length == 0)
         {
-            enumeratorType = userGetEnumerator.Type;
+            enumeratorType = userType.SubstituteMemberType(userGetEnumerator.Type);
             getEnumeratorCall = new BoundUserInstanceCallExpression(
                 null,
                 collection,
@@ -1475,12 +1475,14 @@ public sealed class Lowerer : BoundTreeRewriter
 
                 currentType ??= GetClrMemberType(currentMember);
 
-                moveNextCallFactory = receiver => new BoundImportedInstanceCallExpression(
-                    null,
-                    receiver,
-                    moveNext,
-                    TypeSymbol.Bool,
-                    ImmutableArray<BoundExpression>.Empty);
+                Func<BoundExpression, BoundExpression> createMoveNextCall =
+                    receiver => new BoundImportedInstanceCallExpression(
+                        null,
+                        receiver,
+                        moveNext,
+                        TypeSymbol.Bool,
+                        ImmutableArray<BoundExpression>.Empty);
+                moveNextCallFactory = createMoveNextCall;
                 currentAccessFactory = receiver => new BoundClrPropertyAccessExpression(
                     null,
                     receiver,

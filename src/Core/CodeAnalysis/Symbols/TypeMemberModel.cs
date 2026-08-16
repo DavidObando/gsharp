@@ -58,7 +58,11 @@ public static class TypeMemberModel
             return members.ToImmutable();
         }
 
-        members.AddRange(type.Fields);
+        foreach (var field in type.Fields)
+        {
+            members.Add(field);
+        }
+
         foreach (var property in type.Properties)
         {
             if (!property.IsStatic && !property.IsIndexer && property.BackingField != null)
@@ -130,7 +134,7 @@ public static class TypeMemberModel
         if (type is StructSymbol structSymbol)
         {
             ImmutableArray<FunctionSymbol>.Builder? builder = null;
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
                 if (query.IncludeInstance)
                 {
@@ -213,18 +217,19 @@ public static class TypeMemberModel
     /// <returns>True if found.</returns>
     public static bool TryGetField(TypeSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
+        field = null;
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
-                if (c.TryGetField(name, out field))
+                if (c.TryGetField(name, out var foundField))
                 {
+                    field = foundField;
                     return true;
                 }
             }
         }
 
-        field = null;
         return false;
     }
 
@@ -246,23 +251,27 @@ public static class TypeMemberModel
     /// <returns>True if found.</returns>
     public static bool TryGetFieldIncludingInherited(TypeSymbol type, string name, MemberQuery query, [NotNullWhen(true)] out FieldSymbol? field, [NotNullWhen(true)] out StructSymbol? declaringType)
     {
+        field = null;
+        declaringType = null;
         if ((query.Kinds & MemberKinds.Field) != 0 && type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
-                if (query.IncludeInstance && c.TryGetField(name, out field))
+                if (query.IncludeInstance && c.TryGetField(name, out var foundInstanceField))
                 {
+                    field = foundInstanceField;
                     declaringType = c;
                     return true;
                 }
 
-                if (query.IncludeStatic && c.TryGetStaticField(name, out field))
+                if (query.IncludeStatic && c.TryGetStaticField(name, out var foundStaticField))
                 {
-                    if (!ReferenceEquals(c, structSymbol) && field.Accessibility == Accessibility.Private)
+                    if (!ReferenceEquals(c, structSymbol) && foundStaticField.Accessibility == Accessibility.Private)
                     {
                         break;
                     }
 
+                    field = foundStaticField;
                     declaringType = c;
                     return true;
                 }
@@ -274,8 +283,6 @@ public static class TypeMemberModel
             }
         }
 
-        field = null;
-        declaringType = null;
         return false;
     }
 
@@ -307,7 +314,7 @@ public static class TypeMemberModel
         [NotNullWhen(true)] out FieldSymbol? field,
         [NotNullWhen(true)] out StructSymbol? declaringType)
     {
-        for (var c = type; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(type))
         {
             if (c.TryGetStaticField(name, out field))
             {
@@ -354,7 +361,7 @@ public static class TypeMemberModel
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
                 foreach (var p in c.Properties)
                 {
@@ -415,7 +422,7 @@ public static class TypeMemberModel
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
                 if (c.PrimaryConstructorParameters.IsDefaultOrEmpty)
                 {
@@ -472,7 +479,7 @@ public static class TypeMemberModel
         [NotNullWhen(true)] out PropertySymbol? property,
         [NotNullWhen(true)] out StructSymbol? declaringType)
     {
-        for (var c = type; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(type))
         {
             var effective = ResolveStaticMemberOwner(type, c);
             if (TryGetStaticProperty(effective, name, out property))
@@ -506,7 +513,7 @@ public static class TypeMemberModel
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
                 foreach (var e in c.Events)
                 {
@@ -586,7 +593,7 @@ public static class TypeMemberModel
         [NotNullWhen(true)] out EventSymbol? @event,
         [NotNullWhen(true)] out StructSymbol? declaringType)
     {
-        for (var c = type; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(type))
         {
             var effective = ResolveStaticMemberOwner(type, c);
             if (TryGetStaticEvent(effective, name, out @event))
@@ -627,7 +634,7 @@ public static class TypeMemberModel
                 candidate => ReferenceEquals(candidate, declaredDefinition)) ?? declaredOwner;
         }
 
-        for (var c = lookupType; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(lookupType))
         {
             if (ReferenceEquals(c.Definition ?? c, declaredDefinition))
             {
@@ -643,7 +650,7 @@ public static class TypeMemberModel
     /// <returns>The imported base, or null.</returns>
     public static TypeSymbol? GetNearestImportedBase(StructSymbol type)
     {
-        for (var c = type; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(type))
         {
             if (c.ImportedBaseType?.ClrType != null)
             {
@@ -669,7 +676,7 @@ public static class TypeMemberModel
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
                 if (c.TryGetMethod(name, out method))
                 {
@@ -717,7 +724,7 @@ public static class TypeMemberModel
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var c = structSymbol; c != null; c = c.BaseClass)
+            foreach (var c in GetHierarchy(structSymbol))
             {
                 if (c.TryGetStaticMethod(name, out method))
                 {
@@ -766,9 +773,22 @@ public static class TypeMemberModel
         return false;
     }
 
+    private static List<StructSymbol> GetHierarchy(StructSymbol type)
+    {
+        var hierarchy = new List<StructSymbol>();
+        StructSymbol? current = type;
+        while (current != null)
+        {
+            hierarchy.Add(current);
+            current = current.BaseClass;
+        }
+
+        return hierarchy;
+    }
+
     private static IEnumerable<Symbol> EnumerateStructMembers(StructSymbol structSymbol, MemberQuery query)
     {
-        for (var c = structSymbol; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(structSymbol))
         {
             if ((query.Kinds & MemberKinds.Field) != 0)
             {
@@ -925,7 +945,7 @@ public static class TypeMemberModel
 
     private static Symbol? LookupStructMember(StructSymbol structSymbol, string name, MemberQuery query)
     {
-        for (var c = structSymbol; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy(structSymbol))
         {
             if ((query.Kinds & MemberKinds.Property) != 0
                 && TryFirst(query.IncludeInstance ? c.Properties : ImmutableArray<PropertySymbol>.Empty, query.IncludeStatic ? c.StaticProperties : ImmutableArray<PropertySymbol>.Empty, name, out PropertySymbol? property))

@@ -1191,9 +1191,15 @@ internal sealed class LambdaBinder
         var closesStaticReceiver = method.IsStatic && group.Receiver != null;
         var parameterOffset = closesStaticReceiver ? 1 : 0;
         var invoke = targetFunctionType.ClrType?.GetMethodSafe("Invoke");
+        var hasByRefParameter = false;
+        foreach (var parameter in methodParameters)
+        {
+            hasByRefParameter |= parameter.ParameterType.IsByRef;
+        }
+
         if (invoke == null
             || methodParameters.Length != targetFunctionType.ParameterTypes.Length + parameterOffset
-            || methodParameters.Any(p => p.ParameterType.IsByRef))
+            || hasByRefParameter)
         {
             return group;
         }
@@ -2917,7 +2923,7 @@ internal sealed class LambdaBinder
             });
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
             if (node == null || Found != null)
             {
@@ -2968,7 +2974,7 @@ internal sealed class LambdaBinder
             base.VisitExpression(node);
         }
 
-        public override void VisitPattern(BoundPattern node)
+        public override void VisitPattern(BoundPattern? node)
         {
             if (node == null || Found != null)
             {

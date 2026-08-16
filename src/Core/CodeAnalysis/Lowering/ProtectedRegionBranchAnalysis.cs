@@ -83,8 +83,13 @@ internal sealed class ProtectedRegionBranchAnalysis
 
         public List<Branch> Branches { get; } = new();
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             switch (node)
             {
                 case BoundLabelStatement label:

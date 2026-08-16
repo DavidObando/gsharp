@@ -78,13 +78,15 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="t">The starting CLR type.</param>
     /// <returns>The type and its interfaces in walk order.</returns>
-    public static IEnumerable<Type> EnumerateSelfAndInterfaces(Type t)
+    public static List<Type> EnumerateSelfAndInterfaces(Type t)
     {
-        yield return t;
+        var result = new List<Type> { t };
         foreach (var i in t.GetInterfaces())
         {
-            yield return i;
+            result.Add(i);
         }
+
+        return result;
     }
 
     /// <summary>
@@ -186,7 +188,7 @@ internal sealed class MemberLookup
             return null;
         }
 
-        for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+        for (Type? current = clrType; current != null; current = GetBaseTypeSafe(current))
         {
             var candidates = GetDeclaredCandidates(current);
             if (candidates.Count > 1)
@@ -295,7 +297,7 @@ internal sealed class MemberLookup
             // Issues #2614 / #2638: an aggregate metadata walk may return a
             // usable but incomplete set. Always probe each declaration level
             // and union accessible methods without duplicating inherited slots.
-            for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+            for (Type? current = clrType; current != null; current = GetBaseTypeSafe(current))
             {
                 foreach (var m in ClrTypeUtilities.SafeGetMethods(
                     current,
@@ -1884,19 +1886,21 @@ internal sealed class MemberLookup
             return false;
         }
 
-        if (t is ImportedTypeSymbol imported
-            && imported.OpenDefinition is { } openDefinition
-            && !imported.TypeArguments.IsDefaultOrEmpty)
+        if (t is ImportedTypeSymbol imported)
         {
-            var contextObject = ResolveErasedObjectInContext(openDefinition);
-            erased = TryBuildErasedClosedGeneric(
-                openDefinition,
-                openDefinition.GetGenericArguments(),
-                imported.TypeArguments,
-                contextObject);
-            if (erased != null)
+            var openDefinition = imported.OpenDefinition;
+            if (openDefinition != null && !imported.TypeArguments.IsDefaultOrEmpty)
             {
-                return true;
+                var contextObject = ResolveErasedObjectInContext(openDefinition);
+                erased = TryBuildErasedClosedGeneric(
+                    openDefinition,
+                    openDefinition.GetGenericArguments(),
+                    imported.TypeArguments,
+                    contextObject);
+                if (erased != null)
+                {
+                    return true;
+                }
             }
         }
 
@@ -2410,7 +2414,7 @@ internal sealed class MemberLookup
                     NullableLifting.GetEffectiveClrType(classConstraint));
             }
 
-            for (var current = type as StructSymbol; current != null; current = current.BaseClass)
+            for (StructSymbol? current = type as StructSymbol; current != null; current = current.BaseClass)
             {
                 var importedBaseClr = NullableLifting.GetEffectiveClrType(current.ImportedBaseType);
                 if (importedBaseClr != null
@@ -2914,41 +2918,47 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
     /// <returns>The slots, or an empty sequence when the symbol is not a CLR interface.</returns>
-    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
+    public static List<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
     {
-        Type declared;
-        ImmutableArray<TypeSymbol> symbolicArgs;
+        var result = new List<ClrInterfaceSlot>();
+        Type? declared = null;
+        var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
         if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
             && openDefinition != null)
         {
             declared = openDefinition;
             symbolicArgs = args;
         }
-        else if (ifaceSym?.ClrType is Type clr && clr.IsInterface)
+
+        if (declared == null)
         {
+            var clr = ifaceSym?.ClrType;
+            if (clr == null || !clr.IsInterface)
+            {
+                return result;
+            }
+
             declared = clr;
-            symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
-        }
-        else
-        {
-            yield break;
         }
 
         foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))
         {
-            yield return slot;
+            result.Add(slot);
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
             foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true))
             {
-                yield return slot;
+                result.Add(slot);
             }
         }
 
-        static IEnumerable<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        return result;
+
+        static List<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
         {
+            var slots = new List<ClrInterfaceSlot>();
             foreach (var method in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (method.IsSpecialName || !method.IsAbstract)
@@ -2956,8 +2966,10 @@ internal sealed class MemberLookup
                     continue;
                 }
 
-                yield return new ClrInterfaceSlot(method, symbolicArgs, isInherited);
+                slots.Add(new ClrInterfaceSlot(method, symbolicArgs, isInherited));
             }
+
+            return slots;
         }
     }
 
@@ -2970,7 +2982,7 @@ internal sealed class MemberLookup
     /// <param name="method">The candidate G# method.</param>
     /// <param name="slot">The interface slot to satisfy.</param>
     /// <returns><see langword="true"/> when the method satisfies the slot.</returns>
-    public static bool MethodSatisfiesClrSlot(FunctionSymbol method, in ClrInterfaceSlot slot)
+    public static bool MethodSatisfiesClrSlot(FunctionSymbol method, ClrInterfaceSlot slot)
     {
         var clrParams = slot.Method.GetParameters();
         var callable = GetCallableParameters(method);
@@ -3057,7 +3069,10 @@ internal sealed class MemberLookup
         var slots = new List<ClrInterfaceSlot>();
         foreach (var ifaceSym in implementedClrInterfaces)
         {
-            slots.AddRange(EnumerateClrInterfaceSlots(ifaceSym));
+            foreach (var slot in EnumerateClrInterfaceSlots(ifaceSym))
+            {
+                slots.Add(slot);
+            }
         }
 
         if (slots.Count == 0)
@@ -3245,20 +3260,34 @@ internal sealed class MemberLookup
         resolvedArguments = default;
 
         var properties = CollectVisibleClrIndexers(targetType, clrTarget);
-        var hasSymbolicArgument = boundArguments.Any(static argument =>
-            argument.Type?.ClrType == null
-            || TypeSymbol.ContainsTypeParameter(argument.Type)
-            || TypeSymbol.ContainsSameCompilationUserType(argument.Type)
-            || argument.Type is ImportedTypeSymbol { HasSubstitutableTypeArgument: true });
-        var hasSetOnlyIndexer = properties.Any(static property => property.GetGetMethod(nonPublic: false) == null);
+        var hasSymbolicArgument = false;
+        foreach (var argument in boundArguments)
+        {
+            hasSymbolicArgument |= argument.Type?.ClrType == null
+                || TypeSymbol.ContainsTypeParameter(argument.Type)
+                || TypeSymbol.ContainsSameCompilationUserType(argument.Type)
+                || argument.Type is ImportedTypeSymbol { HasSubstitutableTypeArgument: true };
+        }
+
+        var hasSetOnlyIndexer = false;
+        foreach (var property in properties)
+        {
+            hasSetOnlyIndexer |= property.GetGetMethod(nonPublic: false) == null;
+        }
+
         if (hasSymbolicArgument || hasSetOnlyIndexer)
         {
             var applicable = new List<(PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)>();
             foreach (var property in properties)
             {
                 var parameters = property.GetIndexParameters();
-                if (boundArguments.Length > parameters.Length
-                    || parameters.Skip(boundArguments.Length).Any(static parameter => !parameter.IsOptional))
+                var hasRequiredOmittedParameter = false;
+                for (var i = boundArguments.Length; i < parameters.Length; i++)
+                {
+                    hasRequiredOmittedParameter |= !parameters[i].IsOptional;
+                }
+
+                if (boundArguments.Length > parameters.Length || hasRequiredOmittedParameter)
                 {
                     continue;
                 }
@@ -3285,7 +3314,7 @@ internal sealed class MemberLookup
 
             if (applicable.Count != 0)
             {
-                (PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)? winner = null;
+                PropertyInfo? winnerProperty = null;
                 foreach (var candidate in applicable)
                 {
                     var betterThanAll = true;
@@ -3305,14 +3334,14 @@ internal sealed class MemberLookup
 
                     if (betterThanAll)
                     {
-                        winner = candidate;
+                        winnerProperty = candidate.Property;
                         break;
                     }
                 }
 
-                if (winner.HasValue)
+                if (winnerProperty != null)
                 {
-                    indexer = winner.Value.Property;
+                    indexer = winnerProperty;
                     resolvedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
                         boundArguments,
                         indexer.GetIndexParameters());
@@ -3348,13 +3377,16 @@ internal sealed class MemberLookup
             }
         }
 
-        var resolution = ClrOverloadResolution.Resolve(
-            properties
-                .Select(static property => property.GetMethod)
-                .Where(static method => method != null)
-                .Cast<MethodInfo>()
-                .ToArray(),
-            argTypes);
+        var getterMethods = new List<MethodInfo>();
+        foreach (var property in properties)
+        {
+            if (property.GetMethod is not null)
+            {
+                getterMethods.Add(property.GetMethod);
+            }
+        }
+
+        var resolution = ClrOverloadResolution.Resolve<MethodInfo>(getterMethods, argTypes);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3366,7 +3398,20 @@ internal sealed class MemberLookup
             return false;
         }
 
-        indexer = properties.First(property => ReferenceEquals(property.GetMethod, best));
+        foreach (var property in properties)
+        {
+            if (ReferenceEquals(property.GetMethod, best))
+            {
+                indexer = property;
+                break;
+            }
+        }
+
+        if (indexer is null)
+        {
+            return false;
+        }
+
         resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
             boundArguments,
             resolution.ParameterMapping,
@@ -3406,9 +3451,17 @@ internal sealed class MemberLookup
         var result = new List<ImportedMethodProbe>();
         if (staticClassType != null)
         {
-            var statics = ClrTypeUtilities.SafeGetMethods(staticClassType, BindingFlags.Static | BindingFlags.Public)
-                .Where(m => string.Equals(m.Name, methodName, StringComparison.Ordinal))
-                .ToList();
+            var statics = new List<MethodInfo>();
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         staticClassType,
+                         BindingFlags.Static | BindingFlags.Public))
+            {
+                if (string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                {
+                    statics.Add(method);
+                }
+            }
+
             if (statics.Count > 0)
             {
                 result.Add(new ImportedMethodProbe(statics, receiverParameterOffset: 0));
@@ -3535,7 +3588,7 @@ internal sealed class MemberLookup
                 }
                 catch (ReflectionTypeLoadException ex)
                 {
-                    types = ex.Types.Where(t => t != null);
+                    types = ex.Types;
                 }
                 catch
                 {
@@ -4123,7 +4176,7 @@ internal sealed class MemberLookup
     {
         var declaringTypes = clrTarget.IsInterface
             ? EnumerateSelfAndInterfaces(clrTarget)
-            : new[] { clrTarget };
+            : new List<Type> { clrTarget };
         var collected = new List<PropertyInfo>();
         foreach (var declaringType in declaringTypes)
         {
@@ -4171,7 +4224,7 @@ internal sealed class MemberLookup
                 .Any(candidate => ClrTypeUtilities.AreSame(candidate, baseType));
         }
 
-        for (var current = derived.BaseType; current != null; current = current.BaseType)
+        for (Type? current = derived.BaseType; current != null; current = current.BaseType)
         {
             if (ClrTypeUtilities.AreSame(current, baseType))
             {
@@ -5589,20 +5642,22 @@ internal sealed class MemberLookup
         return false;
     }
 
-    private static IEnumerable<Type> EnumerateOpenInterfacesAndBases(Type openDef)
+    private static List<Type> EnumerateOpenInterfacesAndBases(Type openDef)
     {
-        yield return openDef;
+        var result = new List<Type> { openDef };
         foreach (var iface in openDef.GetInterfaces())
         {
-            yield return iface;
+            result.Add(iface);
         }
 
         var baseType = openDef.BaseType;
         while (baseType != null && !baseType.IsSameAs(typeof(object)))
         {
-            yield return baseType;
+            result.Add(baseType);
             baseType = baseType.BaseType;
         }
+
+        return result;
     }
 
     /// <summary>

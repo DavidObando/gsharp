@@ -28,8 +28,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public abstract class BoundTreeWalker
 {
     /// <summary>Dispatch on a generic node.</summary>
-    /// <param name="node">The bound node to visit. Null is tolerated.</param>
-    public virtual void Visit(BoundNode node)
+    /// <param name="node">The bound node to visit. Null is a legitimate absent optional child.</param>
+    public virtual void Visit(BoundNode? node)
     {
         if (node == null)
         {
@@ -56,8 +56,8 @@ public abstract class BoundTreeWalker
     }
 
     /// <summary>Dispatch on a statement.</summary>
-    /// <param name="node">The statement to visit.</param>
-    public virtual void VisitStatement(BoundStatement node)
+    /// <param name="node">The statement to visit. Recursive walkers forward absent optional statements as null.</param>
+    public virtual void VisitStatement(BoundStatement? node)
     {
         if (node == null)
         {
@@ -141,8 +141,8 @@ public abstract class BoundTreeWalker
     }
 
     /// <summary>Dispatch on an expression.</summary>
-    /// <param name="node">The expression to visit.</param>
-    public virtual void VisitExpression(BoundExpression node)
+    /// <param name="node">The expression to visit. Recursive walkers forward absent optional expressions as null.</param>
+    public virtual void VisitExpression(BoundExpression? node)
     {
         if (node == null)
         {
@@ -356,8 +356,8 @@ public abstract class BoundTreeWalker
     }
 
     /// <summary>Dispatch on a pattern.</summary>
-    /// <param name="node">The pattern to visit.</param>
-    public virtual void VisitPattern(BoundPattern node)
+    /// <param name="node">The pattern to visit. Recursive walkers may forward an absent optional pattern.</param>
+    public virtual void VisitPattern(BoundPattern? node)
     {
         if (node == null)
         {

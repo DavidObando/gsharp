@@ -87,6 +87,7 @@ internal sealed partial class ExpressionBinder
         var anyInvalid = false;
         BoundExpression? guard = null;
         BoundExpression whenTrue;
+        BoundExpression BindInitializer(ExpressionSyntax initializer) => BindExpression(initializer);
         try
         {
             foreach (var binding in syntax.Bindings)
@@ -96,7 +97,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics,
                     conversions,
                     bindTypeClause,
-                    initializer => BindExpression(initializer),
+                    BindInitializer,
                     DeclareIfLetLocal);
 
                 if (!clause.IsValid)

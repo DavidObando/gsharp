@@ -45,7 +45,7 @@ public abstract class SyntaxNode
     /// <c>null</c> means "not computed yet". Cleared by <see cref="InvalidateCachedSpan"/> when a
     /// parser-time mutation replaces a child-bearing property after construction.
     /// </summary>
-    private object? cachedSpan;
+    private SpanBox? cachedSpan;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SyntaxNode"/> class.
@@ -85,13 +85,13 @@ public abstract class SyntaxNode
             // through this property, so the computed span is cached after the first access
             // (issue #1675). The few parser-time mutations of child-bearing properties clear the
             // cache through InvalidateCachedSpan().
-            if (cachedSpan is TextSpan cached)
+            if (cachedSpan != null)
             {
-                return cached;
+                return cachedSpan.Value;
             }
 
             var computed = ComputeSpan();
-            cachedSpan = computed;
+            cachedSpan = new SpanBox(computed);
             return computed;
         }
     }
@@ -116,10 +116,12 @@ public abstract class SyntaxNode
 
         foreach (var accessor in accessors)
         {
+            // Kind comes from the property's static type, so a failed `as`
+            // here can only represent a legitimate null child/list value.
             switch (accessor.Kind)
             {
                 case ChildAccessorKind.Node:
-                    var child = (SyntaxNode)accessor.Getter(this);
+                    var child = accessor.Getter(this) as SyntaxNode;
                     if (child != null)
                     {
                         yield return child;
@@ -128,7 +130,7 @@ public abstract class SyntaxNode
                     break;
 
                 case ChildAccessorKind.SeparatedList:
-                    var separatedSyntaxList = (SeparatedSyntaxList)accessor.Getter(this);
+                    var separatedSyntaxList = accessor.Getter(this) as SeparatedSyntaxList;
                     if (separatedSyntaxList == null)
                     {
                         break;
@@ -142,7 +144,12 @@ public abstract class SyntaxNode
                     break;
 
                 case ChildAccessorKind.NodeList:
-                    var children = (IEnumerable<SyntaxNode>)accessor.Getter(this);
+                    var children = accessor.Getter(this) as IEnumerable<SyntaxNode>;
+                    if (children == null)
+                    {
+                        break;
+                    }
+
                     foreach (var enumeratedChild in children)
                     {
                         if (enumeratedChild != null)
@@ -360,5 +367,12 @@ public abstract class SyntaxNode
         public ChildAccessorKind Kind { get; }
 
         public Func<SyntaxNode, object> Getter { get; }
+    }
+
+    private sealed class SpanBox
+    {
+        public SpanBox(TextSpan value) => Value = value;
+
+        public TextSpan Value { get; }
     }
 }

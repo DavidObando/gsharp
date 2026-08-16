@@ -443,7 +443,7 @@ public class LexerTests
         var token = Assert.Single(tokens);
         Assert.Empty(diagnostics);
         Assert.Equal(SyntaxKind.InterpolatedStringToken, token.Kind);
-        var fragments = (ImmutableArray<InterpolationFragment>)token.Value;
+        var fragments = Assert.IsType<InterpolationFragments>(token.Value).Items;
         Assert.Equal(2, fragments.Length);
         Assert.False(fragments[0].IsExpression);
         Assert.Equal($"hello{Environment.NewLine}", fragments[0].Text);

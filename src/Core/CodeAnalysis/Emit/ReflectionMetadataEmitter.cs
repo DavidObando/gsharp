@@ -1906,14 +1906,16 @@ internal sealed class ReflectionMetadataEmitter
                 // is what lets EmitExplicitInterfaceEventMethodImpls resolve
                 // the interface-side MethodImpl target token for an explicit
                 // event implementation (`event (IFoo) Changed T`).
-                if (ev.AddMethodSymbol != null)
+                var addMethodSymbol = ev.AddMethodSymbol;
+                if (addMethodSymbol != null)
                 {
-                    this.cache.MethodHandles[ev.AddMethodSymbol] = addHandle;
+                    this.cache.MethodHandles[addMethodSymbol] = addHandle;
                 }
 
-                if (ev.RemoveMethodSymbol != null)
+                var removeMethodSymbol = ev.RemoveMethodSymbol;
+                if (removeMethodSymbol != null)
                 {
-                    this.cache.MethodHandles[ev.RemoveMethodSymbol] = removeHandle;
+                    this.cache.MethodHandles[removeMethodSymbol] = removeHandle;
                 }
 
                 if (ev.RaiseMethodSymbol != null && raiseHandle.HasValue)
@@ -4032,12 +4034,12 @@ internal sealed class ReflectionMetadataEmitter
         this.assemblyAttrs.EmitUserModuleAttributes(moduleHandle);
 
         var assemblyHandle = this.emitCtx.Metadata.AddAssembly(
-            name: this.emitCtx.Metadata.GetOrAddString(assemblyName),
-            version: this.assemblyAttrs.ParseAssemblyVersion(),
-            culture: default(StringHandle),
-            publicKey: default(BlobHandle),
-            flags: 0,
-            hashAlgorithm: AssemblyHashAlgorithm.Sha1);
+            this.emitCtx.Metadata.GetOrAddString(assemblyName),
+            this.assemblyAttrs.ParseAssemblyVersion(),
+            default(StringHandle),
+            default(BlobHandle),
+            (AssemblyFlags)0,
+            AssemblyHashAlgorithm.Sha1);
 
         if (this.emitCtx.MetadataOnly)
         {
@@ -5160,11 +5162,13 @@ internal sealed class ReflectionMetadataEmitter
         // symbolic form, instance-method calls on the receiver would emit
         // `callvirt` + value-on-stack instead of `call` + managed pointer,
         // producing PEVerify-rejected IL.
-        if (type is NullableTypeSymbol nullableTp
-            && nullableTp.UnderlyingType is TypeParameterSymbol tp
-            && tp.HasValueTypeConstraint)
+        if (type is NullableTypeSymbol nullableTp)
         {
-            return true;
+            var tp = nullableTp.UnderlyingType as TypeParameterSymbol;
+            if (tp?.HasValueTypeConstraint == true)
+            {
+                return true;
+            }
         }
 
         // Issue #1298: `E?` over a user-declared enum lowers to the CLR struct
@@ -5179,6 +5183,12 @@ internal sealed class ReflectionMetadataEmitter
         // for a `Nullable<UserStruct>` nil-default — producing invalid IL.
         if (type is NullableTypeSymbol nullableUserVt
             && NullableLifting.IsUserValueTypeNullable(nullableUserVt))
+        {
+            return true;
+        }
+
+        if (type is NullableTypeSymbol symbolicNullable
+            && NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullable))
         {
             return true;
         }

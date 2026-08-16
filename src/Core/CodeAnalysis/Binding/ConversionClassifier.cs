@@ -420,18 +420,21 @@ internal sealed class ConversionClassifier
         // GS0362 instead of the generic "cannot convert ? → ?"
         // diagnostic. The explicit `default(T)` form is already typed and
         // flows through the regular conversion machinery below.
-        if (expression is BoundDefaultExpression placeholderDefault
-            && placeholderDefault.Type == TypeSymbol.Error
-            && placeholderDefault.Syntax is DefaultExpressionSyntax barePlaceholder
-            && barePlaceholder.TypeClause == null)
+        if (expression is BoundDefaultExpression placeholderDefault)
         {
-            if (type == null || type == TypeSymbol.Error)
+            var barePlaceholder = placeholderDefault.Syntax as DefaultExpressionSyntax;
+            if (placeholderDefault.Type == TypeSymbol.Error
+                && barePlaceholder != null
+                && barePlaceholder.TypeClause == null)
             {
-                Diagnostics.ReportBareDefaultNoTargetType(barePlaceholder.DefaultKeyword.Location);
-                return new BoundErrorExpression(barePlaceholder);
-            }
+                if (type == null || type == TypeSymbol.Error)
+                {
+                    Diagnostics.ReportBareDefaultNoTargetType(barePlaceholder.DefaultKeyword.Location);
+                    return new BoundErrorExpression(barePlaceholder);
+                }
 
-            return new BoundDefaultExpression(barePlaceholder, type);
+                return new BoundDefaultExpression(barePlaceholder, type);
+            }
         }
 
         var methodGroupReceiver = expression switch
@@ -514,17 +517,21 @@ internal sealed class ConversionClassifier
         // Issue #2716: a throw-expression lambda naturally has a `never`
         // result. Shape its synthesized method to the target result type; the
         // body still throws and therefore needs no value conversion.
-        if (expression is BoundFunctionLiteralExpression neverCandidateLiteral
-            && neverCandidateLiteral.FunctionType is FunctionTypeSymbol neverCandidateFnType
-            && neverCandidateFnType.ReturnType == TypeSymbol.Never
-            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var neverTargetFnType)
-            && !ReferenceEquals(neverTargetFnType.ReturnType, TypeSymbol.Never)
-            && Conversion.Classify(neverCandidateFnType, neverTargetFnType).IsImplicit)
+        if (expression is BoundFunctionLiteralExpression neverCandidateLiteral)
         {
-            var shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType, false);
-            if (!ReferenceEquals(shaped, neverCandidateLiteral))
+            var neverCandidateFnType =
+                neverCandidateLiteral.FunctionType as FunctionTypeSymbol;
+            if (neverCandidateFnType != null
+                && neverCandidateFnType.ReturnType == TypeSymbol.Never
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var neverTargetFnType)
+                && !ReferenceEquals(neverTargetFnType.ReturnType, TypeSymbol.Never)
+                && Conversion.Classify(neverCandidateFnType, neverTargetFnType).IsImplicit)
             {
-                return BindConversion(diagnosticLocation, shaped, type, allowExplicit, callParameter);
+                var shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType, false);
+                if (!ReferenceEquals(shaped, neverCandidateLiteral))
+                {
+                    return BindConversion(diagnosticLocation, shaped, type, allowExplicit, callParameter);
+                }
             }
         }
 
@@ -536,19 +543,23 @@ internal sealed class ConversionClassifier
         // that already yields void. Void-ize the literal through the erased
         // adapter (which now drops the return value), then continue the
         // conversion against the real delegate target.
-        if (expression is BoundFunctionLiteralExpression voidCandidateLiteral
-            && voidCandidateLiteral.FunctionType is FunctionTypeSymbol voidCandidateFnType
-            && voidCandidateFnType.ReturnType != TypeSymbol.Void
-            && voidCandidateFnType.ReturnType != TypeSymbol.Error
-            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var voidTargetFnType)
-            && voidTargetFnType.ReturnType == TypeSymbol.Void
-            && voidTargetFnType.Arity == voidCandidateFnType.Arity
-            && !ReferenceEquals(type, voidCandidateFnType))
+        if (expression is BoundFunctionLiteralExpression voidCandidateLiteral)
         {
-            var voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType, false);
-            if (!ReferenceEquals(voidized, voidCandidateLiteral))
+            var voidCandidateFnType =
+                voidCandidateLiteral.FunctionType as FunctionTypeSymbol;
+            if (voidCandidateFnType != null
+                && voidCandidateFnType.ReturnType != TypeSymbol.Void
+                && voidCandidateFnType.ReturnType != TypeSymbol.Error
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var voidTargetFnType)
+                && voidTargetFnType.ReturnType == TypeSymbol.Void
+                && voidTargetFnType.Arity == voidCandidateFnType.Arity
+                && !ReferenceEquals(type, voidCandidateFnType))
             {
-                return BindConversion(diagnosticLocation, voidized, type, allowExplicit, callParameter);
+                var voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType, false);
+                if (!ReferenceEquals(voidized, voidCandidateLiteral))
+                {
+                    return BindConversion(diagnosticLocation, voidized, type, allowExplicit, callParameter);
+                }
             }
         }
 
@@ -561,43 +572,51 @@ internal sealed class ConversionClassifier
         // C#'s implicit numeric conversion of a lambda body to an expected
         // delegate return type. Without it the literal would materialize as a
         // narrower-returning delegate flowing into a wider delegate slot.
-        if (expression is BoundFunctionLiteralExpression widenCandidateLiteral
-            && widenCandidateLiteral.FunctionType is FunctionTypeSymbol widenCandidateFnType
-            && widenCandidateFnType.ReturnType != TypeSymbol.Void
-            && widenCandidateFnType.ReturnType != TypeSymbol.Error
-            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var widenTargetFnType)
-            && widenTargetFnType.ReturnType != TypeSymbol.Void
-            && widenTargetFnType.ReturnType != TypeSymbol.Error
-            && widenTargetFnType.Arity == widenCandidateFnType.Arity
-            && !ReferenceEquals(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType)
-            && IsNumericReturnWideningCore(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType))
+        if (expression is BoundFunctionLiteralExpression widenCandidateLiteral)
         {
-            var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType, false);
-            if (!ReferenceEquals(widened, widenCandidateLiteral))
+            var widenCandidateFnType =
+                widenCandidateLiteral.FunctionType as FunctionTypeSymbol;
+            if (widenCandidateFnType != null
+                && widenCandidateFnType.ReturnType != TypeSymbol.Void
+                && widenCandidateFnType.ReturnType != TypeSymbol.Error
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var widenTargetFnType)
+                && widenTargetFnType.ReturnType != TypeSymbol.Void
+                && widenTargetFnType.ReturnType != TypeSymbol.Error
+                && widenTargetFnType.Arity == widenCandidateFnType.Arity
+                && !ReferenceEquals(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType)
+                && IsNumericReturnWideningCore(widenCandidateFnType.ReturnType, widenTargetFnType.ReturnType))
             {
-                return BindConversion(diagnosticLocation, widened, type, allowExplicit, callParameter);
+                var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType, false);
+                if (!ReferenceEquals(widened, widenCandidateLiteral))
+                {
+                    return BindConversion(diagnosticLocation, widened, type, allowExplicit, callParameter);
+                }
             }
         }
 
-        if (expression is BoundFunctionLiteralExpression adaptedCandidateLiteral
-            && adaptedCandidateLiteral.FunctionType is FunctionTypeSymbol adaptedCandidateFnType
-            && adaptedCandidateFnType.ReturnType != TypeSymbol.Void
-            && adaptedCandidateFnType.ReturnType != TypeSymbol.Error
-            && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var adaptedTargetFnType)
-            && adaptedTargetFnType.ReturnType != TypeSymbol.Void
-            && adaptedTargetFnType.ReturnType != TypeSymbol.Error
-            && adaptedTargetFnType.Arity == adaptedCandidateFnType.Arity
-            && !ReferenceEquals(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType)
-            && !IsNumericReturnWideningCore(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType)
-            && Conversion.Classify(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType).IsImplicit)
+        if (expression is BoundFunctionLiteralExpression adaptedCandidateLiteral)
         {
-            var adapted = createErasedFunctionLiteralAdapter(
-                adaptedCandidateLiteral,
-                adaptedTargetFnType,
-                true);
-            if (!ReferenceEquals(adapted, adaptedCandidateLiteral))
+            var adaptedCandidateFnType =
+                adaptedCandidateLiteral.FunctionType as FunctionTypeSymbol;
+            if (adaptedCandidateFnType != null
+                && adaptedCandidateFnType.ReturnType != TypeSymbol.Void
+                && adaptedCandidateFnType.ReturnType != TypeSymbol.Error
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out var adaptedTargetFnType)
+                && adaptedTargetFnType.ReturnType != TypeSymbol.Void
+                && adaptedTargetFnType.ReturnType != TypeSymbol.Error
+                && adaptedTargetFnType.Arity == adaptedCandidateFnType.Arity
+                && !ReferenceEquals(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType)
+                && !IsNumericReturnWideningCore(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType)
+                && Conversion.Classify(adaptedCandidateFnType.ReturnType, adaptedTargetFnType.ReturnType).IsImplicit)
             {
-                return BindConversion(diagnosticLocation, adapted, type, allowExplicit, callParameter);
+                var adapted = createErasedFunctionLiteralAdapter(
+                    adaptedCandidateLiteral,
+                    adaptedTargetFnType,
+                    true);
+                if (!ReferenceEquals(adapted, adaptedCandidateLiteral))
+                {
+                    return BindConversion(diagnosticLocation, adapted, type, allowExplicit, callParameter);
+                }
             }
         }
 
@@ -1580,8 +1599,12 @@ internal sealed class ConversionClassifier
 
         var invokeParams = invoke.GetParameters();
         var targetParameterRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(invoke);
-        var closesExtensionReceiver = group.Receiver != null
-            && group.Candidates.All(candidate => candidate.IsStatic);
+        var closesExtensionReceiver = group.Receiver != null;
+        foreach (var candidate in group.Candidates)
+        {
+            closesExtensionReceiver &= candidate.IsStatic;
+        }
+
         var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
         if (closesExtensionReceiver)
         {
@@ -1741,6 +1764,9 @@ internal sealed class ConversionClassifier
             }
 
             candidateReturn = getMethodGroupObservableReturnType(candidate, candidateReturn);
+            var canonicalCandidateReturn = Invariant.Required(
+                candidateReturn,
+                "a successfully closed method-group candidate has a return type");
             var parameterOffset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
             if (candidate.ReturnRefKind != targetReturnRefKind)
             {
@@ -1767,9 +1793,9 @@ internal sealed class ConversionClassifier
             }
 
             if (!TryCanonicalizeMethodGroupType(
-                candidateReturn,
+                canonicalCandidateReturn,
                 targetReturnType,
-                out candidateReturn))
+                out canonicalCandidateReturn))
             {
                 continue;
             }
@@ -1800,7 +1826,7 @@ internal sealed class ConversionClassifier
             pickOwner = candidateOwner;
             pickMethodTypeArguments = candidateMethodTypeArguments;
             pickParameterTypes = candidateParameterTypes;
-            pickReturnType = candidateReturn;
+            pickReturnType = canonicalCandidateReturn;
         }
 
         if (pick == null)
@@ -1813,7 +1839,7 @@ internal sealed class ConversionClassifier
         }
 
         var pickFnType = FunctionTypeSymbol.Get(
-            ImmutableArray.Create(Invariant.Required(pickParameterTypes, "a selected method group has parameter types")),
+            ImmutableArray.CreateRange(Invariant.Required(pickParameterTypes, "a selected method group has parameter types")),
             Invariant.Required(pickReturnType, "a selected method group has a return type"));
         var resolvedGroup = new BoundMethodGroupExpression(
             group.Syntax,
@@ -2871,8 +2897,8 @@ internal sealed class ConversionClassifier
             && TryGetIntegralMetadataTarget(parameterType, out var integralTarget))
         {
             if (integralTarget == TypeSymbol.Char
-                && integerValue >= char.MinValue
-                && integerValue <= char.MaxValue)
+                && integerValue >= (long)char.MinValue
+                && integerValue <= (long)char.MaxValue)
             {
                 value = (char)(ushort)integerValue;
                 return true;

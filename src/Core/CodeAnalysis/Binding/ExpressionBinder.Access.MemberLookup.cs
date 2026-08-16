@@ -190,8 +190,12 @@ internal sealed partial class ExpressionBinder
             // inner call through the accessor path (which resolves the
             // nested type constructor), then apply the initializer
             // assignments against the constructed instance.
-            case ObjectCreationExpressionSyntax objCreate
-                when objCreate.Target is CallExpressionSyntax innerCall:
+            case ObjectCreationExpressionSyntax objCreate:
+                if (objCreate.Target is not CallExpressionSyntax innerCall)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 var ctorResult = BindAccessorCall(receiver, classSymbol, innerCall);
                 if (ctorResult is BoundErrorExpression)
                 {
@@ -379,7 +383,8 @@ internal sealed partial class ExpressionBinder
                     // unaffected.
                     if (IsWithinType(structSym))
                     {
-                        for (var evtDeclType = structSym; evtDeclType != null; evtDeclType = evtDeclType.BaseClass)
+                        StructSymbol? evtDeclType = structSym;
+                        while (evtDeclType != null)
                         {
                             var evt = evtDeclType.Events.FirstOrDefault(e =>
                                 e.Name == ne.IdentifierToken.Text && e.IsFieldLike && e.BackingField != null);
@@ -387,6 +392,8 @@ internal sealed partial class ExpressionBinder
                             {
                                 return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, evtDeclType, evt.BackingField!));
                             }
+
+                            evtDeclType = evtDeclType.BaseClass;
                         }
                     }
 
@@ -537,73 +544,10 @@ internal sealed partial class ExpressionBinder
 
                     return BindExtensionMethodGroupOrError(receiver, ne);
                 }
-                else if (receiver != null && receiver.Type is NullableTypeSymbol nullableSym
-                    && nullableSym.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr
-                    && this.memberLookup.TryGetNullableConstructedType(nullableInnerClr, out var nullableClr))
+                else if (receiver != null
+                    && TryBindNullableInstanceMember(receiver, ne, out var nullableMember))
                 {
-                    // Issue #517: a value-type `T?` lowers to `System.Nullable<T>`
-                    // at the CLR layer (see `EncodeTypeSymbol`). Resolve `.Value`,
-                    // `.HasValue`, etc. against that constructed generic so the
-                    // BCL instance API surfaces the same way it does for any
-                    // other CLR struct. NRT receivers (reference-type underlying)
-                    // have no `Nullable<T>` projection and continue to fall
-                    // through to the existing GS0158 path below.
-                    var nullableMemberName = ne.IdentifierToken.Text;
-                    var nullableProp = ClrTypeUtilities.SafeGetProperty(nullableClr, nullableMemberName, BindingFlags.Public | BindingFlags.Instance);
-                    if (nullableProp != null && nullableProp.GetIndexParameters().Length == 0 && nullableProp.CanRead)
-                    {
-                        var nullablePropType = ClrNullability.GetPropertyTypeSymbol(nullableProp);
-                        return new BoundClrPropertyAccessExpression(null, receiver, nullableProp, nullablePropType);
-                    }
-
-                    if (TryBindClrMethodGroup(receiver, nullableClr, wantStatic: false, nullableMemberName, out var nullableGroup))
-                    {
-                        return nullableGroup;
-                    }
-
-                    return BindExtensionMethodGroupOrError(receiver, ne);
-                }
-                else if (receiver != null && receiver.Type is NullableTypeSymbol openNullableSym
-                    && openNullableSym.UnderlyingType is TypeParameterSymbol openTp
-                    && openTp.HasValueTypeConstraint)
-                {
-                    // Issue #806: a `T?` receiver where T is an open value-type
-                    // type parameter still lowers to `Nullable<T>` at IL emit
-                    // time, but the closed `Nullable<T>` CLR instance is not
-                    // available here. Resolve the member name against the open
-                    // `typeof(Nullable<>)` definition so `.HasValue`, `.Value`
-                    // and `.GetValueOrDefault()` bind successfully and lower
-                    // to a normal property/method access on the symbolic
-                    // constructed receiver.
-                    var openNullableMemberName = ne.IdentifierToken.Text;
-                    var openNullableDef = typeof(System.Nullable<>);
-                    var openProp = ClrTypeUtilities.SafeGetProperty(openNullableDef, openNullableMemberName, BindingFlags.Public | BindingFlags.Instance);
-                    if (openProp != null && openProp.GetIndexParameters().Length == 0 && openProp.CanRead)
-                    {
-                        // HasValue → bool (concrete); Value → the open T (the
-                        // property's PropertyType IS the open type parameter
-                        // itself in the reflection model). Substitute back to
-                        // the binder's symbolic T so downstream type checks
-                        // see the right symbol.
-                        TypeSymbol openPropType;
-                        if (openProp.PropertyType.IsGenericParameter)
-                        {
-                            openPropType = openTp;
-                        }
-                        else
-                        {
-                            openPropType = ClrNullability.GetPropertyTypeSymbol(openProp);
-                        }
-
-                        return new BoundClrPropertyAccessExpression(null, receiver, openProp, openPropType);
-                    }
-
-                    if (TryBindClrMethodGroup(receiver, openNullableDef, wantStatic: false, openNullableMemberName, out var openNullableGroup))
-                    {
-                        return openNullableGroup;
-                    }
-
-                    return BindExtensionMethodGroupOrError(receiver, ne);
+                    return nullableMember;
                 }
                 else if (TryGetClrInstanceMemberReceiverType(receiver, out var clrInstanceReceiverType))
                 {
@@ -758,6 +702,94 @@ internal sealed partial class ExpressionBinder
             default:
                 return new BoundErrorExpression(null);
         }
+    }
+
+    private bool TryBindNullableInstanceMember(
+        BoundExpression receiver,
+        NameExpressionSyntax name,
+        [NotNullWhen(true)] out BoundExpression? member)
+    {
+        member = null;
+        if (receiver.Type is not NullableTypeSymbol nullableType)
+        {
+            return false;
+        }
+
+        var memberName = name.IdentifierToken.Text;
+        var nullableInnerClr = nullableType.UnderlyingType?.ClrType;
+        if (nullableInnerClr?.IsValueType == true
+            && this.memberLookup.TryGetNullableConstructedType(nullableInnerClr, out var nullableClr))
+        {
+            var nullableProperty = ClrTypeUtilities.SafeGetProperty(
+                nullableClr,
+                memberName,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (nullableProperty != null
+                && nullableProperty.GetIndexParameters().Length == 0
+                && nullableProperty.CanRead)
+            {
+                member = new BoundClrPropertyAccessExpression(
+                    null,
+                    receiver,
+                    nullableProperty,
+                    ClrNullability.GetPropertyTypeSymbol(nullableProperty));
+                return true;
+            }
+
+            if (TryBindClrMethodGroup(
+                receiver,
+                nullableClr,
+                wantStatic: false,
+                memberName,
+                out var nullableGroup))
+            {
+                member = nullableGroup;
+                return true;
+            }
+
+            member = BindExtensionMethodGroupOrError(receiver, name);
+            return true;
+        }
+
+        var openTypeParameter = nullableType.UnderlyingType as TypeParameterSymbol;
+        if (openTypeParameter?.HasValueTypeConstraint != true)
+        {
+            return false;
+        }
+
+        var openNullable = typeof(System.Nullable<>);
+        var openProperty = ClrTypeUtilities.SafeGetProperty(
+            openNullable,
+            memberName,
+            BindingFlags.Public | BindingFlags.Instance);
+        if (openProperty != null
+            && openProperty.GetIndexParameters().Length == 0
+            && openProperty.CanRead)
+        {
+            var propertyType = openProperty.PropertyType.IsGenericParameter
+                ? openTypeParameter
+                : ClrNullability.GetPropertyTypeSymbol(openProperty);
+            member = new BoundClrPropertyAccessExpression(
+                null,
+                receiver,
+                openProperty,
+                propertyType);
+            return true;
+        }
+
+        if (TryBindClrMethodGroup(
+            receiver,
+            openNullable,
+            wantStatic: false,
+            memberName,
+            out var openNullableGroup))
+        {
+            member = openNullableGroup;
+            return true;
+        }
+
+        member = BindExtensionMethodGroupOrError(receiver, name);
+        return true;
     }
 
     /// <summary>
@@ -1222,45 +1254,51 @@ internal sealed partial class ExpressionBinder
         // matches the single argument by assignability).
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
-        if (target.Type is TypeParameterSymbol tpIndexTarget
-            && tpIndexTarget.ClrInterfaceConstraint is TypeSymbol clrIndexConstraint
-            && clrIndexConstraint.ClrType is System.Type clrConstraintType)
+        if (target.Type is TypeParameterSymbol tpIndexTarget)
         {
-            var idxArgs = ImmutableArray.Create(BoundIndexArg());
-            if (this.memberLookup.TryResolveClrIndexer(
-                clrIndexConstraint,
-                clrConstraintType,
-                idxArgs,
-                out var idxProp,
-                out var resolvedIdxArgs))
+            var clrIndexConstraint = tpIndexTarget.ClrInterfaceConstraint;
+            var clrConstraintType = clrIndexConstraint?.ClrType;
+            if (clrIndexConstraint != null && clrConstraintType != null)
             {
-                if (idxProp!.GetGetMethod(nonPublic: false) == null)
+                var idxArgs = ImmutableArray.Create(BoundIndexArg());
+                if (this.memberLookup.TryResolveClrIndexer(
+                    clrIndexConstraint,
+                    clrConstraintType,
+                    idxArgs,
+                    out var idxProp,
+                    out var resolvedIdxArgs))
                 {
-                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
-                    return new BoundErrorExpression(null);
-                }
+                    if (idxProp!.GetGetMethod(nonPublic: false) == null)
+                    {
+                        Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
+                        return new BoundErrorExpression(null);
+                    }
 
-                var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
-                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
-                    clrIndexConstraint,
-                    idxProp);
-                var convertedIdxArgs = BindClrIndexerArguments(
-                    clrIndexConstraint,
-                    idxProp!,
-                    resolvedIdxArgs,
-                    indexSyntax.Location);
-                return ConversionClassifier.AutoDereferenceRefReturn(
-                    new BoundClrIndexExpression(
-                        null,
-                        target,
-                        idxProp,
-                        convertedIdxArgs,
-                        elementType,
-                        tpIndexTarget,
-                        declaringInterface));
+                    var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
+                    var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                        clrIndexConstraint,
+                        idxProp);
+                    var convertedIdxArgs = BindClrIndexerArguments(
+                        clrIndexConstraint,
+                        idxProp!,
+                        resolvedIdxArgs,
+                        indexSyntax.Location);
+                    return ConversionClassifier.AutoDereferenceRefReturn(
+                        new BoundClrIndexExpression(
+                            null,
+                            target,
+                            idxProp,
+                            convertedIdxArgs,
+                            elementType,
+                            tpIndexTarget,
+                            declaringInterface));
+                }
             }
         }
-        else if (target.Type is NullabilityAnnotatedTypeSymbol annotIdx && annotIdx.ClrType is System.Type clrAnnotIdx)
+
+        var annotIdx = target.Type as NullabilityAnnotatedTypeSymbol;
+        var clrAnnotIdx = annotIdx?.ClrType;
+        if (annotIdx != null && clrAnnotIdx != null)
         {
             var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
@@ -1281,7 +1319,10 @@ internal sealed partial class ExpressionBinder
                 return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, convertedIdxArgsAnnot, elemTypeAnnot));
             }
         }
-        else if ((target.Type is ImportedTypeSymbol || target.Type is StructSymbol) && target.Type.ClrType is System.Type clrTarget)
+
+        var clrTarget = target.Type.ClrType;
+        if ((target.Type is ImportedTypeSymbol || target.Type is StructSymbol)
+            && clrTarget != null)
         {
             var idxArgs = ImmutableArray.Create(BoundIndexArg());
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
@@ -1957,41 +1998,44 @@ internal sealed partial class ExpressionBinder
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
-        if (targetType is TypeParameterSymbol tpIndexTarget
-            && tpIndexTarget.ClrInterfaceConstraint is TypeSymbol clrIndexConstraint
-            && clrIndexConstraint.ClrType is System.Type clrConstraintType)
+        if (targetType is TypeParameterSymbol tpIndexTarget)
         {
-            var idxArgs = ImmutableArray.Create(BindIndexValue());
-            if (this.memberLookup.TryResolveClrIndexer(
-                clrIndexConstraint,
-                clrConstraintType,
-                idxArgs,
-                out var idxProp,
-                out var resolvedIdxArgs))
+            var clrIndexConstraint = tpIndexTarget.ClrInterfaceConstraint;
+            var clrConstraintType = clrIndexConstraint?.ClrType;
+            if (clrIndexConstraint != null && clrConstraintType != null)
             {
-                if (idxProp!.GetSetMethod(nonPublic: false) == null)
+                var idxArgs = ImmutableArray.Create(BindIndexValue());
+                if (this.memberLookup.TryResolveClrIndexer(
+                    clrIndexConstraint,
+                    clrConstraintType,
+                    idxArgs,
+                    out var idxProp,
+                    out var resolvedIdxArgs))
                 {
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
-                    return new BoundErrorExpression(null);
-                }
+                    if (idxProp!.GetSetMethod(nonPublic: false) == null)
+                    {
+                        Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
+                        return new BoundErrorExpression(null);
+                    }
 
-                var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
-                var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
-                    clrIndexConstraint,
-                    idxProp);
-                var value = BindValue(elementType);
-                var convertedArgs = BindClrIndexerArguments(
-                    clrIndexConstraint,
-                    idxProp!,
-                    resolvedIdxArgs,
-                    indexSyntax.Location);
-                return MakeClrIndexAssignment(
-                    idxProp,
-                    convertedArgs,
-                    value,
-                    elementType,
-                    tpIndexTarget,
-                    declaringInterface);
+                    var elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp);
+                    var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                        clrIndexConstraint,
+                        idxProp);
+                    var value = BindValue(elementType);
+                    var convertedArgs = BindClrIndexerArguments(
+                        clrIndexConstraint,
+                        idxProp!,
+                        resolvedIdxArgs,
+                        indexSyntax.Location);
+                    return MakeClrIndexAssignment(
+                        idxProp,
+                        convertedArgs,
+                        value,
+                        elementType,
+                        tpIndexTarget,
+                        declaringInterface);
+                }
             }
         }
         else if (targetType is NullabilityAnnotatedTypeSymbol annotWr && targetType.ClrType is System.Type clrAnnotWr)
@@ -2013,7 +2057,13 @@ internal sealed partial class ExpressionBinder
                     idxPropAnnotWr,
                     resolvedIdxArgsAnnotWr,
                     indexSyntax.Location);
-                return MakeClrIndexAssignment(idxPropAnnotWr, convertedIdxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
+                return MakeClrIndexAssignment(
+                    idxPropAnnotWr,
+                    convertedIdxArgsAnnotWr,
+                    boundValueAnnotWr,
+                    valueTypeAnnotWr,
+                    constrainedReceiverTypeParameter: null,
+                    constrainedInterfaceType: null);
             }
         }
         else if ((targetType is ImportedTypeSymbol || targetType is StructSymbol) && targetType.ClrType is System.Type clrTarget)
@@ -2051,7 +2101,13 @@ internal sealed partial class ExpressionBinder
                             ? byRef.PointeeType
                             : TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
                         var refValue = BindValue(pointeeType);
-                        return MakeClrIndexAssignment(idxProp, convertedIdxArgs, refValue, pointeeType);
+                        return MakeClrIndexAssignment(
+                            idxProp,
+                            convertedIdxArgs,
+                            refValue,
+                            pointeeType,
+                            constrainedReceiverTypeParameter: null,
+                            constrainedInterfaceType: null);
                     }
 
                     Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
@@ -2074,7 +2130,13 @@ internal sealed partial class ExpressionBinder
                     ? MapErasedIndexerElementType(imported, idxProp)
                     : ClrNullability.GetPropertyTypeSymbol(idxProp);
                 var boundValue = BindValue(valueType);
-                return MakeClrIndexAssignment(idxProp, convertedIdxArgs, boundValue, valueType);
+                return MakeClrIndexAssignment(
+                    idxProp,
+                    convertedIdxArgs,
+                    boundValue,
+                    valueType,
+                    constrainedReceiverTypeParameter: null,
+                    constrainedInterfaceType: null);
             }
         }
 
@@ -2445,10 +2507,22 @@ internal sealed partial class ExpressionBinder
             // name lookup on the open type with the same instance-binding
             // flags is sufficient for the single-name, non-indexer
             // properties that surface real receiver-type generics.
-            var openType = closedProperty.DeclaringType != imp.ClrType && closedProperty.DeclaringType?.IsGenericType == true
-                ? imp.OpenDefinition.GetInterfaces().FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == closedProperty.DeclaringType.GetGenericTypeDefinition())
-                    ?? imp.OpenDefinition
-                : imp.OpenDefinition;
+            var openType = imp.OpenDefinition;
+            if (closedProperty.DeclaringType != imp.ClrType
+                && closedProperty.DeclaringType?.IsGenericType == true)
+            {
+                foreach (var candidateInterface in imp.OpenDefinition.GetInterfaces())
+                {
+                    if (candidateInterface.IsGenericType
+                        && candidateInterface.GetGenericTypeDefinition()
+                            == closedProperty.DeclaringType.GetGenericTypeDefinition())
+                    {
+                        openType = candidateInterface;
+                        break;
+                    }
+                }
+            }
+
             var openProperty = ClrTypeUtilities.SafeGetProperty(
                 openType,
                 closedProperty.Name,
@@ -2858,10 +2932,10 @@ internal sealed partial class ExpressionBinder
         {
             ArrayTypeSymbol arr => arr.ElementType,
             SliceTypeSymbol slice => slice.ElementType,
-            ImportedTypeSymbol imp when imp.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => TypeSymbol.FromClrType(clr.GetElementType()),
-            NullabilityAnnotatedTypeSymbol annot when annot.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => annot.GetTypeArgumentSymbolForClrType(clr.GetElementType()),
+            ImportedTypeSymbol imp when imp.ClrType?.IsArray == true && imp.ClrType.GetArrayRank() == 1
+                => TypeSymbol.FromClrType(imp.ClrType.GetElementType()),
+            NullabilityAnnotatedTypeSymbol annot when annot.ClrType?.IsArray == true && annot.ClrType.GetArrayRank() == 1
+                => annot.GetTypeArgumentSymbolForClrType(annot.ClrType.GetElementType()),
             _ => null,
         };
     }
@@ -2936,10 +3010,11 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindArraySlice(BoundExpression target, RangeExpressionSyntax range, TypeSymbol elementType)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => new BoundLenExpression(null, src),
+            lengthOf,
             statements);
 
         var resultType = SliceTypeSymbol.Get(elementType);
@@ -2970,10 +3045,11 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindStringSlice(BoundExpression target, RangeExpressionSyntax range)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => new BoundLenExpression(null, src),
+            lengthOf,
             statements);
 
         // System.String always declares the exact Substring(int, int) method.
@@ -2991,10 +3067,12 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindSpanLikeSlice(BoundExpression target, RangeExpressionSyntax range, MemberInfo lengthMember, MethodInfo sliceMethod)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        Func<BoundExpression, BoundExpression> lengthOf =
+            src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32);
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+            lengthOf,
             statements);
 
         var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
@@ -3108,10 +3186,11 @@ internal sealed partial class ExpressionBinder
         if (arrayElement != null)
         {
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
             var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
                 target,
                 rangeValue,
-                src => new BoundLenExpression(null, src),
+                lengthOf,
                 statements);
 
             var resultType = SliceTypeSymbol.Get(arrayElement);
@@ -3134,10 +3213,11 @@ internal sealed partial class ExpressionBinder
         if (target.Type == TypeSymbol.String)
         {
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
             var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
                 target,
                 rangeValue,
-                src => new BoundLenExpression(null, src),
+                lengthOf,
                 statements);
 
             // System.String always declares the exact Substring(int, int) method.
@@ -3163,10 +3243,12 @@ internal sealed partial class ExpressionBinder
             if (TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod))
             {
                 var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                Func<BoundExpression, BoundExpression> lengthOf = src =>
+                    new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32);
                 var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
                     target,
                     rangeValue,
-                    src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+                    lengthOf,
                     statements);
 
                 var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
@@ -3464,10 +3546,10 @@ internal sealed partial class ExpressionBinder
             SliceTypeSymbol slice => slice.ElementType,
 
             // Issue #664: CLR T[] arrays (e.g. result of string.Split) are indexable.
-            ImportedTypeSymbol imp when imp.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => TypeSymbol.FromClrType(clr.GetElementType()),
-            NullabilityAnnotatedTypeSymbol annot when annot.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => annot.GetTypeArgumentSymbolForClrType(clr.GetElementType()),
+            ImportedTypeSymbol imp when imp.ClrType?.IsArray == true && imp.ClrType.GetArrayRank() == 1
+                => TypeSymbol.FromClrType(imp.ClrType.GetElementType()),
+            NullabilityAnnotatedTypeSymbol annot when annot.ClrType?.IsArray == true && annot.ClrType.GetArrayRank() == 1
+                => annot.GetTypeArgumentSymbolForClrType(annot.ClrType.GetElementType()),
             _ => null,
         };
     }
@@ -3841,7 +3923,7 @@ internal sealed partial class ExpressionBinder
     private static TypeSymbol SubstituteThroughConstructedInterface(TypeSymbol type, InterfaceSymbol constructedIface)
     {
         if (type is TypeParameterSymbol tp
-            && constructedIface?.Definition?.TypeParameters != null
+            && constructedIface?.Definition != null
             && !constructedIface.Definition.TypeParameters.IsDefaultOrEmpty
             && !constructedIface.TypeArguments.IsDefaultOrEmpty)
         {

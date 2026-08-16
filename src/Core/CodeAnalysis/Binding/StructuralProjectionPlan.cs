@@ -163,7 +163,7 @@ internal sealed class StructuralProjectionSourceMember
 
 internal static class StructuralProjectionPlanner
 {
-    private const BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
+    private static readonly BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
 
     public static bool CanProject(TypeSymbol? source, TypeSymbol? target)
         => TryCreate(source, target, strict: true, explicitMemberNames: null, out _, out _);
@@ -257,7 +257,8 @@ internal static class StructuralProjectionPlanner
 
         var initializerSlots = ImmutableArray.CreateBuilder<StructuralProjectionSlot>();
         var targetNames = new HashSet<string>(constructorNames, StringComparer.Ordinal);
-        for (var current = target; current != null; current = current.BaseClass)
+        StructSymbol? current = target;
+        while (current != null)
         {
             foreach (var field in current.Fields)
             {
@@ -308,6 +309,8 @@ internal static class StructuralProjectionPlanner
                         targetProperty: property));
                 }
             }
+
+            current = current.BaseClass;
         }
 
         plan = new StructuralProjectionPlan(
@@ -406,9 +409,19 @@ internal static class StructuralProjectionPlanner
         ConstructorInfo? constructor = null;
         ParameterInfo[] constructorParameters = Array.Empty<ParameterInfo>();
         var constructors = ClrTypeUtilities.SafeGetConstructors(clrType, PublicInstance);
+        ConstructorInfo? parameterlessConstructor = null;
+        foreach (var candidate in constructors)
+        {
+            if (candidate.GetParameters().Length == 0)
+            {
+                parameterlessConstructor = candidate;
+                break;
+            }
+        }
+
         if (!clrType.IsValueType)
         {
-            constructor = constructors.FirstOrDefault(c => c.GetParameters().Length == 0);
+            constructor = parameterlessConstructor;
             if (constructor == null)
             {
                 foreach (var candidate in constructors)
@@ -432,7 +445,7 @@ internal static class StructuralProjectionPlanner
         }
         else
         {
-            constructor = constructors.FirstOrDefault(c => c.GetParameters().Length == 0);
+            constructor = parameterlessConstructor;
             if (constructor == null)
             {
                 foreach (var candidate in constructors)

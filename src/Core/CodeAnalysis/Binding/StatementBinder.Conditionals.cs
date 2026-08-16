@@ -790,11 +790,13 @@ internal sealed partial class StatementBinder
 
             // [NotNullWhen(rv)]: narrow a nullable argument to its underlying
             // non-nullable type on the arm where the call returns rv.
-            if (notNullWhenReturnValue is bool returnValue
-                && argExpr is BoundVariableExpression narrowVarExpr
-                && narrowVarExpr.Variable.Type is NullableTypeSymbol nullable)
+            var narrowVarExpr = argExpr as BoundVariableExpression;
+            var nullable = narrowVarExpr?.Variable.Type as NullableTypeSymbol;
+            if (notNullWhenReturnValue.HasValue
+                && narrowVarExpr != null
+                && nullable != null)
             {
-                var narrowThen = returnValue != negate;
+                var narrowThen = notNullWhenReturnValue.Value != negate;
                 var frame = narrowThen
                     ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
                     : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
@@ -803,12 +805,13 @@ internal sealed partial class StatementBinder
 
             // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
             // counterpart on the arm where the call returns rv.
-            if (maybeNullWhenReturnValue is bool widenReturnValue
-                && argExpr is BoundVariableExpression widenVarExpr
+            var widenVarExpr = argExpr as BoundVariableExpression;
+            if (maybeNullWhenReturnValue.HasValue
+                && widenVarExpr != null
                 && widenVarExpr.Variable.Type is not NullableTypeSymbol
                 && widenVarExpr.Variable.Type != TypeSymbol.Null)
             {
-                var widenThen = widenReturnValue != negate;
+                var widenThen = maybeNullWhenReturnValue.Value != negate;
                 var widenFrame = widenThen
                     ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
                     : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
@@ -1193,13 +1196,15 @@ internal sealed partial class StatementBinder
         switch (bound)
         {
             case BoundAssignmentExpression assignment:
-                plan = new MultiAssignmentTargetPlan(
-                    assignment.Expression,
+                Func<BoundExpression, BoundExpression> createVariableWrite =
                     value => new BoundAssignmentExpression(
                         assignment.Syntax,
                         assignment.Variable,
                         value,
-                        assignment.AssignedValueType));
+                        assignment.AssignedValueType);
+                plan = new MultiAssignmentTargetPlan(
+                    assignment.Expression,
+                    createVariableWrite);
                 return true;
 
             case BoundFieldAssignmentExpression field:
@@ -1236,22 +1241,23 @@ internal sealed partial class StatementBinder
                 var propertyReceiver = property.Receiver == null
                     ? null
                     : CaptureMultiAssignmentReceiver(property.Receiver, targetSyntax, captures);
-                plan = new MultiAssignmentTargetPlan(
-                    property.Value,
+                Func<BoundExpression, BoundExpression> createPropertyWrite =
                     value => new BoundPropertyAssignmentExpression(
                         property.Syntax,
                         propertyReceiver,
                         property.StructType,
                         property.Property,
-                        value));
+                        value);
+                plan = new MultiAssignmentTargetPlan(
+                    property.Value,
+                    createPropertyWrite);
                 return true;
 
             case BoundClrPropertyAssignmentExpression clrProperty:
                 var clrPropertyReceiver = clrProperty.Receiver == null
                     ? null
                     : CaptureMultiAssignmentReceiver(clrProperty.Receiver, targetSyntax, captures);
-                plan = new MultiAssignmentTargetPlan(
-                    clrProperty.Value,
+                Func<BoundExpression, BoundExpression> createClrPropertyWrite =
                     value => new BoundClrPropertyAssignmentExpression(
                         clrProperty.Syntax,
                         clrPropertyReceiver,
@@ -1260,7 +1266,10 @@ internal sealed partial class StatementBinder
                         clrProperty.Type,
                         clrProperty.StaticContainerType,
                         clrProperty.ConstrainedReceiverTypeParameter,
-                        clrProperty.ConstrainedInterfaceType));
+                        clrProperty.ConstrainedInterfaceType);
+                plan = new MultiAssignmentTargetPlan(
+                    clrProperty.Value,
+                    createClrPropertyWrite);
                 return true;
 
             case BoundIndexAssignmentExpression index:
@@ -1349,12 +1358,14 @@ internal sealed partial class StatementBinder
         ImmutableArray<BoundStatement>.Builder captures)
     {
         var address = CaptureMultiAssignmentAddress(storage, targetSyntax, captures);
-        return new MultiAssignmentTargetPlan(
-            assignedValue,
+        Func<BoundExpression, BoundExpression> createWrite =
             value => new BoundIndirectAssignmentExpression(
                 targetSyntax,
                 new BoundVariableExpression(null, address),
-                value));
+                value);
+        return new MultiAssignmentTargetPlan(
+            assignedValue,
+            createWrite);
     }
 
     private LocalVariableSymbol CaptureMultiAssignmentAddress(

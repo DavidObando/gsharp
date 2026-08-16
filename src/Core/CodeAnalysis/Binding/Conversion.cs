@@ -296,11 +296,11 @@ public sealed class Conversion
             }
 
             var nativeIntPartner = to is PointerTypeSymbol ? from : to;
-            if (nativeIntPartner is { } nonNullNativeIntPartner
-                && (nonNullNativeIntPartner == TypeSymbol.NInt || nonNullNativeIntPartner == TypeSymbol.NUInt
-                || nonNullNativeIntPartner == TypeSymbol.Int32 || nonNullNativeIntPartner == TypeSymbol.UInt32
-                || nonNullNativeIntPartner == TypeSymbol.Int64 || nonNullNativeIntPartner == TypeSymbol.UInt64
-                || TypeSymbol.IsLegalPointeeType(nonNullNativeIntPartner)))
+            if (nativeIntPartner != null
+                && (nativeIntPartner == TypeSymbol.NInt || nativeIntPartner == TypeSymbol.NUInt
+                || nativeIntPartner == TypeSymbol.Int32 || nativeIntPartner == TypeSymbol.UInt32
+                || nativeIntPartner == TypeSymbol.Int64 || nativeIntPartner == TypeSymbol.UInt64
+                || TypeSymbol.IsLegalPointeeType(nativeIntPartner)))
             {
                 return Conversion.Explicit;
             }
@@ -628,22 +628,26 @@ public sealed class Conversion
         // and constraint-satisfying interface targets so no narrowing or
         // otherwise-invalid conversion is admitted.
         if (from is NullableTypeSymbol fromNullableTypeParam
-            && fromNullableTypeParam.UnderlyingType is TypeParameterSymbol nullableUnderlyingTypeParam
-            && to is not NullableTypeSymbol
-            && !nullableUnderlyingTypeParam.HasReferenceTypeConstraint
-            && nullableUnderlyingTypeParam.ClassConstraint is null)
+            && to is not NullableTypeSymbol)
         {
-            if (to?.ClrType.IsSameAs(typeof(object)) == true)
+            var nullableUnderlyingTypeParam =
+                fromNullableTypeParam.UnderlyingType as TypeParameterSymbol;
+            if (nullableUnderlyingTypeParam != null
+                && !nullableUnderlyingTypeParam.HasReferenceTypeConstraint
+                && nullableUnderlyingTypeParam.ClassConstraint is null)
             {
-                return Conversion.Implicit;
-            }
+                if (to?.ClrType.IsSameAs(typeof(object)) == true)
+                {
+                    return Conversion.Implicit;
+                }
 
-            if (IsInterfaceLikeType(to)
-                && TypeParameterConvertsTo(
-                    nullableUnderlyingTypeParam,
-                    Invariant.Required(to, "a conversion target is present")))
-            {
-                return Conversion.Implicit;
+                if (IsInterfaceLikeType(to)
+                    && TypeParameterConvertsTo(
+                        nullableUnderlyingTypeParam,
+                        Invariant.Required(to, "a conversion target is present")))
+                {
+                    return Conversion.Implicit;
+                }
             }
         }
 
@@ -820,12 +824,17 @@ public sealed class Conversion
         // supported story. The `[]char → string` conversion (#1441, the G#
         // rendering of C# `new string(char[])`) is a real conversion with a
         // dedicated emit path and remains.
-        if (to == TypeSymbol.String
-            && from?.ClrType is { IsArray: true } fromCharArray
-            && fromCharArray.GetElementType() is System.Type fromCharElement
-            && fromCharElement.IsSameAs(typeof(char)))
+        if (to == TypeSymbol.String)
         {
-            return Conversion.Explicit;
+            var fromCharArray = from?.ClrType;
+            if (fromCharArray?.IsArray == true)
+            {
+                var fromCharElement = fromCharArray.GetElementType();
+                if (fromCharElement?.IsSameAs(typeof(char)) == true)
+                {
+                    return Conversion.Explicit;
+                }
+            }
         }
 
         // ADR-0045: every value-type primitive (and every user struct)
@@ -984,7 +993,7 @@ public sealed class Conversion
 
             if (to is InterfaceSymbol toInterface)
             {
-                for (var c = fromClass; c != null; c = c.BaseClass)
+                foreach (var c in GetStructHierarchy(fromClass))
                 {
                     foreach (var i in c.Interfaces)
                     {
@@ -1010,7 +1019,7 @@ public sealed class Conversion
             // `IEnumerable<T>`).
             if (to?.ClrType != null && to.ClrType.IsInterface)
             {
-                for (var c = fromClass; c != null; c = c.BaseClass)
+                foreach (var c in GetStructHierarchy(fromClass))
                 {
                     foreach (var iface in c.ImplementedClrInterfaces)
                     {
@@ -1058,7 +1067,7 @@ public sealed class Conversion
                 && !toClrClass.IsPointer
                 && !toClrClass.IsByRef)
             {
-                for (var c = fromClass; c != null; c = c.BaseClass)
+                foreach (var c in GetStructHierarchy(fromClass))
                 {
                     if (c.ImportedBaseType?.ClrType is Type importedBaseClr
                         && ClrTypeUtilities.IsAssignableByName(toClrClass, importedBaseClr))
@@ -1159,13 +1168,21 @@ public sealed class Conversion
         // the CLR allows array reference covariance, because G# slices are
         // invariant in their element type. The IL is a no-op since the
         // runtime representation is identical.
-        if (from is SliceTypeSymbol sliceSrc
-            && to?.ClrType != null && to.ClrType.IsArray && to.ClrType.GetArrayRank() == 1
-            && sliceSrc.ElementType?.ClrType != null
-            && to.ClrType.GetElementType() is Type targetElement
-            && string.Equals(targetElement.FullName, sliceSrc.ElementType.ClrType.FullName, StringComparison.Ordinal))
+        if (from is SliceTypeSymbol sliceSrc)
         {
-            return Conversion.Implicit;
+            var targetArray = to?.ClrType;
+            var sourceElement = sliceSrc.ElementType?.ClrType;
+            if (targetArray?.IsArray == true
+                && targetArray.GetArrayRank() == 1
+                && sourceElement != null)
+            {
+                var targetElement = targetArray.GetElementType();
+                if (targetElement != null
+                    && string.Equals(targetElement.FullName, sourceElement.FullName, StringComparison.Ordinal))
+                {
+                    return Conversion.Implicit;
+                }
+            }
         }
 
         // Issue #1162: same forward slice-to-array conversion when the
@@ -2065,6 +2082,19 @@ public sealed class Conversion
         return true;
     }
 
+    private static List<StructSymbol> GetStructHierarchy(StructSymbol type)
+    {
+        var hierarchy = new List<StructSymbol>();
+        StructSymbol? current = type;
+        while (current != null)
+        {
+            hierarchy.Add(current);
+            current = current.BaseClass;
+        }
+
+        return hierarchy;
+    }
+
     /// <summary>
     /// Issue #1248: determines whether a (possibly constructed generic) class
     /// <paramref name="fromClass"/> implicitly upcasts to a constructed generic
@@ -2092,7 +2122,7 @@ public sealed class Conversion
         // type arguments resolved in fromClass's context, composed across hops.
         Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
 
-        for (var c = fromClass; c != null; c = c.BaseClass)
+        foreach (var c in GetStructHierarchy(fromClass))
         {
             // The most-derived class itself is the identity case (handled by the
             // caller); only its base chain is an upcast target.

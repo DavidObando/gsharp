@@ -7,6 +7,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -20,6 +21,19 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// </summary>
 public class MultiAssignmentTests
 {
+    [Fact]
+    public void MutableTupleDeconstruction_WithDiscard_Executes()
+    {
+        var result = EmittedOracle.Evaluate("""
+            var kept = 0
+            kept, _ = (7, 2)
+            kept
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
     [Fact]
     public void MultiDecl_AsTwoVarLines_Binds()
     {

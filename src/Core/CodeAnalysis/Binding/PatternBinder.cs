@@ -766,6 +766,7 @@ internal sealed class PatternBinder
         bool preferTypeNames,
         out BoundPropertyPatternField? boundField)
     {
+        boundField = null;
         var name = syntax.Identifier.Text;
         if (lookupType is StructSymbol structType)
         {
@@ -797,7 +798,6 @@ internal sealed class PatternBinder
 
                     if (property.IsIndexer || property.IsStatic || !property.HasGetter)
                     {
-                        boundField = null;
                         return false;
                     }
 
@@ -877,6 +877,19 @@ internal sealed class PatternBinder
             && TryBindClrPropertyPatternMember(
                 lookupType,
                 clrType,
+                syntax,
+                bindingContext,
+                preferTypeNames,
+                out boundField))
+        {
+            return true;
+        }
+
+        var directClrType = lookupType.ClrType;
+        if (directClrType is not null
+            && TryBindClrPropertyPatternMember(
+                lookupType,
+                directClrType,
                 syntax,
                 bindingContext,
                 preferTypeNames,

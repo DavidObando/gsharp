@@ -81,7 +81,7 @@ internal sealed partial class ExpressionBinder
                 var result = targetType == null
                     ? BindExpression(armSyntax.Result)
                     : BindExpression(armSyntax.Result, targetType);
-                boundArmBuilders.Add((armSyntax, pattern, null, result));
+                boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression?), result));
                 continue;
             }
 

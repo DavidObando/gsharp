@@ -94,7 +94,7 @@ internal sealed class UserTokenResolver
     private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField, RemapScope Scope), EntityHandle> userStructFieldRefCache = new();
     private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember, RemapScope Scope), EntityHandle> userStructMethodRefCache = new();
     private readonly Dictionary<(InterfaceSymbol Sym, RemapScope Scope), EntityHandle> userInterfaceTypeSpecCache = new();
-    private readonly Dictionary<(InterfaceSymbol Containing, EntityHandle OpenMember, RemapScope Scope), EntityHandle> userInterfaceMethodRefCache = new();
+    private readonly Dictionary<UserInterfaceMethodRefKey, EntityHandle> userInterfaceMethodRefCache = new();
     private readonly Dictionary<(InterfaceSymbol Containing, FieldSymbol DefField, RemapScope Scope), EntityHandle> userInterfaceFieldRefCache = new();
     private readonly Dictionary<(DelegateTypeSymbol Sym, RemapScope Scope), EntityHandle> userDelegateTypeSpecCache = new();
     private readonly Dictionary<(DelegateTypeSymbol Sym, RemapScope Scope), EntityHandle> userDelegateCtorRefCache = new();
@@ -1686,8 +1686,12 @@ internal sealed class UserTokenResolver
         string methodName,
         BlobBuilder signature)
     {
-        var key = (containingInterface, openMethodDef, this.remaps.CurrentScope);
-        if (this.userInterfaceMethodRefCache.TryGetValue(key, out var cached))
+        var key = new UserInterfaceMethodRefKey(
+            containingInterface,
+            openMethodDef,
+            this.remaps.CurrentScope);
+        EntityHandle cached;
+        if (this.userInterfaceMethodRefCache.TryGetValue(key, out cached))
         {
             return cached;
         }
@@ -1906,8 +1910,12 @@ internal sealed class UserTokenResolver
             return openDef;
         }
 
-        var key = (containingInterface, openDef, this.remaps.CurrentScope);
-        if (this.userInterfaceMethodRefCache.TryGetValue(key, out var cached))
+        var key = new UserInterfaceMethodRefKey(
+            containingInterface,
+            openDef,
+            this.remaps.CurrentScope);
+        EntityHandle cached;
+        if (this.userInterfaceMethodRefCache.TryGetValue(key, out cached))
         {
             return cached;
         }
@@ -2406,4 +2414,9 @@ internal sealed class UserTokenResolver
         return TypeSymbol.ContainsTypeParameter(fnType.ReturnType)
             || ReflectionMetadataEmitter.ArgIsSymbolicUserDefined(fnType.ReturnType);
     }
+
+    private readonly record struct UserInterfaceMethodRefKey(
+        InterfaceSymbol Containing,
+        EntityHandle OpenMember,
+        RemapScope Scope);
 }

@@ -273,8 +273,16 @@ public sealed class AsyncMethodBuilderInfo
 
         // 3. Custom task-like via [AsyncMethodBuilder] on the return type.
         // ADR-0047 §6: recognised by type identity, not string name.
-        var attributeType = kickoffReturnClrType.GetCustomAttributesData()
-            .FirstOrDefault(a => a.AttributeType.IsSameAs(typeof(System.Runtime.CompilerServices.AsyncMethodBuilderAttribute)));
+        CustomAttributeData? attributeType = null;
+        foreach (var attribute in kickoffReturnClrType.GetCustomAttributesData())
+        {
+            if (attribute.AttributeType.IsSameAs(typeof(System.Runtime.CompilerServices.AsyncMethodBuilderAttribute)))
+            {
+                attributeType = attribute;
+                break;
+            }
+        }
+
         if (attributeType != null && attributeType.ConstructorArguments.Count == 1)
         {
             var customBuilder = attributeType.ConstructorArguments[0].Value as Type;

@@ -6,6 +6,11 @@
 #pragma warning disable SA1028
 #pragma warning disable SA1116
 #pragma warning disable SA1117
+#pragma warning disable SA1202
+#pragma warning disable SA1304
+#pragma warning disable SA1307
+#pragma warning disable SA1401
+#pragma warning disable SA1508
 #pragma warning disable SA1611
 #pragma warning disable SA1615
 
@@ -50,31 +55,31 @@ public static class AsyncIteratorMoveNextBodyBuilder
         return ctx.BuildBody();
     }
 
-    private sealed class BuildContext
+    internal sealed class BuildContext
     {
-        private readonly AsyncIteratorPlan plan;
-        private readonly StructSymbol smClass;
-        private readonly ParameterSymbol thisParameter;
-        private readonly FieldSymbol stateField;
-        private readonly FieldSymbol currentField;
-        private readonly FieldSymbol promiseField;
-        private readonly FieldSymbol disposeModeField;
-        private readonly FieldSymbol disposeExceptionField;
-        private readonly FieldSymbol builderField;
-        private readonly Dictionary<VariableSymbol, FieldSymbol> fieldMap;
-        private readonly Dictionary<Type, FieldSymbol> awaiterPoolFields;
-        private readonly TryDispatchPlan awaitTryDispatch;
-        private readonly IteratorTryDispatchPlan yieldTryDispatch;
+        internal readonly AsyncIteratorPlan plan;
+        internal readonly StructSymbol smClass;
+        internal readonly ParameterSymbol thisParameter;
+        internal readonly FieldSymbol stateField;
+        internal readonly FieldSymbol currentField;
+        internal readonly FieldSymbol promiseField;
+        internal readonly FieldSymbol disposeModeField;
+        internal readonly FieldSymbol disposeExceptionField;
+        internal readonly FieldSymbol builderField;
+        internal readonly Dictionary<VariableSymbol, FieldSymbol> fieldMap;
+        internal readonly Dictionary<Type, FieldSymbol> awaiterPoolFields;
+        internal readonly TryDispatchPlan awaitTryDispatch;
+        internal readonly IteratorTryDispatchPlan yieldTryDispatch;
 
         // Labels for yield resume points
-        private readonly Dictionary<int, BoundLabel> yieldResumeLabels = new();
+        internal readonly Dictionary<int, BoundLabel> yieldResumeLabels = new();
 
         // Labels for await resume points
-        private readonly Dictionary<int, BoundLabel> awaitResumeLabels = new();
-        private readonly Dictionary<int, BoundLabel> awaitResumeAfterLabels = new();
+        internal readonly Dictionary<int, BoundLabel> awaitResumeLabels = new();
+        internal readonly Dictionary<int, BoundLabel> awaitResumeAfterLabels = new();
 
-        private readonly BoundLabel exitLabel = new BoundLabel("<>ai_exit");
-        private readonly BoundLabel endOfBodyLabel = new BoundLabel("<>ai_end");
+        internal readonly BoundLabel exitLabel = new BoundLabel("<>ai_exit");
+        internal readonly BoundLabel endOfBodyLabel = new BoundLabel("<>ai_end");
 
         public BuildContext(
             AsyncIteratorPlan plan,
@@ -164,7 +169,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 jumpIfTrue: true));
 
             // Rewritten user body.
-            var rewriter = new InnerRewriter(this);
+            var rewriter = new AsyncIteratorBodyRewriter(this);
             var rewrittenBody = rewriter.RewriteStatement(plan.LoweredBody);
             if (rewrittenBody is BoundBlockStatement block)
             {
@@ -274,7 +279,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             return new BoundBlockStatement(null, stmts.ToImmutable());
         }
 
-        private BoundExpression EmitPromiseSetResult(bool value)
+        internal BoundExpression EmitPromiseSetResult(bool value)
         {
             var promiseFieldType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
             var setResultMethod = promiseFieldType.GetMethod("SetResult", new[] { typeof(bool) });
@@ -291,12 +296,12 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, value)));
         }
 
-        private BoundExpression ReadField(FieldSymbol field)
+        internal BoundExpression ReadField(FieldSymbol field)
         {
             return new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParameter), smClass, field);
         }
 
-        private BoundExpression WriteField(FieldSymbol field, BoundExpression value)
+        internal BoundExpression WriteField(FieldSymbol field, BoundExpression value)
         {
             return new BoundFieldAssignmentExpression(null, thisParameter, smClass, field, value);
         }
@@ -305,30 +310,42 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
         private static BoundExpressionStatement Stmt(BoundExpression expr) => new BoundExpressionStatement(null, expr);
 
-        /// <summary>
-        /// Walks the user body, replacing yields, awaits, variable accesses (hoisted to fields),
-        /// and returns.
-        /// </summary>
-        private sealed class InnerRewriter : HoistedFieldRewriter
+    }
+}
+
+/// <summary>
+/// Walks an async-iterator body, replacing yields, awaits, variable accesses,
+/// and returns.
+/// </summary>
+internal sealed class AsyncIteratorBodyRewriter : HoistedFieldRewriter
         {
-            private readonly BuildContext ctx;
+            private readonly AsyncIteratorMoveNextBodyBuilder.BuildContext ctx;
             private int yieldIndex;
 
-            public InnerRewriter(BuildContext ctx)
+            public AsyncIteratorBodyRewriter(AsyncIteratorMoveNextBodyBuilder.BuildContext ctx)
                 : base(ctx.smClass, ctx.thisParameter, ctx.fieldMap)
             {
                 this.ctx = ctx;
             }
 
-            protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
+            private static BoundExpression Literal(int value) => new BoundLiteralExpression(null, value);
+
+            private static BoundExpressionStatement Stmt(BoundExpression expr) => new BoundExpressionStatement(null, expr);
+
+            public override BoundStatement RewriteStatement(BoundStatement node)
             {
-                if (node.Initializer is BoundAwaitExpression awaitExpr)
+                if (node is not BoundVariableDeclaration declaration)
                 {
-                    return EmitPerAwaitSequence(awaitExpr, node.Variable);
+                    return base.RewriteStatement(node);
                 }
 
-                var rewrittenInit = node.Initializer != null ? RewriteExpression(node.Initializer) : null;
-                if (ctx.fieldMap.TryGetValue(node.Variable, out var field))
+                if (declaration.Initializer is BoundAwaitExpression awaitExpr)
+                {
+                    return EmitPerAwaitSequence(awaitExpr, declaration.Variable);
+                }
+
+                var rewrittenInit = declaration.Initializer != null ? RewriteExpression(declaration.Initializer) : null;
+                if (ctx.fieldMap.TryGetValue(declaration.Variable, out var field))
                 {
                     if (rewrittenInit != null)
                     {
@@ -338,12 +355,16 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     return new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
                 }
 
-                if (rewrittenInit != node.Initializer)
+                if (rewrittenInit != declaration.Initializer)
                 {
-                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit, node.ConstantValue);
+                    return new BoundVariableDeclaration(
+                        null,
+                        declaration.Variable,
+                        rewrittenInit,
+                        declaration.ConstantValue);
                 }
 
-                return node;
+                return declaration;
             }
 
             protected override BoundStatement RewriteYieldStatement(BoundYieldStatement node)
@@ -754,6 +775,4 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 return new BoundBlockStatement(null, stmts.ToImmutable());
             }
-        }
-    }
 }

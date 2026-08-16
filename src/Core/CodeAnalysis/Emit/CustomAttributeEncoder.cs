@@ -1061,11 +1061,15 @@ internal sealed class CustomAttributeEncoder
 
         if (paramType.IsSameAs(typeof(bool)))
         {
-            bb.WriteBoolean((bool)Invariant.Required(value, "a bool-typed attribute parameter binds a bool constant"));
+            bb.WriteByte(object.Equals(value, true) ? (byte)1 : (byte)0);
         }
         else if (paramType.IsSameAs(typeof(char)))
         {
-            bb.WriteUInt16((char)Invariant.Required(value, "a char-typed attribute parameter binds a char constant"));
+            var charValue = System.Convert.ToUInt16(
+                value,
+                System.Globalization.CultureInfo.InvariantCulture);
+            bb.WriteByte((byte)charValue);
+            bb.WriteByte((byte)(charValue >> 8));
         }
         else if (paramType.IsSameAs(typeof(sbyte)))
         {

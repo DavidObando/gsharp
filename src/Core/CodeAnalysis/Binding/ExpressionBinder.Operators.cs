@@ -851,12 +851,16 @@ internal sealed partial class ExpressionBinder
         whenTrueNarrowing = MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue);
         whenFalseNarrowing = MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse);
 
+        Func<BoundExpression> bindWhenTrue =
+            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
+        Func<BoundExpression> bindWhenFalse =
+            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
         var whenTrue = BindWithNarrowing(
             whenTrueNarrowing,
-            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType));
+            bindWhenTrue);
         var whenFalse = BindWithNarrowing(
             whenFalseNarrowing,
-            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType));
+            bindWhenFalse);
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {
@@ -1021,23 +1025,22 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression? boundExpression = null;
         VariableSymbol? result = null;
-        var boundStatements = bindStatementList(
-            statements,
-            () =>
+        Func<BoundStatement> bindTrailingStatement = () =>
+        {
+            boundExpression = BindTrailingExpression();
+            if (boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void)
             {
-                boundExpression = BindTrailingExpression();
-                if (boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void)
-                {
-                    return new BoundExpressionStatement(expression, boundExpression);
-                }
+                return new BoundExpressionStatement(expression, boundExpression);
+            }
 
-                result = new LocalVariableSymbol(
-                    $"<blockResult{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
-                    isReadOnly: true,
-                    boundExpression.Type ?? TypeSymbol.Error);
-                scope.TryDeclareVariable(result);
-                return new BoundVariableDeclaration(expression, result, boundExpression);
-            });
+            result = new LocalVariableSymbol(
+                $"<blockResult{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: true,
+                boundExpression.Type ?? TypeSymbol.Error);
+            scope.TryDeclareVariable(result);
+            return new BoundVariableDeclaration(expression, result, boundExpression);
+        };
+        var boundStatements = bindStatementList(statements, bindTrailingStatement);
         var resultExpression = result != null
             ? (BoundExpression)new BoundVariableExpression(expression, result)
             : boundExpression is BoundErrorExpression
@@ -1051,7 +1054,7 @@ internal sealed partial class ExpressionBinder
         bool canBeVoid = false,
         TypeSymbol? targetType = null,
         bool preserveEmptyBlock = false)
-        => BindInBlockExpressionScope(() => BindBlockExpressionValueCore(
+        => BindInBlockExpressionScope<BoundExpression>(() => BindBlockExpressionValueCore(
             syntax,
             canBeVoid,
             targetType,
@@ -1082,7 +1085,11 @@ internal sealed partial class ExpressionBinder
 
         // Bind prefix statements.
         var (boundStatements, boundExpression) =
-            BindBlockExpressionParts(syntax.Statements, syntax.Expression, canBeVoid, targetType);
+            BindBlockExpressionParts(
+                syntax.Statements,
+                Invariant.Required(syntax.Expression, "a block value has a trailing expression"),
+                canBeVoid,
+                targetType);
         if (IsDeferredBranchyArgumentPlaceholder(boundExpression, out _))
         {
             return new BoundErrorExpression(syntax);
@@ -1127,7 +1134,7 @@ internal sealed partial class ExpressionBinder
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
-            return BindInBlockExpressionScope(() => BindLambdaBlockBodyExpression(block));
+            return BindInBlockExpressionScope<BoundExpression>(() => BindLambdaBlockBodyExpression(block));
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);
@@ -1156,7 +1163,10 @@ internal sealed partial class ExpressionBinder
         }
 
         var (boundStatements, trailing) =
-            BindBlockExpressionParts(block.Statements, block.Expression, canBeVoid: true);
+            BindBlockExpressionParts(
+                block.Statements,
+                Invariant.Required(block.Expression, "a value-returning lambda block has a trailing expression"),
+                canBeVoid: true);
         if (boundStatements.Length == 0)
         {
             return trailing;

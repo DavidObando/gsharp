@@ -29,10 +29,13 @@ public static class NullableLifting
     /// <returns>The CLR <see cref="Type"/> to use for overload resolution, or <see langword="null"/> if <paramref name="typeSymbol"/> is <see langword="null"/>.</returns>
     public static Type? GetEffectiveClrType(TypeSymbol? typeSymbol)
     {
-        if (typeSymbol is NullableTypeSymbol nullable
-            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
+        if (typeSymbol is NullableTypeSymbol nullable)
         {
-            return typeof(Nullable<>).MakeGenericType(innerVt);
+            var innerVt = nullable.UnderlyingType?.ClrType;
+            if (innerVt?.IsValueType == true)
+            {
+                return typeof(Nullable<>).MakeGenericType(innerVt);
+            }
         }
 
         return typeSymbol?.ClrType;
@@ -97,11 +100,14 @@ public static class NullableLifting
     /// </returns>
     public static Type? ResolveClrTypeForGenericArg(ReferenceResolver references, TypeSymbol? typeSymbol)
     {
-        if (typeSymbol is NullableTypeSymbol nullable
-            && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt
-            && TryConstructNullable(references, innerVt, out var nullableClr))
+        if (typeSymbol is NullableTypeSymbol nullable)
         {
-            return nullableClr;
+            var innerVt = nullable.UnderlyingType?.ClrType;
+            if (innerVt?.IsValueType == true
+                && TryConstructNullable(references, innerVt, out var nullableClr))
+            {
+                return nullableClr;
+            }
         }
 
         var clr = typeSymbol?.ClrType;
@@ -202,6 +208,9 @@ public static class NullableLifting
     {
         return IsUserValueTypeNullable(nullable)
             || nullable?.UnderlyingType is TupleTypeSymbol { ClrType: null }
+            || (nullable?.UnderlyingType is ImportedTypeSymbol imported
+                && imported.OpenDefinition?.IsValueType == true
+                && !imported.TypeArguments.IsDefaultOrEmpty)
             || (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint);
     }
 

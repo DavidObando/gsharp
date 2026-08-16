@@ -345,7 +345,7 @@ public sealed class StructSymbol : TypeSymbol
             bool HasUnimplementedAbstractProperties()
             {
                 var effectiveProperties = new Dictionary<string, PropertySymbol>();
-                for (var current = this; current != null; current = current.BaseClass)
+                foreach (var current in GetHierarchy())
                 {
                     foreach (var property in current.Properties)
                     {
@@ -967,7 +967,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns><c>true</c> when this class is or derives from <see cref="System.Attribute"/>.</returns>
     public bool DerivesFromSystemAttribute()
     {
-        for (var current = this; current != null; current = current.BaseClass)
+        foreach (var current in GetHierarchy())
         {
             if (current.IsAttributeClass)
             {
@@ -1037,7 +1037,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>True if found.</returns>
     public bool TryGetMethodIncludingInherited(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
-        for (var c = this; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy())
         {
             if (c.TryGetMethod(name, out method))
             {
@@ -1107,7 +1107,7 @@ public sealed class StructSymbol : TypeSymbol
     public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethodsIncludingInherited(string name)
     {
         System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder? builder = null;
-        for (var c = this; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy())
         {
             if (c.Methods.IsDefaultOrEmpty)
             {
@@ -1179,7 +1179,7 @@ public sealed class StructSymbol : TypeSymbol
         // each argument through the running map composes the substitution across hops.
         var levels = new List<(StructSymbol Cls, Dictionary<TypeParameterSymbol, TypeSymbol>? Subst)>();
         Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
-        for (var c = this; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy())
         {
             if (c.Definition != null
                 && !c.TypeArguments.IsDefaultOrEmpty
@@ -1308,7 +1308,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>True if found.</returns>
     public bool TryGetFieldIncludingInherited(string name, [NotNullWhen(true)] out FieldSymbol? field, [NotNullWhen(true)] out StructSymbol? declaringType)
     {
-        for (var c = this; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy())
         {
             if (c.TryGetField(name, out field))
             {
@@ -1504,7 +1504,7 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
-        for (var c = this; c != null; c = c.BaseClass)
+        foreach (var c in GetHierarchy())
         {
             // A constructed nested receiver already carries the argument shape
             // needed by its TypeSpec. Keep it verbatim: rebuilding a generic
@@ -1791,6 +1791,19 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return SubstituteTypeForConstruction(type, GetSubstitutionMap(), mapClrType);
+    }
+
+    private List<StructSymbol> GetHierarchy()
+    {
+        var hierarchy = new List<StructSymbol>();
+        StructSymbol? current = this;
+        while (current != null)
+        {
+            hierarchy.Add(current);
+            current = current.BaseClass;
+        }
+
+        return hierarchy;
     }
 
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
@@ -2559,7 +2572,13 @@ public sealed class StructSymbol : TypeSymbol
                 // a bug. Log for diagnosability and fall back to the erased
                 // constructed form so both debug and release builds degrade
                 // gracefully rather than crash.
-                var assertMessage = $"StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", resolvedClrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                var renderedArguments = new string[resolvedClrArgs.Length];
+                for (var i = 0; i < resolvedClrArgs.Length; i++)
+                {
+                    renderedArguments[i] = resolvedClrArgs[i].ToString();
+                }
+
+                var assertMessage = $"StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", renderedArguments)}] even after mapClrType projection.";
                 System.Diagnostics.Debug.WriteLine(assertMessage);
                 return imported;
             }
