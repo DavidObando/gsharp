@@ -1048,7 +1048,10 @@ public static class SpillSequenceSpiller
                         propAssign,
                         propAssign.Receiver,
                         propAssign.Value,
-                        (recv, val) => new BoundPropertyAssignmentExpression(null, recv, propAssign.StructType, propAssign.Property, val));
+                        (recv, val) =>
+                        {
+                            return new BoundPropertyAssignmentExpression(null, recv, propAssign.StructType, propAssign.Property, val);
+                        });
                 case BoundTupleLiteralExpression tupleLiteral:
                     return SpillTupleLiteral(tupleLiteral);
                 case BoundTupleElementAccessExpression tupleAccess:
@@ -1117,7 +1120,13 @@ public static class SpillSequenceSpiller
                         operand => new BoundAsExpression(null, operand, asExpr.TargetType);
                     return SpillOneOperand(asExpr, asExpr.Expression, rebuildAsExpression);
                 case BoundThrowExpression throwExpr:
-                    return SpillOneOperand(throwExpr, throwExpr.Expression, operand => new BoundThrowExpression(null, operand));
+                    return SpillOneOperand(
+                        throwExpr,
+                        throwExpr.Expression,
+                        operand =>
+                        {
+                            return new BoundThrowExpression(null, operand);
+                        });
                 case BoundAddressOfExpression addressOf:
                     return SpillOneOperand(addressOf, addressOf.Operand, operand => new BoundAddressOfExpression(null, operand));
                 case BoundDereferenceExpression dereference:
