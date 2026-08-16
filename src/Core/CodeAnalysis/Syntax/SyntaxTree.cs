@@ -15,11 +15,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public class SyntaxTree
 {
     private Dictionary<SyntaxNode, string>? documentationTable;
+    private CompilationUnitSyntax? root;
 
     private SyntaxTree(SourceText text)
     {
         Text = text;
-        Root = null!;
         Diagnostics = ImmutableArray<Diagnostic>.Empty;
         DocumentationTokens = ImmutableArray<SyntaxToken>.Empty;
     }
@@ -37,7 +37,8 @@ public class SyntaxTree
     /// <summary>
     /// Gets the compilation unit root.
     /// </summary>
-    public CompilationUnitSyntax Root { get; private set; }
+    public CompilationUnitSyntax Root =>
+        Invariant.Required(root, "a syntax tree publishes its root before returning to callers");
 
     /// <summary>
     /// Gets the documentation comment tokens collected during lexing (ADR-0057 §7).
@@ -170,7 +171,7 @@ public class SyntaxTree
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableArray<SyntaxToken> documentationTokens)
     {
-        Root = root;
+        this.root = root;
         Diagnostics = diagnostics;
         DocumentationTokens = documentationTokens;
     }
