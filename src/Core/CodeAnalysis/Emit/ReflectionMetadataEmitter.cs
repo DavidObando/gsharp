@@ -4369,7 +4369,7 @@ internal sealed class ReflectionMetadataEmitter
         private static bool TryGetFixedReturnType(BoundStatement statement, [NotNullWhen(true)] out TypeSymbol? returnType)
         {
             TypeSymbol? foundType = null;
-            var found = Find(statement, insideFixed: false);
+            var found = Find(statement, false);
             returnType = foundType;
             return found;
 
@@ -4389,7 +4389,7 @@ internal sealed class ReflectionMetadataEmitter
 
                         return found;
                     case BoundFixedStatement fixedStatement:
-                        return Find(fixedStatement.Body, insideFixed: true);
+                        return Find(fixedStatement.Body, true);
                     case BoundSelectStatement selectStatement:
                         var selectFound = false;
                         foreach (var arm in selectStatement.Cases)

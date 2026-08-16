@@ -206,9 +206,9 @@ public sealed class ControlFlowGraph
 
     private static BoundBlockStatement ProjectRegionsForDefiniteReturn(BoundStatement statement)
     {
-        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
         var labelOrdinal = 0;
         var choiceOrdinal = 0;
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
         BoundLabel? methodExitLabel = null;
         BoundReturnStatement? methodExitReturn = null;
 
@@ -227,7 +227,7 @@ public sealed class ControlFlowGraph
             }
         }
 
-        Add(statement);
+        Add(statement, null);
         return new BoundBlockStatement(null, builder.ToImmutable());
 
         void Add(BoundStatement current, Action<BoundStatement>? routeTransfer = null)
