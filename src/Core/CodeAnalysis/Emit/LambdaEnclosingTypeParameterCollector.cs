@@ -47,7 +47,7 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
         new LambdaEnclosingTypeParameterCollector(sink).VisitStatement(body);
     }
 
-    public override void VisitExpression(BoundExpression node)
+    public override void VisitExpression(BoundExpression? node)
     {
         if (node == null)
         {

@@ -137,7 +137,7 @@ public static class AsyncBoundTreeQueries
 
         public bool Found { get; private set; }
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
             if (node == null)
             {
@@ -157,7 +157,7 @@ public static class AsyncBoundTreeQueries
             Found = Found || outerFound;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
             if (node == null)
             {

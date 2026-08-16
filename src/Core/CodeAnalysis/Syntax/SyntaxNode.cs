@@ -116,6 +116,8 @@ public abstract class SyntaxNode
 
         foreach (var accessor in accessors)
         {
+            // Kind comes from the property's static type, so a failed `as`
+            // here can only represent a legitimate null child/list value.
             switch (accessor.Kind)
             {
                 case ChildAccessorKind.Node:

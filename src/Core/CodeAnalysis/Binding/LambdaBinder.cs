@@ -2923,7 +2923,7 @@ internal sealed class LambdaBinder
             });
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
             if (node == null || Found != null)
             {
