@@ -622,9 +622,15 @@ internal sealed partial class ExpressionBinder
             var parameterIndex = sourceArgumentIndex + parameterOffset;
             if (!string.IsNullOrEmpty(argumentName))
             {
-                parameterIndex = Array.FindIndex(
-                    parameters,
-                    parameter => string.Equals(parameter.Name, argumentName, StringComparison.Ordinal));
+                parameterIndex = -1;
+                for (var i = 0; i < parameters.Length; i++)
+                {
+                    if (string.Equals(parameters[i].Name, argumentName, StringComparison.Ordinal))
+                    {
+                        parameterIndex = i;
+                        break;
+                    }
+                }
             }
 
             if (parameterIndex < 0 || parameterIndex >= parameters.Length)

@@ -256,7 +256,16 @@ public sealed class InterpolatedStringHandlerInfo
                 continue;
             }
 
-            var index = System.Array.FindIndex(parameters, p => string.Equals(p.Name, name, System.StringComparison.Ordinal));
+            var index = -1;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (string.Equals(parameters[i].Name, name, StringComparison.Ordinal))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
             if (index < 0 || index >= arguments.Length)
             {
                 failure = $"the handler argument references parameter '{name}', which is not a preceding argument of this call";

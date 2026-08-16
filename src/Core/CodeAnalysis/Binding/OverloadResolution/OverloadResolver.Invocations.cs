@@ -549,7 +549,10 @@ internal sealed partial class OverloadResolver
                 fixedCount,
                 (SliceTypeSymbol)variadicParameter.Type,
                 variadicParameter.Name,
-                i => i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Location,
+                i =>
+                {
+                    return i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Location;
+                },
                 ref hasElementErrors);
             if (hasElementErrors)
             {
@@ -1575,7 +1578,10 @@ internal sealed partial class OverloadResolver
                     fixedCallableParamCount,
                     sliceType,
                     variadicParam.Name,
-                    i => permutedSyntax[i]?.Location ?? ce.Location,
+                    i =>
+                    {
+                        return permutedSyntax[i]?.Location ?? ce.Location;
+                    },
                     ref hasVariadicErrors);
 
                 if (hasVariadicErrors)

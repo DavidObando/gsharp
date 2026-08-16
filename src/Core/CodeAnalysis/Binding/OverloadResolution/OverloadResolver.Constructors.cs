@@ -422,7 +422,10 @@ internal sealed partial class OverloadResolver
                 fixedPrimaryCount,
                 variadicSliceType,
                 variadicParam.Name,
-                i => parameterSyntaxV[i].Location,
+                i =>
+                {
+                    return parameterSyntaxV[i].Location;
+                },
                 ref hasErrorsV);
 
             if (hasErrorsV)

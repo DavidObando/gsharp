@@ -490,11 +490,19 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(elementType);
         if (node.Capacity == null)
         {
-            var openCreate = typeof(System.Threading.Channels.Channel)
-                .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                .First(m => m.Name == nameof(System.Threading.Channels.Channel.CreateUnbounded)
-                    && m.IsGenericMethodDefinition
-                    && m.GetParameters().Length == 0);
+            MethodInfo? openCreate = null;
+            foreach (var method in typeof(System.Threading.Channels.Channel).GetMethods(BindingFlags.Public | BindingFlags.Static))
+            {
+                if (method.Name == nameof(System.Threading.Channels.Channel.CreateUnbounded)
+                    && method.IsGenericMethodDefinition
+                    && method.GetParameters().Length == 0)
+                {
+                    openCreate = method;
+                    break;
+                }
+            }
+
+            openCreate = Invariant.Required(openCreate, "Channel.CreateUnbounded<T>() is available");
             var create = openCreate.MakeGenericMethod(elementClr);
             this.il.Call(this.GetChannelGenericMethodEntityHandle(create, elementType));
             return;
@@ -506,12 +514,20 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(optionsCtor));
 
-        var openBounded = typeof(System.Threading.Channels.Channel)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .First(m => m.Name == nameof(System.Threading.Channels.Channel.CreateBounded)
-                && m.IsGenericMethodDefinition
-                && m.GetParameters().Length == 1
-                && m.GetParameters()[0].ParameterType.IsSameAs(typeof(System.Threading.Channels.BoundedChannelOptions)));
+        MethodInfo? openBounded = null;
+        foreach (var method in typeof(System.Threading.Channels.Channel).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (method.Name == nameof(System.Threading.Channels.Channel.CreateBounded)
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 1
+                && method.GetParameters()[0].ParameterType.IsSameAs(typeof(System.Threading.Channels.BoundedChannelOptions)))
+            {
+                openBounded = method;
+                break;
+            }
+        }
+
+        openBounded = Invariant.Required(openBounded, "Channel.CreateBounded<T>(BoundedChannelOptions) is available");
         var bounded = openBounded.MakeGenericMethod(elementClr);
         this.il.Call(this.GetChannelGenericMethodEntityHandle(bounded, elementType));
     }

@@ -539,7 +539,7 @@ public sealed class ReferenceResolver : IDisposable
     /// references when the caller supplies none.
     /// </summary>
     /// <returns>The host's trusted-platform assembly paths.</returns>
-    public static IReadOnlyList<string> HostTrustedPlatformAssemblyPaths() => GetHostTrustedPlatformAssemblies().ToArray();
+    public static IReadOnlyList<string> HostTrustedPlatformAssemblyPaths() => GetHostTrustedPlatformAssemblies();
 
     /// <summary>
     /// Gets a resolver that searches only the assemblies referenced by file
@@ -1588,7 +1588,7 @@ public sealed class ReferenceResolver : IDisposable
         return false;
     }
 
-    private static IEnumerable<string> GetHostTrustedPlatformAssemblies()
+    private static IReadOnlyList<string> GetHostTrustedPlatformAssemblies()
     {
         var tpa = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
         if (string.IsNullOrEmpty(tpa))
@@ -1596,8 +1596,16 @@ public sealed class ReferenceResolver : IDisposable
             return Array.Empty<string>();
         }
 
-        return tpa.Split(Path.PathSeparator)
-                  .Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
+        var paths = new List<string>();
+        foreach (var path in tpa.Split(Path.PathSeparator))
+        {
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                paths.Add(path);
+            }
+        }
+
+        return paths;
     }
 
     /// <summary>

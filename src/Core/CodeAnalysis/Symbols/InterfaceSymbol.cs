@@ -843,7 +843,10 @@ public sealed class InterfaceSymbol : TypeSymbol
         {
             var enclosingArgs = EnumSymbol.SubstituteEnclosingArguments(
                 enumType,
-                argument => SubstituteType(argument, subst, mapClrType));
+                argument =>
+                {
+                    return SubstituteType(argument, subst, mapClrType);
+                });
             return enclosingArgs.IsDefaultOrEmpty
                 ? enumType
                 : EnumSymbol.ConstructNested(enumType.Definition ?? enumType, enclosingArgs);
@@ -865,7 +868,10 @@ public sealed class InterfaceSymbol : TypeSymbol
         {
             return StructSymbol.SubstituteConstructionArguments(
                 structType,
-                argument => SubstituteType(argument, subst, mapClrType),
+                argument =>
+                {
+                    return SubstituteType(argument, subst, mapClrType);
+                },
                 mapClrType);
         }
 
