@@ -4645,11 +4645,17 @@ internal static class ClrOverloadResolution
 
         try
         {
-            return importedBase.Assembly.GetTypes().FirstOrDefault(type =>
-                !type.IsAbstract
-                && importedBase.IsAssignableFrom(type)
-                && type.GetConstructor(Type.EmptyTypes) is { IsPublic: true })
-                ?? importedBase;
+            foreach (var type in importedBase.Assembly.GetTypes())
+            {
+                if (!type.IsAbstract
+                    && importedBase.IsAssignableFrom(type)
+                    && type.GetConstructor(Type.EmptyTypes) is { IsPublic: true })
+                {
+                    return type;
+                }
+            }
+
+            return importedBase;
         }
         catch (Exception ex) when (IsMetadataLoadFailure(ex) || ex is ReflectionTypeLoadException)
         {

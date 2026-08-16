@@ -1461,12 +1461,24 @@ internal sealed class MemberLookup
             return default;
         }
 
-        var inferred = !symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0
-            ? InferSymbolicMethodTypeArguments(
+        TypeSymbol?[] inferred;
+        if (!symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0)
+        {
+            var nullableSymbolicArgTypes = ImmutableArray.CreateBuilder<TypeSymbol?>(symbolicArgTypes.Length);
+            foreach (var symbolicArgType in symbolicArgTypes)
+            {
+                nullableSymbolicArgTypes.Add(symbolicArgType);
+            }
+
+            inferred = InferSymbolicMethodTypeArguments(
                 openMethod,
-                ImmutableArray.CreateRange<TypeSymbol, TypeSymbol?>(symbolicArgTypes, static t => t),
-                isExpanded)
-            : new TypeSymbol?[arity];
+                nullableSymbolicArgTypes.MoveToImmutable(),
+                isExpanded);
+        }
+        else
+        {
+            inferred = new TypeSymbol?[arity];
+        }
 
         // Explicit list takes precedence at each slot when present.
         if (!explicitTypeArgSymbols.IsDefaultOrEmpty)
