@@ -4575,6 +4575,16 @@ public sealed class Binder
         {
             hasSymbolicArgument = true;
 
+            // Issue #2919 follow-up: a nullable source enum keeps the same
+            // caller-selected leaf surrogate as the bare enum. A caller that
+            // erases Mode to object must therefore erase Mode? to object too;
+            // only callers selecting the Int32 backing may use Nullable<Int32>.
+            if (type is NullableTypeSymbol { UnderlyingType: EnumSymbol }
+                && !erasedArgument.IsValueType)
+            {
+                return scope.References.MapClrTypeToReferences(erasedArgument);
+            }
+
             if (type is SliceTypeSymbol
                     or ArrayTypeSymbol
                     or RectangularArrayTypeSymbol
@@ -5663,6 +5673,8 @@ public sealed class Binder
                     }
                     catch (System.ArgumentException)
                     {
+                        var assertMessage = $"Binder.SubstituteType: erased MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", erasedArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        System.Diagnostics.Debug.WriteLine(assertMessage);
                     }
                 }
             }
