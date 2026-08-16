@@ -1009,10 +1009,19 @@ public sealed class Binder
         // validation also needs the base type's members. Bind same-compilation
         // base classes before their derived classes, independent of tree/source
         // order.
-        var declarationsByName = declaredStructs
-            .Select((declaration, index) => (declaration.Symbol.Name, Index: index))
-            .GroupBy(entry => entry.Name, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Select(entry => entry.Index).ToList(), StringComparer.Ordinal);
+        var declarationsByName = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < declaredStructs.Count; i++)
+        {
+            var name = declaredStructs[i].Symbol.Name;
+            if (!declarationsByName.TryGetValue(name, out var indices))
+            {
+                indices = new List<int>();
+                declarationsByName.Add(name, indices);
+            }
+
+            indices.Add(i);
+        }
+
         var bindingState = new byte[declaredStructs.Count];
         var bindingOrder = new List<int>(declaredStructs.Count);
 

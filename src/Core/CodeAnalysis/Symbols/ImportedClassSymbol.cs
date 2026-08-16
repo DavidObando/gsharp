@@ -537,12 +537,18 @@ public sealed class ImportedClassSymbol : Symbol
                     string.Equals(f.Name, name, StringComparison.Ordinal)
                     && IsVisibleToCurrentCompilation(f))
                 .ToImmutableArray();
-            var events = ClrTypeUtilities.SafeGetEvents(current, Flags)
-                .Any(e =>
-                    string.Equals(e.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(e));
+            var declaresEvent = false;
+            foreach (var eventInfo in ClrTypeUtilities.SafeGetEvents(current, Flags))
+            {
+                if (string.Equals(eventInfo.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(eventInfo))
+                {
+                    declaresEvent = true;
+                    break;
+                }
+            }
 
-            if (!methods.IsEmpty || !properties.IsEmpty || !fields.IsEmpty || events || DeclaresVisibleNestedType(current, name))
+            if (!methods.IsEmpty || !properties.IsEmpty || !fields.IsEmpty || declaresEvent || DeclaresVisibleNestedType(current, name))
             {
                 return new NamedMemberLevel(methods, properties, fields);
             }
