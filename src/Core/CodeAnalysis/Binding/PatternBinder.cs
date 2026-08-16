@@ -885,6 +885,19 @@ internal sealed class PatternBinder
             return true;
         }
 
+        var directClrType = lookupType.ClrType;
+        if (directClrType is not null
+            && TryBindClrPropertyPatternMember(
+                lookupType,
+                directClrType,
+                syntax,
+                bindingContext,
+                preferTypeNames,
+                out boundField))
+        {
+            return true;
+        }
+
         boundField = null;
         return false;
     }

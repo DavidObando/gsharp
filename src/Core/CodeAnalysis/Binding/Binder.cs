@@ -5139,13 +5139,18 @@ public sealed class Binder
                 }
             }
         }
-        else if (parameterType is ImportedTypeSymbol pit && pit.HasTypeParameterArgument)
+
+        var importedParameterType = parameterType as ImportedTypeSymbol;
+        if (importedParameterType is not null && importedParameterType.HasTypeParameterArgument)
         {
+            var pit = importedParameterType;
+
             // #313: infer from a generic type parameterized by an in-scope type
             // parameter (e.g. parameter `List[T]` matched against argument
             // `List<int32>`). Unify the symbolic type arguments positionally
             // against the argument's CLR generic arguments.
-            var argClrArgs = GetClrGenericArguments(argumentType);
+            var argClrArgs = GetClrGenericArguments(
+                Invariant.Required(argumentType, "generic inference requires an argument type"));
             if (!argClrArgs.IsDefaultOrEmpty && argClrArgs.Length == pit.TypeArguments.Length)
             {
                 for (var i = 0; i < pit.TypeArguments.Length; i++)

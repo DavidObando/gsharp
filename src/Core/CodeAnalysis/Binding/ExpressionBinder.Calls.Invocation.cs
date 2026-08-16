@@ -2488,13 +2488,17 @@ internal sealed partial class ExpressionBinder
                     // overload resolution. The closed candidate supplies the
                     // shared function shape, but only the selected method can
                     // determine whether the lambda needs a named delegate.
-                    if ((inner is LambdaExpressionSyntax { Body: BlockExpressionSyntax } && !hasClosedTarget && blocked)
+                    var lambdaHandled = false;
+                    var lambdaSyntax = inner as LambdaExpressionSyntax;
+                    if ((lambdaSyntax?.Body is BlockExpressionSyntax && !hasClosedTarget && blocked)
                         || (hasClosedTarget && sawOpen))
                     {
                         deferredArrowLambdaIndices.Add(argSlot);
                         boundArguments.Add(new BoundErrorExpression(inner));
+                        lambdaHandled = true;
                     }
-                    else if (inner is LambdaExpressionSyntax lambdaSyntax && hasClosedTarget)
+
+                    if (!lambdaHandled && lambdaSyntax != null && hasClosedTarget)
                     {
                         // target: non-null whenever hasClosedTarget is true
                         // ([NotNullWhen(true)] on TryResolveDelegateTargetFromCandidates).
@@ -2503,8 +2507,10 @@ internal sealed partial class ExpressionBinder
                             lambdaSyntax,
                             target!,
                             nominalTarget));
+                        lambdaHandled = true;
                     }
-                    else
+
+                    if (!lambdaHandled)
                     {
                         boundArguments.Add(BindExpression(inner));
                     }

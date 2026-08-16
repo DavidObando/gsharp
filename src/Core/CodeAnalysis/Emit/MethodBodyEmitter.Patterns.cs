@@ -208,7 +208,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        if (valueType == TypeSymbol.String)
+        if (IsStringOrNullableStringEmit(valueType))
         {
             loadValue();
             this.EmitExpression(cp.Value);

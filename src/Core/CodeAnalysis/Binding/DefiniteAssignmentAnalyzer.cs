@@ -781,9 +781,11 @@ internal static class DefiniteAssignmentAnalyzer
             return;
         }
 
-        if (rhs is BoundAddressOfExpression addr && addr.Operand is BoundVariableExpression bve)
+        var address = rhs as BoundAddressOfExpression;
+        var variable = address?.Operand as BoundVariableExpression;
+        if (variable is not null)
         {
-            pointerAliases[pointerVar] = bve.Variable;
+            pointerAliases[pointerVar] = variable.Variable;
         }
         else
         {
@@ -793,14 +795,19 @@ internal static class DefiniteAssignmentAnalyzer
 
     private static bool TryResolvePointerTarget(BoundExpression pointerExpr, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, out VariableSymbol? target)
     {
-        if (pointerExpr is BoundAddressOfExpression addr && addr.Operand is BoundVariableExpression bve)
+        var address = pointerExpr as BoundAddressOfExpression;
+        var variable = address?.Operand as BoundVariableExpression;
+        if (variable is not null)
         {
-            target = bve.Variable;
+            target = variable.Variable;
             return true;
         }
 
-        if (pointerExpr is BoundVariableExpression pve && pointerAliases.TryGetValue(pve.Variable, out target))
+        var pointerVariable = pointerExpr as BoundVariableExpression;
+        if (pointerVariable is not null
+            && pointerAliases.TryGetValue(pointerVariable.Variable, out var aliasedTarget))
         {
+            target = aliasedTarget;
             return true;
         }
 

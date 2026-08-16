@@ -352,9 +352,11 @@ public sealed class BoundGlobalScope
     public ImmutableArray<ImportSymbol> GetCumulativeImports()
     {
         var chain = new Stack<BoundGlobalScope>();
-        for (var scope = this; scope != null; scope = scope.Previous)
+        BoundGlobalScope? current = this;
+        while (current is not null)
         {
-            chain.Push(scope);
+            chain.Push(current);
+            current = current.Previous;
         }
 
         var builder = ImmutableArray.CreateBuilder<ImportSymbol>();

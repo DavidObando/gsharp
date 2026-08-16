@@ -1881,16 +1881,19 @@ internal sealed partial class ExpressionBinder
             // honour the user-given identifier.
             bool isReadOnly = syntax.DeclarationKeyword != null
                 && string.Equals(syntax.DeclarationKeyword.Text, "let", System.StringComparison.Ordinal);
-            string localName;
+            string? localName = null;
             if (syntax.DiscardToken != null)
             {
                 localName = $"<>out_discard_{binderCtx.OutDiscardCounter++}";
             }
-            else if (syntax.DeclarationIdentifier is { } identifierForName)
+
+            var identifierForName = syntax.DeclarationIdentifier;
+            if (syntax.DiscardToken == null && identifierForName != null)
             {
                 localName = identifierForName.Text;
             }
-            else
+
+            if (localName == null)
             {
                 return new BoundErrorExpression(null);
             }

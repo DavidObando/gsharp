@@ -189,13 +189,55 @@ internal sealed partial class ExpressionBinder
         // be a chain of accessors (e.g. Guid.NewGuid().ToString()).
         var leftPart = syntax.LeftPart;
         var rightPart = syntax.RightPart;
+        var leftName = leftPart as NameExpressionSyntax;
         BoundExpression? receiver = null;
         ImportedClassSymbol? classSymbol = null;
         EnumSymbol? enumSymbol = null;
         StructSymbol? userStructSymbol = null;
         InterfaceSymbol? userInterfaceSymbol = null;
 
-        if (leftPart is NameExpressionSyntax leftName)
+        if (leftName is null)
+        {
+            var genericTypeIndex = leftPart as IndexExpressionSyntax;
+            if (genericTypeIndex is not null
+                && !genericTypeIndex.IsNullConditional
+                && TryResolveConstructedGenericTypeReceiver(
+                    genericTypeIndex,
+                    out var indexedStruct,
+                    out var indexedInterface,
+                    out var indexedImported))
+            {
+                return BindConstructedGenericTypeAccessorStep(
+                    indexedStruct,
+                    indexedInterface,
+                    indexedImported,
+                    rightPart,
+                    leftPart);
+            }
+
+            var genericTypeName = leftPart as GenericNameExpressionSyntax;
+            if (genericTypeName is not null
+                && TryResolveConstructedGenericTypeReceiver(
+                    genericTypeName,
+                    out var namedStruct,
+                    out var namedInterface,
+                    out var namedImported))
+            {
+                return BindConstructedGenericTypeAccessorStep(
+                    namedStruct,
+                    namedInterface,
+                    namedImported,
+                    rightPart,
+                    leftPart);
+            }
+        }
+
+        if (leftName is null)
+        {
+            receiver = BindExpression(leftPart);
+        }
+
+        if (leftName is not null)
         {
             var name = leftName.IdentifierToken.Text;
             var variableHit = scope.TryLookupSymbol(name) as VariableSymbol;
@@ -661,10 +703,6 @@ internal sealed partial class ExpressionBinder
                     break;
             }
         }
-        else
-        {
-            receiver = BindExpression(leftPart);
-        }
 
         if (enumSymbol != null)
         {
@@ -682,6 +720,31 @@ internal sealed partial class ExpressionBinder
         }
 
         return BindAccessorStep(receiver, classSymbol, rightPart, leftPart);
+    }
+
+    private BoundExpression BindConstructedGenericTypeAccessorStep(
+        StructSymbol? constructedStruct,
+        InterfaceSymbol? constructedInterface,
+        ImportedClassSymbol? constructedImported,
+        ExpressionSyntax rightPart,
+        ExpressionSyntax leftPart)
+    {
+        if (constructedInterface is not null)
+        {
+            return BindInterfaceStaticAccessorStep(constructedInterface, rightPart);
+        }
+
+        if (constructedStruct is not null)
+        {
+            return BindUserTypeStaticAccessorStep(constructedStruct, rightPart);
+        }
+
+        if (constructedImported is not null)
+        {
+            return BindAccessorStep(null, constructedImported, rightPart, leftPart);
+        }
+
+        return new BoundErrorExpression(null);
     }
 
     private bool TryResolveInheritedImportedNestedType(

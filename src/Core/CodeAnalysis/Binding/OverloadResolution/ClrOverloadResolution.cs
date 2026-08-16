@@ -2414,8 +2414,14 @@ internal static class ClrOverloadResolution
                     return;
                 }
             }
-            else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+
+            var inferredMethod = rawCandidate as MethodInfo;
+            if (explicitTypeArgs == null
+                && inferredMethod != null
+                && inferredMethod.IsGenericMethodDefinition)
             {
+                var mi = inferredMethod;
+
                 // Issue #343: when named arguments are present, the per-source
                 // argTypes are not necessarily in parameter order. Build an
                 // ordered argTypes for inference by mapping each source index to
@@ -2777,8 +2783,14 @@ internal static class ClrOverloadResolution
                 return;
             }
         }
-        else if (rawCandidate is MethodInfo mi && mi.IsGenericMethodDefinition)
+
+        var inferredMethod = rawCandidate as MethodInfo;
+        if (explicitTypeArgs == null
+            && inferredMethod != null
+            && inferredMethod.IsGenericMethodDefinition)
         {
+            var mi = inferredMethod;
+
             if (!TryInferTypeArgumentsForExpandedParams(mi, argTypes, argumentNames, out var typeArgs))
             {
                 return;
@@ -4557,9 +4569,11 @@ internal static class ClrOverloadResolution
             }
 
             Type? importedBase = null;
-            for (var current = symbol; current != null && importedBase == null; current = current.BaseClass)
+            StructSymbol? current = symbol;
+            while (current != null && importedBase == null)
             {
                 importedBase = current.ImportedBaseType?.ClrType;
+                current = current.BaseClass;
             }
 
             if (importedBase == null)
@@ -5159,12 +5173,16 @@ internal static class ClrOverloadResolution
 
         try
         {
-            for (var t = type; t != null; t = t.BaseType)
+            Type? current = type;
+            while (current is not null)
             {
-                if (t.IsGenericType && MatchesOpenDefinition(t.GetGenericTypeDefinition(), openDefinition, openDefName))
+                if (current.IsGenericType
+                    && MatchesOpenDefinition(current.GetGenericTypeDefinition(), openDefinition, openDefName))
                 {
-                    return t;
+                    return current;
                 }
+
+                current = current.BaseType;
             }
         }
         catch (NotSupportedException)
