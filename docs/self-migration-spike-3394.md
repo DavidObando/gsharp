@@ -260,13 +260,20 @@ The spike minimized and filed four independent blockers:
 - [#3402](https://github.com/DavidObando/gsharp/issues/3402):
   short-circuit pattern binders escape generated scope.
 
-### Capturing recursion
+### Capturing recursion (resolved — #3399)
 
-cs2gs can now lift recursive capture-free static local functions. Core still
-contains recursive local-function groups that capture builders, counters,
-labels, and other mutable outer state. G# local `let = func` bindings are not
-recursive or forward-visible. A faithful solution needs a generated
-closure/helper type or a recursive local-function language feature.
+cs2gs lifted recursive capture-free local functions on the `let`/hoist path,
+which G# supports for self- and mutual recursion. Capturing recursive or
+mutually recursive local functions (builders, counters, labels, other mutable
+outer state) now lower to the documented G# scheme (ADR-0137 / ADR-0069): the
+whole SCC of recursive sibling functions is bound as nil-initialized
+nullable-function-typed `var` locals — declarations first, assignments after —
+instead of plain `let`/`func` literals, because `let` is not recursive or
+forward-visible across siblings (GS0130/GS0125). Sibling calls inside the
+closure bodies then go through postfix null assertions, and the captured
+mutable outer state stays a single shared `var` binding, preserving C#'s
+shared-mutation semantics. Capture-free SCCs keep the canonical `let` path
+untouched.
 
 ### Byref symbolic generics
 
