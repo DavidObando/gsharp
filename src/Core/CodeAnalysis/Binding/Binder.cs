@@ -4575,7 +4575,18 @@ public sealed class Binder
         {
             hasSymbolicArgument = true;
 
-            if (MemberLookup.TryProjectErasedClrType(type, out var projected))
+            if (type is SliceTypeSymbol
+                    or ArrayTypeSymbol
+                    or RectangularArrayTypeSymbol
+                    or TupleTypeSymbol
+                    or MapTypeSymbol
+                    or FunctionTypeSymbol
+                    or SequenceTypeSymbol
+                    or AsyncSequenceTypeSymbol
+                    or ChannelTypeSymbol
+                    or NullableTypeSymbol
+                    or ImportedTypeSymbol
+                && MemberLookup.TryProjectErasedClrType(type, out var projected))
             {
                 return scope.References.MapClrTypeToReferences(projected);
             }
