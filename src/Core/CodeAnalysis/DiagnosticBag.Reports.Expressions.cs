@@ -396,10 +396,19 @@ public sealed partial class DiagnosticBag
     /// </param>
     public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string>? candidateSignatures = null)
     {
-        var candidates = candidateSignatures?
-            .Where(s => !string.IsNullOrEmpty(s))
-            .ToArray();
-        var candidateList = candidates is { Length: > 0 }
+        var candidates = new List<string>();
+        if (candidateSignatures != null)
+        {
+            foreach (var signature in candidateSignatures)
+            {
+                if (!string.IsNullOrEmpty(signature))
+                {
+                    candidates.Add(signature);
+                }
+            }
+        }
+
+        var candidateList = candidates.Count > 0
             ? string.Format(
                 DiagnosticDescriptors.AmbiguousOverloadCandidatesMessageFormat,
                 string.Join("; ", candidates))
