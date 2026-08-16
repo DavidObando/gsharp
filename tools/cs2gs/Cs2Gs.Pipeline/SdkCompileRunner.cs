@@ -27,7 +27,6 @@ namespace Cs2Gs.Pipeline;
 public sealed class SdkCompileRunner
 {
     private const string SdkPackageId = "Gsharp.NET.Sdk";
-    private const string SdkPackagePrefix = SdkPackageId + ".";
 
     // Matches a generic MSBuild/NuGet/CS error line, e.g.
     // `... : error NU1101: ...` or `... : error CS0246: ...`, used only as a
@@ -1078,31 +1077,7 @@ public sealed class SdkCompileRunner
     private static (string NupkgPath, string Version)? ResolveFallbackSdkPackageFromLocalFeed(string repoRoot)
     {
         string feed = Path.Combine(repoRoot, ".nugs");
-        if (!Directory.Exists(feed))
-        {
-            return null;
-        }
-
-        (string Path, string Version, DateTime WrittenUtc)? best = null;
-        foreach (string file in Directory.EnumerateFiles(feed, SdkPackagePrefix + "*.nupkg"))
-        {
-            string version = GsharpTestProjectRunner.ParseVersion(Path.GetFileName(file));
-            if (version is null)
-            {
-                continue;
-            }
-
-            DateTime writtenUtc = File.GetLastWriteTimeUtc(file);
-            if (best is null
-                || writtenUtc > best.Value.WrittenUtc
-                || (writtenUtc == best.Value.WrittenUtc
-                    && GsharpTestProjectRunner.CompareVersions(version, best.Value.Version) > 0))
-            {
-                best = (file, version, writtenUtc);
-            }
-        }
-
-        return best is null ? null : (best.Value.Path, best.Value.Version);
+        return GsharpTestProjectRunner.ResolveNewestSdkPackage(feed);
     }
 
     private static GscDiagnostic SynthesizeFallbackDiagnostic(ProcessRunResult result, IReadOnlyList<string> gsFilePaths)
