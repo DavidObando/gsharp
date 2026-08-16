@@ -375,4 +375,37 @@ func Describe(a Animal) string {
 
 Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
 
+## Pattern variables
+
+When the tested value is not a plain local — a property, a call result, a nested member — smart casts cannot name it. A pattern can instead bind the matched value to a **pattern variable** by writing the name after the pattern, exactly as in C#. The variable is read-only and is in scope wherever the match is known to have happened: the `&&` continuation, the selected branch, and the statements after an `if` whose other branch always exits.
+
+```gsharp title="PatternVariables.gs"
+package Tour.ControlFlow.PatternVariables
+
+import System
+
+class Box {
+    prop Value object? { get; init; }
+}
+
+func Describe(box Box) string {
+    if box.Value is string text && text.Length > 3 {
+        return "long text " + text
+    }
+    if box is { Value: int32 n } {
+        return "number " + n.ToString()
+    }
+    if !(box.Value is Box inner) {
+        return "empty"
+    }
+    return "nested " + Describe(inner)
+}
+
+func FirstRest(values []int32) string {
+    return values is [1, ..rest] && rest.Length > 0 ? rest[0].ToString() : "none"
+}
+```
+
+Reading a pattern variable outside its region reports `GS0532`. Type patterns with a designation (`case Dog dog { ... }`) are also accepted in `switch` arms alongside the `case dog is Dog` spelling.
+
 Next: [Tour: Concurrency](/docs/tour/concurrency).

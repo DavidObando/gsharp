@@ -12,7 +12,10 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Issue #3402: a pattern binder at the start of an && chain remains visible
-/// through later conjuncts and the true body.
+/// through later conjuncts and the true body. ADR-0166 / issue #3409: the
+/// binder is now a native G# pattern variable, so the whole condition — the
+/// <c>is</c> designation, the later conjuncts, and an inline <c>out var</c> —
+/// keeps its C# shape verbatim instead of an <c>if let</c> lowering.
 /// </summary>
 public class Issue3402ShortCircuitPatternBinderTranslationTests
 {
@@ -66,10 +69,16 @@ public class Issue3402ShortCircuitPatternBinderTranslationTests
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("if let candidate = C.Get(value) as Candidate", rendered, StringComparison.Ordinal);
-        Assert.Contains("candidate.Value > 0 && C.TryRead(out var extra) && extra > 0", rendered, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: native pattern variable; `candidate` and the
+        // later `out var extra` both stay visible through the chain and the body.
+        Assert.Contains(
+            "if C.Get(value) is Candidate candidate && candidate.Value > 0 && C.TryRead(out var extra) && extra > 0 {",
+            rendered,
+            StringComparison.Ordinal);
         Assert.Contains("return candidate.Value + extra", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("if if let", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("as Candidate", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -120,9 +129,15 @@ public class Issue3402ShortCircuitPatternBinderTranslationTests
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("if C.TryGet(input, out var value)", rendered, StringComparison.Ordinal);
-        Assert.Contains("if let candidate = value as Candidate", rendered, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the `out var` prefix and the native pattern
+        // variable share one condition; no nested `if let` for the binder.
+        Assert.Contains(
+            "if C.TryGet(input, out var value) && value is Candidate candidate && candidate.Value > 0 {",
+            rendered,
+            StringComparison.Ordinal);
         Assert.Contains("return candidate.Value", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("as Candidate", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

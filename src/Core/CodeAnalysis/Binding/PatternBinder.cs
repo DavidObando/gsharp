@@ -21,7 +21,14 @@ internal enum PatternBindingContext
     /// <summary>Bindings are rejected because an <c>or</c> or <c>not</c> cannot definitely assign them.</summary>
     OrOrNot,
 
-    /// <summary>Bindings are rejected because boolean <c>is</c> expressions introduce no scope.</summary>
+    /// <summary>
+    /// ADR-0166: the pattern is the operand of a boolean <c>is</c> expression.
+    /// Designation bindings (<c>T name</c>, <c>{ ... } name</c>, slice captures)
+    /// are permitted but are not declared into a scope here; the consumer of
+    /// the bound condition scopes them to the regions where the pattern is
+    /// known to have matched (see <see cref="PatternVariables"/>). The switch
+    /// binding spelling <c>name is T</c> stays rejected in this position.
+    /// </summary>
     IsExpression,
 }
 
@@ -181,8 +188,18 @@ internal sealed class PatternBinder
                     bindingContext,
                     preferTypeNames);
             case SyntaxKind.PropertyPattern:
+                var propertySyntax = (PropertyPatternSyntax)syntax;
+                if (propertySyntax.Designation != null)
+                {
+                    return BindDesignatedPropertyPattern(
+                        propertySyntax,
+                        discriminantType,
+                        bindingContext,
+                        preferTypeNames);
+                }
+
                 return BindPropertyPattern(
-                    (PropertyPatternSyntax)syntax,
+                    propertySyntax,
                     discriminantType,
                     bindingContext,
                     preferTypeNames);
@@ -574,10 +591,12 @@ internal sealed class PatternBinder
         PatternBindingContext bindingContext,
         bool preferTypeNames)
     {
+        var targetType = bindTypeClause(syntax.Type) ?? TypeSymbol.Error;
         return BindTypePatternCore(
             syntax,
             syntax.Identifier,
-            syntax.Type,
+            syntax.Designation,
+            targetType,
             syntax.PropertyPattern,
             discriminantType,
             bindingContext,
@@ -592,42 +611,50 @@ internal sealed class PatternBinder
         PatternBindingContext bindingContext,
         bool preferTypeNames)
     {
+        var targetType = bindTypeClause(type) ?? TypeSymbol.Error;
         return BindTypePatternCore(
             syntax,
             identifier: null,
-            type,
+            designation: null,
+            targetType,
             propertyPattern,
             discriminantType,
             bindingContext,
             preferTypeNames);
     }
 
+    /// <summary>
+    /// Binds a type test with an optional pattern variable. <paramref name="identifier"/>
+    /// is the switch binding spelling (<c>name is T</c>); <paramref name="designation"/>
+    /// is the ADR-0166 designation spelling (<c>T name</c>, <c>{ ... } name</c>).
+    /// </summary>
     private BoundTypePattern BindTypePatternCore(
         SyntaxNode syntax,
         SyntaxToken? identifier,
-        TypeClauseSyntax type,
+        SyntaxToken? designation,
+        TypeSymbol targetType,
         PropertyPatternSyntax? propertyPattern,
         TypeSymbol discriminantType,
         PatternBindingContext bindingContext,
         bool preferTypeNames)
     {
-        var targetType = bindTypeClause(type) ?? TypeSymbol.Error;
         if (bindingContext == PatternBindingContext.IsExpression
             && targetType is NullableTypeSymbol nullableTarget)
         {
             targetType = nullableTarget.UnderlyingType;
         }
 
-        var bindingIdentifier = identifier != null && identifier.Text != "_"
-            ? identifier
+        var nameToken = identifier ?? designation;
+        var bindingIdentifier = nameToken != null && nameToken.Text != "_"
+            ? nameToken
             : null;
         var hasBinding = bindingIdentifier != null;
         var variableName = bindingIdentifier?.Text ?? "<type-pattern-value>";
-        var variable = new LocalVariableSymbol(
+        var variable = CreatePatternVariable(
             variableName,
-            isReadOnly: true,
             targetType,
-            declaringSyntax: identifier);
+            nameToken,
+            isExpressionBinding: hasBinding && bindingContext == PatternBindingContext.IsExpression);
 
         if (bindingIdentifier != null)
         {
@@ -649,12 +676,18 @@ internal sealed class PatternBinder
                     bindingIdentifier.Location,
                     bindingIdentifier.Text);
             }
-            else
+            else if (identifier != null)
             {
+                // ADR-0166: only the designation spelling introduces a pattern
+                // variable in a boolean `is`; `value is text is string` keeps
+                // reading as an incoherent double test.
                 Diagnostics.ReportPatternBindingNotAllowedInIsExpression(
                     bindingIdentifier.Location,
                     bindingIdentifier.Text);
             }
+
+            // ADR-0166: a designation in a boolean `is` is declared by the
+            // consumer of the condition (see PatternVariables), not here.
         }
 
         var boundProperty = propertyPattern == null
@@ -671,6 +704,48 @@ internal sealed class PatternBinder
             variable,
             hasBinding,
             boundProperty);
+    }
+
+    /// <summary>
+    /// ADR-0166: creates the local that receives a pattern's matched value. A
+    /// designation bound in a boolean <c>is</c> is a
+    /// <see cref="PatternVariableSymbol"/> so later passes can recognise a
+    /// single-assignment binding whose every visible use is dominated by the
+    /// match (closure capture snapshots it instead of boxing it).
+    /// </summary>
+    private static LocalVariableSymbol CreatePatternVariable(
+        string name,
+        TypeSymbol type,
+        SyntaxToken? declaringSyntax,
+        bool isExpressionBinding)
+        => isExpressionBinding
+            ? new PatternVariableSymbol(name, type, declaringSyntax)
+            : new LocalVariableSymbol(name, isReadOnly: true, type, declaringSyntax);
+
+    /// <summary>
+    /// ADR-0166: <c>{ ... } name</c> binds the matched, non-nil input at the
+    /// input's non-nullable type. It is bound as a type pattern over the
+    /// stripped input type — the C# semantics — so emission and narrowing reuse
+    /// the type-pattern pipeline unchanged.
+    /// </summary>
+    private BoundPattern BindDesignatedPropertyPattern(
+        PropertyPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
+    {
+        var targetType = discriminantType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : discriminantType;
+        return BindTypePatternCore(
+            syntax,
+            identifier: null,
+            syntax.Designation,
+            targetType,
+            syntax,
+            discriminantType,
+            bindingContext,
+            preferTypeNames);
     }
 
     private BoundPropertyPattern BindPropertyPattern(
@@ -725,7 +800,10 @@ internal sealed class PatternBinder
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
         }
 
-        if (!SupportsPropertyPattern(lookupType))
+        // ADR-0166: the empty property pattern `{ }` is a pure non-nil test
+        // (C# semantics) and applies to every input type; only a member list
+        // needs a struct, class, interface, or tuple to look members up on.
+        if (syntax.Fields.Count > 0 && !SupportsPropertyPattern(lookupType))
         {
             Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
@@ -1085,7 +1163,11 @@ internal sealed class PatternBinder
         LocalVariableSymbol? variable = null;
         if (syntax.CaptureIdentifier != null)
         {
-            variable = new LocalVariableSymbol(syntax.CaptureIdentifier.Text, isReadOnly: true, sliceType, declaringSyntax: syntax.CaptureIdentifier);
+            variable = CreatePatternVariable(
+                syntax.CaptureIdentifier.Text,
+                sliceType,
+                syntax.CaptureIdentifier,
+                isExpressionBinding: bindingContext == PatternBindingContext.IsExpression);
             if (bindingContext == PatternBindingContext.Allowed)
             {
                 if (!Scope.TryDeclareVariable(variable))
@@ -1099,12 +1181,9 @@ internal sealed class PatternBinder
                     syntax.CaptureIdentifier.Location,
                     syntax.CaptureIdentifier.Text);
             }
-            else
-            {
-                Diagnostics.ReportPatternBindingNotAllowedInIsExpression(
-                    syntax.CaptureIdentifier.Location,
-                    syntax.CaptureIdentifier.Text);
-            }
+
+            // ADR-0166: a slice capture in a boolean `is` is scoped by the
+            // consumer of the condition, like a type-pattern designation.
         }
         else if (subPattern != null)
         {

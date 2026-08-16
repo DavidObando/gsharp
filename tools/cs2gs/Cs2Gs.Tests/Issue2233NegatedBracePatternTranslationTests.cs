@@ -30,6 +30,15 @@ namespace Cs2Gs.Tests;
 /// pattern the hoisted local's type is the receiver's own non-null type (no
 /// <c>as</c> downcast is emitted, which also sidesteps <c>as</c>'s
 /// reference-only restriction for a nullable value-type receiver).
+/// <para>
+/// ADR-0166 / issue #3409: G# now scopes pattern variables the way C# definite
+/// assignment does, so a qualifying <c>x is { } v</c> — positive or negated —
+/// is emitted verbatim (<c>if !(x is { } v) { return }</c>, then plain
+/// <c>v</c>) with no hoisted local at all. The hoist lowering above remains the
+/// fallback when the binder is later reassigned (G# pattern variables are
+/// <c>let</c>-immutable) and is witnessed by
+/// <see cref="NegatedBracePattern_ReferenceTypeReceiver_ReassignedBinder_HoistsBindingPastIf"/>.
+/// </para>
 /// </summary>
 public class Issue2233NegatedBracePatternTranslationTests
 {
@@ -39,7 +48,7 @@ public class Issue2233NegatedBracePatternTranslationTests
     /// the code that follows the guard.
     /// </summary>
     [Fact]
-    public void NegatedBracePattern_NullableValueTypeField_HoistsBindingPastIf()
+    public void NegatedBracePattern_NullableValueTypeField_KeepsBinderAsNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -62,18 +71,24 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let at DateTimeOffset? = promptShownAt", printed);
-        Assert.Contains("if at == nil", printed);
+        // ADR-0166 / issue #3409: native `!(x is { } at)` guard; no hoisted
+        // `let at DateTimeOffset? = promptShownAt` / `if at == nil`.
+        Assert.Contains("if !(promptShownAt is { } at) {", printed);
         Assert.Contains("clock() - at <= C.ExitWindow", printed);
+        Assert.DoesNotContain("let at", printed);
+        Assert.DoesNotContain("== nil", printed);
         Assert.DoesNotContain("as DateTimeOffset", printed);
 
         CompileAndRun(printed, "C().ToastActive(func () DateTimeOffset { return DateTimeOffset.UtcNow })");
     }
+
+    /// <summary>
+    /// Generalization: the same guard over a LOCAL nullable value type (not a
     /// field), confirming the fix is not hardcoded to fields or to
     /// <c>DateTimeOffset?</c>.
     /// </summary>
     [Fact]
-    public void NegatedBracePattern_LocalNullableValueType_HoistsBindingPastIf()
+    public void NegatedBracePattern_LocalNullableValueType_KeepsBinderAsNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -93,19 +108,26 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let value int32? = maybe", printed);
-        Assert.Contains("if value == nil", printed);
+        // ADR-0166 / issue #3409: native `!(maybe is { } value)` guard; no
+        // hoisted `let value int32? = maybe` / `if value == nil`.
+        Assert.Contains("if !(maybe is { } value) {", printed);
         Assert.Contains("value + 1", printed);
+        Assert.DoesNotContain("let value", printed);
+        Assert.DoesNotContain("== nil", printed);
 
         CompileAndRun(printed, "C().G()");
     }
 
     /// <summary>
-    /// Generalization: a negated bare pattern over a nullable REFERENCE type
-    /// also hoists correctly (no downcast, since there is no type test).
+    /// Witness for the hoisted-nullable-local lowering over a nullable
+    /// REFERENCE type (no downcast, since there is no type test).
+    /// ADR-0166 / issue #3409: the native <c>!(s is { } text)</c> form only
+    /// applies while <c>text</c> is never reassigned; this input reassigns
+    /// <c>text</c> after the guard, so the translator must still hoist a mutable
+    /// nullable local above the exiting <c>if</c>.
     /// </summary>
     [Fact]
-    public void NegatedBracePattern_ReferenceTypeReceiver_HoistsBindingPastIf()
+    public void NegatedBracePattern_ReferenceTypeReceiver_ReassignedBinder_HoistsBindingPastIf()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -119,31 +141,32 @@ namespace Demo
                 return -1;
             }
 
+            text = text.Trim();
             return text.Length;
         }
     }
 }");
 
-        Assert.Contains("let text string? = s", printed);
+        Assert.Contains("var text string? = s", printed);
         Assert.Contains("if text == nil", printed);
+        Assert.Contains("text = text.Trim()", printed);
         Assert.Contains("text.Length", printed);
         Assert.DoesNotContain("as string", printed);
+        Assert.DoesNotContain("is { } text", printed);
 
         CompileAndRun(printed, "C().G(\"hi\")");
     }
 
     /// <summary>
     /// Standalone positive bare pattern (<c>if (x is { } v) { ... }</c>, no
-    /// trailing <c>&amp;&amp;</c>) uses a scoped author-named local.
-    /// <para>
-    /// Issue #3359 does NOT apply here: the scrutinee <c>s</c> is a NON-nullable
-    /// <c>string</c>, and ADR-0071's <c>if let</c> requires a nullable
-    /// initializer (GS0296). C# still treats <c>s is { }</c> as a runtime null
-    /// test, so cs2gs binds <c>text</c> directly and tests that local.
-    /// </para>
+    /// trailing <c>&amp;&amp;</c>) over a NON-nullable <c>string</c>: C# still
+    /// treats <c>s is { }</c> as a runtime null test, and ADR-0166 / issue #3409
+    /// keeps it as the native <c>s is { } text</c> pattern variable (no
+    /// <c>if let</c>, which ADR-0071 reserves for a nullable initializer, no
+    /// scoped <c>let text = s</c> local, no <c>__spillN</c>).
     /// </summary>
     [Fact]
-    public void PositiveBracePattern_Standalone_StaysCorrect()
+    public void PositiveBracePattern_Standalone_IsNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -162,8 +185,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let text = s", printed);
-        Assert.Contains("text != nil", printed);
+        Assert.Contains("if s is { } text {", printed);
+        Assert.Contains("return text.Length", printed);
+        Assert.DoesNotContain("let text", printed);
+        Assert.DoesNotContain("!= nil", printed);
         Assert.DoesNotContain("if let", printed);
         Assert.DoesNotContain("__spill", printed);
 
@@ -175,13 +200,15 @@ namespace Demo
     /// AND-combined with a further condition.
     /// <para>
     /// Issue #3359 replaced the smart-cast form (<c>x != nil &amp;&amp; …x!!…</c>)
-    /// with an <c>if let</c> whose guard is nested in the then-branch. Besides
-    /// keeping the binder name and dropping the <c>!!</c>, this reads the
-    /// nullable FIELD once instead of twice.
+    /// with an <c>if let</c> whose guard was nested in the then-branch.
+    /// ADR-0166 / issue #3409 goes one step further: the pattern variable stays
+    /// in the condition (<c>promptShownAt is { } at &amp;&amp; now - at &lt;= …</c>),
+    /// so the binder keeps its name, there is no <c>!!</c>, the nullable FIELD is
+    /// read once, and the C# short-circuit shape survives verbatim.
     /// </para>
     /// </summary>
     [Fact]
-    public void PositiveBracePattern_AndCombinedWithCondition_StaysSmartCastForm()
+    public void PositiveBracePattern_AndCombinedWithCondition_IsNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -204,8 +231,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let at = promptShownAt", printed);
+        Assert.Contains("if promptShownAt is { } at && now - at <= C.ExitWindow {", printed);
+        Assert.DoesNotContain("if let", printed);
         Assert.DoesNotContain("promptShownAt!!", printed);
+        Assert.DoesNotContain("__spill", printed);
 
         CompileAndRun(printed, "C().ToastActive(DateTimeOffset.UtcNow)");
     }

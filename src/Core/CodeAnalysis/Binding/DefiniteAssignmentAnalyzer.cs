@@ -161,6 +161,13 @@ internal static class DefiniteAssignmentAnalyzer
 
         var entryAssigned = new Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>?>();
         var exitAssigned = new Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>?>();
+
+        // ADR-0166 follow-on: a block that ends in a conditional goto has two
+        // exits whose "definitely assigned" sets differ — `a && M(out x)`
+        // assigns `x` on the true edge only (C# definite assignment "when
+        // true" / "when false"). Recorded per block; EdgeExit selects the set
+        // matching the branch's polarity.
+        var conditionalExits = new Dictionary<ControlFlowGraph.BasicBlock, (HashSet<VariableSymbol> WhenTrue, HashSet<VariableSymbol> WhenFalse)>();
         foreach (var b in graph.Blocks)
         {
             entryAssigned[b] = b.IsStart ? new HashSet<VariableSymbol>(initialAssigned) : null;
@@ -189,7 +196,7 @@ internal static class DefiniteAssignmentAnalyzer
                     entry = null;
                     foreach (var incoming in block.Incoming)
                     {
-                        var predExit = exitAssigned[incoming.From];
+                        var predExit = EdgeExit(incoming, exitAssigned, conditionalExits);
                         if (predExit == null)
                         {
                             continue;
@@ -228,6 +235,29 @@ internal static class DefiniteAssignmentAnalyzer
                     exitAssigned[block] = exit;
                     changed = true;
                 }
+
+                if (block.Statements.LastOrDefault() is BoundConditionalGotoStatement conditionalGoto)
+                {
+                    var beforeCondition = new HashSet<VariableSymbol>(currentEntry);
+                    for (var i = 0; i < block.Statements.Count - 1; i++)
+                    {
+                        ProcessStatement(block.Statements[i], beforeCondition, outParams, function, null, pointerAliases, tracked, methodExitLabel);
+                    }
+
+                    var (whenTrue, whenFalse) = ClassifyConditionAssignments(
+                        conditionalGoto.Condition,
+                        beforeCondition,
+                        pointerAliases,
+                        tracked,
+                        new ExpressionFlowContext(outParams, function, methodExitLabel));
+                    if (!conditionalExits.TryGetValue(block, out var previous)
+                        || !SetsEqual(previous.WhenTrue, whenTrue)
+                        || !SetsEqual(previous.WhenFalse, whenFalse))
+                    {
+                        conditionalExits[block] = (whenTrue, whenFalse);
+                        changed = true;
+                    }
+                }
             }
         }
 
@@ -259,7 +289,7 @@ internal static class DefiniteAssignmentAnalyzer
                         continue;
                     }
 
-                    var exit = exitAssigned[endBranch.From] ?? new HashSet<VariableSymbol>(initialAssigned);
+                    var exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? new HashSet<VariableSymbol>(initialAssigned);
                     foreach (var op in outParams)
                     {
                         if (!exit.Contains(op))
@@ -280,7 +310,7 @@ internal static class DefiniteAssignmentAnalyzer
         foreach (var endBranch in graph.End.Incoming)
         {
             var fromBlock = endBranch.From;
-            var exit = exitAssigned[fromBlock] ?? new HashSet<VariableSymbol>(initialAssigned);
+            var exit = EdgeExit(endBranch, exitAssigned, conditionalExits) ?? new HashSet<VariableSymbol>(initialAssigned);
             var lastStatement = fromBlock.Statements.LastOrDefault();
             if (lastStatement?.Kind == BoundNodeKind.ThrowStatement)
             {
@@ -311,6 +341,74 @@ internal static class DefiniteAssignmentAnalyzer
         }
 
         return anyNormal ? normalExit : null;
+    }
+
+    /// <summary>
+    /// The predecessor's exit state along <paramref name="branch"/>: the
+    /// polarity-specific set when the predecessor ends in a conditional goto
+    /// (the CFG builder attaches the goto's own condition object to the true
+    /// edge and a negation of it to the false edge), the plain exit otherwise.
+    /// </summary>
+    private static HashSet<VariableSymbol>? EdgeExit(
+        ControlFlowGraph.BasicBlockBranch branch,
+        Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>?> exitAssigned,
+        Dictionary<ControlFlowGraph.BasicBlock, (HashSet<VariableSymbol> WhenTrue, HashSet<VariableSymbol> WhenFalse)> conditionalExits)
+    {
+        if (branch.Condition != null
+            && branch.From.Statements.LastOrDefault() is BoundConditionalGotoStatement conditionalGoto
+            && conditionalExits.TryGetValue(branch.From, out var exits))
+        {
+            return ReferenceEquals(branch.Condition, conditionalGoto.Condition)
+                ? exits.WhenTrue
+                : exits.WhenFalse;
+        }
+
+        return exitAssigned[branch.From];
+    }
+
+    /// <summary>
+    /// The definitely-assigned sets after <paramref name="condition"/> evaluates
+    /// to true and to false, starting from <paramref name="assigned"/>. Mirrors
+    /// C# §9.4.4: for <c>A &amp;&amp; B</c> the right operand runs in the
+    /// when-true state of the left, and the whole is false when either was
+    /// (intersection); dually for <c>||</c>; <c>!</c> swaps.
+    /// </summary>
+    private static (HashSet<VariableSymbol> WhenTrue, HashSet<VariableSymbol> WhenFalse) ClassifyConditionAssignments(
+        BoundExpression condition,
+        HashSet<VariableSymbol> assigned,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
+        ExpressionFlowContext flowContext)
+    {
+        switch (condition)
+        {
+            case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
+                {
+                    var (whenTrue, whenFalse) = ClassifyConditionAssignments(unary.Operand, assigned, pointerAliases, tracked, flowContext);
+                    return (whenFalse, whenTrue);
+                }
+
+            case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd:
+                {
+                    var (leftTrue, leftFalse) = ClassifyConditionAssignments(binary.Left, assigned, pointerAliases, tracked, flowContext);
+                    var (rightTrue, rightFalse) = ClassifyConditionAssignments(binary.Right, leftTrue, pointerAliases, tracked, flowContext);
+                    return (rightTrue, Intersect(leftFalse, rightFalse));
+                }
+
+            case BoundBinaryExpression binary when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr:
+                {
+                    var (leftTrue, leftFalse) = ClassifyConditionAssignments(binary.Left, assigned, pointerAliases, tracked, flowContext);
+                    var (rightTrue, rightFalse) = ClassifyConditionAssignments(binary.Right, leftFalse, pointerAliases, tracked, flowContext);
+                    return (Intersect(leftTrue, rightTrue), rightFalse);
+                }
+
+            default:
+                {
+                    var after = new HashSet<VariableSymbol>(assigned);
+                    ProcessExpression(condition, after, null, new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases), tracked, flowContext);
+                    return (after, after);
+                }
+        }
     }
 
     private static BoundLabel? FindMethodExitLabel(BoundBlockStatement body)

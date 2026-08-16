@@ -671,7 +671,17 @@ internal sealed partial class ExpressionBinder
             // Not a method group: surface the suppressed diagnostics.
             if (scope.TryLookupSymbol(name) is null)
             {
-                Diagnostics.ReportUndefinedVariable(syntax.IdentifierToken.Location, name);
+                // ADR-0166: a pattern variable read outside the region its
+                // match dominates is a definite-assignment error, not an
+                // unknown name.
+                if (binderCtx.PatternVariableNames.Contains(name))
+                {
+                    Diagnostics.ReportPatternVariableNotDefinitelyAssigned(syntax.IdentifierToken.Location, name);
+                }
+                else
+                {
+                    Diagnostics.ReportUndefinedVariable(syntax.IdentifierToken.Location, name);
+                }
             }
             else if (scope.TryLookupSymbol(name) is not VariableSymbol)
             {
@@ -2526,8 +2536,67 @@ internal sealed partial class ExpressionBinder
             expression.Type,
             allowBindings: false,
             preferTypeNames: true);
-        return new BoundIsExpression(syntax, expression, pattern);
+        var result = new BoundIsExpression(syntax, expression, pattern);
+
+        // ADR-0166: designations are declared by the consumer of the
+        // condition (see PatternVariables); here only record the names so a
+        // read outside their region reports GS0532, and reject a name bound
+        // twice by the same pattern (`{ A: T t, B: U t }`).
+        var bindings = PatternVariables.CollectBindings(pattern);
+        if (!bindings.IsDefaultOrEmpty)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var variable in bindings)
+            {
+                binderCtx.PatternVariableNames.Add(variable.Name);
+                if (!seen.Add(variable.Name) && variable.DeclaringSyntax is SyntaxNode declaring)
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name);
+                }
+            }
+        }
+
+        return result;
     }
+
+    /// <summary>
+    /// ADR-0166: reports every variable in <paramref name="added"/> whose name
+    /// already occurs in <paramref name="existing"/> — the C# CS0128 rule for
+    /// a pattern variable that would be definitely assigned twice on the same
+    /// path (<c>a is T t &amp;&amp; b is U t</c>). Duplicates inside a single
+    /// operand were reported when that operand was bound.
+    /// </summary>
+    private void ReportDuplicatePatternVariables(
+        ImmutableArray<LocalVariableSymbol> added,
+        ImmutableArray<LocalVariableSymbol> existing)
+    {
+        if (added.IsDefaultOrEmpty || existing.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var variable in existing)
+        {
+            seen.Add(variable.Name);
+        }
+
+        foreach (var variable in added)
+        {
+            if (seen.Contains(variable.Name) && variable.DeclaringSyntax is SyntaxNode declaring)
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0166: binds <paramref name="bind"/> with <paramref name="variables"/>
+    /// declared in a fresh child scope — the region in which those pattern
+    /// variables are definitely assigned.
+    /// </summary>
+    private T BindWithPatternVariables<T>(ImmutableArray<LocalVariableSymbol> variables, Func<T> bind)
+        => PatternVariables.BindInScope(binderCtx, variables, bind);
 
     private BoundExpression BindAsExpression(AsExpressionSyntax syntax)
     {

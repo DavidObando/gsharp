@@ -2725,6 +2725,14 @@ internal sealed class LambdaBinder
                 this.declared.Add(typePattern.Variable);
             }
 
+            // ADR-0166: a slice capture (`[..rest]`) declares its variable in
+            // the same way, whether the pattern sits in a switch arm or in a
+            // boolean `is` inside the lambda body.
+            if (node is BoundSlicePattern slicePattern && slicePattern.Variable != null)
+            {
+                this.declared.Add(slicePattern.Variable);
+            }
+
             return base.RewritePattern(node);
         }
 

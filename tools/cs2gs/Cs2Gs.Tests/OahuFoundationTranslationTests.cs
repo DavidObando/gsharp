@@ -149,11 +149,12 @@ namespace Demo
 
     /// <summary>
     /// ADR-0115 §B: `x is null` / `x is not null` map to G# `== nil` / `!= nil`,
-    /// and a type-test with a binder (`x is T t`) preserves the binder as a
+    /// and a type-test with a binder (`x is T t`) preserves the binder — since
+    /// ADR-0166 / issue #3409 as a native G# pattern variable rather than a
     /// nullable local narrowed by a nil test.
     /// </summary>
     [Fact]
-    public void IsPattern_MapsToNilTestsAndSmartCast()
+    public void IsPattern_MapsToNilTestsAndNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -176,7 +177,10 @@ namespace Demo
 
         Assert.Contains("== nil", printed);
         Assert.Contains("!= nil", printed);
-        Assert.Contains("let s string? = o as string", printed);
+        // ADR-0166 / issue #3409: native pattern variable, no hoisted `as` local.
+        Assert.Contains("if o is string s {", printed);
+        Assert.Contains("return s", printed);
+        Assert.DoesNotContain("as string", printed);
     }
 
     /// <summary>

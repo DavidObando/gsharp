@@ -64,6 +64,14 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
+            // ADR-0166: a loop condition whose designations are native pattern
+            // variables stays a plain `for cond { }`; the body sees the
+            // when-true variables directly.
+            if (this.ConditionUsesNativePatternVariables(condition))
+            {
+                return false;
+            }
+
             if (!isDoWhile &&
                 this.TryBuildWhileLetLoop(condition, bodyStatement, out IReadOnlyList<GStatement> whileLet))
             {
@@ -275,7 +283,8 @@ public sealed partial class CSharpToGSharpTranslator
         private bool ClauseRequiresConditionHoist(ExpressionSyntax clause)
         {
             return (clause is IsPatternExpressionSyntax isPattern &&
-                (PatternIntroducesBinding(isPattern.Pattern) ||
+                ((PatternIntroducesBinding(isPattern.Pattern)
+                    && !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))) ||
                  ExpressionDeclaresOutVar(isPattern.Expression))) ||
                 ClauseContainsAssignment(clause);
         }
@@ -509,6 +518,15 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private IEnumerable<GStatement> TranslateIfStatements(IfStatementSyntax ifStatement)
         {
+            // ADR-0166 / issue #3409: when every `is` designation in the condition
+            // is a native G# pattern variable, the plain `if` keeps the C# shape
+            // and names; the `if let` / guard-hoist lowerings below only serve
+            // conditions the native scoping cannot express.
+            if (this.ConditionUsesNativePatternVariables(ifStatement.Condition))
+            {
+                return new[] { this.TranslateIf(ifStatement) };
+            }
+
             // Issue #3359: `if (recv is { } name) { … }` has a canonical G# form —
             // the ADR-0071 `if let` statement — that binds the name at its
             // non-null type and evaluates `recv` exactly once by construction.

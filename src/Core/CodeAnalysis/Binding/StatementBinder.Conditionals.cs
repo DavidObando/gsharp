@@ -47,8 +47,18 @@ internal sealed partial class StatementBinder
             thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen);
             elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse);
 
-            var thenStatement = BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
-            var elseStatement = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
+            // ADR-0166: pattern variables are in scope in the branch their
+            // match dominates: when-true in the then-branch, when-false in the
+            // else-branch (`if !(x is T t) { ... } else { use(t) }`).
+            var (patternThen, patternElse) = PatternVariables.Classify(condition);
+            var thenStatement = BindWithPatternVariables(
+                patternThen,
+                () => BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow));
+            var elseStatement = syntax.ElseClause == null
+                ? null
+                : BindWithPatternVariables(
+                    patternElse,
+                    () => BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow));
             var result = new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
 
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
@@ -58,6 +68,13 @@ internal sealed partial class StatementBinder
             {
                 binderCtx.PendingEarlyExitFrames[result] = elseNarrow;
             }
+
+            // ADR-0166: the same early-exit rule leaks pattern variables into
+            // the statements that follow the `if` — `if !(x is T t) { return }`
+            // makes `t` usable afterwards, and so does an else-branch that
+            // always exits for the when-true variables. BindBlockStatements
+            // declares them into the enclosing block scope.
+            RecordPatternVariableLeak(result, patternThen, patternElse);
 
             return result;
         }
@@ -85,8 +102,15 @@ internal sealed partial class StatementBinder
         initThenNarrow = MergeNarrowingFrames(initThenNarrow, initTypeThen);
         initElseNarrow = MergeNarrowingFrames(initElseNarrow, initTypeElse);
 
-        var initThen = BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow);
-        var initElse = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow);
+        var (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition);
+        var initThen = BindWithPatternVariables(
+            initPatternThen,
+            () => BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow));
+        var initElse = syntax.ElseClause == null
+            ? null
+            : BindWithPatternVariables(
+                initPatternElse,
+                () => BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow));
 
         scope = scope.Pop();
 
@@ -365,6 +389,76 @@ internal sealed partial class StatementBinder
             if (!EndsInUnconditionalExit(armElse))
             {
                 Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ADR-0166: binds a statement with the given pattern variables declared in
+    /// a fresh child scope (see <see cref="PatternVariables.BindInScope{T}"/>).
+    /// </summary>
+    private T BindWithPatternVariables<T>(ImmutableArray<LocalVariableSymbol> variables, Func<T> bind)
+        => PatternVariables.BindInScope(binderCtx, variables, bind);
+
+    /// <summary>
+    /// ADR-0166: parks the pattern variables that <paramref name="ifStatement"/>
+    /// leaks into the statements following it: the condition's when-false
+    /// variables when the then-branch always exits, plus its when-true
+    /// variables when the else-branch always exits. Consumed by
+    /// <see cref="ApplyEarlyExitPatternVariables"/> from
+    /// <c>BindBlockStatements</c>, so an <c>else if</c> (which is not a direct
+    /// block statement) never leaks — the outer condition's other path could
+    /// reach the following statements without the match.
+    /// </summary>
+    private void RecordPatternVariableLeak(
+        BoundIfStatement ifStatement,
+        ImmutableArray<LocalVariableSymbol> whenTrue,
+        ImmutableArray<LocalVariableSymbol> whenFalse)
+    {
+        if (whenTrue.IsDefaultOrEmpty && whenFalse.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var leaked = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+        if (!whenFalse.IsDefaultOrEmpty && EndsInUnconditionalExit(ifStatement.ThenStatement))
+        {
+            leaked.AddRange(whenFalse);
+        }
+
+        if (!whenTrue.IsDefaultOrEmpty
+            && ifStatement.ElseStatement != null
+            && EndsInUnconditionalExit(ifStatement.ElseStatement))
+        {
+            leaked.AddRange(whenTrue);
+        }
+
+        if (leaked.Count > 0)
+        {
+            binderCtx.PendingPatternVariableLeaks[ifStatement] = leaked.ToImmutable();
+        }
+    }
+
+    /// <summary>
+    /// ADR-0166: declares the pattern variables parked by
+    /// <see cref="RecordPatternVariableLeak"/> into the current (enclosing
+    /// block) scope. A name that is already declared in that scope is reported
+    /// once, at the designation.
+    /// </summary>
+    private void ApplyEarlyExitPatternVariables(BoundStatement? statement)
+    {
+        if (statement is not BoundIfStatement ifStatement
+            || !binderCtx.PendingPatternVariableLeaks.TryGetValue(ifStatement, out var leaked))
+        {
+            return;
+        }
+
+        binderCtx.PendingPatternVariableLeaks.Remove(ifStatement);
+        foreach (var variable in leaked)
+        {
+            if (!scope.TryDeclareVariable(variable) && variable.DeclaringSyntax is SyntaxNode declaring)
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name);
             }
         }
     }

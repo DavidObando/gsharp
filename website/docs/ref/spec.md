@@ -1021,9 +1021,31 @@ type-first meaning, then falls back to a value. A property suffix forces the
 type interpretation. Use `== name` to force a value interpretation after
 boolean `is`.
 
-Boolean `is` patterns cannot introduce names. A binding type pattern or slice
-capture reports `GS0525`; use `if let` / `guard let` when a matched value needs a
-name, or `while let` when the binding controls a loop.
+A pattern may name the value it matches by writing a **designation** identifier
+after it, C# style (ADR-0166): `value is string text`, `value is Dog { Name:
+"Rex" } dog`, `value is { Length: > 0 } text`, `box is { Value: Dog d }`,
+`value is { } present` (the empty property pattern is a pure non-nil test over
+any input), and `values is [1, ..rest]`. The designation must follow the
+pattern on the same line and cannot be one of the contextual pattern words
+`and`, `or`, `when`; `_` discards. A pattern variable is a read-only local of
+the tested type that is assigned exactly once, when its pattern matches, and it
+is in scope exactly where C# would consider it definitely assigned: the right
+operand of `&&` (of `||` after a negated test), the branch an `if` or `?:`
+selects, the body of a `for`/`while` whose condition tests it, a `switch` arm
+whose `when` guard binds it, and the statements after an `if` whose other
+branch always exits (`if !(value is string text) { return }` makes `text`
+usable afterwards). Reading it anywhere else reports `GS0532`; binding the same
+name twice on one path (`a is T t && b is U t`) reports `GS0102`. The switch
+spelling `name is Type` stays a switch-only form — in boolean position it
+reports `GS0525` — while `Type name` is accepted in every pattern position,
+including `switch` arms.
+
+```gsharp
+if value is string text && text.Length > 3 { use(text) }
+if !(node is Leaf leaf) { return }
+Console.WriteLine(leaf.Value)
+let label = value is int32 n ? n.ToString() : "?"
+```
 
 A list pattern (`[p1, p2, ...]`) may include at most one **slice ("rest") subpattern**: a bare `..` discards the middle slice, `..name` captures it into a `[]T` binding, and `..pattern` matches it against a nested pattern (e.g. `[first, .., last]`, `[head, ..rest]`, `[.., > 0]`). The slice subpattern greedily absorbs whichever elements are not matched by the fixed-position patterns before and after it.
 

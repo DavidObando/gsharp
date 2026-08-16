@@ -557,7 +557,7 @@
     "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DeclarationPattern.cs",
-    "notes": "x is T t binder (issue #993, resolved)."
+    "notes": "x is T t binder (issue #993, resolved); emitted verbatim as a native G# pattern variable when it qualifies (ADR-0166, issue #3409)."
   },
   {
     "kind": "DefaultConstraint",
@@ -1241,7 +1241,9 @@
     "nodeType": "IsPatternExpressionSyntax",
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.36",
-    "rationale": "None"
+    "rationale": "None",
+    "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/IsPatternExpression.cs",
+    "notes": "Native boolean patterns; designations become G# pattern variables scoped to their definitely-assigned regions (ADR-0166, issue #3409). var designations and reassigned binders keep the substitution/hoist lowerings."
   },
   {
     "kind": "JoinClause",
@@ -1848,7 +1850,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1923",
-    "notes": "Shallow property patterns green; nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923)."
+    "notes": "Property patterns green, including nested designations \u0060{ P: T t } u\u0060 as native G# pattern variables (ADR-0166); nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923)."
   },
   {
     "kind": "RefExpression",

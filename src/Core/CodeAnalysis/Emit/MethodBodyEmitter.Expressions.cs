@@ -2254,7 +2254,9 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitIsExpression(BoundIsExpression node)
     {
-        if (node.Pattern is BoundTypePattern { PropertyPattern: null } typePattern)
+        // ADR-0166: a type test that binds a pattern variable takes the general
+        // path so the matched value is stored into the variable's slot.
+        if (node.IsSimpleTypeTest && node.Pattern is BoundTypePattern typePattern)
         {
             this.EmitSimpleTypeIsExpression(node.Expression, typePattern.TargetType);
             return;

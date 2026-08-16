@@ -22,14 +22,20 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// ADR-0151 translation tests: a C# conditional whose condition is a bare
 /// non-null declaration pattern (<c>receiver is { } name</c>), optionally
-/// <c>&amp;&amp;</c>-joined with further predicates, now lowers to the
-/// canonical G# value-position <c>if let</c> instead of the spill-based
-/// <c>if</c>-expression. That removes the <c>let __spillN</c> prologue (so an
-/// expression-bodied member folds back to the arrow form) and the repeated
-/// <c>!!</c> non-null assertions at every binder reference.
+/// <c>&amp;&amp;</c>-joined with further predicates, must not fall back to
+/// the spill-based <c>if</c>-expression: no <c>let __spillN</c> prologue (so
+/// an expression-bodied member keeps the arrow form) and no repeated
+/// <c>!!</c> non-null assertion at every binder reference.
 ///
-/// The rewrite is deliberately conservative; the fallback tests at the bottom
-/// pin down the shapes that must keep the old lowering.
+/// ADR-0166 / issue #3409: the translator now emits these ternaries as the
+/// native G# if-expression over a pattern variable —
+/// <c>if receiver is { } name &amp;&amp; predicate { … } else { … }</c> — so the
+/// tests below assert that form. The ADR-0151 value-position <c>if let</c>
+/// remains a supported G# expression: its printer goldens stay in this file,
+/// and it is still the translation target for shapes the native path
+/// declines (a <c>var</c> designation, a reassigned binder, a binder read
+/// outside a region G# scopes it to). The fallback tests at the bottom pin
+/// down the shapes that must keep the older lowerings.
 /// </summary>
 public class Adr0151IfLetExpressionTranslationTests
 {
@@ -113,8 +119,10 @@ public class Adr0151IfLetExpressionTranslationTests
     // The reported repro: an expression-bodied property whose body is a
     // guarded pattern ternary. Before ADR-0151 this produced a block-bodied
     // accessor with a `__spill0` prologue and repeated `!!`.
+    // ADR-0166 / issue #3409: the pattern variable is now native, so the arrow
+    // body is the G# if-expression `if recv is { } name && guard { a } else { b }`.
     [Fact]
-    public void ExpressionBodiedProperty_GuardedPatternTernary_FoldsToArrowIfLet()
+    public void ExpressionBodiedProperty_GuardedPatternTernary_FoldsToArrowIfExpression()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -130,10 +138,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let copyright = ", printed, StringComparison.Ordinal);
-        Assert.Contains("GetCopyrights()", printed, StringComparison.Ordinal);
-        Assert.Contains("&& copyright.Length > 0 {", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "if GetCopyrights() is { } copyright && copyright.Length > 0 {",
+            printed,
+            StringComparison.Ordinal);
         Assert.Contains("{ copyright[0] } else { default(string?) }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
 
         // Folded back to the idiomatic expression-bodied arrow form ...
         Assert.Contains("prop Copyright string? ->", printed, StringComparison.Ordinal);
@@ -145,8 +155,10 @@ namespace Demo
         Assert.DoesNotContain("copyright!!", printed, StringComparison.Ordinal);
     }
 
+    // ADR-0166 / issue #3409: `recv is { } n ? n : fallback` is the native
+    // if-expression over the pattern variable `n`.
     [Fact]
-    public void BindingOnlyTernary_LowersToIfLet()
+    public void BindingOnlyTernary_UsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -161,8 +173,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let n = ", printed, StringComparison.Ordinal);
-        Assert.Contains("{ n } else { \"anonymous\" }", printed, StringComparison.Ordinal);
+        Assert.Contains("if Find() is { } n { n } else { \"anonymous\" }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("n!!", printed, StringComparison.Ordinal);
     }
@@ -184,13 +196,20 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let n = ", printed, StringComparison.Ordinal);
-        Assert.Contains("&& n.Length > 0 && n[0] == 'a' {", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: every predicate stays in the native `if`
+        // header, where the pattern variable is in scope for the `&&` chain.
+        Assert.Contains(
+            "if Find() is { } n && n.Length > 0 && n[0] == 'a' { n } else { \"anonymous\" }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
+    // ADR-0166 / issue #3409: `{ }` over a `Nullable<T>` receiver is the native
+    // non-nil test that binds the unwrapped value.
     [Fact]
-    public void NullableValueTypeReceiver_LowersToIfLet()
+    public void NullableValueTypeReceiver_UsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -205,8 +224,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let v = ", printed, StringComparison.Ordinal);
-        Assert.Contains("&& v > 0 { v * 2 } else { -1 }", printed, StringComparison.Ordinal);
+        Assert.Contains("if Value is { } v && v > 0 { v * 2 } else { -1 }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
@@ -232,15 +251,19 @@ namespace Demo
     }
 }");
 
-        // `if let` evaluates its initializer exactly once by construction, so
-        // the side-effecting receiver needs no spill temp to be single-evaluated.
-        Assert.Contains("if let s = ", printed, StringComparison.Ordinal);
-        Assert.Contains("Next() { s } else { \"none\" }", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: a native `is` pattern evaluates its receiver
+        // exactly once by construction, so the side-effecting receiver needs no
+        // spill temp to be single-evaluated — one declaration, one call site.
+        Assert.Contains("if Next() is { } s { s } else { \"none\" }", printed, StringComparison.Ordinal);
+        Assert.Equal(2, printed.Split("Next()").Length - 1);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
+    // ADR-0166 / issue #3409: each conditional becomes its own native
+    // if-expression; the inner one nests inside the outer else arm.
     [Fact]
-    public void NestedConditional_InElseArm_AlsoLowersToIfLet()
+    public void NestedConditional_InElseArm_AlsoUsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -257,8 +280,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let a = ", printed, StringComparison.Ordinal);
-        Assert.Contains("if let b = ", printed, StringComparison.Ordinal);
+        Assert.Contains("if A() is { } a { a } else {", printed, StringComparison.Ordinal);
+        Assert.Contains("if B() is { } b { b } else { \"none\" }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
@@ -278,12 +302,17 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let n = ", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: native pattern variable; the `null` arm is
+        // still `default` of the nullable result type.
+        Assert.Contains("if Find() is { } n && n.Length > 0 { n }", printed, StringComparison.Ordinal);
         Assert.Contains("else { default(string?) }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
     }
 
+    // ADR-0166 / issue #3409: the native if-expression must compile and run
+    // under gsc end to end, exactly as the `if let` lowering did.
     [Fact]
-    public void TranslatedIfLet_CompilesAndRunsUnderGsc()
+    public void TranslatedNativePatternVariable_CompilesAndRunsUnderGsc()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -299,12 +328,18 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if let c = ", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "if Copyrights is { } c && c.Length > 0 { c[0] } else { default(string?) }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         CompileAndRun(printed, "Package().Copyright()");
     }
 
+    // ADR-0166 / issue #3409: the packed tool emits the native pattern
+    // variable, and the same-version packed SDK must compile it.
     [Fact]
-    public void Issue2819_SameVersionPackedToolAndSdk_CompileTranslatedIfLet()
+    public void Issue2819_SameVersionPackedToolAndSdk_CompileTranslatedPatternVariable()
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         (string NupkgPath, string Version)? cs2gs = ResolveLocalCs2GsPackage(repoRoot);
@@ -434,7 +469,7 @@ namespace Demo
         string translatedSource = Path.Combine(translatedDir, "Repro.gs");
         Assert.True(File.Exists(translatedSource), "Packed cs2gs did not emit Repro.gs.");
         Assert.Contains(
-            "if let values = ",
+            "if G() is { } values && values.Length > 0 {",
             File.ReadAllText(translatedSource),
             StringComparison.Ordinal);
 
@@ -466,6 +501,83 @@ namespace Demo
         Directory.Delete(workDir, recursive: true);
     }
 
+    // ADR-0166 / issue #3409: `recv is T t` is a native declaration pattern —
+    // no `as T` testing initializer, no `if let`.
+    [Fact]
+    public void TypedDeclarationPattern_UsesNativePatternVariable()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+namespace Demo
+{
+    public class C
+    {
+        public object? Find() => null;
+
+        public string Name => Find() is string s ? s : ""anonymous"";
+    }
+}");
+
+        Assert.Contains("if Find() is string s { s } else { \"anonymous\" }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("as string", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+    }
+
+    // ADR-0166 / issue #3409: a designated property pattern is emitted
+    // verbatim — the member test rides in the pattern, not in a guard.
+    [Fact]
+    public void PropertySubpattern_TranslatesVerbatim()
+    {
+        // `is { Length: > 0 } s` adds a member test to the null check.
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+namespace Demo
+{
+    public class C
+    {
+        public string? Find() => null;
+
+        public string Name => Find() is { Length: > 0 } s ? s : ""anonymous"";
+    }
+}");
+
+        Assert.Contains(
+            "if Find() is { Length: > 0 } s { s } else { \"anonymous\" }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+    }
+
+    // ADR-0166 / issue #3409: gsc rejects a non-nullable `if let` initializer
+    // (GS0296), which used to force a scoped `let n = Find()` local; the native
+    // `{ }` pattern is a plain non-nil test accepted over any input type, so
+    // the author's binder survives verbatim.
+    [Fact]
+    public void NonNullableReceiver_UsesNativePatternVariable()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+namespace Demo
+{
+    public class C
+    {
+        public string Find() => ""x"";
+
+        public string Name => Find() is { } n ? n : ""anonymous"";
+    }
+}");
+
+        Assert.Contains("if Find() is { } n { n } else { \"anonymous\" }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let n = Find()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+    }
+
     // ── Conservative fallbacks ───────────────────────────────────────────
 
     [Fact]
@@ -494,71 +606,6 @@ namespace Demo
             "Reassigned pattern binders currently keep a spill fallback that cannot declare the mutable designator in G#.");
 
         Assert.DoesNotContain("if let n =", printed, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void TypedDeclarationPattern_UsesTestingIfLet()
-    {
-        string printed = TranslateUnit(@"
-#nullable enable
-using System;
-namespace Demo
-{
-    public class C
-    {
-        public object? Find() => null;
-
-        public string Name => Find() is string s ? s : ""anonymous"";
-    }
-}");
-
-        Assert.Contains("if let s = Find() as string", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void PropertySubpattern_UsesIfLetGuard()
-    {
-        // `is { Length: > 0 } s` adds a member test to the null check.
-        string printed = TranslateUnit(@"
-#nullable enable
-using System;
-namespace Demo
-{
-    public class C
-    {
-        public string? Find() => null;
-
-        public string Name => Find() is { Length: > 0 } s ? s : ""anonymous"";
-    }
-}");
-
-        Assert.Contains("if let s = Find()", printed, StringComparison.Ordinal);
-        Assert.Contains("s is { Length: > 0 }", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void NonNullableReceiver_UsesScopedAuthorBinding()
-    {
-        // gsc rejects a non-nullable `if let` initializer with GS0296, so the
-        // translator uses a scoped local carrying the author's binder name.
-        string printed = TranslateUnit(@"
-#nullable enable
-using System;
-namespace Demo
-{
-    public class C
-    {
-        public string Find() => ""x"";
-
-        public string Name => Find() is { } n ? n : ""anonymous"";
-    }
-}");
-
-        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
-        Assert.Contains("let n = Find()", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
 
     [Fact]

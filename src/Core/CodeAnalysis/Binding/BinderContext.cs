@@ -266,6 +266,27 @@ internal sealed class BinderContext
         = new Dictionary<BoundPatternSwitchStatement, Dictionary<AccessPath, TypeSymbol>>();
 
     /// <summary>
+    /// Gets the ADR-0166 side-table that parks the pattern variables an
+    /// <c>if</c>-statement leaks into the statements that follow it, keyed by
+    /// the resulting <see cref="BoundIfStatement"/>. <c>BindIfStatement</c>
+    /// records the condition's when-false variables when the then-branch ends
+    /// in an unconditional exit (and the when-true variables when the else-
+    /// branch does); <c>BindBlockStatements</c> declares them into the enclosing
+    /// block scope, the same lift <see cref="PendingEarlyExitFrames"/> performs
+    /// for smart-cast narrowings.
+    /// </summary>
+    public Dictionary<BoundIfStatement, ImmutableArray<LocalVariableSymbol>> PendingPatternVariableLeaks { get; }
+        = new Dictionary<BoundIfStatement, ImmutableArray<LocalVariableSymbol>>();
+
+    /// <summary>
+    /// Gets the names of every ADR-0166 pattern variable bound in this binder's
+    /// body. An unresolved name that matches one is reported as a pattern
+    /// variable read outside the region its match dominates (GS0532) rather
+    /// than as an unknown variable.
+    /// </summary>
+    public HashSet<string> PatternVariableNames { get; } = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// Gets or sets the type-parameter dictionary in scope while binding a
     /// generic function body. Indexed by type-parameter name. <c>null</c> when
     /// no generic context is active.

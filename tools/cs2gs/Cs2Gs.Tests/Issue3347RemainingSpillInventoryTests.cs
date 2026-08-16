@@ -43,8 +43,13 @@ public sealed class Issue3347RemainingSpillInventoryTests
         Assert.Contains("node.Value != nil", printed, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// ADR-0166 / issue #3409: a top-level typed binder with a native property
+    /// residual is a native pattern variable in both value and statement
+    /// position, so neither surface needs the <c>if let</c> lowering (or a spill).
+    /// </summary>
     [Fact]
-    public void TopLevelPatternBinders_UseIfLetAcrossValueAndStatementPositions()
+    public void TopLevelPatternBinders_UseNativePatternVariablesAcrossValueAndStatementPositions()
     {
         string printed = Translate(
             """
@@ -70,8 +75,13 @@ public sealed class Issue3347RemainingSpillInventoryTests
             """);
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("if let text = C.Get() as string", printed, StringComparison.Ordinal);
-        Assert.Contains("text is { Length: > 0 }", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "if C.Get() is string { Length: > 0 } text && text[0] == 'a' { text.Length } else { 0 }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("if C.Get() is string { Length: > 0 } text {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("as string", printed, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -22,20 +22,24 @@ namespace Cs2Gs.Tests;
 /// <c>out var</c> (→ GS0102). The fix hoists the scrutinee to a single local at
 /// the top of the loop body and converts the trailing pattern tests into
 /// <c>break</c> guards, keeping the leading side-effect-free clauses as the real
-/// loop condition. Each snippet must round-trip-parse through the real G# parser.
+/// loop condition. Since ADR-0166 / issue #3409, G# accepts pattern variables
+/// (and the ADR-0162 <c>and</c>/<c>not</c> combinators) directly in a boolean
+/// <c>is</c>, so a loop whose designations all qualify is emitted verbatim and
+/// the hoist remains the fallback for the other shapes. Each snippet must
+/// round-trip-parse through the real G# parser.
 /// </summary>
 public class Issue914WhileConditionHoistTranslationTests
 {
     /// <summary>
     /// The motivating <c>Frame.LoadChildren</c> shape:
     /// <c>while (a &amp;&amp; b &amp;&amp; M(out var n) is Frame child and not EmptyFrame)</c>.
-    /// The leading pure clauses stay in the loop condition; the scrutinee is
-    /// evaluated once into <c>let child = …</c>; the <c>not EmptyFrame</c> test
-    /// becomes an <c>if child is EmptyFrame { break }</c> guard; and the
-    /// <c>out var</c> declaration appears exactly once.
+    /// ADR-0166 / issue #3409: the whole condition is emitted verbatim as a native
+    /// pattern variable in the loop condition — the scrutinee call, the
+    /// <c>out var</c> declaration and the binder each appear exactly once and no
+    /// hoist local or <c>break</c> guard is produced.
     /// </summary>
     [Fact]
-    public void WhileWithOutVarAndPatternCombinator_HoistsScrutineeOnce()
+    public void WhileWithOutVarAndPatternCombinator_UsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -75,21 +79,24 @@ namespace Demo
     }
 }");
 
-        // Leading side-effect-free clauses remain the real loop condition.
-        Assert.Contains("while position < endPosition && origPosition == position {", printed);
+        // ADR-0166 / issue #3409: the whole condition — leading pure clauses, the
+        // side-effecting scrutinee, the `and not` combinator and the binder — is
+        // the native loop condition.
+        Assert.Contains(
+            "while position < endPosition && origPosition == position && (TagFactory.CreateTag(out var lengthRead) is Frame child and not EmptyFrame) {",
+            printed);
 
-        // The scrutinee is evaluated once into the hoist local reusing the binder name.
-        Assert.Contains("let child = TagFactory.CreateTag(out var lengthRead)", printed);
-
-        // The `not EmptyFrame` arm becomes a break guard.
-        Assert.Contains("if child is EmptyFrame {", printed);
-        Assert.Contains("break", printed);
+        // No hoist local and no `break` guard are produced.
+        Assert.DoesNotContain("let child", printed);
+        Assert.DoesNotContain("break", printed);
+        Assert.DoesNotContain("__spill", printed);
 
         // The `out var` declaration and the call must each appear exactly once.
         Assert.Equal(1, CountOccurrences(printed, "out var lengthRead"));
         Assert.Equal(1, CountOccurrences(printed, "TagFactory.CreateTag"));
 
-        // The body still reads the hoisted binder and out-var.
+        // The body reads the pattern variable and the out-var.
+        Assert.Contains("origPosition += lengthRead", printed);
         Assert.Contains("Children.Add(child)", printed);
     }
 
@@ -127,11 +134,11 @@ namespace Demo
 
     /// <summary>
     /// A <c>while</c> whose only condition is a side-effecting pattern clause
-    /// (no leading pure clauses) hoists the scrutinee with a <c>true</c> loop
-    /// condition.
+    /// (no leading pure clauses). ADR-0166 / issue #3409: the pattern is the
+    /// native loop condition (no <c>while true</c> + hoist + <c>break</c> guard).
     /// </summary>
     [Fact]
-    public void WhilePatternOnly_HoistsWithTrueCondition()
+    public void WhilePatternOnly_UsesNativePatternVariableCondition()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -166,10 +173,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("while true {", printed);
-        Assert.Contains("let node = Source.Next(out var read)", printed);
-        Assert.Contains("if node is Stop {", printed);
+        Assert.Contains("while (Source.Next(out var read) is Node node and not Stop) {", printed);
+        Assert.Contains("consumed += read", printed);
+        Assert.DoesNotContain("while true {", printed);
+        Assert.DoesNotContain("let node", printed);
+        Assert.DoesNotContain("break", printed);
         Assert.Equal(1, CountOccurrences(printed, "out var read"));
+        Assert.Equal(1, CountOccurrences(printed, "Source.Next"));
     }
 
     private static int CountOccurrences(string haystack, string needle)

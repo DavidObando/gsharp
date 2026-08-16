@@ -5,7 +5,7 @@ draft: false
 
 # Design decisions (ADRs)
 
-This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0165** (plus the `0000` template).
+This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0166** (plus the `0000` template).
 
 ## Null model, values, and primitives
 
@@ -72,6 +72,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0009](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0009-switch-semantics.md) | `switch` semantics — expression + statement, patterns, exhaustive | Defines switch statements, switch expressions, patterns, and exhaustiveness. |
 | [0013](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0013-no-fallthrough.md) | Drop Go's `fallthrough` | Reserves `fallthrough` but rejects it; cases never fall through. |
 | [0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md) | Canonical `for x in collection` | Establishes `for x in collection` as the preferred range iteration spelling. |
+| [0166](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0166-is-pattern-variables.md) | Pattern variables in boolean `is` expressions | Adds C#-style `Type name` designations to patterns and scopes the variable to the regions where its match is known to have happened. |
 
 ## Syntax, naming, and documentation policy
 
@@ -171,7 +172,7 @@ The 0.3 documentation audit covers these ADRs landed after the 0.2 snapshot. The
 | [0145](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0145-source-generator-host-native-gsharp.md) | Roslyn source-generator host for native G# projects (`gsgen`) |
 | [0146](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0146-anonymous-class-literal.md) | Anonymous-object literal (`object { ... }`, Kotlin-style) |
 
-## 0.4 ADRs (0157-0165)
+## 0.4 ADRs (0157-0166)
 
 The 0.4 documentation audit covers these ADRs landed after the 0.3 snapshot.
 
@@ -186,3 +187,4 @@ The 0.4 documentation audit covers these ADRs landed after the 0.3 snapshot.
 | [0163](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0163-while-let-loop-condition-bindings.md) | `while let` loop-condition bindings |
 | [0164](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0164-native-rectangular-arrays.md) | Native CLR rectangular arrays |
 | [0165](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0165-explicit-extension-receiver-clauses.md) | Explicit extension receiver clauses |
+| [0166](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0166-is-pattern-variables.md) | Pattern variables in boolean `is` expressions |

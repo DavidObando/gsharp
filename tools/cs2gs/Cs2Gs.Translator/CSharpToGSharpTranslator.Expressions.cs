@@ -880,7 +880,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return this.context.GetSymbolInfo(expression).Symbol is { } symbol
-                && this.state.PatternBindings.ContainsKey(symbol);
+                && (this.state.PatternBindings.ContainsKey(symbol)
+                    || this.state.NativePatternVariables.Contains(symbol));
         }
 
         private GExpression ForgiveNullableReferenceValue(
