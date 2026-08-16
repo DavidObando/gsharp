@@ -352,6 +352,17 @@ internal static class CaptureBoxingRewriter
             return false;
         }
 
+        // ADR-0166: a boolean `is` pattern variable is assigned exactly once by
+        // its match and is visible only in regions that match dominates, so
+        // every closure that captures it is created after the assignment and
+        // no later write can exist. Snapshotting it into the closure field is
+        // therefore already correct — and unlike switch-arm bindings there is
+        // no single statement body in which a box seed could be planted.
+        if (local is PatternVariableSymbol)
+        {
+            return false;
+        }
+
         // Parameters are boxable only when they belong to *this* function:
         // a captured parameter from an enclosing function is the responsibility
         // of that outer pass.

@@ -928,16 +928,39 @@ public static class GSharpPrinter
                 return $"{relational.Operator} {RenderExpression(relational.Value, indent)}";
 
             case TypePattern type:
-                return includeTypeDesignator
-                    ? $"{type.Designator} is {RenderType(type.Type)}"
-                    : RenderType(type.Type);
+                {
+                    var typeText = RenderType(type.Type);
+                    if (type.Suffix != null)
+                    {
+                        typeText += " " + RenderPattern(new PropertyPattern(type.Suffix.Fields), indent, includeTypeDesignator);
+                    }
+
+                    // ADR-0166: `Type name` is valid in every pattern position and
+                    // is the only spelling a boolean `is` accepts; the switch-only
+                    // `name is Type` spelling is kept for arms that ask for it.
+                    if (type.DesignationAfterType)
+                    {
+                        return string.IsNullOrEmpty(type.Designator) || type.Designator == "_"
+                            ? typeText
+                            : $"{typeText} {type.Designator}";
+                    }
+
+                    return includeTypeDesignator
+                        ? $"{type.Designator} is {typeText}"
+                        : typeText;
+                }
 
             case PropertyPattern property:
-                var fields = string.Join(
-                    ", ",
-                    property.Fields.Select(
-                        f => $"{f.Name}: {RenderPattern(f.Pattern, indent, includeTypeDesignator)}"));
-                return $"{{ {fields} }}";
+                {
+                    var fields = string.Join(
+                        ", ",
+                        property.Fields.Select(
+                            f => $"{f.Name}: {RenderPattern(f.Pattern, indent, includeTypeDesignator)}"));
+                    var text = property.Fields.Count == 0 ? "{ }" : $"{{ {fields} }}";
+                    return string.IsNullOrEmpty(property.Designator) || property.Designator == "_"
+                        ? text
+                        : $"{text} {property.Designator}";
+                }
 
             case DiscardPattern _:
                 return "_";

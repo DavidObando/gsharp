@@ -38,6 +38,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `out int n` parameter / `M(out var n)` | `out n int32` / `M(out var n)` | Ref-kind parameters and inline `out` declarations. |
 | `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types. |
 | `cond ? a : b` | `cond ? a : b` | Ternary expression. |
+| `if (x is Foo f && f.Ok)`, `if (x is not Foo f) return;` | `if x is Foo f && f.Ok`, `if !(x is Foo f) { return }` | Pattern variables (ADR-0166) are read-only and scoped to where the match is known to have happened; `is not T name` is spelled `!(x is T name)`. `switch` arms accept both `case Foo f` and `case f is Foo`. |
 | `a ?? b`, `a ??= b` | `a ?? b`, `a ??= b` | The old G# `?:` null-coalescing spelling is removed. |
 | `using static System.Math;` | `import System.Math` | Static members are available as an unqualified fallback. |
 | `unsafe`, pointers, `stackalloc`, `fixed` | `unsafe`, `*T`, `stackalloc [n]T`, `fixed p *T = source { ... }` | `*void` maps C# `void*`; raw-pointer operations require an unsafe context. |

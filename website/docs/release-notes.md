@@ -17,11 +17,12 @@ The fourth pre-1.0 line focuses on **sound defaults, expressive control flow, an
 - **Richer conditions and blocks.** Boolean `is` accepts the full pattern grammar, including constant, type, property, relational, list, and composed patterns. `while let` introduces a narrowed, body-scoped binding that is re-evaluated before each iteration. General block expressions can contain declarations and statements before their trailing value.
 - **Native rectangular arrays.** `[,]T`, `[,,]T`, and higher ranks preserve CLR type identity. `[rows, columns]T` allocates storage, flat initializers use row-major order, and `a[i, j]` supports reads, writes, compound assignment, address-taking, null-conditional access, iteration, and interop.
 - **Cleaner extension declarations.** `func extension (receiver T) Name()` explicitly declares an extension for an owned type or enum without turning it into an instance member.
-- **Migration fidelity.** `cs2gs` now emits native block expressions, rectangular arrays, multi-target storage assignment, `if let` / `while let` bindings, explicit extensions, and value-position assignments instead of synthetic spill-heavy rewrites.
+- **Migration fidelity.** `cs2gs` now emits native block expressions, rectangular arrays, multi-target storage assignment, `if let` / `while let` bindings, native `is` pattern variables, explicit extensions, and value-position assignments instead of synthetic spill-heavy rewrites.
 
 ### Added
 
 - Full patterns in `value is pattern` and `value !is pattern`, with type-plus-property composition and narrowed right-hand `and` patterns.
+- Pattern variables in boolean `is` (ADR-0166): `value is string text && text.Length > 3`, `value is { Length: > 0 } text`, `box is { Value: Dog d }`, `values is [1, ..rest]`, and the guard idiom `if !(value is string text) { return }` followed by uses of `text`. Variables are scoped to the regions where the match is known to have happened; `Type name` designations are also accepted in `switch` arms. `cs2gs` preserves C# `is` pattern syntax and names for these shapes instead of hoisting `__spillN` temporaries.
 - `while let name = nullableExpression { ... }`, including multiple bindings and normal labeled `break` / `continue` behavior.
 - General value-producing block expressions such as `{ let x = compute(); x + 1 }`.
 - Native rectangular array types, allocation, initialization, indexing, iteration, nullable forms, metadata, and expression-tree support.
@@ -49,7 +50,7 @@ The fourth pre-1.0 line focuses on **sound defaults, expressive control flow, an
 ### Known limitations
 
 - A non-empty rectangular-array initializer requires constant non-negative dimensions and a flat row-major element list.
-- Boolean pattern expressions cannot introduce bindings; use `if let`, `guard let`, or `while let` when a matched value needs a name.
+- Pattern variables introduced by a boolean `is` pattern (`value is string text`, ADR-0166) are read-only and are in scope only where their match is known to have happened; C# forms that rely on full definite-assignment data flow (for example a variable read after a `while` whose exit depends on the pattern) report `GS0532`.
 
 ## 0.3
 

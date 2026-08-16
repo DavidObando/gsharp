@@ -24,7 +24,8 @@ namespace Cs2Gs.Tests;
 /// (2) numeric promotion must extend to bitwise / null-coalescing / char /
 /// compound-assignment operands (GS0129);
 /// (3) a negated type-pattern guard (<c>is not T t</c>) must keep its binding
-/// available after the <c>if</c> via a hoisted nullable local (GS0157).
+/// available after the <c>if</c> (GS0157) — since ADR-0166 / issue #3409 as a
+/// native pattern variable leaked past <c>if !(x is T t) { exit }</c>.
 /// </summary>
 public class Issue914NumericCoercionTranslationTests
 {
@@ -175,12 +176,13 @@ namespace Demo
     }
 
     /// <summary>
-    /// Task 3: a negated type-pattern guard (<c>is not T t</c>) is lowered to a
-    /// hoisted nullable local plus a nil-guard, so the binder <c>t</c> stays in
-    /// scope (and smart-casts) after the <c>if</c>.
+    /// Task 3: a negated type-pattern guard (<c>is not T t</c>) whose then-branch
+    /// always exits. ADR-0166 / issue #3409: it is emitted as the native
+    /// <c>if !(x is T t) { throw }</c> and the pattern variable <c>t</c> is in
+    /// scope after the <c>if</c> — no hoisted nullable local, no nil-guard.
     /// </summary>
     [Fact]
-    public void NegatedTypePatternGuard_HoistsBindingPastIf()
+    public void NegatedTypePatternGuard_LeaksNativePatternVariablePastIf()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -201,18 +203,20 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let trun TrunBox? = box as TrunBox", printed);
-        Assert.Contains("if trun == nil", printed);
-        Assert.Contains("trun.DoThing()", printed);
+        Assert.Contains("if !(box is TrunBox trun) {", printed);
+        Assert.Contains("return trun.DoThing()", printed);
+        Assert.DoesNotContain("as TrunBox", printed);
+        Assert.DoesNotContain("== nil", printed);
     }
 
     /// <summary>
     /// Task 3: a negated type-pattern guard over a property-path receiver
-    /// (<c>child.Header is not T t</c>) hoists the receiver into the local, which
-    /// G# cannot smart-cast in place.
+    /// (<c>child.Box is not T t</c>), which G# cannot smart-cast in place.
+    /// ADR-0166 / issue #3409: the native pattern variable binds the matched
+    /// value itself, so no receiver hoist is needed.
     /// </summary>
     [Fact]
-    public void NegatedTypePatternGuard_PropertyPathReceiver_HoistsLocal()
+    public void NegatedTypePatternGuard_PropertyPathReceiver_UsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -235,9 +239,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let trun TrunBox? = child.Box as TrunBox", printed);
-        Assert.Contains("if trun == nil", printed);
-        Assert.Contains("trun.DoThing()", printed);
+        Assert.Contains("if !(child.Box is TrunBox trun) {", printed);
+        Assert.Contains("return trun.DoThing()", printed);
+        Assert.DoesNotContain("as TrunBox", printed);
+        Assert.DoesNotContain("== nil", printed);
+        Assert.DoesNotContain("__spill", printed);
     }
 
     /// <summary>

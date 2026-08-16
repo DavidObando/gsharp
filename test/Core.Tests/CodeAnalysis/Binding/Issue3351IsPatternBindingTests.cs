@@ -76,8 +76,11 @@ public sealed class Issue3351IsPatternBindingTests
     }
 
     [Fact]
-    public void IsExpressionBindings_ReportGS0525AtBindingName()
+    public void IsExpressionSwitchSpellingBinding_ReportsGS0525AtBindingName()
     {
+        // ADR-0166: the designation spelling (`value is string text`) and the
+        // slice capture (`[..rest]`) now bind pattern variables; only the switch
+        // spelling `name is Type` keeps GS0525 in boolean position.
         const string Source = """
             let value object = "hello"
             if value is text is string { }
@@ -87,16 +90,12 @@ public sealed class Issue3351IsPatternBindingTests
 
         var diagnostics = Bind(Source).Where(diagnostic => diagnostic.Id == "GS0525").ToArray();
 
-        Assert.Equal(2, diagnostics.Length);
-        Assert.Equal(
-            ["text", "rest"],
-            diagnostics.Select(diagnostic => diagnostic.Location.Text.ToString(diagnostic.Location.Span)));
-        Assert.All(
-            diagnostics,
-            diagnostic => Assert.Contains(
-                "use 'if let' or 'guard let'",
-                diagnostic.Message,
-                System.StringComparison.Ordinal));
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("text", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.Contains(
+            "'is Type text'",
+            diagnostic.Message,
+            System.StringComparison.Ordinal);
     }
 
     [Fact]

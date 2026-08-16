@@ -61,7 +61,13 @@ public sealed class BoundIsExpression : BoundExpression
     /// <summary>Gets the direct tested type when the pattern starts with a type test.</summary>
     public TypeSymbol? TargetType => Pattern is BoundTypePattern typePattern ? typePattern.TargetType : null;
 
-    /// <summary>Gets a value indicating whether this is a plain type test with no recursive suffix.</summary>
+    /// <summary>
+    /// Gets a value indicating whether this is a plain type test with no
+    /// recursive suffix and no pattern variable (ADR-0166): the shape the
+    /// emitter lowers to a bare <c>isinst</c> without storing the value.
+    /// </summary>
     public bool IsSimpleTypeTest =>
-        Pattern is BoundTypePattern typePattern && typePattern.PropertyPattern == null;
+        Pattern is BoundTypePattern typePattern
+        && typePattern.PropertyPattern == null
+        && !typePattern.HasBinding;
 }

@@ -60,20 +60,34 @@ public sealed class RelationalPattern : GPattern
 }
 
 /// <summary>
-/// A type pattern <c>case d is Dog:</c> binding the subject to a designator when
-/// it has the given runtime type (spec §Pattern matching, <c>TypePattern</c>).
+/// A type pattern binding the subject to a designator when it has the given
+/// runtime type (spec §Pattern matching, <c>TypePattern</c>). Two spellings
+/// exist: the switch form <c>case d is Dog:</c> and the ADR-0166 designation
+/// form <c>Dog d</c> / <c>Dog { Name: "Rex" } d</c>, which is the only form a
+/// boolean <c>is</c> accepts and the one that preserves C# pattern syntax.
 /// </summary>
 public sealed class TypePattern : GPattern
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="TypePattern"/> class.
     /// </summary>
-    /// <param name="designator">The bound variable name.</param>
+    /// <param name="designator">The bound variable name (<c>_</c> for none).</param>
     /// <param name="type">The matched type.</param>
-    public TypePattern(string designator, GTypeReference type)
+    /// <param name="suffix">The optional property-pattern suffix (<c>Dog { Name: "Rex" }</c>).</param>
+    /// <param name="designationAfterType">
+    /// <see langword="true"/> to print the ADR-0166 spelling <c>Type designator</c>;
+    /// <see langword="false"/> for the switch spelling <c>designator is Type</c>.
+    /// </param>
+    public TypePattern(
+        string designator,
+        GTypeReference type,
+        PropertyPattern suffix = null,
+        bool designationAfterType = false)
     {
         Designator = designator;
         Type = type;
+        Suffix = suffix;
+        DesignationAfterType = designationAfterType;
     }
 
     /// <summary>Gets the bound variable name.</summary>
@@ -81,6 +95,15 @@ public sealed class TypePattern : GPattern
 
     /// <summary>Gets the matched type.</summary>
     public GTypeReference Type { get; }
+
+    /// <summary>Gets the optional property-pattern suffix matched against the narrowed value.</summary>
+    public PropertyPattern Suffix { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the designator prints after the type
+    /// (ADR-0166 <c>Type name</c>) rather than before it (<c>name is Type</c>).
+    /// </summary>
+    public bool DesignationAfterType { get; }
 }
 
 /// <summary>
@@ -116,13 +139,21 @@ public sealed class PropertyPattern : GPattern
     /// Initializes a new instance of the <see cref="PropertyPattern"/> class.
     /// </summary>
     /// <param name="fields">The property field patterns.</param>
-    public PropertyPattern(IReadOnlyList<PropertyPatternField> fields)
+    /// <param name="designator">
+    /// The optional ADR-0166 designation printed after the closing brace
+    /// (<c>{ Length: &gt; 0 } text</c>), binding the matched non-nil value.
+    /// </param>
+    public PropertyPattern(IReadOnlyList<PropertyPatternField> fields, string designator = null)
     {
         Fields = fields ?? new List<PropertyPatternField>();
+        Designator = designator;
     }
 
     /// <summary>Gets the property field patterns.</summary>
     public IReadOnlyList<PropertyPatternField> Fields { get; }
+
+    /// <summary>Gets the optional designation that names the matched value, or <see langword="null"/>.</summary>
+    public string Designator { get; }
 }
 
 /// <summary>

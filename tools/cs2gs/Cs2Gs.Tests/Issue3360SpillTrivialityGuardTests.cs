@@ -25,7 +25,9 @@ namespace Cs2Gs.Tests;
 /// preserve C# method-group capture timing (issue #3357 follow-up).
 /// </para>
 /// Issue #3347 later removes the remaining value-type guard spill by emitting
-/// native typed <c>if let</c>.
+/// native typed <c>if let</c>, and ADR-0166 (issue #3409) turns an unmodified
+/// binder into a native pattern variable (<c>if x is T t { }</c>), so the hoist
+/// under test is now only reached for a binder the body reassigns.
 /// </summary>
 public class Issue3360SpillTrivialityGuardTests
 {
@@ -37,12 +39,15 @@ public class Issue3360SpillTrivialityGuardTests
     [Fact]
     public void ValueTypeGuard_TrivialScrutinee_EmitsNoSpill()
     {
+        // ADR-0166 / issue #3409: the binder is reassigned in the body, so the
+        // (let-immutable) native pattern variable path declines and the
+        // positive value-guard hoist under test is still the lowering taken.
         string printed = Translate(@"
 public sealed class C
 {
     public void M(object o)
     {
-        if (o is int i) { System.Console.WriteLine(i + 1); }
+        if (o is int i) { i = i + 1; System.Console.WriteLine(i); }
     }
 }");
 
@@ -50,14 +55,16 @@ public sealed class C
 
         Assert.Contains("var i int32", printed, StringComparison.Ordinal);
         Assert.Contains("if o is int32", printed, StringComparison.Ordinal);
+        Assert.Contains("i = int32(o)", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// A non-trivial scrutinee is read twice by the same shape and still must be
-    /// evaluated exactly once.
+    /// A non-trivial scrutinee must be evaluated exactly once. ADR-0166 / issue
+    /// #3409: an unmodified binder is a native pattern variable, which reads the
+    /// scrutinee once by construction — no spill, no <c>if let</c>.
     /// </summary>
     [Fact]
-    public void ValueTypeGuard_NonTrivialScrutinee_UsesTypedIfLet()
+    public void ValueTypeGuard_NonTrivialScrutinee_UsesNativePatternVariable()
     {
         string printed = Translate(@"
 public sealed class C
@@ -71,7 +78,9 @@ public sealed class C
 }");
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("if let i = C.Get() as int32?", printed, StringComparison.Ordinal);
+        Assert.Contains("if C.Get() is int32 i {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("as int32?", printed, StringComparison.Ordinal);
 
         // Evaluated exactly once: one declaration site, one call.
         Assert.Equal(2, CountOccurrences(printed, "Get()"));

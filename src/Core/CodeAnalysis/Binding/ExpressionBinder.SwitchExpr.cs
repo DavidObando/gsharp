@@ -115,7 +115,11 @@ internal sealed partial class ExpressionBinder
                     frame);
             }
 
-            var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame, targetType);
+            // ADR-0166: the arm result sees the guard's when-true pattern variables.
+            var (guardWhenTrue, _) = PatternVariables.Classify(guard);
+            var armResult = BindWithPatternVariables(
+                guardWhenTrue,
+                () => BindExpressionWithNarrowing(armSyntax.Result, frame, targetType));
 
             scope = scope.Pop();
             boundArmBuilders.Add((armSyntax, pattern, guard, armResult));

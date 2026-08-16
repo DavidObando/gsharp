@@ -467,12 +467,14 @@ namespace Demo
 
     /// <summary>
     /// A type reference that Roslyn parses as a constant pattern after a pattern
-    /// combinator (<c>is Frame f and not EmptyFrame</c>) lowers to a type test
-    /// <c>!(x is EmptyFrame)</c>, not an equality <c>x != EmptyFrame</c> (which
-    /// would treat the type name as a value → GS0125).
+    /// combinator (<c>is Frame f and not EmptyFrame</c>) is a type test, not an
+    /// equality <c>x != EmptyFrame</c> (which would treat the type name as a value
+    /// → GS0125). ADR-0166 / issue #3409: the designation <c>f</c> qualifies as a
+    /// native pattern variable, so the whole pattern — including the
+    /// <c>and not EmptyFrame</c> type-pattern conjunct — is emitted verbatim.
     /// </summary>
     [Fact]
-    public void IsPattern_TypeReferenceAfterCombinator_LowersToTypeTest()
+    public void IsPattern_TypeReferenceAfterCombinator_KeepsNativeTypePattern()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -485,10 +487,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("is Frame", printed);
-        Assert.Contains("is EmptyFrame", printed);
+        Assert.Contains("o is Frame f and not EmptyFrame", printed);
         Assert.DoesNotContain("!= EmptyFrame", printed);
         Assert.DoesNotContain("== EmptyFrame", printed);
+        Assert.DoesNotContain("as Frame", printed);
+        Assert.DoesNotContain("__spill", printed);
     }
 
     /// <summary>

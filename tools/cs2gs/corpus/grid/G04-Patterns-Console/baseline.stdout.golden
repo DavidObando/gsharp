@@ -25,6 +25,14 @@ DiscardPattern: -5 -> negative
 ExpressionColon: line starts on y-axis = True
 ExpressionColon: line ends above 4 = True
 ExpressionColon: switch-arm classification = starts-on-axis-ends-at-5
+IsPatternExpression: class receiver = True
+IsPatternExpression: struct receiver = False
+IsPatternExpression: nil receiver = False
+IsPatternExpression: text of length 5
+IsPatternExpression: not text
+IsPatternExpression: n=7 long name gsharp
+IsPatternExpression: n=nil
+IsPatternExpression: drained 3 with 1 left
 ListPattern: exact length match
 ListPattern: edge slice match
 ListPattern: empty match

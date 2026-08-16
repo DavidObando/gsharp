@@ -709,8 +709,8 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PatternVariableNotAllowedUnderOrNot, variableName);
 
     /// <summary>
-    /// Issue #3351: reports a source-visible binding inside a boolean
-    /// <c>is</c>-expression pattern.
+    /// Issue #3351 / ADR-0166: reports the switch binding spelling
+    /// (<c>name is Type</c>) inside a boolean <c>is</c>-expression pattern.
     /// </summary>
     /// <param name="location">The source location of the binding identifier.</param>
     /// <param name="variableName">The rejected binding name.</param>
@@ -718,6 +718,17 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string variableName)
     => Report(location, DiagnosticDescriptors.PatternBindingNotAllowedInIsExpression, variableName);
+
+    /// <summary>
+    /// ADR-0166 / issue #3409: reports a read of a pattern variable outside
+    /// the region its match dominates.
+    /// </summary>
+    /// <param name="location">The source location of the read.</param>
+    /// <param name="variableName">The pattern variable name.</param>
+    public void ReportPatternVariableNotDefinitelyAssigned(
+        TextLocation location,
+        string variableName)
+    => Report(location, DiagnosticDescriptors.PatternVariableNotDefinitelyAssigned, variableName);
 
     private static string FormatMissingNames(IEnumerable<string> missingNames)
     {

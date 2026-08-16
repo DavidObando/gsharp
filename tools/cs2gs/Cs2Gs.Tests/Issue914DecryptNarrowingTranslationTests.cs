@@ -51,12 +51,14 @@ namespace Demo
 
     /// <summary>
     /// A positive type-pattern guard whose scrutinee is not smart-castable
-    /// (here a method call) is hoisted to a nullable local; writing through that
-    /// local inside the guard must null-forgive the receiver (<c>x!!.Member = …</c>)
-    /// because gsc narrows pattern locals for reads but not for assignment targets.
+    /// (here a method call) used to be hoisted to a nullable local, forcing a
+    /// null-forgiven assignment receiver (<c>x!!.Member = …</c>). ADR-0166 /
+    /// issue #3409: the binder is now a native pattern variable of the tested
+    /// (non-nullable) type, so writing through it inside the guard needs no
+    /// hoist and no <c>!!</c>.
     /// </summary>
     [Fact]
-    public void AssignmentThroughHoistedGuardLocal_NullForgivesReceiver()
+    public void AssignmentThroughPatternVariable_UsesNativePatternVariableWithoutNullForgiveness()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -78,7 +80,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("referenceType!!.TrackIds = references", printed);
+        // ADR-0166 / issue #3409: native pattern variable; the assignment receiver
+        // is the non-nullable binder itself.
+        Assert.Contains("if Lookup() is IRefs referenceType {", printed);
+        Assert.Contains("referenceType.TrackIds = references", printed);
+        Assert.DoesNotContain("!!", printed);
+        Assert.DoesNotContain("as IRefs", printed);
+        Assert.DoesNotContain("__spill", printed);
     }
 
     /// <summary>

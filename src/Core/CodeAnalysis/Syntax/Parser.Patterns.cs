@@ -227,7 +227,7 @@ public partial class Parser
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var isKeyword = MatchToken(SyntaxKind.IsKeyword);
         var type = ParseTypeClause();
-        var propertyPattern = TryParseTypePropertyPattern();
+        var propertyPattern = TryParseTypePropertyPattern(type);
         return new TypePatternSyntax(syntaxTree, identifier, isKeyword, type, propertyPattern);
     }
 
@@ -238,7 +238,10 @@ public partial class Parser
         return new RelationalPatternSyntax(syntaxTree, operatorToken, expression);
     }
 
-    private PatternSyntax ParsePropertyPattern()
+    // Parses `{ Name: pattern, ... }` without a trailing designation. Callers
+    // that own the surrounding pattern shape (a standalone property pattern or
+    // a type pattern's property suffix) attach the ADR-0166 designation.
+    private PropertyPatternSyntax ParsePropertyPatternCore()
     {
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
@@ -261,6 +264,54 @@ public partial class Parser
         var fields = new SeparatedSyntaxList<PropertyPatternFieldSyntax>(nodesAndSeparators.ToImmutable());
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
         return new PropertyPatternSyntax(syntaxTree, openBrace, fields, closeBrace);
+    }
+
+    // A standalone property pattern (`{ Length: > 0 } text`) owns its designation.
+    private PropertyPatternSyntax ParsePropertyPattern()
+    {
+        var property = ParsePropertyPatternCore();
+        return WithDesignation(property, TryParsePatternDesignation(property));
+    }
+
+    private PropertyPatternSyntax WithDesignation(PropertyPatternSyntax property, SyntaxToken? designation)
+        => designation == null
+            ? property
+            : new PropertyPatternSyntax(syntaxTree, property.OpenBraceToken, property.Fields, property.CloseBraceToken, designation);
+
+    // ADR-0166: a designation is an identifier that directly follows a bare
+    // type pattern (`string text`), a type + property suffix
+    // (`Dog { Name: "Rex" } dog`), or a property pattern (`{ Length: > 0 } text`).
+    // The pattern combinators and the `when` guard keyword are contextual
+    // identifiers and never designations, and the identifier must sit on the
+    // same line as the pattern it names so a following statement that starts
+    // with a name is not swallowed.
+    private bool IsPatternDesignationCandidate(SyntaxNode precedingNode)
+        => IsPatternDesignationCandidateAt(0, precedingNode);
+
+    private bool IsPatternDesignationCandidateAt(int offset, SyntaxNode precedingNode)
+    {
+        var token = Peek(offset);
+        if (token.Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        if (token.Text is "and" or "or" or "when")
+        {
+            return false;
+        }
+
+        return !IsTokenOnNewLineAfter(token, precedingNode);
+    }
+
+    private SyntaxToken? TryParsePatternDesignation(SyntaxNode precedingNode)
+    {
+        if (!IsPatternDesignationCandidate(precedingNode))
+        {
+            return null;
+        }
+
+        return NextToken();
     }
 
     private PatternSyntax ParseListPattern()
@@ -348,9 +399,14 @@ public partial class Parser
         {
             var trialType = ParseTypeClause();
             candidateEnd = position;
+
+            // ADR-0166: `Type name` — an identifier that directly follows the
+            // type on the same line is a designation, so a bare name is a type
+            // candidate there as well.
             isCandidate = Diagnostics.Count == savedDiagnosticCount
                 && (CanFollowBareTypePattern(Current)
-                    || IsTokenOnNewLineAfter(Current, trialType));
+                    || IsTokenOnNewLineAfter(Current, trialType)
+                    || IsPatternDesignationCandidate(trialType));
         }
         finally
         {
@@ -394,7 +450,22 @@ public partial class Parser
 
         if (position == candidateEnd && Diagnostics.Count == expressionDiagnosticCount)
         {
-            var propertyPattern = TryParseTypePropertyPattern();
+            var propertyPattern = TryParseTypePropertyPattern(candidateType);
+            var valueDesignation = TryParsePatternDesignation((SyntaxNode?)propertyPattern ?? candidateType);
+            if (valueDesignation != null)
+            {
+                // ADR-0166: a designation commits the name to the type
+                // interpretation, exactly like a property suffix does for
+                // binding purposes — `value is limit n` can only be a type test.
+                return new TypePatternSyntax(
+                    syntaxTree,
+                    identifier: null,
+                    isKeyword: null,
+                    candidateType,
+                    propertyPattern,
+                    valueDesignation);
+            }
+
             return new TypeOrConstantPatternSyntax(
                 syntaxTree,
                 expression,
@@ -418,13 +489,15 @@ public partial class Parser
         position = candidateEnd;
         tokens = candidateTokens;
         Diagnostics.TruncateTo(expressionDiagnosticCount);
-        var suffix = TryParseTypePropertyPattern();
+        var suffix = TryParseTypePropertyPattern(candidateType);
+        var designation = TryParsePatternDesignation((SyntaxNode?)suffix ?? candidateType);
         return new TypePatternSyntax(
             syntaxTree,
             identifier: null,
             isKeyword: null,
             candidateType,
-            suffix);
+            suffix,
+            designation);
     }
 
     private static bool CanFollowBareTypePattern(SyntaxToken token)
@@ -469,10 +542,10 @@ public partial class Parser
 
         var savedPosition = position;
         var savedDiagnosticCount = Diagnostics.Count;
-        var property = ParsePropertyPattern();
-        if (CanCommitTypePropertyPattern())
+        var property = ParsePropertyPatternCore();
+        if (CanCommitTypePropertyPattern(property))
         {
-            return property;
+            return WithDesignation(property, TryParsePatternDesignation(property));
         }
 
         position = savedPosition;
@@ -484,7 +557,10 @@ public partial class Parser
         return new ConstantPatternSyntax(syntaxTree, new NameExpressionSyntax(syntaxTree, missing));
     }
 
-    private PropertyPatternSyntax? TryParseTypePropertyPattern()
+    // Parses the optional `{ ... }` suffix of a type pattern. The suffix never
+    // carries its own designation: `Dog { Name: "Rex" } dog` names the type
+    // pattern, so the caller attaches the designation after this returns.
+    private PropertyPatternSyntax? TryParseTypePropertyPattern(TypeClauseSyntax type)
     {
         if (Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -502,13 +578,13 @@ public partial class Parser
         if (patternNestingDepth > 0
             || patternParseContext is PatternParseContext.General or PatternParseContext.IsExpression)
         {
-            return (PropertyPatternSyntax)ParsePropertyPattern();
+            return ParsePropertyPatternCore();
         }
 
         var savedPosition = position;
         var savedDiagnosticCount = Diagnostics.Count;
-        var property = (PropertyPatternSyntax)ParsePropertyPattern();
-        if (CanCommitTypePropertyPattern())
+        var property = ParsePropertyPatternCore();
+        if (CanCommitTypePropertyPattern(property))
         {
             return property;
         }
@@ -518,15 +594,21 @@ public partial class Parser
         return null;
     }
 
-    private bool CanCommitTypePropertyPattern()
+    // Decides whether a speculatively parsed `{ ... }` is a property pattern
+    // rather than the owning statement body. ADR-0166: an optional designation
+    // may sit between the closing brace and the continuation, so the check
+    // looks past it (`if value is { Length: > 0 } text {`).
+    private bool CanCommitTypePropertyPattern(PropertyPatternSyntax property)
     {
         if (patternNestingDepth > 0)
         {
             return true;
         }
 
-        if (Current.Kind == SyntaxKind.IdentifierToken
-            && (Current.Text == "and" || Current.Text == "or"))
+        var offset = IsPatternDesignationCandidate(property) ? 1 : 0;
+        var next = Peek(offset);
+        if (next.Kind == SyntaxKind.IdentifierToken
+            && (next.Text == "and" || next.Text == "or"))
         {
             return true;
         }
@@ -535,15 +617,15 @@ public partial class Parser
         {
             PatternParseContext.General or PatternParseContext.IsExpression => true,
             PatternParseContext.IsExpressionBodyHeader =>
-                Current.Kind == SyntaxKind.OpenBraceToken
-                || Current.Kind == SyntaxKind.CloseParenthesisToken
-                || Current.Kind.GetBinaryOperatorPrecedence() != 0,
+                next.Kind == SyntaxKind.OpenBraceToken
+                || next.Kind == SyntaxKind.CloseParenthesisToken
+                || next.Kind.GetBinaryOperatorPrecedence() != 0,
             PatternParseContext.SwitchStatement =>
-                Current.Kind == SyntaxKind.OpenBraceToken
-                || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when"),
+                next.Kind == SyntaxKind.OpenBraceToken
+                || (next.Kind == SyntaxKind.IdentifierToken && next.Text == "when"),
             PatternParseContext.SwitchExpression =>
-                Current.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken
-                || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when"),
+                next.Kind is SyntaxKind.ColonToken or SyntaxKind.RightArrowToken
+                || (next.Kind == SyntaxKind.IdentifierToken && next.Text == "when"),
             _ => false,
         };
     }

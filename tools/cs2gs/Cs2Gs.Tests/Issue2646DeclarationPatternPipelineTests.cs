@@ -88,9 +88,12 @@ public sealed class Issue2646DeclarationPatternPipelineTests
             result.RunId,
             MigrationPipeline.SanitizeAppId(app.AppId),
             "Program.gs"));
-        Assert.Contains("var code int32", translated, StringComparison.Ordinal);
-        // Issue #3360: `rewriteCode` is a bare local — no spill needed.
-        Assert.Contains("code = int32(rewriteCode)", translated, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: `rewriteCode is int code` is a native G#
+        // pattern variable — no typed hoist, no conversion, no spill.
+        Assert.Contains("if rewriteCode is int32 code {", translated, StringComparison.Ordinal);
+        Assert.Contains("return code", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("var code int32", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("int32(rewriteCode)", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("let code = rewriteCode", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("return rewriteCode", translated, StringComparison.Ordinal);

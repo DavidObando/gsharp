@@ -14,9 +14,10 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Translator-fidelity tests for the three defects in issue #914:
-/// (1) a positive type-pattern variable (<c>x is T t</c>) that leaks past its
-/// <c>if</c> is hoisted to a nullable local plus a positive nil-guard so later
-/// uses bind to it;
+/// (1) a positive type-pattern variable (<c>x is T t</c>) keeps its binder name:
+/// a never-reassigned binder is emitted as a native G# pattern variable
+/// (ADR-0166 / issue #3409), while a reassigned binder that leaks past its
+/// <c>if</c> is hoisted to a nullable local plus a positive nil-guard;
 /// (2) a reassigned value parameter is shadowed by a mutable local
 /// (<c>var p = p</c>) because G# parameters are read-only;
 /// (3) <c>x ?? throw E</c> is lowered to a nil-guard that throws when nil.
@@ -45,9 +46,11 @@ namespace Demo
     }
 }");
 
-        // Hoisted as a mutable local (reassigned by `esds = fresh`).
+        // Hoisted as a mutable local (reassigned by `esds = fresh`); a reassigned
+        // binder cannot be a `let`-immutable G# pattern variable (ADR-0166).
         Assert.Contains("var esds E? = b.Esds as E", printed);
         Assert.Contains("if esds != nil", printed);
+        Assert.DoesNotContain("is E esds", printed);
     }
 
     [Fact]
@@ -68,12 +71,16 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let esds E? = local as E", printed);
-        Assert.Contains("if esds != nil", printed);
+        // ADR-0166 / issue #3409: a never-reassigned binder is emitted verbatim as
+        // a native pattern variable; no hoisted `as` local, no nil-guard.
+        Assert.Contains("if local is E esds {", printed);
+        Assert.Contains("Console.WriteLine(esds.X)", printed);
+        Assert.DoesNotContain("as E", printed);
+        Assert.DoesNotContain("!= nil", printed);
     }
 
     [Fact]
-    public void PositivePattern_PropertyScrutinee_UsedOnlyInsideThen_HoistsLocal()
+    public void PositivePattern_PropertyScrutinee_UsedOnlyInsideThen_UsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -89,15 +96,19 @@ namespace Demo
     }
 }");
 
-        // A property-access scrutinee cannot be smart-cast by gsc, so even when the
-        // binder is used only inside the then-block it must hoist into a local
-        // (rewriting `esds` to `b.Esds` would yield `b.Esds.X` → GS0158).
-        Assert.Contains("let esds E? = b.Esds as E", printed);
-        Assert.Contains("if esds != nil", printed);
+        // ADR-0166 / issue #3409: a property-access scrutinee cannot be smart-cast
+        // by gsc, but the native pattern variable binds the matched value itself,
+        // so the binder is kept verbatim (rewriting `esds` to `b.Esds` would yield
+        // `b.Esds.X` → GS0158) and no hoisted local is needed.
+        Assert.Contains("if b.Esds is E esds {", printed);
+        Assert.Contains("Console.WriteLine(esds.X)", printed);
+        Assert.DoesNotContain("b.Esds.X", printed);
+        Assert.DoesNotContain("as E", printed);
+        Assert.DoesNotContain("let esds", printed);
     }
 
     [Fact]
-    public void PositivePattern_MethodCallScrutinee_UsedOnlyInsideThen_HoistsLocalOnce()
+    public void PositivePattern_MethodCallScrutinee_UsedOnlyInsideThen_EvaluatesScrutineeOnce()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -113,17 +124,20 @@ namespace Demo
     }
 }");
 
-        // A method-call scrutinee must be evaluated once into a hoisted local; the
-        // side-effecting call must not be re-emitted at each use of the binder.
-        Assert.Contains("let child E? = b.GetChild[E]() as E", printed);
-        Assert.Contains("if child != nil", printed);
-        // The method call is emitted exactly once (in the hoist), not per binder use.
+        // ADR-0166 / issue #3409: the side-effecting call is the scrutinee of a
+        // native pattern variable, so it is evaluated once by the `is` test itself;
+        // no hoisted local, and the call must not be re-emitted at each binder use.
+        Assert.Contains("if b.GetChild[E]() is E child {", printed);
+        Assert.Contains("child.X + child.X", printed);
+        Assert.DoesNotContain("as E", printed);
+        Assert.DoesNotContain("let child", printed);
+        // The method call is emitted exactly once (in the `is` test), not per binder use.
         string[] occurrences = printed.Split("GetChild[E]()");
         Assert.Equal(2, occurrences.Length);
     }
 
     [Fact]
-    public void PositivePattern_JaggedArrayTarget_PropertyScrutinee_HoistsNullableJaggedArray()
+    public void PositivePattern_JaggedArrayTarget_PropertyScrutinee_UsesNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -139,16 +153,19 @@ namespace Demo
     }
 }");
 
-        // Issue #1351: a nullable jagged-array local annotation (`[]?[]uint8`) now
-        // round-trip-parses in gsc, so an array target with a non-smart-castable
-        // (property-chain) scrutinee hoists the faithful nullable local + `!= nil`
-        // guard instead of falling back to the smart-cast `is` test.
-        Assert.Contains("let ivs []?[]uint8 = chunk.ExtraData as [][]uint8", printed);
-        Assert.Contains("if ivs != nil", printed);
+        // ADR-0166 / issue #3409: an array-typed target with a non-smart-castable
+        // (property-chain) scrutinee is a native pattern variable of type
+        // `[][]uint8`; the nullable jagged-array hoist (`let ivs []?[]uint8 = … as
+        // [][]uint8` + `!= nil`, issue #1351) is no longer needed.
+        Assert.Contains("if chunk.ExtraData is [][]uint8 ivs {", printed);
+        Assert.Contains("return ivs.Length", printed);
+        Assert.DoesNotContain("let ivs", printed);
+        Assert.DoesNotContain("as [][]uint8", printed);
+        Assert.DoesNotContain("!= nil", printed);
     }
 
     [Fact]
-    public void PositivePattern_UsedAfterIf_NeverReassigned_HoistsAsLet()
+    public void PositivePattern_UsedAfterIf_NeverReassigned_LeaksNativePatternVariable()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -165,8 +182,14 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let esds E? = b.Esds as E", printed);
-        Assert.Contains("if esds != nil", printed);
+        // ADR-0166 / issue #3409: the else-branch always exits, so G# scopes the
+        // native pattern variable to the statements after the `if`; the binder is
+        // emitted verbatim and read after the `if` without a hoisted `let`.
+        Assert.Contains("if b.Esds is E esds {", printed);
+        Assert.Contains("return esds.X", printed);
+        Assert.DoesNotContain("as E", printed);
+        Assert.DoesNotContain("let esds", printed);
+        Assert.DoesNotContain("!= nil", printed);
     }
 
     // ---- Task 2: reassigned value parameter ---------------------------------

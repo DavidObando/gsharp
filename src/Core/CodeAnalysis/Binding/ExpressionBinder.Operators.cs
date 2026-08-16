@@ -712,12 +712,16 @@ internal sealed partial class ExpressionBinder
         var trueIsBareDefault = syntax.WhenTrue is DefaultExpressionSyntax tDef && tDef.TypeClause == null;
         var falseIsBareDefault = syntax.WhenFalse is DefaultExpressionSyntax fDef && fDef.TypeClause == null;
 
+        // ADR-0166: each branch sees the pattern variables the condition
+        // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
+        var (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition);
+
         BoundExpression whenTrue;
         BoundExpression whenFalse;
         if (targetType != null)
         {
-            whenTrue = BindExpression(syntax.WhenTrue, targetType);
-            whenFalse = BindExpression(syntax.WhenFalse, targetType);
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue, targetType));
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse, targetType));
         }
         else if (trueIsBareDefault && falseIsBareDefault)
         {
@@ -726,7 +730,7 @@ internal sealed partial class ExpressionBinder
         }
         else if (trueIsBareDefault)
         {
-            whenFalse = BindExpression(syntax.WhenFalse);
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse));
             if (whenFalse is BoundErrorExpression)
             {
                 return new BoundErrorExpression(null);
@@ -736,7 +740,7 @@ internal sealed partial class ExpressionBinder
         }
         else if (falseIsBareDefault)
         {
-            whenTrue = BindExpression(syntax.WhenTrue);
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue));
             if (whenTrue is BoundErrorExpression)
             {
                 return new BoundErrorExpression(null);
@@ -746,8 +750,8 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            whenTrue = BindExpression(syntax.WhenTrue);
-            whenFalse = BindExpression(syntax.WhenFalse);
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue));
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse));
         }
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
@@ -851,16 +855,19 @@ internal sealed partial class ExpressionBinder
         whenTrueNarrowing = MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue);
         whenFalseNarrowing = MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse);
 
+        // ADR-0166: each arm also sees the pattern variables the condition
+        // definitely assigns on that arm.
+        var (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition);
         Func<BoundExpression> bindWhenTrue =
             () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
         Func<BoundExpression> bindWhenFalse =
             () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
-        var whenTrue = BindWithNarrowing(
-            whenTrueNarrowing,
-            bindWhenTrue);
-        var whenFalse = BindWithNarrowing(
-            whenFalseNarrowing,
-            bindWhenFalse);
+        Func<BoundExpression> bindWhenTrueNarrowed =
+            () => BindWithNarrowing(whenTrueNarrowing, bindWhenTrue);
+        Func<BoundExpression> bindWhenFalseNarrowed =
+            () => BindWithNarrowing(whenFalseNarrowing, bindWhenFalse);
+        var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed);
+        var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed);
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {
@@ -1574,16 +1581,28 @@ internal sealed partial class ExpressionBinder
         // right operand is only evaluated when the left operand was false.
         // Thread the left's else-frame (its negative narrowing) so
         // `!(x is T) || f(x)` binds `f(x)` with `x` narrowed to `T`.
+        //
+        // ADR-0166: the same short-circuit regions scope pattern variables —
+        // `x is T t && t.Length > 0` binds `t.Length` with `t` in scope, and
+        // `!(x is T t) || t.Length > 0` likewise through the negation.
         BoundExpression boundRight;
         if (syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken)
         {
             var rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft);
-            boundRight = BindExpressionWithNarrowing(syntax.Right, rightFrame);
+            var (leftWhenTrue, _) = PatternVariables.Classify(boundLeft);
+            boundRight = BindWithPatternVariables(
+                leftWhenTrue,
+                () => BindExpressionWithNarrowing(syntax.Right, rightFrame));
+            ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue);
         }
         else if (syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken)
         {
             var rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft);
-            boundRight = BindExpressionWithNarrowing(syntax.Right, rightFrame);
+            var (_, leftWhenFalse) = PatternVariables.Classify(boundLeft);
+            boundRight = BindWithPatternVariables(
+                leftWhenFalse,
+                () => BindExpressionWithNarrowing(syntax.Right, rightFrame));
+            ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse);
         }
         else
         {

@@ -697,6 +697,39 @@ internal sealed partial class StatementBinder
         BoundStatement? backEdgeTail,
         BoundExpression? backEdgeCondition)
     {
+        // ADR-0166: the loop body runs only when the condition was true, so
+        // the condition's when-true pattern variables are in scope there
+        // (`for queue.Peek() is Node node { ... }`).
+        var (patternWhenTrue, _) = PatternVariables.Classify(condition);
+        var (body, loopBreak, loopContinue) = PatternVariables.BindInScope(
+            binderCtx,
+            patternWhenTrue,
+            () =>
+            {
+                var bound = BindConditionedLoopBodyCore(
+                    condition,
+                    bodySyntax,
+                    labelName,
+                    out var breakTarget,
+                    out var continueTarget,
+                    backEdgeTail,
+                    backEdgeCondition);
+                return (bound, breakTarget, continueTarget);
+            });
+        breakLabel = loopBreak;
+        continueLabel = loopContinue;
+        return body;
+    }
+
+    private BoundStatement BindConditionedLoopBodyCore(
+        BoundExpression? condition,
+        StatementSyntax bodySyntax,
+        string? labelName,
+        out BoundLabel breakLabel,
+        out BoundLabel continueLabel,
+        BoundStatement? backEdgeTail,
+        BoundExpression? backEdgeCondition)
+    {
         var inheritedNarrowingFrameCount = binderCtx.NarrowedVariables.Count;
         var loopNarrow = condition == null
             ? null

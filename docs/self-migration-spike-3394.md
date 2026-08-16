@@ -480,3 +480,41 @@ Final focused validation:
 Per the required sequence, test parity, self-hosted Core recompilation, and
 gsc/gsi/gsgen/cs2gs migration remain gated behind #3407 rather than running
 against unverifiable IL.
+
+## ADR-0166 pattern variables (issue #3409)
+
+Branch `oats/3409-is-pattern-variables` (PR #3417), rebased onto `28cb0e891`,
+added C#-style pattern variables to boolean `is` (ADR-0166) and taught cs2gs
+to emit C# `is` patterns with designations verbatim. Measured against a
+same-harness run of `28cb0e891` (the same `cs2gs migrate --diagnostic-run
+--corpus src/Core` invocation, both trees built from source):
+
+| Metric | `28cb0e891` (main) | ADR-0166 branch |
+|---|---:|---:|
+| Core compile diagnostics | 12 | **14** |
+| `__spillN` declarations | 142 | **4** (2 files, all `{ P: var x }`) |
+
+The twelve main diagnostics (`labelOrdinal` / `choiceOrdinal` locals emitted
+after the lifted recursive local functions that read them, and named
+arguments on `Find!!(…)` delegate invocations, both from the #3411 lowering)
+are unchanged. The two additional diagnostics are in code the native path
+restored: the legacy positive-guard hoist had silently dropped every `else if`
+branch of `SignatureEncoder.EncodeTypeSymbol` after the hoisted
+`TypeParameterSymbol tp` arm (issue #3418); the restored channel branch reports
+`typeof(Channel[_])` / `MakeGenericType` (GS0113, GS0159; issue #3425).
+
+Along the way the definite-assignment analyzer learned per-edge conditional
+state, so `x is T t && t.TryGet(name, out field)` now definitely assigns
+`field` on the true edge (C# §9.4.4) — the native shape had exposed a spurious
+GS0238 in `TypeMemberModel.TryGetStaticField`.
+
+Against the pre-#3408 baseline (`ed0f00f44`, 60 diagnostics / 231 spills) the
+same branch measured 52 / 4; ten baseline diagnostics were pattern-lowering
+artifacts (`GS0125` on escaped binders, `GS0296` on a non-nullable `if let`,
+`GS0157` on binder names bound as types).
+
+Remaining synthetic constructs are tracked as follow-ups: `(x as T)!!` explicit
+downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
+(#3422), `__castN` / `__deconN` / `__using` (#3423), property patterns on
+property receivers (#3424), and the fallback hoist ordering / unbound-write
+defects (#3419).
