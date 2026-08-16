@@ -959,15 +959,18 @@ public static class SpillSequenceSpiller
                         return SpillOneOperand(
                             clrEventSub,
                             clrEventSub.Handler,
-                            handler => new BoundClrEventSubscriptionExpression(
-                                null,
-                                receiver: null,
-                                clrEventSub.Event,
-                                handler,
-                                clrEventSub.IsAdd,
-                                clrEventSub.ConstrainedReceiverTypeParameter,
-                                clrEventSub.ConstrainedInterfaceType,
-                                clrEventSub.EventContainingType));
+                            handler =>
+                            {
+                                return new BoundClrEventSubscriptionExpression(
+                                    null,
+                                    receiver: null,
+                                    clrEventSub.Event,
+                                    handler,
+                                    clrEventSub.IsAdd,
+                                    clrEventSub.ConstrainedReceiverTypeParameter,
+                                    clrEventSub.ConstrainedInterfaceType,
+                                    clrEventSub.EventContainingType);
+                            });
                     }
 
                     return SpillTwoOperand(

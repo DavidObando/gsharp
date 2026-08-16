@@ -477,13 +477,21 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="text">The method-group name.</param>
     /// <returns>The visible, non-special static methods at the winning level.</returns>
     internal ImmutableArray<MethodInfo> GetStaticMethodGroup(string text)
-        => FindNearestNamedMemberLevel(text).Methods
-            .Where(m =>
-                m.IsStatic
-                && !m.IsGenericMethodDefinition
-                && !m.IsSpecialName
-                && IsVisibleToCurrentCompilation(m))
-            .ToImmutableArray();
+    {
+        var methods = ImmutableArray.CreateBuilder<MethodInfo>();
+        foreach (var method in FindNearestNamedMemberLevel(text).Methods)
+        {
+            if (method.IsStatic
+                && !method.IsGenericMethodDefinition
+                && !method.IsSpecialName
+                && IsVisibleToCurrentCompilation(method))
+            {
+                methods.Add(method);
+            }
+        }
+
+        return methods.ToImmutable();
+    }
 
     private static Type? ProjectMethodGroupType(TypeSymbol type)
     {
