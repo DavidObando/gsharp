@@ -196,13 +196,6 @@ namespace Demo
     [Fact]
     public void MutuallyRecursiveLocalFunctions_AreBothHoistedBeforeFirstExternalUse()
     {
-        // Issue #2231, case (d): `A` and `B` call each other and are both used
-        // (via `A`) before either's textual declaration. Both `let` bindings
-        // must land before the external use, in their original relative
-        // order. (Whether the mutual recursion itself binds in gsc is a
-        // pre-existing, separate `let`-recursion limitation — see
-        // Issue2231MutualRecursionRemainsUnsupportedByGscLetBindings below —
-        // this test only checks the hoist ordering.)
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -226,21 +219,167 @@ namespace Demo
             }
         }
     }
-}",
-            "Mutually recursive local functions use non-recursive G# let bindings, as documented by the compiler-gap test below.");
+}");
 
-        int aDeclIndex = printed.IndexOf("let A", StringComparison.Ordinal);
-        int bDeclIndex = printed.IndexOf("let B", StringComparison.Ordinal);
-        int ifIndex = printed.IndexOf("if ", StringComparison.Ordinal);
-        Assert.True(ifIndex >= 0, "The external `if` call site should be present.\n" + printed);
-        int useIndex = printed.IndexOf("A()", ifIndex, StringComparison.Ordinal);
-        Assert.True(aDeclIndex >= 0 && bDeclIndex >= 0, "Both bindings should be present.\n" + printed);
-        Assert.True(
-            aDeclIndex < useIndex && bDeclIndex < useIndex,
-            "Both mutually-recursive local functions must be hoisted above the first external use.\n" + printed);
-        Assert.True(
-            aDeclIndex < bDeclIndex,
-            "Original relative declaration order (A before B) must be preserved.\n" + printed);
+    Assert.DoesNotContain("let A", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("let B", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_M_A_", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_M_B_", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CapturingRecursiveLocalFunction_LiftsMutableCaptureByRef()
+    {
+    string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public class C
+    {
+    public void Run(int input)
+    {
+        int sum = 0;
+
+        void Add(int current)
+        {
+            sum += current;
+            if (current > 0)
+            {
+                Add(current - 1);
+            }
+        }
+
+        Add(input);
+        if (sum != 6)
+        {
+            throw new Exception(""wrong sum"");
+        }
+    }
+    }
+}");
+
+    Assert.DoesNotContain("let Add", printed, StringComparison.Ordinal);
+    Assert.Contains("ref sum int32", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_Run_Add_", printed, StringComparison.Ordinal);
+    CompileAndRun(printed, "C().Run(3)");
+    }
+
+    [Fact]
+    public void MutuallyRecursiveLocalFunctions_ForwardSharedMutableCapture()
+    {
+    string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public class C
+    {
+    public void Run(int input)
+    {
+        int sum = 0;
+
+        void AddEven(int current)
+        {
+            sum += current;
+            if (current > 0)
+            {
+                AddOdd(current - 1);
+            }
+        }
+
+        void AddOdd(int current)
+        {
+            sum += current;
+            if (current > 0)
+            {
+                AddEven(current - 1);
+            }
+        }
+
+        AddEven(input);
+        if (sum != 6)
+        {
+            throw new Exception(""wrong sum"");
+        }
+    }
+    }
+}");
+
+    Assert.DoesNotContain("let AddEven", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("let AddOdd", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_Run_AddEven_", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_Run_AddOdd_", printed, StringComparison.Ordinal);
+    CompileAndRun(printed, "C().Run(3)");
+    }
+
+    [Fact]
+    public void CapturingLocalFunction_WithOutParameters_LiftsToMethod()
+    {
+    string printed = TranslateUnit(@"
+using System;
+namespace Demo
+{
+    public class C
+    {
+    public void Run(int input)
+    {
+        int offset = 2;
+
+        int Read(out int doubled)
+        {
+            doubled = input * 2;
+            return doubled + offset;
+        }
+
+        int result = Read(out var doubled);
+        if (result != 8 || doubled != 6)
+        {
+            throw new Exception(""wrong result"");
+        }
+    }
+    }
+}");
+
+    Assert.DoesNotContain("let Read", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_Run_Read_", printed, StringComparison.Ordinal);
+    Assert.Contains("out doubled int32", printed, StringComparison.Ordinal);
+    CompileAndRun(printed, "C().Run(3)");
+    }
+
+    [Fact]
+    public void RecursiveHelper_CaptureKeepsNonNullableReferenceType()
+    {
+    string printed = TranslateUnit(@"
+using System;
+using System.Collections.Generic;
+namespace Demo
+{
+    public class C
+    {
+    public void Run(int input)
+    {
+        var values = new List<int>();
+
+        void Add(int current)
+        {
+            values.Add(current);
+            if (current > 0)
+            {
+                Add(current - 1);
+            }
+        }
+
+        Add(input);
+        if (values[0] != input)
+        {
+            throw new Exception(""wrong value"");
+        }
+    }
+    }
+}");
+
+    Assert.Contains("values List[int32]", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("values List[int32]?", printed, StringComparison.Ordinal);
+    CompileAndRun(printed, "C().Run(3)");
     }
 
     [Fact]
@@ -275,11 +414,8 @@ namespace Demo
     [Fact]
     public void Issue2231MutualRecursionRemainsUnsupportedByGscLetBindings()
     {
-        // Documents a pre-existing, separate gsc limitation (not addressed by
-        // this fix, per the issue's own scoping guidance): `let` bindings are
-        // not letrec — a lambda cannot forward-reference a `let` name bound
-        // later in the same block, so two mutually-recursive `let`-lambdas
-        // can never both bind successfully, regardless of hoist order.
+        // Raw G# `let` bindings remain non-recursive. cs2gs avoids this form for
+        // recursive C# local functions by lifting them to helper methods.
         const string Source = @"
 package p
 class C {

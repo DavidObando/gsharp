@@ -22,6 +22,41 @@ namespace Cs2Gs.Tests;
 public class Issue3394NestedGenericTypeTranslationTests
 {
     [Fact]
+    public void ImmutableArrayBuilder_PreservesContainingElementType()
+    {
+        const string source = """
+            using System.Collections.Immutable;
+
+            namespace Demo
+            {
+                public class Item { }
+
+                public static class C
+                {
+                    public static int Count(ImmutableArray<Item>.Builder builder) =>
+                        builder.Count;
+                }
+            }
+            """;
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains(
+            "builder ImmutableArray[Item].Builder",
+            rendered,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public void ImmutableArrayBuilder_RetainsContainingElementType()
     {
         const string source = @"
@@ -49,6 +84,35 @@ namespace Demo
         string rendered = GSharpPrinter.Print(unit);
 
         Assert.Contains("ImmutableArray[int32].Builder?", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void PositionalRecordProperty_RedeclarationDoesNotDuplicateMember()
+    {
+        const string source = @"
+namespace Demo
+{
+    public readonly record struct Key(string Name)
+    {
+        public string Name { get; } = Name ?? string.Empty;
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Equal(1, rendered.Split("Name string", StringSplitOptions.None).Length - 1);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

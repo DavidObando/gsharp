@@ -85,6 +85,24 @@ namespace Demo
         Assert.Contains("F(items []?object?)", printed);
     }
 
+    [Fact]
+    public void NullableReferenceElementArrayCreation_RendersElementNullable()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        public object?[] F(int count) => new object?[count];
+    }
+}");
+
+        Assert.True(
+            printed.Split("object?", StringSplitOptions.None).Length >= 3,
+            printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

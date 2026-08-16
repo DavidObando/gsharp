@@ -235,4 +235,132 @@ namespace Demo
         Assert.Contains("return present", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
+
+    [Fact]
+    public void BoxedValueNegatedPattern_HoistsSurvivingBinder()
+    {
+        const string source = @"
+namespace Demo
+{
+    public static class C
+    {
+        public static bool Read(object value)
+        {
+            if (value is not bool present)
+            {
+                return false;
+            }
+
+            return present;
+        }
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("let present bool? = value as bool?", rendered, StringComparison.Ordinal);
+        Assert.Contains("return present", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void NestedPropertyPatternBinder_HoistsAcrossExitingGuard()
+    {
+        const string source = @"
+namespace Demo
+{
+    public class Base { }
+    public sealed class Candidate : Base { public int Value; }
+    public sealed class Holder
+    {
+        public Base Child;
+    }
+
+    public static class C
+    {
+        public static int Read(Holder value)
+        {
+            if (value is not Holder { Child: Candidate candidate })
+            {
+                return 0;
+            }
+
+            return candidate.Value;
+        }
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("var candidate Candidate?", rendered, StringComparison.Ordinal);
+        Assert.Contains("return candidate!!.Value", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void PriorOrGuard_WithElse_KeepsPatternBinderInElseScope()
+    {
+        const string source = @"
+namespace Demo
+{
+    public class Base { }
+    public sealed class Candidate : Base { public int Value; }
+
+    public static class C
+    {
+        private static Base Get(Base value) => value;
+
+        public static int Read(bool skip, Base value)
+        {
+            if (skip || !(Get(value) is Candidate candidate))
+            {
+                return 0;
+            }
+            else
+            {
+                return candidate.Value;
+            }
+        }
+    }
+}
+";
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("let candidate Candidate?", rendered, StringComparison.Ordinal);
+        Assert.Contains("return candidate.Value", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
 }

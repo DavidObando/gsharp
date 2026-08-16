@@ -1485,7 +1485,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var statements = new List<GStatement>();
             IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(block);
-            this.RegisterStaticLocalFunctionLifts(ordered);
+            this.RegisterRecursiveLocalFunctionLifts(ordered);
             foreach (StatementSyntax statement in ordered)
             {
                 statements.AddRange(this.TranslateStatement(statement));
@@ -1494,26 +1494,25 @@ public sealed partial class CSharpToGSharpTranslator
             return new BlockStatement(statements);
         }
 
-        private void RegisterStaticLocalFunctionLifts(IEnumerable<StatementSyntax> statements)
+        private void RegisterRecursiveLocalFunctionLifts(IEnumerable<StatementSyntax> statements)
         {
-            var staticLocals = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
+            var localFunctions = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
             foreach (LocalFunctionStatementSyntax localFunction in statements
-                .OfType<LocalFunctionStatementSyntax>()
-                .Where(candidate => candidate.Modifiers.Any(SyntaxKind.StaticKeyword)))
+                .OfType<LocalFunctionStatementSyntax>())
             {
                 using IDisposable modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree);
                 if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol)
                 {
-                    staticLocals.Add((localFunction, symbol));
+                    localFunctions.Add((localFunction, symbol));
                 }
             }
 
             var symbols = new HashSet<IMethodSymbol>(
-                staticLocals.Select(pair => pair.Symbol),
+                localFunctions.Select(pair => pair.Symbol),
                 SymbolEqualityComparer.Default);
             var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(
                 SymbolEqualityComparer.Default);
-            foreach (var pair in staticLocals)
+            foreach (var pair in localFunctions)
             {
                 using IDisposable modelScope = this.context.UseSemanticModelFor(pair.Syntax.SyntaxTree);
                 var dependencies = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -1554,12 +1553,22 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var toLift = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            foreach (var pair in staticLocals)
+            foreach (var pair in localFunctions)
             {
-                if (IsRecursive(
-                    pair.Symbol,
-                    pair.Symbol,
-                    new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default)))
+                bool usedAsMethodGroup = statements
+                    .SelectMany(statement => statement.DescendantNodes().OfType<IdentifierNameSyntax>())
+                    .Any(identifier =>
+                        SymbolEqualityComparer.Default.Equals(
+                            this.context.GetSymbolInfo(identifier).Symbol,
+                            pair.Symbol)
+                        && (identifier.Parent is not InvocationExpressionSyntax invocation
+                            || !ReferenceEquals(invocation.Expression, identifier)));
+                if ((!usedAsMethodGroup
+                        && pair.Symbol.Parameters.Any(parameter => parameter.RefKind != RefKind.None))
+                    || IsRecursive(
+                        pair.Symbol,
+                        pair.Symbol,
+                        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default)))
                 {
                     toLift.Add(pair.Symbol);
                 }
@@ -1583,7 +1592,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            foreach (var pair in staticLocals)
+            foreach (var pair in localFunctions.Where(pair => pair.Symbol.IsStatic))
             {
                 if (this.state.LiftedStaticLocalFunctions.ContainsKey(pair.Symbol)
                     || !toLift.Contains(pair.Symbol))
@@ -1595,6 +1604,113 @@ public sealed partial class CSharpToGSharpTranslator
                 string localName = SanitizeIdentifier(pair.Syntax.Identifier.Text);
                 this.state.LiftedStaticLocalFunctions[pair.Symbol] =
                     $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}";
+            }
+
+            var capturingLocals = localFunctions
+                .Where(pair => !pair.Symbol.IsStatic && toLift.Contains(pair.Symbol))
+                .ToList();
+            if (capturingLocals.Count == 0)
+            {
+                return;
+            }
+
+            var directCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(
+                SymbolEqualityComparer.Default);
+            foreach (var pair in capturingLocals)
+            {
+                var captures = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+                foreach (IdentifierNameSyntax identifier in pair.Syntax.DescendantNodes().OfType<IdentifierNameSyntax>())
+                {
+                    ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                    if (symbol is not ILocalSymbol and not IParameterSymbol)
+                    {
+                        continue;
+                    }
+
+                    bool lexicalOwner = false;
+                    for (ISymbol owner = pair.Symbol.ContainingSymbol;
+                        owner is IMethodSymbol;
+                        owner = owner.ContainingSymbol)
+                    {
+                        if (SymbolEqualityComparer.Default.Equals(symbol.ContainingSymbol, owner))
+                        {
+                            lexicalOwner = true;
+                            break;
+                        }
+                    }
+
+                    if (!lexicalOwner)
+                    {
+                        continue;
+                    }
+
+                    bool declaredInside = symbol.DeclaringSyntaxReferences.Any(reference =>
+                        pair.Syntax.Span.Contains(reference.Span));
+                    if (!declaredInside)
+                    {
+                        captures.Add(symbol);
+                    }
+                }
+
+                directCaptures[pair.Symbol] = captures;
+            }
+
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (var pair in capturingLocals)
+                {
+                    if (!edges.TryGetValue(pair.Symbol, out HashSet<IMethodSymbol> dependencies))
+                    {
+                        continue;
+                    }
+
+                    foreach (IMethodSymbol dependency in dependencies)
+                    {
+                        if (!directCaptures.TryGetValue(dependency, out HashSet<ISymbol> dependencyCaptures))
+                        {
+                            continue;
+                        }
+
+                        foreach (ISymbol capture in dependencyCaptures)
+                        {
+                            changed |= directCaptures[pair.Symbol].Add(capture);
+                        }
+                    }
+                }
+            }
+            while (changed);
+
+            foreach (var pair in capturingLocals)
+            {
+                if (this.state.LiftedRecursiveLocalFunctions.ContainsKey(pair.Symbol))
+                {
+                    continue;
+                }
+
+                var captures = directCaptures[pair.Symbol]
+                    .OrderBy(symbol => symbol.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
+                    .ThenBy(symbol => symbol.Name, StringComparer.Ordinal)
+                    .Select(symbol => new LiftedLocalFunctionCapture(
+                        symbol,
+                        capturingLocals.Any(candidate =>
+                            directCaptures[candidate.Symbol].Contains(symbol)
+                            && this.IsSymbolReassigned(symbol, candidate.Syntax))))
+                    .ToList();
+                IMethodSymbol containingMethod = pair.Symbol.ContainingSymbol as IMethodSymbol;
+                while (containingMethod?.MethodKind == MethodKind.LocalFunction)
+                {
+                    containingMethod = containingMethod.ContainingSymbol as IMethodSymbol;
+                }
+
+                string ownerName = SanitizeIdentifier(pair.Symbol.ContainingSymbol?.Name ?? "scope");
+                string localName = SanitizeIdentifier(pair.Syntax.Identifier.Text);
+                this.state.LiftedRecursiveLocalFunctions[pair.Symbol] =
+                    new LiftedRecursiveLocalFunction(
+                        $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}",
+                        containingMethod?.IsStatic != false,
+                        captures);
             }
         }
 

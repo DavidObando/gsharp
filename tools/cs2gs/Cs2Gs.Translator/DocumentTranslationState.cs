@@ -203,10 +203,45 @@ internal sealed class DocumentTranslationState
     public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
 
+    public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
+        new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
+
     // The exception variable bound by the innermost enclosing `catch` clause,
     // used to translate a C# re-throw (`throw;`) — which has no bare G# form —
     // to `throw <caughtVar>` (ADR-0115 §B).
     public string CurrentCatchVariable { get; set; }
+}
+
+internal sealed class LiftedRecursiveLocalFunction
+{
+    public LiftedRecursiveLocalFunction(
+        string name,
+        bool isStatic,
+        IReadOnlyList<LiftedLocalFunctionCapture> captures)
+    {
+        Name = name;
+        IsStatic = isStatic;
+        Captures = captures;
+    }
+
+    public string Name { get; }
+
+    public bool IsStatic { get; }
+
+    public IReadOnlyList<LiftedLocalFunctionCapture> Captures { get; }
+}
+
+internal sealed class LiftedLocalFunctionCapture
+{
+    public LiftedLocalFunctionCapture(ISymbol symbol, bool isByRef)
+    {
+        Symbol = symbol;
+        IsByRef = isByRef;
+    }
+
+    public ISymbol Symbol { get; }
+
+    public bool IsByRef { get; }
 }
 
 /// <summary>
