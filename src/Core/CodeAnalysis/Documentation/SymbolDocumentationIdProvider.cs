@@ -679,6 +679,45 @@ internal static class SymbolDocumentationIdProvider
             return false;
         }
 
+        if (type is StructSymbol structSymbol)
+        {
+            var list = structSymbol.Declaration?.TypeParameterList;
+            if (list != null)
+            {
+                return ordinal < list.Parameters.Count &&
+                    string.Equals(
+                        list.Parameters[ordinal].Identifier.Text,
+                        typeParameter.Name,
+                        StringComparison.Ordinal);
+            }
+        }
+
+        if (type is InterfaceSymbol interfaceSymbol)
+        {
+            var list = interfaceSymbol.Declaration?.TypeParameterList;
+            if (list != null)
+            {
+                return ordinal < list.Parameters.Count &&
+                    string.Equals(
+                        list.Parameters[ordinal].Identifier.Text,
+                        typeParameter.Name,
+                        StringComparison.Ordinal);
+            }
+        }
+
+        if (type is DelegateTypeSymbol delegateSymbol)
+        {
+            var list = delegateSymbol.Declaration?.TypeParameterList;
+            if (list != null)
+            {
+                return ordinal < list.Parameters.Count &&
+                    string.Equals(
+                        list.Parameters[ordinal].Identifier.Text,
+                        typeParameter.Name,
+                        StringComparison.Ordinal);
+            }
+        }
+
         var parameters = type switch
         {
             StructSymbol structType => structType.TypeParameters,

@@ -30,6 +30,7 @@ public class Issue1567CollectionInitializerObjectInitTranslationTests
     [Fact]
     public void GetOnlyCollectionProperty_EmitsBracedMemberInitializer()
     {
+        _ = System.Text.Json.JsonSerializerOptions.Default;
         string printed = TranslateUnit(@"
 using System.Text.Json;
 using System.Text.Json.Serialization;

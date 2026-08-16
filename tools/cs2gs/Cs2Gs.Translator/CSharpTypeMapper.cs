@@ -869,6 +869,9 @@ public sealed class CSharpTypeMapper
             }
 
             if (!named.Locations.Any(candidate => candidate.IsInSource)
+                && named.Name == "List"
+                && named.ContainingNamespace?.ToDisplayString()
+                    == "System.Collections.Generic"
                 && named.ContainingNamespace is { IsGlobalNamespace: false } aliasNamespace)
             {
                 string target = $"{aliasNamespace.ToDisplayString()}.{simpleName}";
