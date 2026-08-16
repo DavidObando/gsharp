@@ -2325,22 +2325,29 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
         var (interfaceMethodDeclaration, interfaceMethodBody) = RequireDeclaredBody(method);
-        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, interfaceMethodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, method);
-            var body = binder.statements.BindBlockStatement(interfaceMethodBody);
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body);
-
-            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            method.Package?.Name,
+            interfaceMethodBody.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindBlockStatement(interfaceMethodBody);
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body);
 
-            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
+                    }
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(method, loweredBody);
     }

@@ -1128,9 +1128,21 @@ public static class SpillSequenceSpiller
                             return new BoundThrowExpression(null, operand);
                         });
                 case BoundAddressOfExpression addressOf:
-                    return SpillOneOperand(addressOf, addressOf.Operand, operand => new BoundAddressOfExpression(null, operand));
+                    return SpillOneOperand(
+                        addressOf,
+                        addressOf.Operand,
+                        operand =>
+                        {
+                            return new BoundAddressOfExpression(null, operand);
+                        });
                 case BoundDereferenceExpression dereference:
-                    return SpillOneOperand(dereference, dereference.Operand, operand => new BoundDereferenceExpression(null, operand));
+                    return SpillOneOperand(
+                        dereference,
+                        dereference.Operand,
+                        operand =>
+                        {
+                            return new BoundDereferenceExpression(null, operand);
+                        });
                 case BoundIndirectAssignmentExpression indirectAssign:
                     return SpillTwoOperand(
                         indirectAssign,

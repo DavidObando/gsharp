@@ -880,7 +880,10 @@ internal sealed partial class MethodBodyEmitter
                 {
                     representable &= fn.Parameters[i].RefKind == RefKind.None;
                 }
-                else if (TypeSymbol.AnyTypeParameter(pt, cand => ReferenceEquals(cand, tp)))
+                else if (TypeSymbol.AnyTypeParameter(pt, cand =>
+                {
+                    return ReferenceEquals(cand, tp);
+                }))
                 {
                     // T occurs NESTED (e.g. []T, Box[T]): the instantiated
                     // slot shape ([]X) diverges from the lifted vector
@@ -901,7 +904,10 @@ internal sealed partial class MethodBodyEmitter
                 // Bare-T return unwraps after the call; T? return already
                 // matches the lifted Nullable<X>.
             }
-            else if (TypeSymbol.AnyTypeParameter(rt, cand => ReferenceEquals(cand, tp)))
+            else if (TypeSymbol.AnyTypeParameter(rt, cand =>
+            {
+                return ReferenceEquals(cand, tp);
+            }))
             {
                 // Nested occurrence in the return (Task[T], []T, ...): not
                 // representable by the lift.
