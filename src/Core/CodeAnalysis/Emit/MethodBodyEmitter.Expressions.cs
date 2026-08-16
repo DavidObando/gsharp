@@ -1649,8 +1649,7 @@ internal sealed partial class MethodBodyEmitter
             // TypeDef/TypeSpec tokens — mirroring the issue #1298 enum lift in
             // MethodBodyEmitter.Conversions. The same token path also serves a
             // value-constrained open type parameter (issue #814).
-            if (NullableLifting.RequiresSymbolicNullableGetValue(nullableType)
-                || underlying?.ClrType is not { IsValueType: true })
+            if (underlying?.ClrType is not { IsValueType: true })
             {
                 var nullableToken = this.outer.memberRefs.GetElementTypeToken(nullableType);
 

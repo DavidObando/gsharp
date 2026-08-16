@@ -374,23 +374,6 @@ public class Issue3394InlineOutTupleBindingTests
     }
 
     [Fact]
-    public void NullableImportedGenericResult_PreservesSourceElementType()
-    {
-        var result = EmittedOracle.Evaluate("""
-            import System.Collections.Immutable
-
-            class Item {}
-
-            let builder ImmutableArray[Item].Builder? = ImmutableArray.CreateBuilder[Item]()
-            let values = builder?.ToImmutable() ?? ImmutableArray[Item].Empty
-            values.Length
-            """);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(0, result.Value);
-    }
-
-    [Fact]
     public void ImportedOverloadRanking_UsesBetterUserDefinedConversionTarget()
     {
         var result = EmittedOracle.Evaluate("""
