@@ -427,9 +427,9 @@ internal sealed class PatternBinder
     {
         switch (expression)
         {
-            case BoundLiteralExpression lit when lit.Value is object literalValue
-                && ExpressionBinder.IsIntegerLiteralValue(literalValue):
-                value = literalValue;
+            case BoundLiteralExpression lit when lit.Value != null
+                && ExpressionBinder.IsIntegerLiteralValue(lit.Value):
+                value = lit.Value;
                 return true;
 
             case BoundUnaryExpression unary

@@ -1063,7 +1063,9 @@ internal sealed partial class OverloadResolver
             if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrCtor)
             {
                 var pointee = addrCtor.Operand?.Type;
-                if (pointee == paramType || pointee == TypeSymbol.Error || paramType == TypeSymbol.Error)
+                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, paramType)
+                    || pointee == TypeSymbol.Error
+                    || paramType == TypeSymbol.Error)
                 {
                     convertedArguments.Add(argument);
                     continue;
@@ -1072,7 +1074,9 @@ internal sealed partial class OverloadResolver
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrCtor)
             {
                 var pointee = condAddrCtor.PointeeType;
-                if (pointee == paramType || pointee == TypeSymbol.Error || paramType == TypeSymbol.Error)
+                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, paramType)
+                    || pointee == TypeSymbol.Error
+                    || paramType == TypeSymbol.Error)
                 {
                     convertedArguments.Add(argument);
                     continue;
@@ -1532,7 +1536,9 @@ internal sealed partial class OverloadResolver
             if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrInit)
             {
                 var pointee = addrInit.Operand?.Type;
-                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, parameter.Type)
+                    || pointee == TypeSymbol.Error
+                    || parameter.Type == TypeSymbol.Error)
                 {
                     convertedArgs.Add(argument);
                     continue;
@@ -1541,7 +1547,9 @@ internal sealed partial class OverloadResolver
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrInit)
             {
                 var pointee = condAddrInit.PointeeType;
-                if (pointee == parameter.Type || pointee == TypeSymbol.Error || parameter.Type == TypeSymbol.Error)
+                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, parameter.Type)
+                    || pointee == TypeSymbol.Error
+                    || parameter.Type == TypeSymbol.Error)
                 {
                     convertedArgs.Add(argument);
                     continue;

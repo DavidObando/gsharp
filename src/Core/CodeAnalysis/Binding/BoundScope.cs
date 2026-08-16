@@ -668,6 +668,14 @@ public sealed class BoundScope
         }
 
         var mangled = name + "`" + arity;
+        if (TryLookupImport(name, out var aliasImport)
+            && aliasImport.IsAlias
+            && References.TryResolveType(aliasImport.Target + "`" + arity, out var aliasedType))
+        {
+            type = aliasedType;
+            return true;
+        }
+
         foreach (var import in EnumerateImports())
         {
             var typeName = import.Target + "." + mangled;

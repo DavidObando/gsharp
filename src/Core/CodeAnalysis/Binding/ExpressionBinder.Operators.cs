@@ -2828,25 +2828,29 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        return (index, clrParameterType) =>
+        return (index, parameterType) =>
         {
             var argIndex = index - argumentOffset;
-            if (argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == null)
+            if (argIndex < 0 || argIndex >= boundArguments.Count || parameterType == null)
             {
                 return false;
             }
 
+            var effectiveParameterType = parameterType;
+
             // A constant literal can never bind by-ref; peel defensively so a
             // by-ref parameter maps to its element type rather than a managed
             // pointer (which TypeSymbol.FromClrType cannot represent).
-            if (clrParameterType.IsByRef)
+            if (effectiveParameterType.IsByRef)
             {
-                clrParameterType = Invariant.Required(
-                    clrParameterType.GetElementType(),
+                effectiveParameterType = Invariant.Required(
+                    effectiveParameterType.GetElementType(),
                     "a by-ref parameter has an element type");
             }
 
-            return IsImplicitConstantNarrowingArgument(boundArguments[argIndex], TypeSymbol.FromClrType(clrParameterType));
+            return IsImplicitConstantNarrowingArgument(
+                boundArguments[argIndex],
+                TypeSymbol.FromClrType(effectiveParameterType));
         };
     }
 

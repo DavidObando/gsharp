@@ -22,6 +22,31 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// </summary>
 public class RefKindDefiniteAssignmentTests
 {
+    [Fact]
+    public void OutParameter_AssignedInEveryTerminalSwitchArm_IsAccepted()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func tryParse(text string, out kind int32) bool {
+                switch text {
+                    case "a" {
+                        kind = 1
+                        return true
+                    }
+                    default {
+                        kind = 0
+                        return false
+                    }
+                }
+            }
+
+            var kind = -1
+            tryParse("a", out kind)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
     private static EmittedOracleResult Compile(string source)
     {
         return EmittedOracle.Evaluate(source);

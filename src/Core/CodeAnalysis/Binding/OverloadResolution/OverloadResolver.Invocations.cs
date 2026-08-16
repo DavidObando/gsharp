@@ -620,7 +620,8 @@ internal sealed partial class OverloadResolver
                     {
                         argument = bindRefArgumentExpression(inlineOut, parameter);
                     }
-                    else if (address.Operand.Type != parameter.Type && address.Operand.Type != TypeSymbol.Error)
+                    else if (!DeclarationBinder.TypeSignaturesEquivalent(address.Operand.Type, parameter.Type)
+                        && address.Operand.Type != TypeSymbol.Error)
                     {
                         Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, address.Operand.Type);
                         hasErrors = true;
@@ -628,7 +629,7 @@ internal sealed partial class OverloadResolver
                 }
                 else if (argument is BoundConditionalAddressExpression conditionalAddress)
                 {
-                    if (conditionalAddress.PointeeType != parameter.Type
+                    if (!DeclarationBinder.TypeSignaturesEquivalent(conditionalAddress.PointeeType, parameter.Type)
                         && conditionalAddress.PointeeType != TypeSymbol.Error)
                     {
                         Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, conditionalAddress.PointeeType);

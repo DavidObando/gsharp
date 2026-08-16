@@ -746,6 +746,17 @@ internal static class DefiniteAssignmentAnalyzer
             any = true;
         }
 
+        if (hasDefault && !any)
+        {
+            // Every exhaustive arm terminates inside its recursively analyzed
+            // region. The outer CFG models pattern switches as opaque and still
+            // carries a synthetic fall-through edge, so mark out parameters as
+            // assigned on that unreachable continuation. Any real return missing
+            // an assignment was already reported while analyzing its arm.
+            assigned.UnionWith(outParams);
+            return;
+        }
+
         if (any && meet is not null)
         {
             assigned.Clear();

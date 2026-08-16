@@ -17,10 +17,10 @@ internal static class SymbolDocumentationIdProvider
     {
         return symbol switch
         {
-            PackageSymbol package => GetDocumentationId(package),
-            TypeSymbol type when IsSourceNamedType(type) => GetDocumentationId(type),
-            EnumMemberSymbol enumMember => GetDocumentationId(enumMember),
-            FunctionSymbol function => GetDocumentationId(function),
+            PackageSymbol package => GetDocumentationId(package: package),
+            TypeSymbol type when IsSourceNamedType(type) => GetDocumentationId(type: type),
+            EnumMemberSymbol enumMember => GetDocumentationId(member: enumMember),
+            FunctionSymbol function => GetDocumentationId(function: function),
             _ => null,
         };
     }
@@ -29,10 +29,10 @@ internal static class SymbolDocumentationIdProvider
     {
         return member switch
         {
-            FieldSymbol field => GetDocumentationId(field, ownerType),
-            PropertySymbol property => GetDocumentationId(property, ownerType),
-            EventSymbol @event => GetDocumentationId(@event, ownerType),
-            FunctionSymbol function => GetDocumentationId(function),
+            FieldSymbol field => GetDocumentationId(field: field, ownerType: ownerType),
+            PropertySymbol property => GetDocumentationId(property: property, ownerType: ownerType),
+            EventSymbol @event => GetDocumentationId(@event: @event, ownerType: ownerType),
+            FunctionSymbol function => GetDocumentationId(function: function),
             _ => null,
         };
     }
@@ -677,19 +677,6 @@ internal static class SymbolDocumentationIdProvider
         if (ordinal < 0)
         {
             return false;
-        }
-
-        switch (type)
-        {
-            case StructSymbol { Declaration.TypeParameterList: { } list }:
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
-            case InterfaceSymbol { Declaration.TypeParameterList: { } list }:
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
-            case DelegateTypeSymbol { Declaration.TypeParameterList: { } list }:
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
         }
 
         var parameters = type switch

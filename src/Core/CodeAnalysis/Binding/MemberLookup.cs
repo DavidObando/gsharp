@@ -4873,6 +4873,18 @@ internal sealed class MemberLookup
             return SameTypeSymbol(nullableA.UnderlyingType, nullableB.UnderlyingType);
         }
 
+        if (a is NullableTypeSymbol nullableReferenceA
+            && !NullableLifting.IsAnyValueTypeNullable(nullableReferenceA))
+        {
+            return SameTypeSymbol(nullableReferenceA.UnderlyingType, b);
+        }
+
+        if (b is NullableTypeSymbol nullableReferenceB
+            && !NullableLifting.IsAnyValueTypeNullable(nullableReferenceB))
+        {
+            return SameTypeSymbol(a, nullableReferenceB.UnderlyingType);
+        }
+
         // Constructed user generics are interned (StructSymbol.Construct uses a
         // cache), so reference identity usually holds; fall back to a
         // structural comparison by definition + ordered type arguments.

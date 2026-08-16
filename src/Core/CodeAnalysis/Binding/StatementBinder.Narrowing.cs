@@ -866,7 +866,9 @@ internal sealed partial class StatementBinder
     /// </summary>
     private (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ComputeConditionNarrowing(BoundExpression condition)
     {
-        var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
+        Dictionary<AccessPath, TypeSymbol>? thenNarrow;
+        Dictionary<AccessPath, TypeSymbol>? elseNarrow;
+        (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
         if (thenNarrow == null && elseNarrow == null)
         {
             (thenNarrow, elseNarrow) = TryClassifyBoolCallNarrowing(condition);

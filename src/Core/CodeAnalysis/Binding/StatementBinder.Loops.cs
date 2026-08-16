@@ -1017,7 +1017,7 @@ internal sealed partial class StatementBinder
             var boundInner = BindStatement(inner);
             return new BoundBlockStatement(
                 syntax,
-                ImmutableArray.Create(
+                ImmutableArray.Create<BoundStatement>(
                     new BoundLabelStatement(syntax, userLabel),
                     Invariant.Required(boundInner, "a labeled statement has a bound inner statement")));
         }
