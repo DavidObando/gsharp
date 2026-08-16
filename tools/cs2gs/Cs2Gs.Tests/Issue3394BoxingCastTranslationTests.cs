@@ -40,8 +40,13 @@ namespace Demo
         TranslationTestValidation.AssertBinds(rendered);
     }
 
+    /// <summary>
+    /// ADR-0166 / issue #3409: a type-parameter scrutinee with a constrained
+    /// reference target is a native pattern variable — no scoped <c>if let</c>
+    /// and no <c>as</c> conversion of the type parameter.
+    /// </summary>
     [Fact]
-    public void TypeParameterPatternBinding_UsesScopedIfLet()
+    public void TypeParameterPatternBinding_UsesNativePatternVariable()
     {
         const string source = @"
 using System.Reflection;
@@ -65,12 +70,20 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("if let method = value as MethodInfo", rendered, StringComparison.Ordinal);
+        Assert.Contains("if value is MethodInfo method && method.IsGenericMethod {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("if let", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("as MethodInfo", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
+    /// <summary>
+    /// ADR-0166 / issue #3409: the binder read in the <c>&amp;&amp;</c> right
+    /// operand is a native pattern variable, so no narrowing cast is emitted at
+    /// all — neither the <c>(value as Candidate)!!</c> substitution nor the
+    /// <c>Candidate(value)</c> construction misrender this issue guards against.
+    /// </summary>
     [Fact]
-    public void ShortCircuitPatternBinding_UsesExplicitNarrowingCast()
+    public void ShortCircuitPatternBinding_UsesNativePatternVariable()
     {
         const string source = @"
 namespace Demo
@@ -88,12 +101,21 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("(value as Candidate)!!.Value", rendered, StringComparison.Ordinal);
+        Assert.Contains("value is Candidate candidate && candidate.Value > 0", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("as Candidate", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Candidate(value)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("!!", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
+    /// <summary>
+    /// ADR-0166 / issue #3409: a bare <c>{ } present</c> designation over a
+    /// nullable value in a switch <c>when</c> guard is a native pattern variable
+    /// scoped to the arm body, so the arm reads <c>present</c> directly — no
+    /// <c>value!!</c> assertion and no <c>int32(value)</c> conversion.
+    /// </summary>
     [Fact]
-    public void BareRecursivePatternOnNullableValue_UsesAssertion()
+    public void BareRecursivePatternOnNullableValue_UsesNativePatternVariable()
     {
         const string source = @"
 namespace Demo
@@ -116,7 +138,10 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("return value!!", rendered, StringComparison.Ordinal);
+        Assert.Contains("case 0 when value is { } present {", rendered, StringComparison.Ordinal);
+        Assert.Contains("return present", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("value!!", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("int32(value)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

@@ -17,13 +17,22 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #3352: C# positive pattern bindings in <c>while</c> conditions use
-/// native G# <c>while let</c> when that form preserves the source semantics.
+/// Issue #3352: C# positive pattern bindings in <c>while</c> conditions use a
+/// native G# loop binding — no <c>let __scrutineeN</c> body prologue and no
+/// <c>while true</c> rewrite — when that form preserves the source semantics.
+/// <para>
+/// ADR-0166 / issue #3409: an unmodified binder is now a native pattern
+/// variable, so these loops keep the C# shape verbatim
+/// (<c>while C.Next() is string text { }</c>). The <c>while let</c> lowering
+/// remains for shapes the native grammar cannot express (residual positional
+/// patterns, see <see cref="Issue3347RemainingSpillInventoryTests"/>), and a
+/// reassigned binder still takes the mutable-hoist fallback (below).
+/// </para>
 /// </summary>
 public sealed class Issue3352WhileLetTranslationTests
 {
     [Fact]
-    public void ReferenceTypePatternEmitsNativeWhileLetAndRuns()
+    public void ReferenceTypePatternEmitsNativePatternVariableAndRuns()
     {
         var printed = Translate("""
             #nullable enable
@@ -55,8 +64,10 @@ public sealed class Issue3352WhileLetTranslationTests
             }
             """);
 
-        Assert.Contains("while let text =", printed, StringComparison.Ordinal);
-        Assert.Contains("as string", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: native pattern variable instead of `while let`.
+        Assert.Contains("while C.Next() is string text {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("while let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("as string", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__scrutinee", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("while true", printed, StringComparison.Ordinal);
         Assert.Equal("12|3", CompileAndRun(printed, "C.Run()").Trim());
@@ -95,8 +106,11 @@ public sealed class Issue3352WhileLetTranslationTests
             }
             """);
 
-        Assert.Contains("while let text =", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("while let text = C.Next() as", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the bare non-null pattern is a native
+        // pattern variable over the receiver itself — no `as`, no `while let`.
+        Assert.Contains("while C.Next() is { } text {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("while let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("C.Next() as", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__scrutinee", printed, StringComparison.Ordinal);
         Assert.Equal("value|2", CompileAndRun(printed, "C.Run()").Trim());
     }
@@ -136,15 +150,18 @@ public sealed class Issue3352WhileLetTranslationTests
             }
             """);
 
-        Assert.Contains("while let text =", printed, StringComparison.Ordinal);
-        Assert.Contains("text.Length > 0", printed, StringComparison.Ordinal);
-        Assert.Contains("break", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the conjoined guard reads the native pattern
+        // variable in the `&&` right operand — it stays in the loop condition
+        // instead of becoming an `if !(guard) { break }` prologue.
+        Assert.Contains("while C.Next() is string text && text.Length > 0 {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("while let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("break", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__scrutinee", printed, StringComparison.Ordinal);
         Assert.Equal("a|2", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     [Fact]
-    public void ValueTypePatternUsesNullableAsTargetAndRuns()
+    public void ValueTypePatternBindsUnboxedNativeVariableAndRuns()
     {
         var printed = Translate("""
             #nullable enable
@@ -176,14 +193,17 @@ public sealed class Issue3352WhileLetTranslationTests
             }
             """);
 
-        Assert.Contains("while let value =", printed, StringComparison.Ordinal);
-        Assert.Contains("as int32?", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the value-type binder is a native pattern
+        // variable of the tested type — no `as int32?` layer to strip.
+        Assert.Contains("while C.Next() is int32 value {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("while let", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("as int32?", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__scrutinee", printed, StringComparison.Ordinal);
         Assert.Equal("3|3", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     [Fact]
-    public void NativeWhileLetPreservesContinueAndBreak()
+    public void NativePatternLoopPreservesContinueAndBreak()
     {
         var printed = Translate("""
             #nullable enable
@@ -220,13 +240,16 @@ public sealed class Issue3352WhileLetTranslationTests
             }
             """);
 
-        Assert.Contains("while let text =", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the native pattern loop owns re-evaluation,
+        // so `continue` and `break` route exactly as in the C# source.
+        Assert.Contains("while C.Next() is string text {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("while let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__scrutinee", printed, StringComparison.Ordinal);
         Assert.Equal("keepstop|3", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     [Fact]
-    public void OuterHoistDoesNotRewriteContinueInsideNestedWhileLet()
+    public void OuterHoistDoesNotRewriteContinueInsideNestedPatternLoop()
     {
         var printed = Translate("""
             #nullable enable
@@ -263,7 +286,10 @@ public sealed class Issue3352WhileLetTranslationTests
             }
             """);
 
-        Assert.Contains("while let text =", printed, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the nested loop is a native pattern loop;
+        // its `continue` still targets it, not the outer loop.
+        Assert.Contains("while C.Next() is string text {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("while let", printed, StringComparison.Ordinal);
         Assert.Equal("2|1|2", CompileAndRun(printed, "C.Run()").Trim());
     }
 

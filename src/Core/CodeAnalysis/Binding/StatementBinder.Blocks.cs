@@ -98,7 +98,14 @@ internal sealed partial class StatementBinder
                     frame);
             }
 
-            var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
+            // ADR-0166: the arm body runs only when the guard was true, so the
+            // guard's when-true pattern variables (`when x.Tag is string tag`)
+            // are in scope there.
+            var (guardWhenTrue, _) = PatternVariables.Classify(guard);
+            var body = PatternVariables.BindInScope(
+                binderCtx,
+                guardWhenTrue,
+                () => BindStatementWithNarrowing(caseSyntax.Body, frame));
 
             scope = scope.Pop();
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));

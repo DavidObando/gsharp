@@ -77,8 +77,9 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
             MigrationPipeline.SanitizeAppId(app.AppId));
         string codebehind = File.ReadAllText(Path.Combine(appDirectory, "LibraryView.axaml.gs"));
         Assert.Contains("open partial class LibraryView : UserControl", codebehind, StringComparison.Ordinal);
-        Assert.Contains("let vm State? = DataContext as State", codebehind, StringComparison.Ordinal);
-        Assert.Contains("if vm == nil || booksGrid == nil", codebehind, StringComparison.Ordinal);
+        // ADR-0166 / issue #3409: the negated guard keeps its C# shape and name.
+        Assert.Contains("if !(DataContext is State vm) || booksGrid == nil", codebehind, StringComparison.Ordinal);
+        Assert.Contains("vm.Count = booksGrid", codebehind, StringComparison.Ordinal);
         Assert.Contains("__asyncVoid_OnLoaded(e)", codebehind, StringComparison.Ordinal);
         Assert.Contains("private async func __asyncVoid_OnLoaded(e RoutedEventArgs)", codebehind, StringComparison.Ordinal);
         Assert.Contains("base.OnLoaded(e)", codebehind, StringComparison.Ordinal);

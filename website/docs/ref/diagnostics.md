@@ -765,7 +765,7 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 
 | ID | Severity | Summary | Example |
 | --- | --- | --- | --- |
-| GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let`, or `while let` for a loop condition. | `if value is text is string { }`, `if values is [..rest] { }` |
+| GS0525 | Error | A boolean `is` pattern uses the switch binding spelling `name is Type`, which reads as an incoherent double test in expression position. Write the designation after the type (`is Type name`, ADR-0166) to introduce a pattern variable, or use `if let` / `guard let` / `while let`. | `if value is text is string { }` |
 
 ## Invalid multi-assignment target (GS0526)
 
@@ -787,6 +787,21 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0531 | Error | `Constructor initializer arguments cannot reference instance member '<name>' before the delegated or base constructor has run.` | `init() : base({ let self = this 1 }) { }` |
+
+## Pattern variable outside its definitely-assigned region (GS0532)
+
+ADR-0166: a designation in a boolean `is`
+pattern (`value is string text`, `value is { Length: > 0 } text`,
+`values is [..rest]`) introduces a read-only pattern variable that is in scope
+exactly where C# would consider it definitely assigned — the right operand of
+`&&` (or of `||` after a negated test), the branches selected by the
+condition, the loop body, the guarded switch arm, and the statements after an
+`if` whose other branch always exits. Reading it anywhere else is a
+definite-assignment error rather than an unknown name.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0532 | Error | `Pattern variable '<name>' is not definitely assigned here; it is only usable where its pattern is known to have matched — the right operand of '&&' (or of '\|\|' after a negated test), the branches selected by the condition, and the statements after an 'if' whose other branch always exits (ADR-0166, issue #3409).` | `if value is string s { }` followed by `s.Length`; `value is string s \|\| s.Length > 0` |
 
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 

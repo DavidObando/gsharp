@@ -44,20 +44,20 @@ public sealed class Issue2646DeclarationPatternTranslationTests
             }
             """);
 
-        // Issue #3360: `rewriteCode` is a bare local, so the scrutinee needs no
-        // spill — it is read twice (guard + narrowing conversion) but is safe to
-        // duplicate. The narrowing SHAPE is unchanged: a separate typed binder
-        // local, so `code` does not depend on flow narrowing surviving this
-        // enclosing try/block, which is the whole point of issue #2646.
+        // ADR-0166 / issue #3409: `code` is a native G# pattern variable —
+        // its own typed local assigned by the match itself, scoped to the
+        // then-branch. It therefore still does not depend on flow narrowing of
+        // `rewriteCode` surviving this enclosing try/block (issue #2646's whole
+        // point), and the separate `var code int32` hoist plus narrowing
+        // conversion (`code = int32(rewriteCode)`) is no longer needed. No
+        // spill either (issue #3360): the scrutinee is read exactly once.
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("var code int32", printed, StringComparison.Ordinal);
-        Assert.Contains("if rewriteCode is int32", printed, StringComparison.Ordinal);
-        Assert.Contains("code = int32(rewriteCode)", printed, StringComparison.Ordinal);
+        Assert.Contains("if rewriteCode is int32 code {", printed, StringComparison.Ordinal);
         Assert.Contains("return code", printed, StringComparison.Ordinal);
-        // `code` must be its own typed local, not a smart-cast alias of
-        // `rewriteCode` — that is issue #2646's whole point, and it is unchanged.
-        // (The guard now TESTS `rewriteCode` directly rather than a spill temp,
-        // which is issue #3360 and is orthogonal.)
+        Assert.DoesNotContain("var code int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("int32(rewriteCode)", printed, StringComparison.Ordinal);
+        // `code` must keep its own identity, not become a smart-cast alias of
+        // `rewriteCode`.
         Assert.DoesNotContain("let code = rewriteCode", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return rewriteCode", printed, StringComparison.Ordinal);
     }

@@ -2001,14 +2001,15 @@ internal sealed partial class DeclarationBinder
     /// capture, catch/for-loop variable, ...) shadows the instance member of
     /// the same name and must not be flagged. <paramref name="shadowedNames"/>
     /// carries the names bound by enclosing scopes down into this call.
-    /// Expression-level <c>is</c> patterns (<see cref="IsExpressionSyntax"/>)
-    /// reject captures (GS0525). The pattern captures reachable here come from
-    /// <c>switch</c>/<c>match</c> arm patterns (<see cref="TypePatternSyntax"/>,
-    /// <see cref="SlicePatternSyntax"/>), which the generic child walk already
-    /// scopes correctly: a capture is added to the shadow set only while
+    /// Pattern captures come from <c>switch</c>/<c>match</c> arm patterns and,
+    /// since ADR-0166, from boolean <c>is</c> designations
+    /// (<see cref="TypePatternSyntax"/>, <see cref="PropertyPatternSyntax"/>,
+    /// <see cref="SlicePatternSyntax"/>). The generic child walk scopes both
+    /// conservatively: a capture is added to the shadow set only while
     /// iterating the owning <see cref="SwitchCaseSyntax"/>/
-    /// <see cref="SwitchExpressionArmSyntax"/>'s own children (guard + body),
-    /// never leaking to sibling arms or the enclosing scope.
+    /// <see cref="SwitchExpressionArmSyntax"/>/<see cref="IfStatementSyntax"/>'s
+    /// own later children (guard + body, or the branches), never leaking to
+    /// sibling arms or the enclosing scope.
     /// </summary>
     private static bool TryFindInstanceMemberReference(
         SyntaxNode node,
@@ -2240,8 +2241,11 @@ internal sealed partial class DeclarationBinder
     {
         switch (node)
         {
-            case TypePatternSyntax typePattern when typePattern.Identifier != null:
-                captures.Add(typePattern.Identifier.Text);
+            case TypePatternSyntax typePattern when typePattern.BindingIdentifier != null:
+                captures.Add(typePattern.BindingIdentifier.Text);
+                break;
+            case PropertyPatternSyntax propertyPattern when propertyPattern.Designation != null:
+                captures.Add(propertyPattern.Designation.Text);
                 break;
 
             case SlicePatternSyntax slicePattern when slicePattern.CaptureIdentifier != null:

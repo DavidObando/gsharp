@@ -336,10 +336,32 @@ internal sealed partial class MethodBodyEmitter
         var scratch = this.typePatternScratchSlots[tp];
         loadValue();
 
-        if (ReflectionMetadataEmitter.IsValueTypeSymbol(sourceType))
+        // A value-typed source must be boxed before `isinst`. So must a bare
+        // (unconstrained / class-constrained) type-parameter source: `isinst`
+        // over an unboxed `!!T` is unverifiable ("Expected an ObjRef on the
+        // stack, found T"), and `box !!T` is a verifiable no-op for a
+        // reference-type closure — the same rule EmitSimpleTypeIsExpression
+        // applies to `value is T`. ADR-0166 routes binding type tests over a
+        // type parameter (`if value is IDisposable d`) through this path.
+        var boxNeeded = ReflectionMetadataEmitter.IsValueTypeSymbol(sourceType);
+        var boxType = sourceType;
+        if (!boxNeeded)
+        {
+            if (sourceType is TypeParameterSymbol)
+            {
+                boxNeeded = true;
+            }
+            else if (sourceType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol underlyingTypeParameter })
+            {
+                boxNeeded = true;
+                boxType = underlyingTypeParameter;
+            }
+        }
+
+        if (boxNeeded)
         {
             this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(sourceType));
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(boxType));
         }
 
         this.il.OpCode(ILOpCode.Isinst);
@@ -464,6 +486,16 @@ internal sealed partial class MethodBodyEmitter
             else
             {
                 loadValue();
+            }
+
+            // A bare type-parameter value is not a verifiable `brfalse` operand
+            // (ADR-0166: `value is { } present` over `T`); box it first — a
+            // no-op for a reference-type closure, and a value-type closure can
+            // never be null so the branch simply falls through.
+            if (valueType is TypeParameterSymbol)
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(valueType));
             }
 
             this.il.Branch(ILOpCode.Brfalse, failLabel);

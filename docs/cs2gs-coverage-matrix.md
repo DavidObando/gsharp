@@ -74,7 +74,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | ContinueStatement | ContinueStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/ContinueStatement.cs |  |  |
 | ConversionOperatorDeclaration | ConversionOperatorDeclarationSyntax | ADR-0115 §B.31 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/ConversionOperatorDeclaration.cs |  |  |
 | DeclarationExpression | DeclarationExpressionSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
-| DeclarationPattern | DeclarationPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DeclarationPattern.cs |  | x is T t binder (issue #993, resolved). |
+| DeclarationPattern | DeclarationPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DeclarationPattern.cs |  | x is T t binder (issue #993, resolved); emitted verbatim as a native G# pattern variable when it qualifies (ADR-0166, issue #3409). |
 | DefaultConstraint | DefaultConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/DefaultConstraint.cs |  | Translates to an unconstrained G# [T]; gsc override/inference bug fixed (issue #1931). |
 | DefaultExpression | DefaultExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DefaultExpression.cs |  |  |
 | DefaultLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/DefaultLiteralExpression.cs |  |  |
@@ -137,7 +137,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | InterpolationFormatClause | InterpolationFormatClauseSyntax | ADR-0115 §B.9 |  | tools/cs2gs/corpus/grid/G14-Strings-Console/Constructs/InterpolationFormatClause.cs |  |  |
 | InvocationExpression | InvocationExpressionSyntax | ADR-0115 §B |  |  |  |  |
 | IsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/IsExpression.cs |  |  |
-| IsPatternExpression | IsPatternExpressionSyntax | ADR-0115 §B.36 |  |  |  |  |
+| IsPatternExpression | IsPatternExpressionSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/IsPatternExpression.cs |  | Native boolean patterns; designations become G# pattern variables scoped to their definitely-assigned regions (ADR-0166, issue #3409). var designations and reassigned binders keep the substitution/hoist lowerings. |
 | LabeledStatement | LabeledStatementSyntax | ADR-0139 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/LabeledStatement.cs |  |  |
 | LeftShiftAssignmentExpression | AssignmentExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftAssignmentExpression.cs |  |  |
 | LeftShiftExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/LeftShiftExpression.cs |  |  |
@@ -191,7 +191,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | QualifiedName | QualifiedNameSyntax | ADR-0115 §B.12 |  |  |  |  |
 | RecordDeclaration | RecordDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs |  | with-expressions blocked by initializer bug (issue #1892). |
 | RecordStructDeclaration | RecordDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordStructDeclaration.cs |  |  |
-| RecursivePattern | RecursivePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs | https://github.com/DavidObando/gsharp/issues/1923 | Shallow property patterns green; nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923). |
+| RecursivePattern | RecursivePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs | https://github.com/DavidObando/gsharp/issues/1923 | Property patterns green, including nested designations `{ P: T t } u` as native G# pattern variables (ADR-0166); nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923). |
 | RefStructConstraint | RefStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/AllowsConstraintClause.cs |  |  |
 | RelationalPattern | RelationalPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RelationalPattern.cs |  |  |
 | RemoveAccessorDeclaration | AccessorDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs |  | The explicit add/remove accessor body of an event declaration (ADR-0052 §2); translates like any other accessor body. |

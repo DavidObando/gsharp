@@ -39,6 +39,20 @@ internal sealed class DocumentTranslationState
     public Dictionary<ISymbol, GExpression> PatternBindings { get; } =
         new Dictionary<ISymbol, GExpression>(SymbolEqualityComparer.Default);
 
+    // ADR-0166 / issue #3409: memoized answer to "does this boolean condition
+    // root translate its `is` designations as native G# pattern variables?",
+    // keyed by the condition root syntax node. The statement/expression
+    // dispatchers and TranslateIsPattern must agree, so both consult this.
+    public Dictionary<SyntaxNode, bool> NativePatternConditionCache { get; } =
+        new Dictionary<SyntaxNode, bool>();
+
+    // ADR-0166: C# pattern locals emitted as native G# pattern variables. G#
+    // types them non-nullable and scopes them to the regions the C# reads live
+    // in, so no read ever needs a `!!` — including reads after the `if` whose
+    // scoped PatternBindings entry TranslateIf has already dropped.
+    public HashSet<ISymbol> NativePatternVariables { get; } =
+        new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
     // Pattern variables (`x is T t`) that <see cref="TryBuildPositiveGuardHoist"/>
     // materialised as a *nullable* G# local (`var t T? = scrutinee as T`). gsc
     // flow-narrows such a local for reads inside the `if t != nil { … }` guard,

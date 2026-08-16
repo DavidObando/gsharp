@@ -575,6 +575,14 @@ internal sealed partial class ExpressionBinder
                 // undefined single-segment name still reports GS0157 below.
                 classSymbol = fullyQualifiedClrClass;
             }
+            else if (binderCtx.PatternVariableNames.Contains(name))
+            {
+                // ADR-0166: `t.Member` where `t` is a pattern variable read
+                // outside the region its match dominates — a definite-
+                // assignment error, not a missing type.
+                Diagnostics.ReportPatternVariableNotDefinitelyAssigned(leftName.Location, name);
+                return new BoundErrorExpression(null);
+            }
             else
             {
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);

@@ -420,6 +420,11 @@ internal sealed partial class StatementBinder
                 // block see the narrowing.
                 ApplyEarlyExitNarrowings(statement, memberNotNullFrame);
 
+                // ADR-0166: the same lift for pattern variables — after
+                // `if !(x is T t) { return }`, `t` is declared for the rest of
+                // this block.
+                ApplyEarlyExitPatternVariables(statement);
+
                 // Phase 3.C.4: mutation invalidates the narrowing. After binding
                 // a statement that writes to a narrowed variable, drop its
                 // narrowing from the current frame so subsequent reads in this

@@ -294,6 +294,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateBinaryExpression(BinaryExpressionSyntax binary)
         {
             if (binary.IsKind(SyntaxKind.LogicalAndExpression)
+                && !this.ConditionUsesNativePatternVariables(GetConditionRoot(binary))
                 && this.TryTranslateIfLetBooleanExpression(binary, out GExpression ifLet))
             {
                 return ifLet;
@@ -966,7 +967,8 @@ public sealed partial class CSharpToGSharpTranslator
             // neither a single-evaluation spill temp nor a `!!` at each binder
             // reference. Attempt it before the general lowering; the helper is
             // conservative and leaves everything untranslated when it bails.
-            if (this.TryTranslateIfLetConditional(conditional, out GExpression ifLet))
+            if (!this.ConditionUsesNativePatternVariables(conditional.Condition)
+                && this.TryTranslateIfLetConditional(conditional, out GExpression ifLet))
             {
                 return ifLet;
             }

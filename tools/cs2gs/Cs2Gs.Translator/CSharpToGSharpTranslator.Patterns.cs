@@ -546,6 +546,15 @@ public sealed partial class CSharpToGSharpTranslator
             // for every non-loop-condition `is`-pattern.
             this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
+            // ADR-0166 / issue #3409: a binding pattern whose designations G#
+            // scopes natively is emitted verbatim (`x is T t && t.M`), keeping
+            // the C# names and needing no spill or narrowing substitution.
+            GExpression nativeVariables = this.TryTranslateNativePatternVariables(isPattern);
+            if (nativeVariables != null)
+            {
+                return nativeVariables;
+            }
+
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
 

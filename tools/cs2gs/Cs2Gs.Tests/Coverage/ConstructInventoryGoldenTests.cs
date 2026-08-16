@@ -31,7 +31,7 @@ public class ConstructInventoryGoldenTests
     /// Ratchet: translated/lowered rows without a fixture yet. Lower it as the
     /// grid corpus (M4) lands; never raise it. Target: 0.
     /// </summary>
-    private const int MaxTranslatedWithoutFixture = 58;
+    private const int MaxTranslatedWithoutFixture = 51;
 
     [Fact]
     public void RoslynSurface_MatchesGolden()
