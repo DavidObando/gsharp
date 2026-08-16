@@ -2595,7 +2595,9 @@ internal sealed partial class ExpressionBinder
     /// declared in a fresh child scope — the region in which those pattern
     /// variables are definitely assigned.
     /// </summary>
-    private T BindWithPatternVariables<T>(ImmutableArray<LocalVariableSymbol> variables, Func<T> bind)
+    private BoundExpression BindWithPatternVariables(
+        ImmutableArray<LocalVariableSymbol> variables,
+        Func<BoundExpression> bind)
         => PatternVariables.BindInScope(binderCtx, variables, bind);
 
     private BoundExpression BindAsExpression(AsExpressionSyntax syntax)

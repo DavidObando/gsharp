@@ -234,8 +234,14 @@ public sealed class Binder
             lookupType: LookupType,
             lookupTypeWithArity: LookupType,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
-            tryBindClrConstructorCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindClrConstructorCall(syntax, out result),
-            tryBindIntrinsicCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindIntrinsicCall(syntax, out result),
+            tryBindClrConstructorCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) =>
+            {
+                return Expressions.TryBindClrConstructorCall(syntax, out result);
+            },
+            tryBindIntrinsicCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) =>
+            {
+                return Expressions.TryBindIntrinsicCall(syntax, out result);
+            },
             tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type? importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result, Type[]? explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) =>
             {
                 return Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited);

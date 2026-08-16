@@ -2068,7 +2068,12 @@ internal sealed partial class DeclarationBinder
                     return true;
                 }
 
-                var forTupleRangeNames = forTupleRange.Identifiers.Select(t => t.Text);
+                var forTupleRangeNames = new string[forTupleRange.Identifiers.Count];
+                for (var i = 0; i < forTupleRange.Identifiers.Count; i++)
+                {
+                    forTupleRangeNames[i] = forTupleRange.Identifiers[i].Text;
+                }
+
                 return TryFindInstanceMemberReference(forTupleRange.Body, forbiddenNames, WithShadowed(shadowedNames, forTupleRangeNames), out offendingName, out offendingLocation);
 
             case ForEllipsisStatementSyntax forEllipsis:
