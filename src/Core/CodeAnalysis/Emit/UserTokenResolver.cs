@@ -1418,11 +1418,7 @@ internal sealed class UserTokenResolver
     /// </summary>
     /// <param name="encoder">The return-type encoder.</param>
     /// <param name="fn">The function whose emitted return type to encode.</param>
-    /// <param name="returnTypeOverride">The constructed receiver's substituted return type, when applicable.</param>
-    private void EncodeFunctionReturnSymbol(
-        ReturnTypeEncoder encoder,
-        FunctionSymbol fn,
-        TypeSymbol? returnTypeOverride = null)
+    private void EncodeFunctionReturnSymbol(ReturnTypeEncoder encoder, FunctionSymbol fn)
     {
         if (fn.IsAsync && fn.StateMachineType != null)
         {
@@ -1445,10 +1441,7 @@ internal sealed class UserTokenResolver
             }
         }
 
-        this.signatures.EncodeReturnSymbol(
-            encoder,
-            returnTypeOverride ?? fn.Type,
-            fn.ReturnRefKind);
+        this.signatures.EncodeReturnSymbol(encoder, fn.Type, fn.ReturnRefKind);
     }
 
     /// <summary>
@@ -1488,38 +1481,12 @@ internal sealed class UserTokenResolver
         StructSymbol containingType,
         FunctionSymbol openMethod)
     {
-        var sigBlob = new BlobBuilder();
-        var paramCount = openMethod.Parameters.Length - (openMethod.ExplicitReceiverParameter == null ? 0 : 1);
-        var definition = containingType.Definition ?? containingType;
-        using (this.remaps.PushSmRemap(definition))
+        // Nested generic definitions re-ordinalize enclosing and own type
+        // parameters into one CLR VAR vector. Match the MethodDef encoding.
+        using (this.remaps.PushSmRemap(containingType.Definition ?? containingType))
         {
-            new BlobEncoder(sigBlob)
-                .MethodSignature(
-                    isInstanceMethod: openMethod.IsInstanceMethod,
-                    genericParameterCount: openMethod.TypeParameters.IsDefaultOrEmpty ? 0 : openMethod.TypeParameters.Length)
-                .Parameters(
-                    paramCount,
-                    r => this.EncodeFunctionReturnSymbol(
-                        r,
-                        openMethod,
-                        containingType.SubstituteMemberType(openMethod.Type)),
-                    ps =>
-                    {
-                        foreach (var p in openMethod.Parameters)
-                        {
-                            if (ReferenceEquals(p, openMethod.ThisParameter))
-                            {
-                                continue;
-                            }
-
-                            this.signatures.EncodeTypeSymbol(
-                                ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
-                                containingType.SubstituteMemberType(p.Type));
-                        }
-                    });
+            return this.EncodeOpenMethodSignature(openMethod);
         }
-
-        return sigBlob;
     }
 
     /// <summary>

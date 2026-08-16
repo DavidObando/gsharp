@@ -1876,7 +1876,7 @@ internal sealed partial class ExpressionBinder
         out bool blockedByOpenGenericParameter,
         out bool sawOpenGenericParameter)
     {
-        target = null;
+        target = default;
         nominalTarget = null;
         blockedByOpenGenericParameter = false;
         sawOpenGenericParameter = false;

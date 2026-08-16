@@ -848,14 +848,14 @@ public sealed class Binder
             }
         }
 
-        var importDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+        var importDeclarations = syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable())
                                  .OfType<ImportSyntax>();
         foreach (var import in importDeclarations)
         {
             binder.BindImport(import);
         }
 
-        var typeAliasDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+        var typeAliasDeclarations = syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable())
                                                .OfType<TypeAliasDeclarationSyntax>();
         foreach (var typeAlias in typeAliasDeclarations)
         {
@@ -868,7 +868,7 @@ public sealed class Binder
         // their members can reference delegates. Signatures are bound after all
         // interface/enum/struct shells exist, making delegate constraints,
         // parameters, and returns independent of syntax-tree order.
-        var delegateDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+        var delegateDeclarations = syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable())
                                               .OfType<DelegateDeclarationSyntax>()
                                               .ToList();
         var declaredDelegates = new List<(DelegateDeclarationSyntax Syntax, DelegateTypeSymbol Symbol)>();
@@ -885,7 +885,7 @@ public sealed class Binder
         }
 
         var interfaceDeclarations = PartialTypeMerger.MergeInterfaces(
-            syntaxTrees.SelectMany(st => st.Root.Members).OfType<InterfaceDeclarationSyntax>(),
+            syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable()).OfType<InterfaceDeclarationSyntax>(),
             packageByTree,
             binder.Diagnostics);
 
@@ -907,7 +907,7 @@ public sealed class Binder
             }
         }
 
-        var enumDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+        var enumDeclarations = syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable())
                                            .OfType<EnumDeclarationSyntax>();
         foreach (var enumSyntax in enumDeclarations)
         {
@@ -939,7 +939,7 @@ public sealed class Binder
         }
 
         var structDeclarations = PartialTypeMerger.MergeStructs(
-            syntaxTrees.SelectMany(st => st.Root.Members).OfType<StructDeclarationSyntax>(),
+            syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable()).OfType<StructDeclarationSyntax>(),
             packageByTree,
             binder.Diagnostics)
             .Concat(richAnonymousClasses.Select(r => r.Declaration))
@@ -1084,7 +1084,7 @@ public sealed class Binder
             RunWithPackage(owningPackage, ifaceSyntax.SyntaxTree, () => binder.declarations.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage));
         }
 
-        var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members)
+        var functionDeclarations = syntaxTrees.SelectMany(st => st.Root.Members.AsEnumerable())
                                               .OfType<FunctionDeclarationSyntax>();
         foreach (var function in functionDeclarations)
         {
@@ -1125,7 +1125,7 @@ public sealed class Binder
         // SelectMany's iteration order.
         var globalStatements = syntaxTrees
             .OrderBy(st => st.Text?.FileName ?? string.Empty, StringComparer.Ordinal)
-            .SelectMany(st => st.Root.Members)
+            .SelectMany(st => st.Root.Members.AsEnumerable())
             .OfType<GlobalStatementSyntax>()
             .ToArray();
 
@@ -6860,7 +6860,7 @@ public sealed class Binder
         var classMain = explicitMain == null && !structs.IsDefaultOrEmpty
             ? structs
                 .Where(s => s.IsClass && !s.StaticMethods.IsDefaultOrEmpty)
-                .SelectMany(s => s.StaticMethods)
+                .SelectMany(s => s.StaticMethods.AsEnumerable())
                 .FirstOrDefault(m => m.Name == "Main")
             : null;
         explicitMain ??= classMain;

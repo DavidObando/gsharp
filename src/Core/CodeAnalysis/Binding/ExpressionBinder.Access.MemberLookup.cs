@@ -3865,7 +3865,7 @@ internal sealed partial class ExpressionBinder
     private static TypeSymbol SubstituteThroughConstructedInterface(TypeSymbol type, InterfaceSymbol constructedIface)
     {
         if (type is TypeParameterSymbol tp
-            && constructedIface?.Definition?.TypeParameters != null
+            && constructedIface?.Definition != null
             && !constructedIface.Definition.TypeParameters.IsDefaultOrEmpty
             && !constructedIface.TypeArguments.IsDefaultOrEmpty)
         {

@@ -62,8 +62,8 @@ public sealed class BoundScope
     // single member body, mirroring currentDeclaringPackageName exactly.
     // Import enumeration consults this to expose only imports declared in the
     // same file as the reference being resolved, plus implicit imports.
-    private AsyncLocal<ReferencingSyntaxTreeState?> currentReferencingSyntaxTree =
-        new AsyncLocal<ReferencingSyntaxTreeState?>();
+    private AsyncLocal<object?> currentReferencingSyntaxTree =
+        new AsyncLocal<object?>();
 
     // Issue #2455: the ambient "qualified construction package hint" (see
     // SetQualifiedConstructionPackageHint), set only while re-binding the
@@ -1471,7 +1471,7 @@ public sealed class BoundScope
             return Parent.SetCurrentReferencingSyntaxTree(tree);
         }
 
-        var previous = currentReferencingSyntaxTree.Value?.Tree;
+        var previous = (currentReferencingSyntaxTree.Value as ReferencingSyntaxTreeState)?.Tree;
         currentReferencingSyntaxTree.Value = new ReferencingSyntaxTreeState(tree);
         return previous;
     }
@@ -1548,7 +1548,9 @@ public sealed class BoundScope
     /// import-based disambiguation this fix adds simply does not fire).
     /// </summary>
     private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? GetCurrentReferencingSyntaxTree()
-        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree.Value?.Tree;
+        => Parent != null
+            ? Parent.GetCurrentReferencingSyntaxTree()
+            : (currentReferencingSyntaxTree.Value as ReferencingSyntaxTreeState)?.Tree;
 
     /// <summary>
     /// Issue #2455: gets the ambient qualified-construction package hint set

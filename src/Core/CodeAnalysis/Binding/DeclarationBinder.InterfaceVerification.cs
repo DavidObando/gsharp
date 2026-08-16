@@ -1830,7 +1830,7 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, in MemberLookup.ClrInterfaceSlot slot)
+    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, MemberLookup.ClrInterfaceSlot slot)
     {
         // Note: do NOT route through GetMethodsIncludingInherited here — it
         // dedups same-name overloads by parameter signature (ignoring return

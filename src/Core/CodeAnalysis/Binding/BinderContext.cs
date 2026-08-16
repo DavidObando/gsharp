@@ -120,7 +120,8 @@ internal sealed class BinderContext
     /// computed by <see cref="GetStaticImportTypes"/>; invalidated when the
     /// import or struct count moves.
     /// </summary>
-    private ImmutableArray<StructSymbol>? cachedStaticImportTypes;
+    private ImmutableArray<StructSymbol> cachedStaticImportTypes;
+    private bool hasCachedStaticImportTypes;
 
     private int cachedStaticImportImportCount = -1;
 
@@ -304,12 +305,12 @@ internal sealed class BinderContext
     {
         var imports = RootScope.GetDeclaredImports();
         var structs = RootScope.GetDeclaredStructs();
-        if (cachedStaticImportTypes is { } cached
+        if (hasCachedStaticImportTypes
             && cachedStaticImportImportCount == imports.Length
             && cachedStaticImportStructCount == structs.Length
             && ReferenceEquals(cachedStaticImportSyntaxTree, RootScope.GetCurrentReferencingSyntaxTreeForCache()))
         {
-            return cached;
+            return cachedStaticImportTypes;
         }
 
         ImmutableArray<StructSymbol>.Builder? builder = null;
@@ -343,6 +344,7 @@ internal sealed class BinderContext
 
         var result = builder?.ToImmutable() ?? ImmutableArray<StructSymbol>.Empty;
         cachedStaticImportTypes = result;
+        hasCachedStaticImportTypes = true;
         cachedStaticImportImportCount = imports.Length;
         cachedStaticImportStructCount = structs.Length;
         cachedStaticImportSyntaxTree = RootScope.GetCurrentReferencingSyntaxTreeForCache();

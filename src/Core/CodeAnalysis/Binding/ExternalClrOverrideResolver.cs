@@ -66,13 +66,13 @@ internal static class ExternalClrOverrideResolver
 
             if (!method.IsVirtual || method.IsFinal)
             {
-                return new MatchResult<MethodInfo>(null, externalBase, sawName, IsSealed: true);
+                return new MatchResult<MethodInfo>(null, externalBase, sawName, isSealed: true);
             }
 
-            return new MatchResult<MethodInfo>(method, externalBase, sawName, IsSealed: false);
+            return new MatchResult<MethodInfo>(method, externalBase, sawName, isSealed: false);
         }
 
-        return new MatchResult<MethodInfo>(null, externalBase, sawName, IsSealed: false);
+        return new MatchResult<MethodInfo>(null, externalBase, sawName, isSealed: false);
     }
 
     internal static MatchResult<PropertyInfo> FindProperty(
@@ -119,13 +119,13 @@ internal static class ExternalClrOverrideResolver
             if ((getter != null && (!getter.IsVirtual || getter.IsFinal))
                 || (setter != null && (!setter.IsVirtual || setter.IsFinal)))
             {
-                return new MatchResult<PropertyInfo>(null, externalBase, sawName, IsSealed: true);
+                return new MatchResult<PropertyInfo>(null, externalBase, sawName, isSealed: true);
             }
 
-            return new MatchResult<PropertyInfo>(property, externalBase, sawName, IsSealed: false);
+            return new MatchResult<PropertyInfo>(property, externalBase, sawName, isSealed: false);
         }
 
-        return new MatchResult<PropertyInfo>(null, externalBase, sawName, IsSealed: false);
+        return new MatchResult<PropertyInfo>(null, externalBase, sawName, isSealed: false);
     }
 
     internal static MatchResult<EventInfo> FindEvent(
@@ -161,13 +161,13 @@ internal static class ExternalClrOverrideResolver
             if ((add != null && (!add.IsVirtual || add.IsFinal))
                 || (remove != null && (!remove.IsVirtual || remove.IsFinal)))
             {
-                return new MatchResult<EventInfo>(null, externalBase, sawName, IsSealed: true);
+                return new MatchResult<EventInfo>(null, externalBase, sawName, isSealed: true);
             }
 
-            return new MatchResult<EventInfo>(eventInfo, externalBase, sawName, IsSealed: false);
+            return new MatchResult<EventInfo>(eventInfo, externalBase, sawName, isSealed: false);
         }
 
-        return new MatchResult<EventInfo>(null, externalBase, sawName, IsSealed: false);
+        return new MatchResult<EventInfo>(null, externalBase, sawName, isSealed: false);
     }
 
     internal static ImmutableArray<UnimplementedAbstractMember> GetUnimplementedAbstractMembers(
@@ -953,12 +953,29 @@ internal static class ExternalClrOverrideResolver
         string MemberName,
         bool ReportedBySourceAbstractMethod);
 
-    internal readonly record struct MatchResult<T>(
-        T? Member,
-        TypeSymbol? ContainingType,
-        bool SawName,
-        bool IsSealed)
-        where T : MemberInfo;
+    internal readonly struct MatchResult<T>
+        where T : MemberInfo
+    {
+        public MatchResult(
+            T? member,
+            TypeSymbol? containingType,
+            bool sawName,
+            bool isSealed)
+        {
+            Member = member;
+            ContainingType = containingType;
+            SawName = sawName;
+            IsSealed = isSealed;
+        }
+
+        public T? Member { get; }
+
+        public TypeSymbol? ContainingType { get; }
+
+        public bool SawName { get; }
+
+        public bool IsSealed { get; }
+    }
 
     private readonly record struct TypeArgumentSubstitution(
         Type? OpenDefinition,

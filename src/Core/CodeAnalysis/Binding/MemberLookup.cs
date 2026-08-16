@@ -2978,7 +2978,7 @@ internal sealed class MemberLookup
     /// <param name="method">The candidate G# method.</param>
     /// <param name="slot">The interface slot to satisfy.</param>
     /// <returns><see langword="true"/> when the method satisfies the slot.</returns>
-    public static bool MethodSatisfiesClrSlot(FunctionSymbol method, in ClrInterfaceSlot slot)
+    public static bool MethodSatisfiesClrSlot(FunctionSymbol method, ClrInterfaceSlot slot)
     {
         var clrParams = slot.Method.GetParameters();
         var callable = GetCallableParameters(method);
@@ -3296,7 +3296,7 @@ internal sealed class MemberLookup
 
             if (applicable.Count != 0)
             {
-                (PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)? winner = null;
+                (PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)? winner = default;
                 foreach (var candidate in applicable)
                 {
                     var betterThanAll = true;

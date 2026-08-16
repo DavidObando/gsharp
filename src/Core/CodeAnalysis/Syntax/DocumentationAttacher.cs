@@ -219,7 +219,7 @@ internal static class DocumentationAttacher
             result.Add(method);
         }
 
-        if (structDecl.Constructors != null)
+        if (!structDecl.Constructors.IsDefaultOrEmpty)
         {
             foreach (var ctor in structDecl.Constructors)
             {

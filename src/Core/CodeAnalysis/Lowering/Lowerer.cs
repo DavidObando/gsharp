@@ -1295,7 +1295,7 @@ public sealed class Lowerer : BoundTreeRewriter
             userType.TryGetMethodIncludingInherited("GetEnumerator", out var userGetEnumerator) &&
             userGetEnumerator.Parameters.Length == 0)
         {
-            enumeratorType = userGetEnumerator.Type;
+            enumeratorType = userType.SubstituteMemberType(userGetEnumerator.Type);
             getEnumeratorCall = new BoundUserInstanceCallExpression(
                 null,
                 collection,
