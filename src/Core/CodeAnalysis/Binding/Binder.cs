@@ -233,7 +233,10 @@ public sealed class Binder
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             tryBindClrConstructorCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindClrConstructorCall(syntax, out result),
             tryBindIntrinsicCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindIntrinsicCall(syntax, out result),
-            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type? importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result, Type[]? explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) => Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited),
+            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type? importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result, Type[]? explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) =>
+            {
+                return Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited);
+            },
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
             getRefKindFromModifier: GetRefKindFromModifier,
@@ -1916,23 +1919,30 @@ public sealed class Binder
                     continue;
                 }
 
-                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, ctorDeclaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctorDeclaration.Body, diagnostics, () =>
-                {
-                    var ctorBinder = new Binder(parentScope, ctor.Function);
-                    var ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body);
-                    ctorBinder.statements.FinalizeUserLabels();
-
-                    // ADR-0065 §2 Rule 3: a `convenience init` body must begin
-                    // with a `init(args)` self-delegation expression-statement.
-                    if (ctor.IsConvenience)
+                var ctorLoweredBody = BindBodyWithPackage(
+                    parentScope,
+                    structSym.PackageName,
+                    ctorDeclaration.Body.SyntaxTree,
+                    () =>
                     {
-                        VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
-                    }
+                        return BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctorDeclaration.Body, diagnostics, () =>
+                        {
+                            var ctorBinder = new Binder(parentScope, ctor.Function);
+                            var ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body);
+                            ctorBinder.statements.FinalizeUserLabels();
 
-                    var lowered = Lowerer.Lower(ctorBody, structSym);
-                    AnalyzeFunctionBody(lowered, ctor.Function, ctorBinder.Diagnostics);
-                    return new BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray());
-                }));
+                            // ADR-0065 §2 Rule 3: a `convenience init` body must begin
+                            // with a `init(args)` self-delegation expression-statement.
+                            if (ctor.IsConvenience)
+                            {
+                                VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
+                            }
+
+                            var lowered = Lowerer.Lower(ctorBody, structSym);
+                            AnalyzeFunctionBody(lowered, ctor.Function, ctorBinder.Diagnostics);
+                            return new BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray());
+                        });
+                    });
                 functionBodies.Add(ctor.Function, ctorLoweredBody);
             }
         }

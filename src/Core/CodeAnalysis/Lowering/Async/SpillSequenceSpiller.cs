@@ -974,15 +974,18 @@ public static class SpillSequenceSpiller
                         clrEventSub,
                         clrEventSub.Receiver,
                         clrEventSub.Handler,
-                        (recv, handler) => new BoundClrEventSubscriptionExpression(
-                            null,
-                            recv,
-                            clrEventSub.Event,
-                            handler,
-                            clrEventSub.IsAdd,
-                            clrEventSub.ConstrainedReceiverTypeParameter,
-                            clrEventSub.ConstrainedInterfaceType,
-                            clrEventSub.EventContainingType));
+                        (recv, handler) =>
+                        {
+                            return new BoundClrEventSubscriptionExpression(
+                                null,
+                                recv,
+                                clrEventSub.Event,
+                                handler,
+                                clrEventSub.IsAdd,
+                                clrEventSub.ConstrainedReceiverTypeParameter,
+                                clrEventSub.ConstrainedInterfaceType,
+                                clrEventSub.EventContainingType);
+                        });
                 case BoundEventSubscriptionExpression eventSub:
                     if (eventSub.Receiver == null)
                     {
@@ -2475,7 +2478,10 @@ public static class SpillSequenceSpiller
             return SpillOneOperand(
                 fieldAccess,
                 fieldAccess.Receiver,
-                recv => new BoundFieldAccessExpression(null, recv, BoundNodeForm.DeclaringType(fieldAccess), fieldAccess.Field, fieldAccess.NarrowedType));
+                recv =>
+                {
+                    return new BoundFieldAccessExpression(null, recv, BoundNodeForm.DeclaringType(fieldAccess), fieldAccess.Field, fieldAccess.NarrowedType);
+                });
         }
 
         private BoundSpillSequenceExpression SpillTupleLiteral(BoundTupleLiteralExpression tupleLiteral)
