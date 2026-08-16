@@ -45,7 +45,7 @@ public class Issue3394LocalSdkPackageSelectionTests
     }
 
     [Fact]
-    public void ResolveLocalSdkPackage_WhenWriteTimesTie_UsesOrdinalPackageName()
+    public void ResolveLocalSdkPackage_WhenWriteTimesTie_PrefersHigherVersion()
     {
         string root = CreateTestRoot();
         string packages = Path.Combine(root, "out", "bin", "Release", "nupkgs");
@@ -53,8 +53,11 @@ public class Issue3394LocalSdkPackageSelectionTests
 
         try
         {
-            AssertOrdinalPackageNameWins(
+            AssertTiedPackageWins(
                 packages,
+                "9.0.0-glower",
+                "10.0.0-ghigher",
+                "10.0.0-ghigher",
                 () => GsharpTestProjectRunner.ResolveLocalSdkPackage(root));
         }
         finally
@@ -64,7 +67,7 @@ public class Issue3394LocalSdkPackageSelectionTests
     }
 
     [Fact]
-    public void ResolveNewestSdkPackage_WhenWriteTimesTie_UsesOrdinalPackageName()
+    public void ResolveNewestSdkPackage_WhenVersionsAndWriteTimesTie_UsesOrdinalPackageName()
     {
         string root = CreateTestRoot();
         string packages = Path.Combine(root, ".nugs");
@@ -72,8 +75,12 @@ public class Issue3394LocalSdkPackageSelectionTests
 
         try
         {
-            AssertOrdinalPackageNameWins(
+            Assert.Equal(0, GsharpTestProjectRunner.CompareVersions("1.0", "1.0.0"));
+            AssertTiedPackageWins(
                 packages,
+                "1.0",
+                "1.0.0",
+                "1.0",
                 () => GsharpTestProjectRunner.ResolveNewestSdkPackage(packages));
         }
         finally
@@ -88,26 +95,30 @@ public class Issue3394LocalSdkPackageSelectionTests
             "sdk-selection-tests",
             Guid.NewGuid().ToString("N"));
 
-    private static void AssertOrdinalPackageNameWins(
+    private static void AssertTiedPackageWins(
         string packages,
+        string firstVersion,
+        string secondVersion,
+        string expectedVersion,
         Func<(string NupkgPath, string Version)?> resolve)
     {
-        string ordinalWinner = Path.Combine(packages, "Gsharp.NET.Sdk.9.0.0-gordinal.nupkg");
-        string semanticWinner = Path.Combine(packages, "Gsharp.NET.Sdk.10.0.0-gsemantic.nupkg");
-        File.WriteAllBytes(ordinalWinner, Array.Empty<byte>());
-        File.WriteAllBytes(semanticWinner, Array.Empty<byte>());
+        string first = Path.Combine(packages, $"Gsharp.NET.Sdk.{firstVersion}.nupkg");
+        string second = Path.Combine(packages, $"Gsharp.NET.Sdk.{secondVersion}.nupkg");
+        string expected = Path.Combine(packages, $"Gsharp.NET.Sdk.{expectedVersion}.nupkg");
+        File.WriteAllBytes(first, Array.Empty<byte>());
+        File.WriteAllBytes(second, Array.Empty<byte>());
 
         var tiedWriteTime = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
-        File.SetLastWriteTimeUtc(ordinalWinner, tiedWriteTime);
-        File.SetLastWriteTimeUtc(semanticWinner, tiedWriteTime);
+        File.SetLastWriteTimeUtc(first, tiedWriteTime);
+        File.SetLastWriteTimeUtc(second, tiedWriteTime);
         Assert.Equal(
-            File.GetLastWriteTimeUtc(ordinalWinner),
-            File.GetLastWriteTimeUtc(semanticWinner));
+            File.GetLastWriteTimeUtc(first),
+            File.GetLastWriteTimeUtc(second));
 
         (string NupkgPath, string Version)? resolved = resolve();
 
         Assert.NotNull(resolved);
-        Assert.Equal(ordinalWinner, resolved.Value.NupkgPath);
-        Assert.Equal("9.0.0-gordinal", resolved.Value.Version);
+        Assert.Equal(expected, resolved.Value.NupkgPath);
+        Assert.Equal(expectedVersion, resolved.Value.Version);
     }
 }

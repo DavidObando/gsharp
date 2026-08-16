@@ -227,15 +227,18 @@ public class GsharpTestProjectRunner
             }
 
             DateTime writtenUtc = File.GetLastWriteTimeUtc(file);
+            int versionComparison = best is null ? 0 : CompareVersions(version, best.Value.Version);
             if (best is null
                 || writtenUtc > best.Value.WrittenUtc
                 || (writtenUtc == best.Value.WrittenUtc
-                    && string.CompareOrdinal(
-                        Path.GetFileName(file),
-                        Path.GetFileName(best.Value.Path)) > 0))
+                    && (versionComparison > 0
+                        || (versionComparison == 0
+                            && string.CompareOrdinal(
+                                Path.GetFileName(file),
+                                Path.GetFileName(best.Value.Path)) > 0))))
             {
                 // Exact write-time ties contain no portable recency signal.
-                // Package name supplies a stable cross-platform tie-breaker.
+                // Prefer SemVer, then package name for equivalent versions.
                 best = (file, version, writtenUtc);
             }
         }
