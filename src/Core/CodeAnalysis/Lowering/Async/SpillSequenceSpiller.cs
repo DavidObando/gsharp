@@ -1061,7 +1061,10 @@ public static class SpillSequenceSpiller
                     return SpillOneOperand(
                         tupleAccess,
                         tupleAccess.Receiver,
-                        recv => new BoundTupleElementAccessExpression(null, recv, tupleAccess.TupleType, tupleAccess.Index));
+                        recv =>
+                        {
+                            return new BoundTupleElementAccessExpression(null, recv, tupleAccess.TupleType, tupleAccess.Index);
+                        });
                 case BoundInterpolatedStringExpression interpolated:
                     return SpillInterpolatedString(interpolated);
                 case BoundArrayCreationExpression arrayCreation:

@@ -720,8 +720,14 @@ internal sealed partial class ExpressionBinder
         BoundExpression whenFalse;
         if (targetType != null)
         {
-            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue, targetType));
-            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse, targetType));
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () =>
+            {
+                return BindExpression(syntax.WhenTrue, targetType);
+            });
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () =>
+            {
+                return BindExpression(syntax.WhenFalse, targetType);
+            });
         }
         else if (trueIsBareDefault && falseIsBareDefault)
         {
@@ -730,7 +736,10 @@ internal sealed partial class ExpressionBinder
         }
         else if (trueIsBareDefault)
         {
-            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse));
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () =>
+            {
+                return BindExpression(syntax.WhenFalse);
+            });
             if (whenFalse is BoundErrorExpression)
             {
                 return new BoundErrorExpression(null);
@@ -740,7 +749,10 @@ internal sealed partial class ExpressionBinder
         }
         else if (falseIsBareDefault)
         {
-            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue));
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () =>
+            {
+                return BindExpression(syntax.WhenTrue);
+            });
             if (whenTrue is BoundErrorExpression)
             {
                 return new BoundErrorExpression(null);
@@ -750,8 +762,14 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue));
-            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse));
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () =>
+            {
+                return BindExpression(syntax.WhenTrue);
+            });
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () =>
+            {
+                return BindExpression(syntax.WhenFalse);
+            });
         }
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
@@ -1592,7 +1610,10 @@ internal sealed partial class ExpressionBinder
             var (leftWhenTrue, _) = PatternVariables.Classify(boundLeft);
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
-                () => BindExpressionWithNarrowing(syntax.Right, rightFrame));
+                () =>
+                {
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame);
+                });
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue);
         }
         else if (syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken)
@@ -1601,7 +1622,10 @@ internal sealed partial class ExpressionBinder
             var (_, leftWhenFalse) = PatternVariables.Classify(boundLeft);
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
-                () => BindExpressionWithNarrowing(syntax.Right, rightFrame));
+                () =>
+                {
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame);
+                });
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse);
         }
         else

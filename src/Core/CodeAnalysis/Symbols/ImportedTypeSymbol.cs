@@ -680,12 +680,17 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
     private static FunctionSymbol BuildMethodSymbol(MethodInfo method, StructSymbol aggregate, bool isStatic)
     {
-        var parameters = method.GetParameters()
-            .Select(parameter => new ParameterSymbol(
+        var reflectedParameters = method.GetParameters();
+        var parameterBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(reflectedParameters.Length);
+        foreach (var parameter in reflectedParameters)
+        {
+            parameterBuilder.Add(new ParameterSymbol(
                 parameter.Name ?? "arg",
                 ClrNullability.GetParameterTypeSymbol(parameter),
-                refKind: GetRefKind(parameter)))
-            .ToImmutableArray();
+                refKind: GetRefKind(parameter)));
+        }
+
+        var parameters = parameterBuilder.MoveToImmutable();
         return new FunctionSymbol(
             method.Name,
             parameters,

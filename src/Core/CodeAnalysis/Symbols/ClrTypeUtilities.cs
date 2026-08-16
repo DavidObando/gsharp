@@ -1048,10 +1048,14 @@ public static class ClrTypeUtilities
                 : contextObject.Assembly.GetType(openName, throwOnError: false);
             if (open != null)
             {
-                return open.MakeGenericType(
-                    type.GetGenericArguments()
-                        .Select(argument => RemapHostCoreTypeToContext(argument, contextObject))
-                        .ToArray());
+                var arguments = type.GetGenericArguments();
+                var remappedArguments = new Type[arguments.Length];
+                for (var i = 0; i < arguments.Length; i++)
+                {
+                    remappedArguments[i] = RemapHostCoreTypeToContext(arguments[i], contextObject);
+                }
+
+                return open.MakeGenericType(remappedArguments);
             }
         }
 
