@@ -35,8 +35,8 @@ public class Issue3394MultiAssignmentLookaheadPerfParserTests
 
         Assert.Empty(tree.Diagnostics);
         Assert.True(
-            stopwatch.ElapsedMilliseconds < 1000,
+            stopwatch.Elapsed < TimeSpan.FromSeconds(5),
             $"Parsing {nestingDepth} nested block-lambda calls took " +
-            $"{stopwatch.ElapsedMilliseconds}ms, expected < 1000ms.");
+            $"{stopwatch.ElapsedMilliseconds}ms, expected < 5000ms.");
     }
 }

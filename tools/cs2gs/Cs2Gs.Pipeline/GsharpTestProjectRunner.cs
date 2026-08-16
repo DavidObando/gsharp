@@ -85,28 +85,10 @@ public class GsharpTestProjectRunner
                 continue;
             }
 
-            (string Path, string Version, DateTime WrittenUtc)? best = null;
-            foreach (string file in Directory.EnumerateFiles(nupkgDir, SdkPackagePrefix + "*.nupkg"))
-            {
-                string version = ParseVersion(Path.GetFileName(file));
-                if (version is null)
-                {
-                    continue;
-                }
-
-                DateTime writtenUtc = File.GetLastWriteTimeUtc(file);
-                if (best is null
-                    || writtenUtc > best.Value.WrittenUtc
-                    || (writtenUtc == best.Value.WrittenUtc
-                        && CompareVersions(version, best.Value.Version) > 0))
-                {
-                    best = (file, version, writtenUtc);
-                }
-            }
-
+            (string NupkgPath, string Version)? best = ResolveNewestSdkPackage(nupkgDir);
             if (best is not null)
             {
-                return (best.Value.Path, best.Value.Version);
+                return best;
             }
         }
 
@@ -226,6 +208,39 @@ public class GsharpTestProjectRunner
 
         IReadOnlyList<TestCaseOutcome> results = TrxParser.ParseFile(trxPath);
         return GsharpTestRunResult.Ran(exit, output, trxPath, results);
+    }
+
+    internal static (string NupkgPath, string Version)? ResolveNewestSdkPackage(string directory)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return null;
+        }
+
+        (string Path, string Version, DateTime WrittenUtc)? best = null;
+        foreach (string file in Directory.EnumerateFiles(directory, SdkPackagePrefix + "*.nupkg"))
+        {
+            string version = ParseVersion(Path.GetFileName(file));
+            if (version is null)
+            {
+                continue;
+            }
+
+            DateTime writtenUtc = File.GetLastWriteTimeUtc(file);
+            if (best is null
+                || writtenUtc > best.Value.WrittenUtc
+                || (writtenUtc == best.Value.WrittenUtc
+                    && string.CompareOrdinal(
+                        Path.GetFileName(file),
+                        Path.GetFileName(best.Value.Path)) > 0))
+            {
+                // Exact write-time ties contain no portable recency signal.
+                // Package name supplies a stable cross-platform tie-breaker.
+                best = (file, version, writtenUtc);
+            }
+        }
+
+        return best is null ? null : (best.Value.Path, best.Value.Version);
     }
 
     /// <summary>

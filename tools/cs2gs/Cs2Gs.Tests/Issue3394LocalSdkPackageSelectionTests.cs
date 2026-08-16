@@ -18,10 +18,7 @@ public class Issue3394LocalSdkPackageSelectionTests
     [Fact]
     public void ResolveLocalSdkPackage_PrefersNewestBuildOverHigherVersion()
     {
-        string root = Path.Combine(
-            AppContext.BaseDirectory,
-            "sdk-selection-tests",
-            Guid.NewGuid().ToString("N"));
+        string root = CreateTestRoot();
         string packages = Path.Combine(root, "out", "bin", "Release", "nupkgs");
         Directory.CreateDirectory(packages);
 
@@ -45,5 +42,72 @@ public class Issue3394LocalSdkPackageSelectionTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ResolveLocalSdkPackage_WhenWriteTimesTie_UsesOrdinalPackageName()
+    {
+        string root = CreateTestRoot();
+        string packages = Path.Combine(root, "out", "bin", "Release", "nupkgs");
+        Directory.CreateDirectory(packages);
+
+        try
+        {
+            AssertOrdinalPackageNameWins(
+                packages,
+                () => GsharpTestProjectRunner.ResolveLocalSdkPackage(root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveNewestSdkPackage_WhenWriteTimesTie_UsesOrdinalPackageName()
+    {
+        string root = CreateTestRoot();
+        string packages = Path.Combine(root, ".nugs");
+        Directory.CreateDirectory(packages);
+
+        try
+        {
+            AssertOrdinalPackageNameWins(
+                packages,
+                () => GsharpTestProjectRunner.ResolveNewestSdkPackage(packages));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string CreateTestRoot() =>
+        Path.Combine(
+            AppContext.BaseDirectory,
+            "sdk-selection-tests",
+            Guid.NewGuid().ToString("N"));
+
+    private static void AssertOrdinalPackageNameWins(
+        string packages,
+        Func<(string NupkgPath, string Version)?> resolve)
+    {
+        string ordinalWinner = Path.Combine(packages, "Gsharp.NET.Sdk.9.0.0-gordinal.nupkg");
+        string semanticWinner = Path.Combine(packages, "Gsharp.NET.Sdk.10.0.0-gsemantic.nupkg");
+        File.WriteAllBytes(ordinalWinner, Array.Empty<byte>());
+        File.WriteAllBytes(semanticWinner, Array.Empty<byte>());
+
+        var tiedWriteTime = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(ordinalWinner, tiedWriteTime);
+        File.SetLastWriteTimeUtc(semanticWinner, tiedWriteTime);
+        Assert.Equal(
+            File.GetLastWriteTimeUtc(ordinalWinner),
+            File.GetLastWriteTimeUtc(semanticWinner));
+
+        (string NupkgPath, string Version)? resolved = resolve();
+
+        Assert.NotNull(resolved);
+        Assert.Equal(ordinalWinner, resolved.Value.NupkgPath);
+        Assert.Equal("9.0.0-gordinal", resolved.Value.Version);
     }
 }
