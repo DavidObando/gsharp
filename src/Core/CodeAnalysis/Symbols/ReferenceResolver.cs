@@ -989,7 +989,13 @@ public sealed class ReferenceResolver : IDisposable
         if (hostType.IsGenericType && !hostType.IsGenericTypeDefinition)
         {
             var mappedDefinition = MapClrTypeToReferences(hostType.GetGenericTypeDefinition());
-            var mappedArgs = hostType.GetGenericArguments().Select(t => MapClrTypeToReferences(t)).ToArray();
+            var hostArguments = hostType.GetGenericArguments();
+            var mappedArgs = new Type[hostArguments.Length];
+            for (var i = 0; i < hostArguments.Length; i++)
+            {
+                mappedArgs[i] = MapClrTypeToReferences(hostArguments[i]);
+            }
+
             return mappedDefinition.MakeGenericType(mappedArgs);
         }
 

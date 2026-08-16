@@ -204,7 +204,10 @@ public sealed class Binder
             bindExpression: syntax => Expressions.BindExpression(syntax),
             bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            },
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType, exactTargetReturnType) =>
                 Lambdas.CreateErasedFunctionLiteralAdapter(
                     literal,
@@ -238,7 +241,10 @@ public sealed class Binder
                 return Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited);
             },
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            },
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString,
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
@@ -303,7 +309,10 @@ public sealed class Binder
             bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
             bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility),
             bindVariableReference: (name, location) => Expressions.BindVariableReference(name, location),
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            },
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             isLvalue: ExpressionBinder.IsLvalue,
             isIteratorReturnType: IsIteratorReturnType,
@@ -334,7 +343,10 @@ public sealed class Binder
             refKindToString: RefKindToString,
             getCurrentFunction: () => this.function,
             setCurrentFunction: fn => this.function = fn,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType));
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            });
         expressions = new ExpressionBinder(
             binderCtx,
             memberLookup,
@@ -1254,8 +1266,14 @@ public sealed class Binder
             var contextSet = false;
             try
             {
+                var topLevelStatements = ImmutableArray.CreateBuilder<StatementSyntax>(globalStatements.Length);
+                foreach (var globalStatement in globalStatements)
+                {
+                    topLevelStatements.Add(globalStatement.Statement);
+                }
+
                 statements.AddRange(tlsBinder.statements.BindStatementList(
-                    globalStatements.Select(s => s.Statement).ToImmutableArray(),
+                    topLevelStatements.MoveToImmutable(),
                     statement =>
                     {
                         var tree = statement.SyntaxTree;
@@ -5732,7 +5750,7 @@ public sealed class Binder
                         // a bug. Log for diagnosability and fall through to the erased
                         // constructed form so both debug and release builds degrade gracefully
                         // rather than crash.
-                        var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", clrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{FormatClrTypes(clrArgs)}] even after mapClrType projection.";
                         System.Diagnostics.Debug.WriteLine(assertMessage);
                     }
                 }
@@ -5763,7 +5781,7 @@ public sealed class Binder
                     }
                     catch (System.ArgumentException)
                     {
-                        var assertMessage = $"Binder.SubstituteType: erased MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", erasedArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        var assertMessage = $"Binder.SubstituteType: erased MakeGenericType failed for '{it.OpenDefinition}' with args [{FormatClrTypes(erasedArgs)}] even after mapClrType projection.";
                         System.Diagnostics.Debug.WriteLine(assertMessage);
                     }
                 }
@@ -5773,6 +5791,17 @@ public sealed class Binder
         }
 
         return type;
+    }
+
+    private static string FormatClrTypes(Type[] types)
+    {
+        var text = new string[types.Length];
+        for (var i = 0; i < types.Length; i++)
+        {
+            text[i] = types[i].ToString();
+        }
+
+        return string.Join(", ", text);
     }
 
     // Phase 4.2 / ADR-0020: returns true if `typeArgument` satisfies the constraint of a
