@@ -1101,17 +1101,26 @@ public static class SpillSequenceSpiller
                     return SpillOneOperand(
                         makeChannel,
                         makeChannel.Capacity,
-                        capacity => new BoundMakeChannelExpression(null, makeChannel.ChannelType, capacity));
+                        capacity =>
+                        {
+                            return new BoundMakeChannelExpression(null, makeChannel.ChannelType, capacity);
+                        });
                 case BoundChannelReceiveExpression channelReceive:
                     return SpillOneOperand(
                         channelReceive,
                         channelReceive.Channel,
-                        channel => new BoundChannelReceiveExpression(null, channel, channelReceive.Type));
+                        channel =>
+                        {
+                            return new BoundChannelReceiveExpression(null, channel, channelReceive.Type);
+                        });
                 case BoundChannelCloseExpression channelClose:
                     return SpillOneOperand(
                         channelClose,
                         channelClose.Channel,
-                        channel => new BoundChannelCloseExpression(null, channel));
+                        channel =>
+                        {
+                            return new BoundChannelCloseExpression(null, channel);
+                        });
                 case BoundMapLiteralExpression mapLiteral:
                     return SpillMapLiteral(mapLiteral);
                 case BoundMapDeleteExpression mapDelete:
