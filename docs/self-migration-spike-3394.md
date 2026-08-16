@@ -323,3 +323,42 @@ Required sequence remains:
 4. compile Core with the migrated Core implementation;
 5. only then continue in order through gsc, gsi, gsgen, and cs2gs.
 
+## Continuation through cycle 65
+
+Follow-up branch `oats/3394-core-compile-continuation`, based on `02a8ca99`,
+continued the same Core-first sequence. Translation and round-trip parsing
+remain green. Core compile diagnostics moved:
+
+| Cycle | Diagnostics | Milestone |
+|---:|---:|---|
+| 51 | 291 | Fresh-main baseline |
+| 52 | 208 | #3399–#3402 root-fix cluster |
+| 53 | 200 | Ref-kind local-function and scope follow-up |
+| 54 | 183 | Nested negated-pattern binders |
+| 55 | 157 | Generic CLR import aliases |
+| 56 | 140 | Exhaustive-switch definite assignment and nullable arrays |
+| 57 | 135 | Lifted-helper capture nullability |
+| 58 | 127 | Pattern binders after short-circuit prefixes |
+| 59 | 129 | Diagnostic-neutral nested-builder experiment |
+| 60 | 123 | Inferred generic `Enum.TryParse` rendering |
+| 61 | 122 | Constant-pattern binder scope |
+| 62 | 116 | Explicit statement-array element typing |
+| 63 | 115 | Mutable narrowing-frame locals |
+| 64 | 111 | Positional-record property deduplication |
+| 65 | **110** | Nullable reference interface-signature matching |
+
+Continuation reduction is 291 → 110 (181 removed, 62.2%). From cycle 14,
+Core semantic diagnostics are 1,126 → 110 (1,016 removed, 90.2%).
+
+Durable continuation fixes include capturing recursive and mutually recursive
+local-function lifting with transitive captures and by-ref mutable state;
+ref/out local-function lifting; structural by-ref pointee matching; params
+normal-form specificity; wider short-circuit and nested pattern-binder scope;
+open generic CLR type aliases; exhaustive-switch out-parameter analysis;
+nullable array-allocation element preservation; positional-record property
+deduplication; and nullable-reference-insensitive CLR interface matching.
+
+Cycle 65's largest remaining IDs are GS0155 (21), GS0159 (19), GS0158 (17),
+GS0154 (11), GS0266 (6), and GS0125 (6). Core still does not compile, so
+ILVerify, test parity, self-hosted Core recompilation, and downstream project
+migrations remain gated exactly as before.
