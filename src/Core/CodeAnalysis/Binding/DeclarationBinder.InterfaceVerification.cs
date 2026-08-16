@@ -2038,12 +2038,24 @@ internal sealed partial class DeclarationBinder
             // which can never resolve to an instance member, and type clauses
             // carry no expressions either.
             case LambdaExpressionSyntax lambda:
+                var lambdaParameterNames = new string[lambda.Parameters.Count];
+                for (var i = 0; i < lambda.Parameters.Count; i++)
+                {
+                    lambdaParameterNames[i] = lambda.Parameters[i].Identifier.Text;
+                }
+
                 return TryFindInstanceMemberReference(
-                    lambda.Body, forbiddenNames, WithShadowed(shadowedNames, lambda.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
+                    lambda.Body, forbiddenNames, WithShadowed(shadowedNames, lambdaParameterNames), out offendingName, out offendingLocation);
 
             case FunctionLiteralExpressionSyntax func:
+                var functionParameterNames = new string[func.Parameters.Count];
+                for (var i = 0; i < func.Parameters.Count; i++)
+                {
+                    functionParameterNames[i] = func.Parameters[i].Identifier.Text;
+                }
+
                 return TryFindInstanceMemberReference(
-                    func.Body, forbiddenNames, WithShadowed(shadowedNames, func.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
+                    func.Body, forbiddenNames, WithShadowed(shadowedNames, functionParameterNames), out offendingName, out offendingLocation);
 
             // Catch and loop variables shadow only within their body; the
             // scrutinee/collection/bounds are evaluated in the outer scope.

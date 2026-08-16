@@ -53,12 +53,18 @@ internal sealed partial class StatementBinder
             var (patternThen, patternElse) = PatternVariables.Classify(condition);
             var thenStatement = BindWithPatternVariables(
                 patternThen,
-                () => BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow));
+                () =>
+                {
+                    return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
+                });
             var elseStatement = syntax.ElseClause == null
                 ? null
                 : BindWithPatternVariables(
                     patternElse,
-                    () => BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow));
+                    () =>
+                    {
+                        return BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
+                    });
             var result = new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
 
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
@@ -105,12 +111,18 @@ internal sealed partial class StatementBinder
         var (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition);
         var initThen = BindWithPatternVariables(
             initPatternThen,
-            () => BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow));
+            () =>
+            {
+                return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow);
+            });
         var initElse = syntax.ElseClause == null
             ? null
             : BindWithPatternVariables(
                 initPatternElse,
-                () => BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow));
+                () =>
+                {
+                    return BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow);
+                });
 
         scope = scope.Pop();
 
@@ -397,7 +409,9 @@ internal sealed partial class StatementBinder
     /// ADR-0166: binds a statement with the given pattern variables declared in
     /// a fresh child scope (see <see cref="PatternVariables.BindInScope{T}"/>).
     /// </summary>
-    private T BindWithPatternVariables<T>(ImmutableArray<LocalVariableSymbol> variables, Func<T> bind)
+    private BoundStatement BindWithPatternVariables(
+        ImmutableArray<LocalVariableSymbol> variables,
+        Func<BoundStatement> bind)
         => PatternVariables.BindInScope(binderCtx, variables, bind);
 
     /// <summary>

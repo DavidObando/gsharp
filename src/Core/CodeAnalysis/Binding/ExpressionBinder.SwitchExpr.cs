@@ -119,7 +119,10 @@ internal sealed partial class ExpressionBinder
             var (guardWhenTrue, _) = PatternVariables.Classify(guard);
             var armResult = BindWithPatternVariables(
                 guardWhenTrue,
-                () => BindExpressionWithNarrowing(armSyntax.Result, frame, targetType));
+                () =>
+                {
+                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType);
+                });
 
             scope = scope.Pop();
             boundArmBuilders.Add((armSyntax, pattern, guard, armResult));

@@ -105,7 +105,10 @@ internal sealed partial class StatementBinder
             var body = PatternVariables.BindInScope(
                 binderCtx,
                 guardWhenTrue,
-                () => BindStatementWithNarrowing(caseSyntax.Body, frame));
+                () =>
+                {
+                    return BindStatementWithNarrowing(caseSyntax.Body, frame);
+                });
 
             scope = scope.Pop();
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
