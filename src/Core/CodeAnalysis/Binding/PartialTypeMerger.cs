@@ -490,14 +490,14 @@ internal static class PartialTypeMerger
             sealedKeyword,
             primary.InterfaceKeyword,
             primary.OpenBraceToken,
-            Concat(parts, p => p.Properties),
-            Concat(parts, p => p.Events),
-            Concat(parts, p => p.Methods),
+            Concat<InterfaceDeclarationSyntax, PropertyDeclarationSyntax>(parts, p => p.Properties),
+            Concat<InterfaceDeclarationSyntax, EventDeclarationSyntax>(parts, p => p.Events),
+            Concat<InterfaceDeclarationSyntax, FunctionDeclarationSyntax>(parts, p => p.Methods),
             primary.CloseBraceToken)
         {
             BaseColonToken = baseColon,
             BaseTypeClauses = mergedBaseInterfaces,
-            StaticFields = Concat(parts, p => p.StaticFields),
+            StaticFields = Concat<InterfaceDeclarationSyntax, FieldDeclarationSyntax>(parts, p => p.StaticFields),
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
             PartialPartLocations = parts.Select(p => p.Identifier?.Location ?? default).ToImmutableArray(),
             PartialTypeParameterLists = typeParametersMatch
@@ -505,13 +505,18 @@ internal static class PartialTypeMerger
                 : ImmutableArray<TypeParameterListSyntax>.Empty,
         };
 
-        merged.WithAnnotations(UnionAnnotations(parts));
+        ApplyAnnotations(merged, UnionAnnotations(parts));
         return merged;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Shared helpers
     // ─────────────────────────────────────────────────────────────────────────
+
+    private static void ApplyAnnotations(MemberSyntax member, ImmutableArray<AnnotationSyntax> annotations)
+    {
+        member.WithAnnotations(annotations);
+    }
 
     private static SyntaxToken? ResolveAccessibility(List<StructDeclarationSyntax> parts, string name, DiagnosticBag diagnostics)
     {

@@ -302,9 +302,12 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             ? references.GetOrAddSemanticAggregate(
                 type,
                 consumerAssemblyName,
-                static (t, consumer) => Invariant.Required(
-                    BuildSemanticAggregate(t, consumer),
-                    "a marked imported type has a semantic aggregate"))
+                static (t, consumer) =>
+                {
+                    return Invariant.Required<StructSymbol>(
+                        BuildSemanticAggregate(t, consumer),
+                        "a marked imported type has a semantic aggregate");
+                })
             : BuildSemanticAggregate(type, consumerAssemblyName);
         return aggregate != null;
     }

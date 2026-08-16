@@ -1385,8 +1385,14 @@ internal sealed class ConversionClassifier
             && method.IsGenericMethod
             && !method.ContainsGenericParameters)
         {
-            effectiveMethodTypeArgs = ImmutableArray.CreateRange<TypeSymbol?>(
-                method.GetGenericArguments().Select(static argument => TypeSymbol.FromClrType(argument)));
+            var closedArguments = method.GetGenericArguments();
+            var mappedArguments = ImmutableArray.CreateBuilder<TypeSymbol?>(closedArguments.Length);
+            foreach (var argument in closedArguments)
+            {
+                mappedArguments.Add(TypeSymbol.FromClrType(argument));
+            }
+
+            effectiveMethodTypeArgs = mappedArguments.MoveToImmutable();
         }
 
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(

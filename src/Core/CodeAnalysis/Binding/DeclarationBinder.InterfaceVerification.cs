@@ -2205,7 +2205,13 @@ internal sealed partial class DeclarationBinder
                 return namedDeconstruction.Fields.Select(f => f.LocalIdentifier.Text).ToArray();
 
             case GuardLetStatementSyntax guardLet:
-                return guardLet.Bindings.Select(b => b.Identifier.Text).ToArray();
+                var names = new string[guardLet.Bindings.Count];
+                for (var i = 0; i < guardLet.Bindings.Count; i++)
+                {
+                    names[i] = guardLet.Bindings[i].Identifier.Text;
+                }
+
+                return names;
 
             case PatternSyntax pattern:
                 var captures = new List<string>();

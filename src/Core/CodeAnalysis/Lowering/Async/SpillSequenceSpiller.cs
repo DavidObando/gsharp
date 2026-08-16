@@ -949,7 +949,10 @@ public static class SpillSequenceSpiller
                     return SpillOneOperand(
                         clrConv,
                         clrConv.Source,
-                        src => new BoundClrConversionCallExpression(null, src, clrConv.Method, clrConv.Type));
+                        src =>
+                        {
+                            return new BoundClrConversionCallExpression(null, src, clrConv.Method, clrConv.Type);
+                        });
                 case BoundClrEventSubscriptionExpression clrEventSub:
                     if (clrEventSub.Receiver == null)
                     {
