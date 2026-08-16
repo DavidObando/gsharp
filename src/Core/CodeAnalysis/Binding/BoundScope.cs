@@ -54,6 +54,8 @@ public sealed class BoundScope
     // Issue #2342: the ambient "current declaring package" (see
     // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
     // of the chain, exactly like anonymousTypeCache above.
+    // Empty string is the AsyncLocal storage sentinel for null; setter and
+    // getter normalize null <-> empty so save/restore preserves the contract.
     private AsyncLocal<string?> currentDeclaringPackageName = new AsyncLocal<string?>();
 
     // Issue #2456 (per-file import scoping / #2395 follow-up): the ambient

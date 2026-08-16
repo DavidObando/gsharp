@@ -35,6 +35,25 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 public class Issue3236NullableLiftedReferenceConversionTests
 {
     [Fact]
+    public void RuntimeEquivalentReferenceNullabilityConversion_ExecutesAsIdentity()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Item { prop Value int32 }
+
+            func Lift(value Item) Item? -> value
+
+            let original = Item{}
+            original.Value = 42
+            let lifted = Lift(original)
+            lifted!!.Value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void CovariantInterfaceLift_LibraryShape_EmitsCleanly()
     {
         // The issue's first repro, on the exact channel that surfaced it:
