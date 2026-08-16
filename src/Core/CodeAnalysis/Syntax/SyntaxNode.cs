@@ -45,7 +45,7 @@ public abstract class SyntaxNode
     /// <c>null</c> means "not computed yet". Cleared by <see cref="InvalidateCachedSpan"/> when a
     /// parser-time mutation replaces a child-bearing property after construction.
     /// </summary>
-    private object? cachedSpan;
+    private SpanBox? cachedSpan;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SyntaxNode"/> class.
@@ -85,13 +85,13 @@ public abstract class SyntaxNode
             // through this property, so the computed span is cached after the first access
             // (issue #1675). The few parser-time mutations of child-bearing properties clear the
             // cache through InvalidateCachedSpan().
-            if (cachedSpan is TextSpan cached)
+            if (cachedSpan != null)
             {
-                return cached;
+                return cachedSpan.Value;
             }
 
             var computed = ComputeSpan();
-            cachedSpan = computed;
+            cachedSpan = new SpanBox(computed);
             return computed;
         }
     }
@@ -360,5 +360,12 @@ public abstract class SyntaxNode
         public ChildAccessorKind Kind { get; }
 
         public Func<SyntaxNode, object> Getter { get; }
+    }
+
+    private sealed class SpanBox
+    {
+        public SpanBox(TextSpan value) => Value = value;
+
+        public TextSpan Value { get; }
     }
 }

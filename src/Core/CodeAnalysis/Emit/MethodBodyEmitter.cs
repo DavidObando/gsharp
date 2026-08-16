@@ -1381,8 +1381,13 @@ internal sealed partial class MethodBodyEmitter
             this.sink = sink;
         }
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (this.entered)
             {
                 return;
@@ -1392,8 +1397,13 @@ internal sealed partial class MethodBodyEmitter
             base.VisitStatement(node);
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             // Post-order: a stackalloc nested inside another spilled
             // stackalloc's count/initializer must be materialised first so the
             // outer materialisation reads it back with an empty stack.
@@ -1421,8 +1431,13 @@ internal sealed partial class MethodBodyEmitter
             this.sink = sink;
         }
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (this.entered)
             {
                 return;
@@ -1432,8 +1447,13 @@ internal sealed partial class MethodBodyEmitter
             base.VisitStatement(node);
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             base.VisitExpression(node);
             if (node is BoundChannelReceiveExpression recv)
             {

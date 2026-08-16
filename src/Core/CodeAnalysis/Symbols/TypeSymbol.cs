@@ -503,7 +503,7 @@ public class TypeSymbol : Symbol
             return false;
         }
 
-        return AnyTypeParameter(type, outerMethodTypeParameters.Contains);
+        return AnyTypeParameter(type, parameter => outerMethodTypeParameters.Contains(parameter));
     }
 
     /// <summary>

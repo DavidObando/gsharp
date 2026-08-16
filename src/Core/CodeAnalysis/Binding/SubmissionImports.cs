@@ -49,6 +49,14 @@ public sealed class SubmissionImports
     public ImmutableArray<SubmissionReference> NewestFirst { get; }
 
     /// <summary>
+    /// Gets the metadata name of a package's synthesized top-level container.
+    /// </summary>
+    /// <param name="packageName">The declaring package.</param>
+    /// <returns>The package-qualified metadata type name.</returns>
+    public static string GetProgramTypeName(string packageName) =>
+        packageName + "." + ProgramTypeName;
+
+    /// <summary>
     /// Creates a <see cref="SubmissionImports"/> over the given prior
     /// submissions.
     /// </summary>
@@ -233,7 +241,10 @@ public sealed class SubmissionImports
     // newest, which made the older cell's declarations unreachable even
     // though the newest-first declaration walk had correctly found them.
     private static bool TryResolveProgramType(ReferenceResolver references, SubmissionReference submission, out Type? programType)
-        => references.TryResolveTypeInAssembly(submission.AssemblyName, submission.PackageName + "." + ProgramTypeName, out programType);
+        => references.TryResolveTypeInAssembly(
+            submission.AssemblyName,
+            GetProgramTypeName(submission.PackageName),
+            out programType);
 }
 
 /// <summary>

@@ -83,7 +83,8 @@ internal sealed partial class ExpressionBinder
         // compilation-wide, not file-scoped) could win over the receiver's
         // own compilation's source type for a static event/field compound
         // assignment, mirroring the BindAccessorExpression read-path bug.
-        if (accessor.LeftPart is NameExpressionSyntax staticLeftName
+        var staticLeftName = accessor.LeftPart as NameExpressionSyntax;
+        if (staticLeftName != null
             && EventReceiverNameCanBindAsType(staticLeftName, eventNameSyntax)
             && scope.TryLookupTypeAlias(staticLeftName.IdentifierToken.Text, out var staticTypeAlias)
             && staticTypeAlias is StructSymbol staticStruct)

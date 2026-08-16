@@ -153,7 +153,7 @@ internal static class MaxStackTracker
             short key = op.Value;
             if (op.Size == 2)
             {
-                key = unchecked((short)(0xFE00 | (op.Value & 0xFF)));
+                key = unchecked((short)(0xFE00 | ((int)op.Value & 0xFF)));
             }
 
             table[key] = new OpCodeInfo(

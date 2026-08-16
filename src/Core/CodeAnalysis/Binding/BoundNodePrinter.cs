@@ -626,7 +626,7 @@ public static class BoundNodePrinter
 
         if (node.Type == TypeSymbol.Bool)
         {
-            writer.WriteKeyword(node.Value is true ? SyntaxKind.TrueKeyword : SyntaxKind.FalseKeyword);
+            writer.WriteKeyword(object.Equals(node.Value, true) ? SyntaxKind.TrueKeyword : SyntaxKind.FalseKeyword);
         }
         else if (node.Type == TypeSymbol.String)
         {

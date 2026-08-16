@@ -766,6 +766,7 @@ internal sealed class PatternBinder
         bool preferTypeNames,
         out BoundPropertyPatternField? boundField)
     {
+        boundField = null;
         var name = syntax.Identifier.Text;
         if (lookupType is StructSymbol structType)
         {
@@ -797,7 +798,6 @@ internal sealed class PatternBinder
 
                     if (property.IsIndexer || property.IsStatic || !property.HasGetter)
                     {
-                        boundField = null;
                         return false;
                     }
 

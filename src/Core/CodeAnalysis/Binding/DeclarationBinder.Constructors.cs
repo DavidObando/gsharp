@@ -347,7 +347,7 @@ internal sealed partial class DeclarationBinder
             }
 
             refKindsBuilder.Add(RefKind.None);
-            var targetType = TypeSymbol.FromClrType(clrParamType);
+            var targetType = ClrNullability.GetParameterTypeSymbol(ctorParams[i]);
             var argLoc = isExpanded && i == ctorParams.Length - 1
                 ? location
                 : argLocation(i);

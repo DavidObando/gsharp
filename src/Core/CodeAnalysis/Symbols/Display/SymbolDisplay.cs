@@ -49,7 +49,7 @@ public static class SymbolDisplay
     /// <returns>The rendered display string.</returns>
     public static string ToDisplayString(Type clrType, SymbolDisplayFormat format)
     {
-        return PartsToString(ToDisplayParts(clrType, format));
+        return PartsToString(ToDisplayParts(clrType: clrType, format: format));
     }
 
     /// <summary>

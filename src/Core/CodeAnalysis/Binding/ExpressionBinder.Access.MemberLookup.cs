@@ -190,8 +190,12 @@ internal sealed partial class ExpressionBinder
             // inner call through the accessor path (which resolves the
             // nested type constructor), then apply the initializer
             // assignments against the constructed instance.
-            case ObjectCreationExpressionSyntax objCreate
-                when objCreate.Target is CallExpressionSyntax innerCall:
+            case ObjectCreationExpressionSyntax objCreate:
+                if (objCreate.Target is not CallExpressionSyntax innerCall)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 var ctorResult = BindAccessorCall(receiver, classSymbol, innerCall);
                 if (ctorResult is BoundErrorExpression)
                 {
@@ -2013,7 +2017,13 @@ internal sealed partial class ExpressionBinder
                     idxPropAnnotWr,
                     resolvedIdxArgsAnnotWr,
                     indexSyntax.Location);
-                return MakeClrIndexAssignment(idxPropAnnotWr, convertedIdxArgsAnnotWr, boundValueAnnotWr, valueTypeAnnotWr);
+                return MakeClrIndexAssignment(
+                    idxPropAnnotWr,
+                    convertedIdxArgsAnnotWr,
+                    boundValueAnnotWr,
+                    valueTypeAnnotWr,
+                    constrainedReceiverTypeParameter: null,
+                    constrainedInterfaceType: null);
             }
         }
         else if ((targetType is ImportedTypeSymbol || targetType is StructSymbol) && targetType.ClrType is System.Type clrTarget)
@@ -2051,7 +2061,13 @@ internal sealed partial class ExpressionBinder
                             ? byRef.PointeeType
                             : TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
                         var refValue = BindValue(pointeeType);
-                        return MakeClrIndexAssignment(idxProp, convertedIdxArgs, refValue, pointeeType);
+                        return MakeClrIndexAssignment(
+                            idxProp,
+                            convertedIdxArgs,
+                            refValue,
+                            pointeeType,
+                            constrainedReceiverTypeParameter: null,
+                            constrainedInterfaceType: null);
                     }
 
                     Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
@@ -2074,7 +2090,13 @@ internal sealed partial class ExpressionBinder
                     ? MapErasedIndexerElementType(imported, idxProp)
                     : ClrNullability.GetPropertyTypeSymbol(idxProp);
                 var boundValue = BindValue(valueType);
-                return MakeClrIndexAssignment(idxProp, convertedIdxArgs, boundValue, valueType);
+                return MakeClrIndexAssignment(
+                    idxProp,
+                    convertedIdxArgs,
+                    boundValue,
+                    valueType,
+                    constrainedReceiverTypeParameter: null,
+                    constrainedInterfaceType: null);
             }
         }
 
@@ -2858,10 +2880,10 @@ internal sealed partial class ExpressionBinder
         {
             ArrayTypeSymbol arr => arr.ElementType,
             SliceTypeSymbol slice => slice.ElementType,
-            ImportedTypeSymbol imp when imp.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => TypeSymbol.FromClrType(clr.GetElementType()),
-            NullabilityAnnotatedTypeSymbol annot when annot.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => annot.GetTypeArgumentSymbolForClrType(clr.GetElementType()),
+            ImportedTypeSymbol imp when imp.ClrType?.IsArray == true && imp.ClrType.GetArrayRank() == 1
+                => TypeSymbol.FromClrType(imp.ClrType.GetElementType()),
+            NullabilityAnnotatedTypeSymbol annot when annot.ClrType?.IsArray == true && annot.ClrType.GetArrayRank() == 1
+                => annot.GetTypeArgumentSymbolForClrType(annot.ClrType.GetElementType()),
             _ => null,
         };
     }
@@ -2994,7 +3016,7 @@ internal sealed partial class ExpressionBinder
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+            src => (BoundExpression)new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
             statements);
 
         var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
@@ -3163,10 +3185,12 @@ internal sealed partial class ExpressionBinder
             if (TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod))
             {
                 var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                Func<BoundExpression, BoundExpression> lengthOf = src =>
+                    new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32);
                 var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
                     target,
                     rangeValue,
-                    src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+                    lengthOf,
                     statements);
 
                 var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
@@ -3464,10 +3488,10 @@ internal sealed partial class ExpressionBinder
             SliceTypeSymbol slice => slice.ElementType,
 
             // Issue #664: CLR T[] arrays (e.g. result of string.Split) are indexable.
-            ImportedTypeSymbol imp when imp.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => TypeSymbol.FromClrType(clr.GetElementType()),
-            NullabilityAnnotatedTypeSymbol annot when annot.ClrType is { IsArray: true } clr && clr.GetArrayRank() == 1
-                => annot.GetTypeArgumentSymbolForClrType(clr.GetElementType()),
+            ImportedTypeSymbol imp when imp.ClrType?.IsArray == true && imp.ClrType.GetArrayRank() == 1
+                => TypeSymbol.FromClrType(imp.ClrType.GetElementType()),
+            NullabilityAnnotatedTypeSymbol annot when annot.ClrType?.IsArray == true && annot.ClrType.GetArrayRank() == 1
+                => annot.GetTypeArgumentSymbolForClrType(annot.ClrType.GetElementType()),
             _ => null,
         };
     }

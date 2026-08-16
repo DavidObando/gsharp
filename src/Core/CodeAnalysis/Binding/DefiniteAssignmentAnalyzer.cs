@@ -1380,8 +1380,13 @@ internal static class DefiniteAssignmentAnalyzer
             this.flowContext = flowContext;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             switch (node)
             {
                 case BoundFunctionLiteralExpression literal:

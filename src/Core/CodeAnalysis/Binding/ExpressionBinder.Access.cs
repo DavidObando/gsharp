@@ -466,10 +466,16 @@ internal sealed partial class ExpressionBinder
                 simpleName = nameHead.IdentifierToken.Text;
                 arity = 0;
                 break;
-            case AccessorExpressionSyntax { LeftPart: IndexExpressionSyntax { Target: NameExpressionSyntax indexNameHead } }:
+            case AccessorExpressionSyntax accessor:
                 // `Type[Args].Member`: a generic type receiver parses as an index
                 // expression (`Mp4Operation[int32]`), not a GenericName, when it
                 // appears as the left part of a member access.
+                if (accessor.LeftPart is not IndexExpressionSyntax index
+                    || index.Target is not NameExpressionSyntax indexNameHead)
+                {
+                    return false;
+                }
+
                 simpleName = indexNameHead.IdentifierToken.Text;
                 arity = 0;
                 break;

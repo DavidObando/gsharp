@@ -608,8 +608,13 @@ internal static class RefStructAsyncLivenessAnalyzer
 
         public bool ContainsAwait { get; private set; }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundVariableExpression variableExpression && interesting.Contains(variableExpression.Variable))
             {
                 Reads.Add(variableExpression.Variable);
@@ -644,8 +649,13 @@ internal static class RefStructAsyncLivenessAnalyzer
             this.diagnostics = diagnostics;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundFunctionLiteralExpression literal)
             {
                 // Issue #2350: a function-literal body is bound but not

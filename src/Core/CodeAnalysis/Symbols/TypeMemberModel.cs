@@ -58,7 +58,11 @@ public static class TypeMemberModel
             return members.ToImmutable();
         }
 
-        members.AddRange(type.Fields);
+        foreach (var field in type.Fields)
+        {
+            members.Add(field);
+        }
+
         foreach (var property in type.Properties)
         {
             if (!property.IsStatic && !property.IsIndexer && property.BackingField != null)
@@ -213,18 +217,19 @@ public static class TypeMemberModel
     /// <returns>True if found.</returns>
     public static bool TryGetField(TypeSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
+        field = null;
         if (type is StructSymbol structSymbol)
         {
             for (var c = structSymbol; c != null; c = c.BaseClass)
             {
-                if (c.TryGetField(name, out field))
+                if (c.TryGetField(name, out var foundField))
                 {
+                    field = foundField;
                     return true;
                 }
             }
         }
 
-        field = null;
         return false;
     }
 
@@ -246,23 +251,27 @@ public static class TypeMemberModel
     /// <returns>True if found.</returns>
     public static bool TryGetFieldIncludingInherited(TypeSymbol type, string name, MemberQuery query, [NotNullWhen(true)] out FieldSymbol? field, [NotNullWhen(true)] out StructSymbol? declaringType)
     {
+        field = null;
+        declaringType = null;
         if ((query.Kinds & MemberKinds.Field) != 0 && type is StructSymbol structSymbol)
         {
             for (var c = structSymbol; c != null; c = c.BaseClass)
             {
-                if (query.IncludeInstance && c.TryGetField(name, out field))
+                if (query.IncludeInstance && c.TryGetField(name, out var foundInstanceField))
                 {
+                    field = foundInstanceField;
                     declaringType = c;
                     return true;
                 }
 
-                if (query.IncludeStatic && c.TryGetStaticField(name, out field))
+                if (query.IncludeStatic && c.TryGetStaticField(name, out var foundStaticField))
                 {
-                    if (!ReferenceEquals(c, structSymbol) && field.Accessibility == Accessibility.Private)
+                    if (!ReferenceEquals(c, structSymbol) && foundStaticField.Accessibility == Accessibility.Private)
                     {
                         break;
                     }
 
+                    field = foundStaticField;
                     declaringType = c;
                     return true;
                 }
@@ -274,8 +283,6 @@ public static class TypeMemberModel
             }
         }
 
-        field = null;
-        declaringType = null;
         return false;
     }
 

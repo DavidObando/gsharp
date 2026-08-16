@@ -199,7 +199,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                 continue;
             }
 
-            var value = part.Value;
+            var value = Invariant.Required(
+                part.Value,
+                "a formatted interpolated-string part has a bound value");
             var byRefLikeToString = TypeSymbol.IsByRefLike(value.Type) ? FindByRefLikeToString(value.Type) : null;
             if (byRefLikeToString != null)
             {

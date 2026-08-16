@@ -681,8 +681,9 @@ internal static class ExternalClrOverrideResolver
         return typeArguments.MoveToImmutable();
     }
 
-    private static IEnumerable<MethodInfo> EnumerateMethods(Type? baseType, string name)
+    private static List<MethodInfo> EnumerateMethods(Type? baseType, string name)
     {
+        var result = new List<MethodInfo>();
         for (var current = baseType; current != null; current = current.BaseType)
         {
             MethodInfo[] methods;
@@ -699,14 +700,17 @@ internal static class ExternalClrOverrideResolver
             {
                 if (string.Equals(method.Name, name, StringComparison.Ordinal))
                 {
-                    yield return method;
+                    result.Add(method);
                 }
             }
         }
+
+        return result;
     }
 
-    private static IEnumerable<PropertyInfo> EnumerateProperties(Type? baseType, string name)
+    private static List<PropertyInfo> EnumerateProperties(Type? baseType, string name)
     {
+        var result = new List<PropertyInfo>();
         for (var current = baseType; current != null; current = current.BaseType)
         {
             PropertyInfo[] properties;
@@ -723,14 +727,17 @@ internal static class ExternalClrOverrideResolver
             {
                 if (string.Equals(property.Name, name, StringComparison.Ordinal))
                 {
-                    yield return property;
+                    result.Add(property);
                 }
             }
         }
+
+        return result;
     }
 
-    private static IEnumerable<EventInfo> EnumerateEvents(Type? baseType, string name)
+    private static List<EventInfo> EnumerateEvents(Type? baseType, string name)
     {
+        var result = new List<EventInfo>();
         for (var current = baseType; current != null; current = current.BaseType)
         {
             EventInfo[] events;
@@ -747,10 +754,12 @@ internal static class ExternalClrOverrideResolver
             {
                 if (string.Equals(eventInfo.Name, name, StringComparison.Ordinal))
                 {
-                    yield return eventInfo;
+                    result.Add(eventInfo);
                 }
             }
         }
+
+        return result;
     }
 
     private static bool ParametersMatch(

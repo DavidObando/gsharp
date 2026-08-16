@@ -1906,14 +1906,16 @@ internal sealed class ReflectionMetadataEmitter
                 // is what lets EmitExplicitInterfaceEventMethodImpls resolve
                 // the interface-side MethodImpl target token for an explicit
                 // event implementation (`event (IFoo) Changed T`).
-                if (ev.AddMethodSymbol != null)
+                var addMethodSymbol = ev.AddMethodSymbol;
+                if (addMethodSymbol != null)
                 {
-                    this.cache.MethodHandles[ev.AddMethodSymbol] = addHandle;
+                    this.cache.MethodHandles[addMethodSymbol] = addHandle;
                 }
 
-                if (ev.RemoveMethodSymbol != null)
+                var removeMethodSymbol = ev.RemoveMethodSymbol;
+                if (removeMethodSymbol != null)
                 {
-                    this.cache.MethodHandles[ev.RemoveMethodSymbol] = removeHandle;
+                    this.cache.MethodHandles[removeMethodSymbol] = removeHandle;
                 }
 
                 if (ev.RaiseMethodSymbol != null && raiseHandle.HasValue)
@@ -4032,12 +4034,12 @@ internal sealed class ReflectionMetadataEmitter
         this.assemblyAttrs.EmitUserModuleAttributes(moduleHandle);
 
         var assemblyHandle = this.emitCtx.Metadata.AddAssembly(
-            name: this.emitCtx.Metadata.GetOrAddString(assemblyName),
-            version: this.assemblyAttrs.ParseAssemblyVersion(),
-            culture: default(StringHandle),
-            publicKey: default(BlobHandle),
-            flags: 0,
-            hashAlgorithm: AssemblyHashAlgorithm.Sha1);
+            this.emitCtx.Metadata.GetOrAddString(assemblyName),
+            this.assemblyAttrs.ParseAssemblyVersion(),
+            default(StringHandle),
+            default(BlobHandle),
+            (AssemblyFlags)0,
+            AssemblyHashAlgorithm.Sha1);
 
         if (this.emitCtx.MetadataOnly)
         {

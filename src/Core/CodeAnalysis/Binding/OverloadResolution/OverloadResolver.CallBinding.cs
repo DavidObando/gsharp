@@ -1645,27 +1645,30 @@ internal sealed partial class OverloadResolver
             // literal would materialise as a narrower-returning delegate flowing
             // into a wider delegate slot (unverifiable IL).
             if (!(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
-                && tryGetFunctionLiteral(argument, out var widenLiteralArg)
-                && widenLiteralArg.FunctionType is FunctionTypeSymbol widenLiteralFnType
-                && widenLiteralFnType.ReturnType != TypeSymbol.Void
-                && widenLiteralFnType.ReturnType != TypeSymbol.Error
-                && expectedType is TypeSymbol widenExpectedType
-                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(widenExpectedType, out var widenTargetFn)
-                && widenTargetFn != null
-                && widenTargetFn.Arity == widenLiteralFnType.Arity
-                && widenTargetFn.ReturnType != TypeSymbol.Void
-                && widenTargetFn.ReturnType != TypeSymbol.Error
-                && !ReferenceEquals(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType)
-                && Conversion.Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit)
+                && tryGetFunctionLiteral(argument, out var widenLiteralArg))
             {
-                var widenLoc = i < parameterSyntax.Length
-                    ? Invariant.Required(parameterSyntax[i], "a widened lambda argument has source syntax").Location
-                    : syntax.Identifier.Location;
-                boundArguments[i] = conversions.BindConversion(
-                    widenLoc,
-                    argument,
-                    Invariant.Required(expectedType, "a widened lambda argument has a target type"));
-                continue;
+                var widenLiteralFnType = widenLiteralArg.FunctionType as FunctionTypeSymbol;
+                if (widenLiteralFnType != null
+                    && widenLiteralFnType.ReturnType != TypeSymbol.Void
+                    && widenLiteralFnType.ReturnType != TypeSymbol.Error
+                    && expectedType != null
+                    && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var widenTargetFn)
+                    && widenTargetFn != null
+                    && widenTargetFn.Arity == widenLiteralFnType.Arity
+                    && widenTargetFn.ReturnType != TypeSymbol.Void
+                    && widenTargetFn.ReturnType != TypeSymbol.Error
+                    && !ReferenceEquals(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType)
+                    && Conversion.Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit)
+                {
+                    var widenLoc = i < parameterSyntax.Length
+                        ? Invariant.Required(parameterSyntax[i], "a widened lambda argument has source syntax").Location
+                        : syntax.Identifier.Location;
+                    boundArguments[i] = conversions.BindConversion(
+                        widenLoc,
+                        argument,
+                        expectedType);
+                    continue;
+                }
             }
 
             // ADR-0055 Tier 4 (#369): an interpolated-string argument bound

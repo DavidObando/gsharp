@@ -291,6 +291,89 @@ public class Issue3394InlineOutTupleBindingTests
     }
 
     [Fact]
+    public void QualifiedPrivateNestedTypeConstruction_AllowsTrailingInstanceCall()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Rewriter {}
+
+            class Outer {
+                private open class Rewriter {
+                    func value() int32 -> 42
+                }
+
+                shared {
+                    func make() int32 -> Outer.Rewriter().value()
+                }
+            }
+
+            Outer.make()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ImportedOptionalNullParameter_IsReferenceNullable()
+    {
+        var parameter = typeof(OptionalNullFixture)
+            .GetMethod(nameof(OptionalNullFixture.Accept))!
+            .GetParameters()[0];
+
+        Assert.IsType<NullableTypeSymbol>(ClrNullability.GetParameterTypeSymbol(parameter));
+    }
+
+    [Fact]
+    public void OpenOverride_RemainsOverridable()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base {
+                open func Value() int32 -> 1
+            }
+
+            open class Middle : Base {
+                open override func Value() int32 -> 2
+            }
+
+            class Derived : Middle {
+                override func Value() int32 -> 3
+            }
+
+            Derived().Value()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void NestedPrivateType_CanOverrideInheritedOpenMethod()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base {
+                open func Value() int32 -> 1
+            }
+
+            open class Middle : Base {}
+
+            class Outer {
+                private class Derived : Middle {
+                    override func Value() int32 -> 3
+                }
+
+                shared {
+                    func Run() int32 -> Outer.Derived().Value()
+                }
+            }
+
+            Outer.Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
     public void ImportedOverloadRanking_UsesBetterUserDefinedConversionTarget()
     {
         var result = EmittedOracle.Evaluate("""
@@ -829,4 +912,10 @@ public class Issue3394InlineOutTupleBindingTests
         Assert.Empty(result.Diagnostics);
     }
 
+    private static class OptionalNullFixture
+    {
+        public static void Accept(string value = null)
+        {
+        }
+    }
 }

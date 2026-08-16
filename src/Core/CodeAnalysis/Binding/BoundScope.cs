@@ -62,8 +62,8 @@ public sealed class BoundScope
     // single member body, mirroring currentDeclaringPackageName exactly.
     // Import enumeration consults this to expose only imports declared in the
     // same file as the reference being resolved, plus implicit imports.
-    private AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?> currentReferencingSyntaxTree =
-        new AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?>();
+    private AsyncLocal<ReferencingSyntaxTreeState?> currentReferencingSyntaxTree =
+        new AsyncLocal<ReferencingSyntaxTreeState?>();
 
     // Issue #2455: the ambient "qualified construction package hint" (see
     // SetQualifiedConstructionPackageHint), set only while re-binding the
@@ -735,11 +735,12 @@ public sealed class BoundScope
     /// hoist.
     /// </summary>
     /// <returns>The distinct imported static-import CLR types, in import order.</returns>
-    public IEnumerable<System.Type> EnumerateStaticImportClrTypes()
+    public List<System.Type> EnumerateStaticImportClrTypes()
     {
+        var result = new List<System.Type>();
         if (References == null)
         {
-            yield break;
+            return result;
         }
 
         System.Collections.Generic.HashSet<System.Type>? seen = null;
@@ -753,7 +754,7 @@ public sealed class BoundScope
             if (!References.TryResolveType(import.Target, out var type))
             {
                 References.TryResolveType(
-                    import.Target + "." + SubmissionImports.ProgramTypeName,
+                    SubmissionImports.GetProgramTypeName(import.Target),
                     out type);
             }
 
@@ -762,10 +763,12 @@ public sealed class BoundScope
                 seen ??= new System.Collections.Generic.HashSet<System.Type>();
                 if (seen.Add(type))
                 {
-                    yield return type;
+                    result.Add(type);
                 }
             }
         }
+
+        return result;
     }
 
     /// <summary>
@@ -1438,8 +1441,9 @@ public sealed class BoundScope
             return Parent.SetCurrentDeclaringPackage(packageName);
         }
 
-        var previous = currentDeclaringPackageName.Value;
-        currentDeclaringPackageName.Value = packageName;
+        var stored = currentDeclaringPackageName.Value;
+        var previous = string.IsNullOrEmpty(stored) ? null : stored;
+        currentDeclaringPackageName.Value = packageName ?? string.Empty;
         return previous;
     }
 
@@ -1467,8 +1471,8 @@ public sealed class BoundScope
             return Parent.SetCurrentReferencingSyntaxTree(tree);
         }
 
-        var previous = currentReferencingSyntaxTree.Value;
-        currentReferencingSyntaxTree.Value = tree;
+        var previous = currentReferencingSyntaxTree.Value?.Tree;
+        currentReferencingSyntaxTree.Value = new ReferencingSyntaxTreeState(tree);
         return previous;
     }
 
@@ -1515,8 +1519,9 @@ public sealed class BoundScope
             return Parent.SetQualifiedConstructionPackageHint(packageName);
         }
 
-        var previous = qualifiedConstructionPackageHint.Value;
-        qualifiedConstructionPackageHint.Value = packageName;
+        var stored = qualifiedConstructionPackageHint.Value;
+        var previous = string.IsNullOrEmpty(stored) ? null : stored;
+        qualifiedConstructionPackageHint.Value = packageName ?? string.Empty;
         return previous;
     }
 
@@ -1526,7 +1531,15 @@ public sealed class BoundScope
     /// none is set.
     /// </summary>
     private string? GetCurrentDeclaringPackage()
-        => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName.Value;
+    {
+        if (Parent != null)
+        {
+            return Parent.GetCurrentDeclaringPackage();
+        }
+
+        var packageName = currentDeclaringPackageName.Value;
+        return string.IsNullOrEmpty(packageName) ? null : packageName;
+    }
 
     /// <summary>
     /// Issue #2456: gets the ambient "current referencing syntax tree" set by
@@ -1535,7 +1548,7 @@ public sealed class BoundScope
     /// import-based disambiguation this fix adds simply does not fire).
     /// </summary>
     private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? GetCurrentReferencingSyntaxTree()
-        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree.Value;
+        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree.Value?.Tree;
 
     /// <summary>
     /// Issue #2455: gets the ambient qualified-construction package hint set
@@ -1543,7 +1556,15 @@ public sealed class BoundScope
     /// <see langword="null"/> when none is set.
     /// </summary>
     private string? GetQualifiedConstructionPackageHint()
-        => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint.Value;
+    {
+        if (Parent != null)
+        {
+            return Parent.GetQualifiedConstructionPackageHint();
+        }
+
+        var packageName = qualifiedConstructionPackageHint.Value;
+        return string.IsNullOrEmpty(packageName) ? null : packageName;
+    }
 
     /// <summary>
     /// Issue #2455: tries to resolve (<paramref name="name"/>, <paramref name="arity"/>)
@@ -1645,15 +1666,17 @@ public sealed class BoundScope
     /// </summary>
     private bool TryGetAliasDeclaringPackageInChain(string key, [NotNullWhen(true)] out string? declaringPackageName)
     {
+        declaringPackageName = null;
         for (var s = this; s != null; s = s.Parent)
         {
-            if (s.aliasDeclaringPackages != null && s.aliasDeclaringPackages.TryGetValue(key, out declaringPackageName))
+            if (s.aliasDeclaringPackages != null
+                && s.aliasDeclaringPackages.TryGetValue(key, out var foundPackage))
             {
+                declaringPackageName = foundPackage;
                 return true;
             }
         }
 
-        declaringPackageName = null;
         return false;
     }
 
@@ -1678,15 +1701,16 @@ public sealed class BoundScope
     /// </summary>
     private bool TryGetTypeAliasInChain(string key, [NotNullWhen(true)] out TypeSymbol? value)
     {
+        value = null;
         for (var s = this; s != null; s = s.Parent)
         {
-            if (s.typeAliases != null && s.typeAliases.TryGetValue(key, out value))
+            if (s.typeAliases != null && s.typeAliases.TryGetValue(key, out var foundValue))
             {
+                value = foundValue;
                 return true;
             }
         }
 
-        value = null;
         return false;
     }
 
@@ -1695,8 +1719,9 @@ public sealed class BoundScope
     /// scope first, yielding each key only once (the nearest-scope value wins,
     /// matching <see cref="TryGetTypeAliasInChain"/>).
     /// </summary>
-    private IEnumerable<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
+    private List<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
     {
+        var result = new List<KeyValuePair<string, TypeSymbol>>();
         var seen = new HashSet<string>();
         for (var s = this; s != null; s = s.Parent)
         {
@@ -1709,10 +1734,12 @@ public sealed class BoundScope
             {
                 if (seen.Add(pair.Key))
                 {
-                    yield return pair;
+                    result.Add(pair);
                 }
             }
         }
+
+        return result;
     }
 
     /// <summary>
@@ -2805,4 +2832,14 @@ public sealed class BoundScope
         EnumSymbol e => e.Accessibility == Accessibility.Private,
         _ => false,
     };
+
+    private sealed class ReferencingSyntaxTreeState
+    {
+        public ReferencingSyntaxTreeState(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? tree)
+        {
+            Tree = tree;
+        }
+
+        public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? Tree { get; }
+    }
 }

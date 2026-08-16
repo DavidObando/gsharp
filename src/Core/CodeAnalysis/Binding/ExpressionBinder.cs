@@ -1082,7 +1082,10 @@ internal sealed partial class ExpressionBinder
         // StatementBinder.TryClassifyNilGuard.
         if (SmartCastStability.TryClassifyNilGuardLeaf(condition, restrictBareVariableToLocalsAndParams: true, referenceNullableOnly: true, out var nilTarget, out var nilUnderlying, out var nonNilWhenTrue))
         {
-            var nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [nilTarget] = nilUnderlying };
+            var nonNilFrame = new Dictionary<AccessPath, TypeSymbol>
+            {
+                [nilTarget] = Invariant.Required(nilUnderlying, "a classified nil guard has an underlying type"),
+            };
             return nonNilWhenTrue ? (nonNilFrame, null) : (null, nonNilFrame);
         }
 

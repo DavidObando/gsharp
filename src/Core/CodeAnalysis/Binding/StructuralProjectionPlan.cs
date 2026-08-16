@@ -163,7 +163,7 @@ internal sealed class StructuralProjectionSourceMember
 
 internal static class StructuralProjectionPlanner
 {
-    private const BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
+    private static readonly BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
 
     public static bool CanProject(TypeSymbol? source, TypeSymbol? target)
         => TryCreate(source, target, strict: true, explicitMemberNames: null, out _, out _);

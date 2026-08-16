@@ -1448,8 +1448,10 @@ internal sealed partial class OverloadResolver
 
             var specializedTarget = candidate.Type switch
             {
-                SequenceTypeSymbol { ElementType: NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target } } => target,
-                AsyncSequenceTypeSymbol { ElementType: NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target } } => target,
+                SequenceTypeSymbol sequence when sequence.ElementType is NullableTypeSymbol
+                    => ((NullableTypeSymbol)sequence.ElementType).UnderlyingType as TypeParameterSymbol,
+                AsyncSequenceTypeSymbol sequence when sequence.ElementType is NullableTypeSymbol
+                    => ((NullableTypeSymbol)sequence.ElementType).UnderlyingType as TypeParameterSymbol,
                 _ => null,
             };
             if (specializedTarget == null)

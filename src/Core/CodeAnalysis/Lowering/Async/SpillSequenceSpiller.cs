@@ -170,8 +170,13 @@ public static class SpillSequenceSpiller
 
         public bool Found { get; private set; }
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (blockExpressionDepth > 0
                 && node.Kind is BoundNodeKind.GotoStatement
                     or BoundNodeKind.ConditionalGotoStatement

@@ -978,8 +978,8 @@ internal sealed partial class StatementBinder
     private class AssignedRootsCollector : BoundTreeWalker
     {
         private readonly Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing;
-        private readonly HashSet<(VariableSymbol? Receiver, FieldSymbol Field)> assignedFields = new();
-        private readonly HashSet<(VariableSymbol? Receiver, PropertySymbol Property)> assignedProperties = new();
+        private readonly HashSet<AssignedField> assignedFields = new();
+        private readonly HashSet<AssignedProperty> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
 
         public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
@@ -993,13 +993,13 @@ internal sealed partial class StatementBinder
         {
             return Roots.Contains(root)
                 || (root is ImplicitFieldVariableSymbol field
-                    && assignedFields.Contains((field.Receiver, field.Field)))
+                    && assignedFields.Contains(new AssignedField(field.Receiver, field.Field)))
                 || (root is ImplicitStaticFieldVariableSymbol staticField
-                    && assignedFields.Contains((null, staticField.Field)))
+                    && assignedFields.Contains(new AssignedField(null, staticField.Field)))
                 || (root is ImplicitPropertyVariableSymbol property
-                    && assignedProperties.Contains((property.Receiver, property.Property)))
+                    && assignedProperties.Contains(new AssignedProperty(property.Receiver, property.Property)))
                 || (root is ImplicitStaticPropertyVariableSymbol staticProperty
-                    && assignedProperties.Contains((null, staticProperty.Property)));
+                    && assignedProperties.Contains(new AssignedProperty(null, staticProperty.Property)));
         }
 
         public bool InvalidatesNarrowing(VariableSymbol root, TypeSymbol narrowedType)
@@ -1015,8 +1015,13 @@ internal sealed partial class StatementBinder
                 || rootAssignments.Any(assignment => !assignmentPreservesNarrowing(assignment, narrowedType));
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundFunctionLiteralExpression literal && literal.Body != null)
             {
                 VisitStatement(literal.Body);
@@ -1046,7 +1051,7 @@ internal sealed partial class StatementBinder
         {
             if (node.ReceiverExpression == null)
             {
-                assignedFields.Add((node.Receiver, node.Field));
+                assignedFields.Add(new AssignedField(node.Receiver, node.Field));
             }
 
             base.VisitFieldAssignmentExpression(node);
@@ -1057,11 +1062,15 @@ internal sealed partial class StatementBinder
             var receiver = (node.Receiver as BoundVariableExpression)?.Variable;
             if (node.Receiver == null || receiver != null)
             {
-                assignedProperties.Add((receiver, node.Property));
+                assignedProperties.Add(new AssignedProperty(receiver, node.Property));
             }
 
             base.VisitPropertyAssignmentExpression(node);
         }
+
+        private readonly record struct AssignedField(VariableSymbol? Receiver, FieldSymbol Field);
+
+        private readonly record struct AssignedProperty(VariableSymbol? Receiver, PropertySymbol Property);
     }
 
     private sealed class LoopBackEdgeMutationCollector : AssignedRootsCollector
@@ -1073,8 +1082,13 @@ internal sealed partial class StatementBinder
 
         public bool MayMutateMemberPaths { get; private set; }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (IsPotentiallyMutatingMemberPathExpression(node.Kind))
             {
                 MayMutateMemberPaths = true;

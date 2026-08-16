@@ -121,6 +121,21 @@ internal sealed partial class ExpressionBinder
                 return overloads.BindConstructorCallExpression(nestedCall, nestedClassDef);
             }
 
+            if (syntax.RightPart is AccessorExpressionSyntax nestedAccess
+                && nestedAccess.LeftPart is CallExpressionSyntax nestedAccessCall
+                && scope.TryLookupNestedTypeAlias(
+                    enclosingAliasType,
+                    headIdentifier,
+                    -1,
+                    out var nestedAccessType)
+                && nestedAccessType is StructSymbol nestedAccessClassDef)
+            {
+                var constructed = overloads.BindConstructorCallExpression(nestedAccessCall, nestedAccessClassDef);
+                return constructed is BoundErrorExpression
+                    ? constructed
+                    : BindAccessorStep(constructed, classSymbol: null, nestedAccess.RightPart);
+            }
+
             // Issue #1174: when a top-level type shares the nested type's simple
             // name, re-binding the right part by simple name would resolve to the
             // top-level homonym (which holds the simple key). Resolve the nested
@@ -1512,7 +1527,12 @@ internal sealed partial class ExpressionBinder
 
             switch (currentRight)
             {
-                case AccessorExpressionSyntax nested when nested.LeftPart is NameExpressionSyntax leftName:
+                case AccessorExpressionSyntax nested:
+                    if (nested.LeftPart is not NameExpressionSyntax leftName)
+                    {
+                        return false;
+                    }
+
                     typeNameSyntax = leftName;
                     remainder = nested.RightPart;
                     hasMoreChain = true;
@@ -1564,7 +1584,14 @@ internal sealed partial class ExpressionBinder
     {
         switch (segment)
         {
-            case IndexExpressionSyntax index when !index.IsNullConditional && index.Target is NameExpressionSyntax indexName:
+            case IndexExpressionSyntax index:
+                if (index.IsNullConditional || index.Target is not NameExpressionSyntax indexName)
+                {
+                    name = string.Empty;
+                    arity = 0;
+                    return false;
+                }
+
                 name = indexName.IdentifierToken.Text;
                 arity = index.Indices.Count;
                 return true;

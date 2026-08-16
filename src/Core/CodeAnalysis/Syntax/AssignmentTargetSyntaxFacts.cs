@@ -158,6 +158,9 @@ internal static class AssignmentTargetSyntaxFacts
         [MaybeNullWhen(false)] out SyntaxToken dotToken,
         [MaybeNullWhen(false)] out SyntaxToken fieldIdentifier)
     {
+        receiver = null;
+        dotToken = default;
+        fieldIdentifier = default;
         if (expression is AccessorExpressionSyntax accessor)
         {
             if (accessor.RightPart is NameExpressionSyntax name)
@@ -172,21 +175,20 @@ internal static class AssignmentTargetSyntaxFacts
                 && TryLiftTrailingMemberAccess(
                     accessor.RightPart,
                     out var innerReceiver,
-                    out dotToken,
-                    out fieldIdentifier))
+                    out var innerDotToken,
+                    out var innerFieldIdentifier))
             {
                 receiver = new AccessorExpressionSyntax(
                     expression.SyntaxTree,
                     accessor.LeftPart,
                     accessor.DotToken,
                     innerReceiver);
+                dotToken = innerDotToken;
+                fieldIdentifier = innerFieldIdentifier;
                 return true;
             }
         }
 
-        receiver = null;
-        dotToken = default;
-        fieldIdentifier = default;
         return false;
     }
 }

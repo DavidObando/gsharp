@@ -296,11 +296,11 @@ public sealed class Conversion
             }
 
             var nativeIntPartner = to is PointerTypeSymbol ? from : to;
-            if (nativeIntPartner is { } nonNullNativeIntPartner
-                && (nonNullNativeIntPartner == TypeSymbol.NInt || nonNullNativeIntPartner == TypeSymbol.NUInt
-                || nonNullNativeIntPartner == TypeSymbol.Int32 || nonNullNativeIntPartner == TypeSymbol.UInt32
-                || nonNullNativeIntPartner == TypeSymbol.Int64 || nonNullNativeIntPartner == TypeSymbol.UInt64
-                || TypeSymbol.IsLegalPointeeType(nonNullNativeIntPartner)))
+            if (nativeIntPartner != null
+                && (nativeIntPartner == TypeSymbol.NInt || nativeIntPartner == TypeSymbol.NUInt
+                || nativeIntPartner == TypeSymbol.Int32 || nativeIntPartner == TypeSymbol.UInt32
+                || nativeIntPartner == TypeSymbol.Int64 || nativeIntPartner == TypeSymbol.UInt64
+                || TypeSymbol.IsLegalPointeeType(nativeIntPartner)))
             {
                 return Conversion.Explicit;
             }

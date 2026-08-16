@@ -170,6 +170,27 @@ internal sealed partial class StatementBinder
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
+        static void RestoreDictionary<TKey, TValue>(
+            Dictionary<TKey, TValue> destination,
+            KeyValuePair<TKey, TValue>[] snapshot)
+            where TKey : notnull
+        {
+            destination.Clear();
+            foreach (var entry in snapshot)
+            {
+                destination.Add(entry.Key, entry.Value);
+            }
+        }
+
+        static void RestoreSet<T>(HashSet<T> destination, T[] snapshot)
+        {
+            destination.Clear();
+            foreach (var item in snapshot)
+            {
+                destination.Add(item);
+            }
+        }
+
         // Issue #2943: first bind supplies exact assignment symbols and lowered
         // control flow. If a write can reach the back-edge, restore speculative
         // state, remove only inherited narrowings, and bind the body again.
@@ -227,27 +248,6 @@ internal sealed partial class StatementBinder
             finally
             {
                 binderCtx.LoopStack.Pop();
-            }
-        }
-
-        static void RestoreDictionary<TKey, TValue>(
-            Dictionary<TKey, TValue> destination,
-            KeyValuePair<TKey, TValue>[] snapshot)
-            where TKey : notnull
-        {
-            destination.Clear();
-            foreach (var entry in snapshot)
-            {
-                destination.Add(entry.Key, entry.Value);
-            }
-        }
-
-        static void RestoreSet<T>(HashSet<T> destination, T[] snapshot)
-        {
-            destination.Clear();
-            foreach (var item in snapshot)
-            {
-                destination.Add(item);
             }
         }
     }

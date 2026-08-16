@@ -1220,6 +1220,8 @@ public sealed class Binder
                             binder.scope.SetCurrentDeclaringPackage(packageByTree[tree]?.Name);
                             binder.scope.SetCurrentReferencingSyntaxTree(tree);
                         }
+
+                        return;
                     }));
             }
             finally
@@ -1697,7 +1699,7 @@ public sealed class Binder
 
                     AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
 
-                    return (lowered, binder.Diagnostics.ToImmutableArray());
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 }));
 
                 functionBodies.Add(function, loweredBody);
@@ -1746,7 +1748,7 @@ public sealed class Binder
 
                     AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
 
-                    return (lowered, binder.Diagnostics.ToImmutableArray());
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 }));
 
                 functionBodies.Add(method, loweredBody);
@@ -1900,7 +1902,7 @@ public sealed class Binder
 
                     var lowered = Lowerer.Lower(ctorBody, structSym);
                     AnalyzeFunctionBody(lowered, ctor.Function, ctorBinder.Diagnostics);
-                    return (lowered, ctorBinder.Diagnostics.ToImmutableArray());
+                    return new BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray());
                 }));
                 functionBodies.Add(ctor.Function, ctorLoweredBody);
             }
@@ -2167,7 +2169,7 @@ public sealed class Binder
         FunctionSymbol member,
         SyntaxNode bodySyntax,
         ImmutableArray<Diagnostic>.Builder diagnostics,
-        Func<(BoundBlockStatement Body, ImmutableArray<Diagnostic> Diagnostics)> bindAndLower)
+        Func<BodyBindResult> bindAndLower)
     {
         var isDirty = dirtyTrees != null
             && bodySyntax?.SyntaxTree != null
@@ -2182,14 +2184,14 @@ public sealed class Binder
             return reusedBody;
         }
 
-        var (body, bodyDiagnostics) = bindAndLower();
-        AppendBodyDiagnostics(diagnostics, bodyDiagnostics, member);
+        var result = bindAndLower();
+        AppendBodyDiagnostics(diagnostics, result.Diagnostics, member);
 
         // bodySyntax is this method's own non-nullable parameter, never
         // reassigned above (the `bodySyntax?.SyntaxTree` read a few lines up
         // is a redundant null-conditional, not a narrowing of bodySyntax).
-        cache?.Store(member, bodySyntax!, body, bodyDiagnostics);
-        return body;
+        cache?.Store(member, bodySyntax!, result.Body, result.Diagnostics);
+        return result.Body;
     }
 
     private static void AppendBodyDiagnostics(
@@ -2289,7 +2291,7 @@ public sealed class Binder
 
             AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
 
-            return (lowered, binder.Diagnostics.ToImmutableArray());
+            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
         }));
 
         functionBodies.Add(method, loweredBody);
@@ -2337,7 +2339,7 @@ public sealed class Binder
 
             AnalyzeFunctionBody(lowered, accessor, binder.Diagnostics);
 
-            return (lowered, binder.Diagnostics.ToImmutableArray());
+            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
         }));
 
         functionBodies.Add(accessor, loweredBody);
@@ -2389,7 +2391,7 @@ public sealed class Binder
 
             AnalyzeFunctionBody(lowered, member, binder.Diagnostics);
 
-            return (lowered, binder.Diagnostics.ToImmutableArray());
+            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
         }));
 
         functionBodies.Add(member, loweredBody);
@@ -2433,7 +2435,7 @@ public sealed class Binder
 
             AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
 
-            return (lowered, binder.Diagnostics.ToImmutableArray());
+            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
         }));
 
         functionBodies.Add(method, loweredBody);
@@ -6181,7 +6183,18 @@ public sealed class Binder
             ?? ImmutableArray<TypeSymbol>.Empty;
         var constraintClrArgs = constraintClr.GetGenericArguments();
 
-        foreach (var candidate in EnumerateSelfAndInterfaces(typeArgClr))
+        var candidates = new List<Type>();
+        if (typeArgClr.IsInterface)
+        {
+            candidates.Add(typeArgClr);
+        }
+
+        foreach (var interfaceType in typeArgClr.GetInterfaces())
+        {
+            candidates.Add(interfaceType);
+        }
+
+        foreach (var candidate in candidates)
         {
             if (!candidate.IsGenericType
                 || !string.Equals(candidate.GetGenericTypeDefinition().FullName, openDefName, StringComparison.Ordinal))
@@ -6201,19 +6214,6 @@ public sealed class Binder
         }
 
         return false;
-    }
-
-    private static IEnumerable<Type> EnumerateSelfAndInterfaces(Type type)
-    {
-        if (type.IsInterface)
-        {
-            yield return type;
-        }
-
-        foreach (var i in type.GetInterfaces())
-        {
-            yield return i;
-        }
     }
 
     private static bool GenericConstraintArgumentsMatch(
@@ -6955,5 +6955,10 @@ public sealed class Binder
             symbol.SetDocumentation(doc);
         }
     }
+
+    private readonly record struct BodyBindResult(
+        BoundBlockStatement Body,
+        ImmutableArray<Diagnostic> Diagnostics);
+
 #pragma warning restore SA1202
 }

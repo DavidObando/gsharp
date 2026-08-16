@@ -231,4 +231,45 @@ namespace Demo
             scope.Diagnostics,
             diagnostic => diagnostic.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
     }
+
+    [Fact]
+    public void DeconstructedLocals_PassedByRef_AreMutable()
+    {
+        const string source = """
+            namespace Demo
+            {
+                public static class C
+                {
+                    private static (int?, int?) Pair() => (null, null);
+
+                    private static void Touch(ref int? value)
+                    {
+                    }
+
+                    public static void M()
+                    {
+                        var (left, right) = Pair();
+                        Touch(ref left);
+                        Touch(ref right);
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("var left", rendered, StringComparison.Ordinal);
+        Assert.Contains("var right", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
 }

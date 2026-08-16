@@ -1987,11 +1987,34 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))
                 {
-                    // `var (a, b) = e` → `let (a, b) = e` (spec §Tuples).
+                    if (binding == BindingKind.Var)
+                    {
+                        var temps = names.Select(_ => $"__decon{this.state.DeconCounter++}").ToList();
+                        var statements = new List<GStatement>
+                        {
+                            new TupleDeconstructionStatement(
+                                BindingKind.Let,
+                                temps,
+                                this.TranslateExpression(assignment.Right)),
+                        };
+                        for (var i = 0; i < names.Count; i++)
+                        {
+                            if (names[i] != "_")
+                            {
+                                statements.Add(new LocalDeclarationStatement(
+                                    BindingKind.Var,
+                                    names[i],
+                                    initializer: new IdentifierExpression(temps[i])));
+                            }
+                        }
+
+                        return statements;
+                    }
+
                     return new[]
                     {
                         (GStatement)new TupleDeconstructionStatement(
-                            binding,
+                            BindingKind.Let,
                             names,
                             this.TranslateExpression(assignment.Right)),
                     };

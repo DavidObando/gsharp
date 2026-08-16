@@ -77,15 +77,17 @@ public static class RefInitializationHoister
                 found |= CollectRefLocals(stmt, refLocals);
             }
         }
-        else if (statement is BoundVariableDeclaration decl
-            && decl.Variable is LocalVariableSymbol local
-            && local.Type is ByRefTypeSymbol
-            && decl.Initializer is BoundAddressOfExpression addressOf)
+        else if (statement is BoundVariableDeclaration decl)
         {
-            // Seed with the raw operand; the rewriter replaces this with the
-            // hoisted template when it visits the declaration.
-            refLocals[local] = addressOf.Operand;
-            found = true;
+            var local = decl.Variable as LocalVariableSymbol;
+            var addressOf = decl.Initializer as BoundAddressOfExpression;
+            if (local?.Type is ByRefTypeSymbol && addressOf != null)
+            {
+                // Seed with the raw operand; the rewriter replaces this with the
+                // hoisted template when it visits the declaration.
+                refLocals[local] = addressOf.Operand;
+                found = true;
+            }
         }
         else if (statement is BoundIfStatement ifStmt)
         {
@@ -142,9 +144,9 @@ public static class RefInitializationHoister
             // required field/element address probe. The rewritten template —
             // referencing only captured temps and repeatable storage — is
             // recorded for use-site reconstruction.
-            if (node.Variable is LocalVariableSymbol local
-                && local.Type is ByRefTypeSymbol
-                && node.Initializer is BoundAddressOfExpression addressOf)
+            var local = node.Variable as LocalVariableSymbol;
+            var addressOf = node.Initializer as BoundAddressOfExpression;
+            if (local?.Type is ByRefTypeSymbol && addressOf != null)
             {
                 var prelude = ImmutableArray.CreateBuilder<BoundStatement>();
                 var template = HoistOperand(addressOf.Operand, prelude);

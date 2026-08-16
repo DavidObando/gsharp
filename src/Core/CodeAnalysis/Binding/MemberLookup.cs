@@ -78,13 +78,15 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="t">The starting CLR type.</param>
     /// <returns>The type and its interfaces in walk order.</returns>
-    public static IEnumerable<Type> EnumerateSelfAndInterfaces(Type t)
+    public static List<Type> EnumerateSelfAndInterfaces(Type t)
     {
-        yield return t;
+        var result = new List<Type> { t };
         foreach (var i in t.GetInterfaces())
         {
-            yield return i;
+            result.Add(i);
         }
+
+        return result;
     }
 
     /// <summary>
@@ -2914,8 +2916,9 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
     /// <returns>The slots, or an empty sequence when the symbol is not a CLR interface.</returns>
-    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
+    public static List<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
     {
+        var result = new List<ClrInterfaceSlot>();
         Type declared;
         ImmutableArray<TypeSymbol> symbolicArgs;
         if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
@@ -2931,24 +2934,27 @@ internal sealed class MemberLookup
         }
         else
         {
-            yield break;
+            return result;
         }
 
         foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))
         {
-            yield return slot;
+            result.Add(slot);
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
             foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true))
             {
-                yield return slot;
+                result.Add(slot);
             }
         }
 
-        static IEnumerable<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        return result;
+
+        static List<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
         {
+            var slots = new List<ClrInterfaceSlot>();
             foreach (var method in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (method.IsSpecialName || !method.IsAbstract)
@@ -2956,8 +2962,10 @@ internal sealed class MemberLookup
                     continue;
                 }
 
-                yield return new ClrInterfaceSlot(method, symbolicArgs, isInherited);
+                slots.Add(new ClrInterfaceSlot(method, symbolicArgs, isInherited));
             }
+
+            return slots;
         }
     }
 
@@ -3057,7 +3065,10 @@ internal sealed class MemberLookup
         var slots = new List<ClrInterfaceSlot>();
         foreach (var ifaceSym in implementedClrInterfaces)
         {
-            slots.AddRange(EnumerateClrInterfaceSlots(ifaceSym));
+            foreach (var slot in EnumerateClrInterfaceSlots(ifaceSym))
+            {
+                slots.Add(slot);
+            }
         }
 
         if (slots.Count == 0)
@@ -4123,7 +4134,7 @@ internal sealed class MemberLookup
     {
         var declaringTypes = clrTarget.IsInterface
             ? EnumerateSelfAndInterfaces(clrTarget)
-            : new[] { clrTarget };
+            : new List<Type> { clrTarget };
         var collected = new List<PropertyInfo>();
         foreach (var declaringType in declaringTypes)
         {
@@ -5589,20 +5600,22 @@ internal sealed class MemberLookup
         return false;
     }
 
-    private static IEnumerable<Type> EnumerateOpenInterfacesAndBases(Type openDef)
+    private static List<Type> EnumerateOpenInterfacesAndBases(Type openDef)
     {
-        yield return openDef;
+        var result = new List<Type> { openDef };
         foreach (var iface in openDef.GetInterfaces())
         {
-            yield return iface;
+            result.Add(iface);
         }
 
         var baseType = openDef.BaseType;
         while (baseType != null && !baseType.IsSameAs(typeof(object)))
         {
-            yield return baseType;
+            result.Add(baseType);
             baseType = baseType.BaseType;
         }
+
+        return result;
     }
 
     /// <summary>

@@ -1964,18 +1964,21 @@ internal sealed partial class ExpressionBinder
             var argument = arguments[i];
             var rebound = argument;
             if (paramIndex < parameters.Length
-                && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
-                && literal.FunctionType is FunctionTypeSymbol literalFnType
-                && literalFnType.ReturnType != TypeSymbol.Void
-                && literalFnType.ReturnType != TypeSymbol.Error
-                && MemberLookup.TryGetLambdaTargetFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
-                && targetFunctionType.ReturnType != TypeSymbol.Void
-                && targetFunctionType.ReturnType != TypeSymbol.Error
-                && targetFunctionType.Arity == literalFnType.Arity
-                && !ReferenceEquals(literalFnType.ReturnType, targetFunctionType.ReturnType)
-                && ConversionClassifier.IsNumericReturnWidening(literalFnType.ReturnType, targetFunctionType.ReturnType))
+                && LambdaBinder.TryGetFunctionLiteral(argument, out var literal))
             {
-                rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+                var literalFnType = literal.FunctionType as FunctionTypeSymbol;
+                if (literalFnType != null
+                    && literalFnType.ReturnType != TypeSymbol.Void
+                    && literalFnType.ReturnType != TypeSymbol.Error
+                    && MemberLookup.TryGetLambdaTargetFunctionType(parameters[paramIndex].ParameterType, out var targetFunctionType)
+                    && targetFunctionType.ReturnType != TypeSymbol.Void
+                    && targetFunctionType.ReturnType != TypeSymbol.Error
+                    && targetFunctionType.Arity == literalFnType.Arity
+                    && !ReferenceEquals(literalFnType.ReturnType, targetFunctionType.ReturnType)
+                    && ConversionClassifier.IsNumericReturnWidening(literalFnType.ReturnType, targetFunctionType.ReturnType))
+                {
+                    rebound = lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType);
+                }
             }
 
             if (rebound != argument && builder == null)

@@ -48,6 +48,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            conv.Expression.Type,
+            conv.Type))
+        {
+            this.EmitExpression(conv.Expression);
+            return;
+        }
+
         // Issue #2840 / #2841: a nullable wrapper over a REFERENCE type is a
         // binder-level annotation only — it erases to the underlying type's CLR
         // representation — so the delegate-materialisation arms below classify

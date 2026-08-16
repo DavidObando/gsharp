@@ -325,8 +325,13 @@ internal sealed class SlotPlanner
             this.currentScope = currentScope;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundIsExpression isExpression
                 && !isExpression.IsSimpleTypeTest)
             {
@@ -856,8 +861,13 @@ internal sealed class SlotPlanner
             this.sink = sink;
         }
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundLabelStatement label)
             {
                 this.sink.Add(label.Label);
@@ -877,8 +887,13 @@ internal sealed class SlotPlanner
             this.sink = sink;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundFunctionLiteralExpression lambda)
             {
                 this.sink.Add(lambda);
@@ -899,8 +914,13 @@ internal sealed class SlotPlanner
             this.sink = sink;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             // Override the base dispatch so we descend into the body of any
             // BoundFunctionLiteralExpression we encounter — go statements
             // need to discover nested go statements inside lambda bodies too.
@@ -941,8 +961,13 @@ internal sealed class SlotPlanner
             this.VisitExpression(expression);
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundVariableExpression ve)
             {
                 this.CaptureIfFree(ve.Variable);
@@ -1015,8 +1040,13 @@ internal sealed class SlotPlanner
             this.sink = sink;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundDefaultExpression de)
             {
                 this.sink.Add(de);
@@ -1036,8 +1066,13 @@ internal sealed class SlotPlanner
             this.sink = sink;
         }
 
-        public override void VisitExpression(BoundExpression node)
+        public override void VisitExpression(BoundExpression? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             if (node is BoundStackAllocExpression sa)
             {
                 this.sink.Add(sa);
@@ -1059,8 +1094,13 @@ internal sealed class SlotPlanner
             this.sink = sink;
         }
 
-        public override void VisitStatement(BoundStatement node)
+        public override void VisitStatement(BoundStatement? node)
         {
+            if (node == null)
+            {
+                return;
+            }
+
             switch (node)
             {
                 case BoundExpressionStatement es:
