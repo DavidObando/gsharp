@@ -296,10 +296,16 @@ internal static class ImportedAssemblySemantics
     // (an empty `{ }`  member list).
     private static (ImmutableArray<string> Names, ImmutableArray<int> FieldTokens) BuildRecordPrimaryConstructorShape(Type type)
     {
-        var autoProperties = type
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.GetMethod != null && p.SetMethod != null && p.GetIndexParameters().Length == 0)
-            .ToDictionary(p => p.Name, StringComparer.Ordinal);
+        var autoProperties = new Dictionary<string, PropertyInfo>(StringComparer.Ordinal);
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.GetMethod != null
+                && property.SetMethod != null
+                && property.GetIndexParameters().Length == 0)
+            {
+                autoProperties.Add(property.Name, property);
+            }
+        }
 
         if (autoProperties.Count == 0)
         {
@@ -324,7 +330,17 @@ internal static class ImportedAssemblySemantics
                 continue;
             }
 
-            if (parameters.All(p => autoProperties.ContainsKey(p.Name ?? string.Empty)))
+            var allParametersMatch = true;
+            foreach (var parameter in parameters)
+            {
+                if (!autoProperties.ContainsKey(parameter.Name ?? string.Empty))
+                {
+                    allParametersMatch = false;
+                    break;
+                }
+            }
+
+            if (allParametersMatch)
             {
                 bestMatch = ctor;
                 bestParameters = parameters;

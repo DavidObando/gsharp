@@ -4200,14 +4200,30 @@ internal sealed class MemberLookup
 
         // Issue #2525: hide only along an actual declaration ancestry edge.
         // Same-signature slots from unrelated bases must remain ambiguous.
-        return collected
-            .Where(candidate => !collected.Any(other =>
-                !ReferenceEquals(candidate, other)
-                && other.DeclaringType is Type otherDeclaringType
-                && candidate.DeclaringType is Type candidateDeclaringType
-                && IsMoreDerivedClrType(otherDeclaringType, candidateDeclaringType)
-                && HaveSameIndexerSignature(targetType, other, candidate)))
-            .ToArray();
+        var visible = new List<PropertyInfo>();
+        foreach (var candidate in collected)
+        {
+            var hidden = false;
+            foreach (var other in collected)
+            {
+                if (!ReferenceEquals(candidate, other)
+                    && other.DeclaringType is Type otherDeclaringType
+                    && candidate.DeclaringType is Type candidateDeclaringType
+                    && IsMoreDerivedClrType(otherDeclaringType, candidateDeclaringType)
+                    && HaveSameIndexerSignature(targetType, other, candidate))
+                {
+                    hidden = true;
+                    break;
+                }
+            }
+
+            if (!hidden)
+            {
+                visible.Add(candidate);
+            }
+        }
+
+        return visible.ToArray();
     }
 
     private static bool IsMoreDerivedClrType(Type derived, Type baseType)
