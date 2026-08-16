@@ -2591,8 +2591,7 @@ internal sealed class MemberLookup
             // parameter carries [ParamArrayAttribute] is variadic from the
             // G# perspective too — the call-site pack / pass-through rules
             // mirror what direct method calls already do for params methods.
-            var paramArray = parameter.GetCustomAttributesData()
-                .Any(a => string.Equals(a.AttributeType.FullName, "System.ParamArrayAttribute", StringComparison.Ordinal));
+            var paramArray = HasParamArrayAttribute(parameter);
             variadicBuilder.Add(paramArray);
             anyVariadic |= paramArray;
         }
@@ -4455,8 +4454,7 @@ internal sealed class MemberLookup
             // ADR-0102 follow-up / issue #818: mirror TryGetDelegateFunctionType's
             // variadic-flag handling so a params-shaped named delegate keeps
             // its call-site pack/pass-through behavior through this path too.
-            var paramArray = parameter.GetCustomAttributesData()
-                .Any(a => string.Equals(a.AttributeType.FullName, "System.ParamArrayAttribute", StringComparison.Ordinal));
+            var paramArray = HasParamArrayAttribute(parameter);
             variadicBuilder.Add(paramArray);
             anyVariadic |= paramArray;
         }
@@ -4483,6 +4481,22 @@ internal sealed class MemberLookup
         var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
         functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), variadicFlags, returnType);
         return true;
+    }
+
+    private static bool HasParamArrayAttribute(ParameterInfo parameter)
+    {
+        foreach (var attribute in parameter.GetCustomAttributesData())
+        {
+            if (string.Equals(
+                attribute.AttributeType.FullName,
+                "System.ParamArrayAttribute",
+                StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool IsVisibleImportedMethod(MethodBase method)

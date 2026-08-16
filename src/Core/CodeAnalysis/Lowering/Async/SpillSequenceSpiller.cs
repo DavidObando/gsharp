@@ -2647,7 +2647,10 @@ public static class SpillSequenceSpiller
                 return SpillOneOperand(
                     arrayCreation,
                     arrayCreation.LengthExpression,
-                    length => new BoundArrayCreationExpression(null, arrayCreation.ContainerType, length));
+                    length =>
+                    {
+                        return new BoundArrayCreationExpression(null, arrayCreation.ContainerType, length);
+                    });
             }
 
             var (locals, sideEffects, elements) = SpillArgumentList(arrayCreation.Elements);

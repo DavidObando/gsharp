@@ -195,9 +195,15 @@ public sealed class ImportedClassSymbol : Symbol
         isAmbiguous = false;
         ambiguousMethods = ImmutableArray<MethodInfo>.Empty;
         isExpanded = false;
-        var nameMatches = FindNearestNamedMemberLevel(text).Methods
-            .Where(m => m.IsStatic && IsVisibleToCurrentCompilation(m))
-            .ToList();
+        var nameMatches = new List<MethodInfo>();
+        foreach (var method in FindNearestNamedMemberLevel(text).Methods)
+        {
+            if (method.IsStatic && IsVisibleToCurrentCompilation(method))
+            {
+                nameMatches.Add(method);
+            }
+        }
+
         if (nameMatches.Count == 0)
         {
             return false;
@@ -343,13 +349,18 @@ public sealed class ImportedClassSymbol : Symbol
         var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
             receiverType: null,
             ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
-        nameMatches = MemberLookup.ExcludeErasureOnlyEnumCandidates(
-            nameMatches,
-            symbolicArgVector,
-            argumentNames,
-            SymbolicReceiver).ToList();
-        var result = ClrOverloadResolution.Resolve(
-            nameMatches,
+        var filteredNameMatches = new List<MethodInfo>();
+        foreach (var method in MemberLookup.ExcludeErasureOnlyEnumCandidates(
+                     nameMatches,
+                     symbolicArgVector,
+                     argumentNames,
+                     SymbolicReceiver))
+        {
+            filteredNameMatches.Add(method);
+        }
+
+        var result = ClrOverloadResolution.Resolve<MethodInfo>(
+            filteredNameMatches,
             argTypes,
             explicitTypeArgs,
             projectTypeArgument,
