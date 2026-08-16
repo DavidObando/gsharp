@@ -119,7 +119,7 @@ public abstract class SyntaxNode
             switch (accessor.Kind)
             {
                 case ChildAccessorKind.Node:
-                    var child = (SyntaxNode)accessor.Getter(this);
+                    var child = accessor.Getter(this) as SyntaxNode;
                     if (child != null)
                     {
                         yield return child;
@@ -128,7 +128,7 @@ public abstract class SyntaxNode
                     break;
 
                 case ChildAccessorKind.SeparatedList:
-                    var separatedSyntaxList = (SeparatedSyntaxList)accessor.Getter(this);
+                    var separatedSyntaxList = accessor.Getter(this) as SeparatedSyntaxList;
                     if (separatedSyntaxList == null)
                     {
                         break;
@@ -142,7 +142,12 @@ public abstract class SyntaxNode
                     break;
 
                 case ChildAccessorKind.NodeList:
-                    var children = (IEnumerable<SyntaxNode>)accessor.Getter(this);
+                    var children = accessor.Getter(this) as IEnumerable<SyntaxNode>;
+                    if (children == null)
+                    {
+                        break;
+                    }
+
                     foreach (var enumeratedChild in children)
                     {
                         if (enumeratedChild != null)

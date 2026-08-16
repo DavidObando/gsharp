@@ -25,7 +25,7 @@ public sealed class ChannelTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation element types.
-        : base($"chan {elementType.Name}", MakeClrType(elementType)!)
+        : base($"chan {elementType.Name}", MakeClrType(elementType))
     {
         ElementType = elementType;
     }

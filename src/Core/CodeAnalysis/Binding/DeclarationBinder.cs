@@ -657,7 +657,7 @@ internal sealed partial class DeclarationBinder
 
             var path = new List<StructSymbol>();
             var onPath = new HashSet<StructSymbol>();
-            var current = start;
+            StructSymbol? current = start;
             while (current != null)
             {
                 if (onPath.Contains(current))

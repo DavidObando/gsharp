@@ -3827,20 +3827,28 @@ public sealed class Binder
             // references. Issue #1506: each segment now drives its own preferred
             // arity from its own type-argument list.
             var preferredArity = syntax.SegmentHasTypeArguments(i) ? SegmentTypeArguments(i).Count : -1;
-            if (scope.TryLookupNestedTypeAlias(ResolvedDefinition(i - 1), segmentTexts[i], preferredArity, out var nested))
+            var previousDefinition = ResolvedDefinition(i - 1);
+            if (scope.TryLookupNestedTypeAlias(previousDefinition, segmentTexts[i], preferredArity, out var nested))
             {
                 definitions[i] = nested;
+                continue;
             }
-            else if (ResolvedDefinition(i - 1) is StructSymbol containerStruct
-                && scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segmentTexts[i], preferredArity, out var inheritedNested, out var declaringContainer))
+
+            var containerStruct = previousDefinition as StructSymbol;
+            if (containerStruct != null
+                && scope.TryLookupNestedTypeAliasIncludingInherited(
+                    containerStruct,
+                    segmentTexts[i],
+                    preferredArity,
+                    out var inheritedNested,
+                    out var declaringContainer))
             {
                 definitions[i - 1] = declaringContainer;
                 definitions[i] = inheritedNested;
+                continue;
             }
-            else
-            {
-                return null;
-            }
+
+            return null;
         }
 
         // The chain resolved to a user nested type. Construct generic segments

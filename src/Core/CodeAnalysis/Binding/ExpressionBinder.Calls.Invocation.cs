@@ -2816,19 +2816,22 @@ internal sealed partial class ExpressionBinder
             // the interface paths the method token is the class's own MethodDef
             // (resolved by EmitUserInstanceCall when the constraint type is not
             // an interface), so no interface MemberRef is produced.
-            if (receiver != null && receiver.Type is TypeParameterSymbol tpClassRecv
-                && tpClassRecv.ClassConstraint is StructSymbol tpClassConstraint)
+            if (receiver != null && receiver.Type is TypeParameterSymbol tpClassRecv)
             {
-                var tpClassOverloads = MemberLookup.CollectSourceInstanceMethods(tpClassRecv, methodName);
-                if (tpClassOverloads.Length > 0)
+                var tpClassConstraint = tpClassRecv.ClassConstraint as StructSymbol;
+                if (tpClassConstraint != null)
                 {
-                    var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames);
-                    if (tpClassMethod == null)
+                    var tpClassOverloads = MemberLookup.CollectSourceInstanceMethods(tpClassRecv, methodName);
+                    if (tpClassOverloads.Length > 0)
                     {
-                        return new BoundErrorExpression(null);
-                    }
+                        var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames);
+                        if (tpClassMethod == null)
+                        {
+                            return new BoundErrorExpression(null);
+                        }
 
-                    return overloads.BindUserInstanceCall(receiver, tpClassMethod, arguments, ce, argumentNames, constrainedReceiverTypeParameter: tpClassRecv);
+                        return overloads.BindUserInstanceCall(receiver, tpClassMethod, arguments, ce, argumentNames, constrainedReceiverTypeParameter: tpClassRecv);
+                    }
                 }
             }
 
@@ -3059,11 +3062,16 @@ internal sealed partial class ExpressionBinder
         // instance-method lookup (e.g. `GetValueOrDefault`, `Equals`,
         // `ToString`) must go through the constructed `Nullable<T>` type that
         // actually carries those members.
-        var clrType = receiver.Type is NullableTypeSymbol nullableRecv
-            && nullableRecv.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerVt
-            && this.memberLookup.TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed)
-            ? nullableConstructed
-            : effectiveReceiverType.ClrType;
+        var clrType = effectiveReceiverType.ClrType;
+        if (receiver.Type is NullableTypeSymbol nullableRecv)
+        {
+            var nullableInnerVt = nullableRecv.UnderlyingType?.ClrType;
+            if (nullableInnerVt?.IsValueType == true
+                && this.memberLookup.TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed))
+            {
+                clrType = nullableConstructed;
+            }
+        }
 
         // Issue #529: use interface-aware method enumeration so that
         // methods declared on a base interface (e.g.

@@ -28,7 +28,7 @@ public sealed class PointerTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation pointee types.
-        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakePointerType()!)
+        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakePointerType())
     {
         PointeeType = pointeeType;
     }

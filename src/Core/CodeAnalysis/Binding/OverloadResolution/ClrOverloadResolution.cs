@@ -3784,7 +3784,7 @@ internal static class ClrOverloadResolution
         }
 
         var baseFullName = baseType.FullName;
-        for (var current = derived.BaseType; current != null; current = current.BaseType)
+        for (Type? current = derived.BaseType; current != null; current = current.BaseType)
         {
             if (current == baseType || current.FullName == baseFullName)
             {
@@ -4158,13 +4158,14 @@ internal static class ClrOverloadResolution
             // Issue #1601: a value-type-constrained generic type parameter (e.g.
             // a `TEnum` forwarded from an enclosing `[TEnum Enum struct]`) erases
             // the same way and must classify as a value type here too.
-            var argIsUserValueType = !typeArgSymbols.IsDefaultOrEmpty
+            TypeSymbol? argSymbol = !typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
-                && typeArgSymbols[i] is { } valueTypeSymbol
-                && IsValueTypeErasedSymbol(valueTypeSymbol);
-            var argIsUserReferenceType = !typeArgSymbols.IsDefaultOrEmpty
-                && i < typeArgSymbols.Length
-                && typeArgSymbols[i] is StructSymbol { IsClass: true, ClrType: null };
+                    ? typeArgSymbols[i]
+                    : null;
+            var argIsUserValueType =
+                argSymbol != null && IsValueTypeErasedSymbol(argSymbol);
+            var argIsUserReferenceType =
+                argSymbol is StructSymbol { IsClass: true, ClrType: null };
 
             if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
             {
@@ -4197,7 +4198,7 @@ internal static class ClrOverloadResolution
                 if (!arg.IsValueType && !argIsUserValueType)
                 {
                     if (argIsUserReferenceType
-                        && typeArgSymbols[i] is StructSymbol userClass)
+                        && argSymbol is StructSymbol userClass)
                     {
                         if (userClass.IsAbstract
                             || userClass.HasPrimaryConstructor
@@ -4259,9 +4260,7 @@ internal static class ClrOverloadResolution
                 // instead of the placeholder. This is the Oahu
                 // SettingsManager.GetUserSettings[UserSettings]() shape.
                 if (constraint.IsInterface
-                    && !typeArgSymbols.IsDefaultOrEmpty
-                    && i < typeArgSymbols.Length
-                    && typeArgSymbols[i] is { } interfaceSymbol
+                    && argSymbol is { } interfaceSymbol
                     && interfaceSymbol.ClrType == null)
                 {
                     if (ErasedSymbolSatisfiesInterfaceConstraint(interfaceSymbol, constraint))
@@ -4293,7 +4292,7 @@ internal static class ClrOverloadResolution
                 // carries that same base bound.
                 if (argIsUserValueType && !constraint.IsInterface)
                 {
-                    if (typeArgSymbols[i] is { } constrainedValueTypeSymbol
+                    if (argSymbol is { } constrainedValueTypeSymbol
                         && ValueTypeErasedSymbolSatisfiesBaseConstraint(constrainedValueTypeSymbol, constraint))
                     {
                         continue;
@@ -4307,7 +4306,7 @@ internal static class ClrOverloadResolution
                 // its symbolic base chain for concrete class constraints.
                 if (argIsUserReferenceType && !constraint.IsInterface)
                 {
-                    if (typeArgSymbols[i] is StructSymbol userReferenceType
+                    if (argSymbol is StructSymbol userReferenceType
                         && UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(
                             userReferenceType,
                             constraint))
@@ -4339,7 +4338,7 @@ internal static class ClrOverloadResolution
     {
         if (symbol is StructSymbol aggregate)
         {
-            for (var current = aggregate; current != null; current = current.BaseClass)
+            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
             {
                 foreach (var implemented in current.ImplementedClrInterfaces)
                 {
@@ -4513,7 +4512,7 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        for (var current = symbol; current != null; current = current.BaseClass)
+        for (StructSymbol? current = symbol; current != null; current = current.BaseClass)
         {
             Type? importedBase = current.ImportedBaseType?.ClrType;
             if (importedBase != null)

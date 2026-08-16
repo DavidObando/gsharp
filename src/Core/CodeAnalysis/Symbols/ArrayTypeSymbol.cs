@@ -24,7 +24,7 @@ public sealed class ArrayTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation element types.
-        : base($"[{length}]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType()!)
+        : base($"[{length}]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType())
     {
         ElementType = elementType;
         Length = length;

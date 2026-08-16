@@ -205,7 +205,7 @@ internal static class ExternalClrOverrideResolver
 
     private static TypeSymbol? FindDeclaredExternalBaseType(StructSymbol type)
     {
-        for (var current = type; current != null; current = current.BaseClass)
+        foreach (var current in GetStructHierarchy(type))
         {
             if (current.ImportedBaseType != null)
             {
@@ -224,7 +224,7 @@ internal static class ExternalClrOverrideResolver
             return declaredBase;
         }
 
-        for (var current = type; current != null; current = current.BaseClass)
+        foreach (var current in GetStructHierarchy(type))
         {
             if (current.IsAttributeClass)
             {
@@ -241,12 +241,7 @@ internal static class ExternalClrOverrideResolver
         Type reflectionBaseType,
         ImmutableArray<TypeArgumentSubstitution> typeSubstitutions)
     {
-        var hierarchy = new List<Type>();
-        for (var current = reflectionBaseType; current != null; current = current.BaseType)
-        {
-            hierarchy.Add(current);
-        }
-
+        var hierarchy = GetTypeHierarchy(reflectionBaseType);
         hierarchy.Reverse();
 
         // Reconstruct effective CLR virtual slots base-first. A newslot method
@@ -422,9 +417,35 @@ internal static class ExternalClrOverrideResolver
             ? type.IsGenericTypeDefinition ? type : type.GetGenericTypeDefinition()
             : type;
 
+    private static List<StructSymbol> GetStructHierarchy(StructSymbol type)
+    {
+        var hierarchy = new List<StructSymbol>();
+        StructSymbol? current = type;
+        while (current != null)
+        {
+            hierarchy.Add(current);
+            current = current.BaseClass;
+        }
+
+        return hierarchy;
+    }
+
+    private static List<Type> GetTypeHierarchy(Type? type)
+    {
+        var hierarchy = new List<Type>();
+        var current = type;
+        while (current != null)
+        {
+            hierarchy.Add(current);
+            current = current.BaseType;
+        }
+
+        return hierarchy;
+    }
+
     private static SourceSlotStatus GetSourceSlotStatus(StructSymbol derivedType, MethodInfo slot)
     {
-        for (var current = derivedType; current != null; current = current.BaseClass)
+        foreach (var current in GetStructHierarchy(derivedType))
         {
             foreach (var method in current.Methods)
             {
@@ -462,12 +483,15 @@ internal static class ExternalClrOverrideResolver
 
     private static bool TargetsExternalSlot(FunctionSymbol method, MethodInfo slot)
     {
-        for (var current = method; current != null; current = current.OverriddenMethod)
+        FunctionSymbol? current = method;
+        while (current != null)
         {
             if (SameMethod(current.ExternalOverriddenMethod, slot))
             {
                 return true;
             }
+
+            current = current.OverriddenMethod;
         }
 
         return false;
@@ -478,7 +502,8 @@ internal static class ExternalClrOverrideResolver
         MethodInfo slot,
         out AccessorKind accessorKind)
     {
-        for (var current = property; current != null; current = current.OverriddenProperty)
+        PropertySymbol? current = property;
+        while (current != null)
         {
             if (SameMethod(current.ExternalOverriddenGetter, slot))
             {
@@ -491,6 +516,8 @@ internal static class ExternalClrOverrideResolver
                 accessorKind = AccessorKind.Setter;
                 return true;
             }
+
+            current = current.OverriddenProperty;
         }
 
         accessorKind = default;
@@ -518,7 +545,8 @@ internal static class ExternalClrOverrideResolver
         MethodInfo slot,
         out AccessorKind accessorKind)
     {
-        for (var current = eventSymbol; current != null; current = current.OverriddenEvent)
+        EventSymbol? current = eventSymbol;
+        while (current != null)
         {
             if (SameMethod(current.ExternalOverriddenAddMethod, slot))
             {
@@ -537,6 +565,8 @@ internal static class ExternalClrOverrideResolver
                 accessorKind = AccessorKind.Raise;
                 return true;
             }
+
+            current = current.OverriddenEvent;
         }
 
         accessorKind = default;
@@ -639,7 +669,7 @@ internal static class ExternalClrOverrideResolver
 
         var substitutions = ImmutableArray.CreateBuilder<TypeArgumentSubstitution>();
         substitutions.Add(root);
-        for (var current = imported.OpenDefinition.BaseType; current != null; current = current.BaseType)
+        foreach (var current in GetTypeHierarchy(imported.OpenDefinition.BaseType))
         {
             if (!current.IsGenericType)
             {
@@ -684,7 +714,7 @@ internal static class ExternalClrOverrideResolver
     private static List<MethodInfo> EnumerateMethods(Type? baseType, string name)
     {
         var result = new List<MethodInfo>();
-        for (var current = baseType; current != null; current = current.BaseType)
+        foreach (var current in GetTypeHierarchy(baseType))
         {
             MethodInfo[] methods;
             try
@@ -711,7 +741,7 @@ internal static class ExternalClrOverrideResolver
     private static List<PropertyInfo> EnumerateProperties(Type? baseType, string name)
     {
         var result = new List<PropertyInfo>();
-        for (var current = baseType; current != null; current = current.BaseType)
+        foreach (var current in GetTypeHierarchy(baseType))
         {
             PropertyInfo[] properties;
             try
@@ -738,7 +768,7 @@ internal static class ExternalClrOverrideResolver
     private static List<EventInfo> EnumerateEvents(Type? baseType, string name)
     {
         var result = new List<EventInfo>();
-        for (var current = baseType; current != null; current = current.BaseType)
+        foreach (var current in GetTypeHierarchy(baseType))
         {
             EventInfo[] events;
             try
@@ -909,7 +939,7 @@ internal static class ExternalClrOverrideResolver
 
         if (derivedReturnType is StructSymbol derivedStruct && derivedStruct.IsClass)
         {
-            for (var current = derivedStruct; current != null; current = current.BaseClass)
+            foreach (var current in GetStructHierarchy(derivedStruct))
             {
                 if (current.ImportedBaseType?.ClrType is Type imported
                     && ClrTypeUtilities.IsAssignableByName(baseReturnType, imported))

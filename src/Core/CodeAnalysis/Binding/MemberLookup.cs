@@ -188,7 +188,7 @@ internal sealed class MemberLookup
             return null;
         }
 
-        for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+        for (Type? current = clrType; current != null; current = GetBaseTypeSafe(current))
         {
             var candidates = GetDeclaredCandidates(current);
             if (candidates.Count > 1)
@@ -297,7 +297,7 @@ internal sealed class MemberLookup
             // Issues #2614 / #2638: an aggregate metadata walk may return a
             // usable but incomplete set. Always probe each declaration level
             // and union accessible methods without duplicating inherited slots.
-            for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+            for (Type? current = clrType; current != null; current = GetBaseTypeSafe(current))
             {
                 foreach (var m in ClrTypeUtilities.SafeGetMethods(
                     current,
@@ -1886,19 +1886,21 @@ internal sealed class MemberLookup
             return false;
         }
 
-        if (t is ImportedTypeSymbol imported
-            && imported.OpenDefinition is { } openDefinition
-            && !imported.TypeArguments.IsDefaultOrEmpty)
+        if (t is ImportedTypeSymbol imported)
         {
-            var contextObject = ResolveErasedObjectInContext(openDefinition);
-            erased = TryBuildErasedClosedGeneric(
-                openDefinition,
-                openDefinition.GetGenericArguments(),
-                imported.TypeArguments,
-                contextObject);
-            if (erased != null)
+            var openDefinition = imported.OpenDefinition;
+            if (openDefinition != null && !imported.TypeArguments.IsDefaultOrEmpty)
             {
-                return true;
+                var contextObject = ResolveErasedObjectInContext(openDefinition);
+                erased = TryBuildErasedClosedGeneric(
+                    openDefinition,
+                    openDefinition.GetGenericArguments(),
+                    imported.TypeArguments,
+                    contextObject);
+                if (erased != null)
+                {
+                    return true;
+                }
             }
         }
 
@@ -2412,7 +2414,7 @@ internal sealed class MemberLookup
                     NullableLifting.GetEffectiveClrType(classConstraint));
             }
 
-            for (var current = type as StructSymbol; current != null; current = current.BaseClass)
+            for (StructSymbol? current = type as StructSymbol; current != null; current = current.BaseClass)
             {
                 var importedBaseClr = NullableLifting.GetEffectiveClrType(current.ImportedBaseType);
                 if (importedBaseClr != null
@@ -4182,7 +4184,7 @@ internal sealed class MemberLookup
                 .Any(candidate => ClrTypeUtilities.AreSame(candidate, baseType));
         }
 
-        for (var current = derived.BaseType; current != null; current = current.BaseType)
+        for (Type? current = derived.BaseType; current != null; current = current.BaseType)
         {
             if (ClrTypeUtilities.AreSame(current, baseType))
             {

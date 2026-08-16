@@ -28,7 +28,7 @@ public sealed class MapTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation key/value types.
-        : base($"map[{keyType.Name},{valueType.Name}]", MakeClrType(keyType, valueType)!)
+        : base($"map[{keyType.Name},{valueType.Name}]", MakeClrType(keyType, valueType))
     {
         KeyType = keyType;
         ValueType = valueType;

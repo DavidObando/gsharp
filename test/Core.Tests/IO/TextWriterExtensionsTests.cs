@@ -47,6 +47,21 @@ public class TextWriterExtensionsTests
     }
 
     [Fact]
+    public void DiagnosticWriter_WriteDiagnostics_RendersThroughStableType()
+    {
+        var diagnostic = new Diagnostic(
+            default,
+            "GS9999",
+            DiagnosticSeverity.Error,
+            "stable diagnostic entry point");
+
+        using var writer = new StringWriter();
+        DiagnosticWriter.WriteDiagnostics(writer, new[] { diagnostic });
+
+        Assert.Contains("error GS9999: stable diagnostic entry point", writer.ToString());
+    }
+
+    [Fact]
     public void WriteDiagnostics_SpanAtEndOfFile_DoesNotThrow()
     {
         var sourceText = SourceText.From("let x = 1\r\n", "test.gs");

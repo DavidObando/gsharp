@@ -154,13 +154,13 @@ internal static class AssignmentTargetSyntaxFacts
     /// </summary>
     public static bool TryLiftTrailingMemberAccess(
         ExpressionSyntax expression,
-        [MaybeNullWhen(false)] out ExpressionSyntax receiver,
-        [MaybeNullWhen(false)] out SyntaxToken dotToken,
-        [MaybeNullWhen(false)] out SyntaxToken fieldIdentifier)
+        [NotNullWhen(true)] out ExpressionSyntax? receiver,
+        [NotNullWhen(true)] out SyntaxToken? dotToken,
+        [NotNullWhen(true)] out SyntaxToken? fieldIdentifier)
     {
         receiver = null;
-        dotToken = default;
-        fieldIdentifier = default;
+        dotToken = null;
+        fieldIdentifier = null;
         if (expression is AccessorExpressionSyntax accessor)
         {
             if (accessor.RightPart is NameExpressionSyntax name)

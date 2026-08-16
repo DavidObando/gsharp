@@ -121,8 +121,10 @@ internal sealed partial class ExpressionBinder
                 return overloads.BindConstructorCallExpression(nestedCall, nestedClassDef);
             }
 
-            if (syntax.RightPart is AccessorExpressionSyntax nestedAccess
-                && nestedAccess.LeftPart is CallExpressionSyntax nestedAccessCall
+            var nestedAccess = syntax.RightPart as AccessorExpressionSyntax;
+            var nestedAccessCall = nestedAccess?.LeftPart as CallExpressionSyntax;
+            if (nestedAccess != null
+                && nestedAccessCall != null
                 && scope.TryLookupNestedTypeAlias(
                     enclosingAliasType,
                     headIdentifier,

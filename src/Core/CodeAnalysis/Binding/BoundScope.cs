@@ -1669,14 +1669,17 @@ public sealed class BoundScope
     private bool TryGetAliasDeclaringPackageInChain(string key, [NotNullWhen(true)] out string? declaringPackageName)
     {
         declaringPackageName = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.aliasDeclaringPackages != null
-                && s.aliasDeclaringPackages.TryGetValue(key, out var foundPackage))
+            if (scope.aliasDeclaringPackages != null
+                && scope.aliasDeclaringPackages.TryGetValue(key, out var foundPackage))
             {
                 declaringPackageName = foundPackage;
                 return true;
             }
+
+            scope = scope.Parent;
         }
 
         return false;
@@ -1685,12 +1688,15 @@ public sealed class BoundScope
     /// <summary>Whether <paramref name="key"/> is visible anywhere in this scope chain.</summary>
     private bool TypeAliasVisible(string key)
     {
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.typeAliases != null && s.typeAliases.ContainsKey(key))
+            if (scope.typeAliases != null && scope.typeAliases.ContainsKey(key))
             {
                 return true;
             }
+
+            scope = scope.Parent;
         }
 
         return false;
@@ -1704,13 +1710,16 @@ public sealed class BoundScope
     private bool TryGetTypeAliasInChain(string key, [NotNullWhen(true)] out TypeSymbol? value)
     {
         value = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.typeAliases != null && s.typeAliases.TryGetValue(key, out var foundValue))
+            if (scope.typeAliases != null && scope.typeAliases.TryGetValue(key, out var foundValue))
             {
                 value = foundValue;
                 return true;
             }
+
+            scope = scope.Parent;
         }
 
         return false;
@@ -1725,20 +1734,21 @@ public sealed class BoundScope
     {
         var result = new List<KeyValuePair<string, TypeSymbol>>();
         var seen = new HashSet<string>();
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.typeAliases == null)
+            if (scope.typeAliases != null)
             {
-                continue;
-            }
-
-            foreach (var pair in s.typeAliases)
-            {
-                if (seen.Add(pair.Key))
+                foreach (var pair in scope.typeAliases)
                 {
-                    result.Add(pair);
+                    if (seen.Add(pair.Key))
+                    {
+                        result.Add(pair);
+                    }
                 }
             }
+
+            scope = scope.Parent;
         }
 
         return result;
@@ -1880,13 +1890,16 @@ public sealed class BoundScope
     private ImmutableArray<FunctionSymbol> CollectFunctionBucket(string key)
     {
         ImmutableArray<FunctionSymbol>.Builder? builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.functions != null && s.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
+            if (scope.functions != null && scope.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
             {
                 builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
                 builder.AddRange(bucket);
             }
+
+            scope = scope.Parent;
         }
 
         return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
@@ -2032,50 +2045,51 @@ public sealed class BoundScope
     private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatches(string key, TypeSymbol receiverType)
     {
         ImmutableArray<FunctionSymbol>.Builder? builder = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.extensionFunctionsByName == null
-                || !s.extensionFunctionsByName.TryGetValue(key, out var bucket))
+            if (scope.extensionFunctionsByName != null
+                && scope.extensionFunctionsByName.TryGetValue(key, out var bucket))
             {
-                continue;
+                foreach (var ext in bucket)
+                {
+                    var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
+                    if (!matches
+                        && !ext.TypeParameters.IsDefaultOrEmpty
+                        && ext.ExtensionReceiverType != null
+                        && ext.ExtensionReceiverType != TypeSymbol.Error
+                        && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
+                        && TryUnifyAndCheckConstraints(ext, receiverType, out _))
+                    {
+                        matches = true;
+                    }
+
+                    // Issue #1548: broaden to implicitly-convertible (subtype)
+                    // receivers with a CONCRETE declared receiver type. Open
+                    // receivers (those mentioning the function's own type
+                    // parameters) are handled by the unification pass above; a
+                    // concrete `R` is applicable whenever the call-site receiver is
+                    // implicitly convertible to it. Every applicable candidate is
+                    // collected so the caller's overload resolution — which scores
+                    // the receiver as parameter 0 — picks the most specific one.
+                    if (!matches
+                        && (ext.TypeParameters.IsDefaultOrEmpty
+                            || ext.ExtensionReceiverType == null
+                            || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
+                        && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
+                    {
+                        matches = true;
+                    }
+
+                    if (matches)
+                    {
+                        builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
+                        builder.Add(ext);
+                    }
+                }
             }
 
-            foreach (var ext in bucket)
-            {
-                var matches = ReceiverMatches(ext.ExtensionReceiverType, receiverType);
-                if (!matches
-                    && !ext.TypeParameters.IsDefaultOrEmpty
-                    && ext.ExtensionReceiverType != null
-                    && ext.ExtensionReceiverType != TypeSymbol.Error
-                    && ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters)
-                    && TryUnifyAndCheckConstraints(ext, receiverType, out _))
-                {
-                    matches = true;
-                }
-
-                // Issue #1548: broaden to implicitly-convertible (subtype)
-                // receivers with a CONCRETE declared receiver type. Open
-                // receivers (those mentioning the function's own type
-                // parameters) are handled by the unification pass above; a
-                // concrete `R` is applicable whenever the call-site receiver is
-                // implicitly convertible to it. Every applicable candidate is
-                // collected so the caller's overload resolution — which scores
-                // the receiver as parameter 0 — picks the most specific one.
-                if (!matches
-                    && (ext.TypeParameters.IsDefaultOrEmpty
-                        || ext.ExtensionReceiverType == null
-                        || !ReceiverMentionsAnyTypeParameter(ext.ExtensionReceiverType, ext.TypeParameters))
-                    && ReceiverConvertible(ext.ExtensionReceiverType, receiverType))
-                {
-                    matches = true;
-                }
-
-                if (matches)
-                {
-                    builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
-                    builder.Add(ext);
-                }
-            }
+            scope = scope.Parent;
         }
 
         return builder == null ? ImmutableArray<FunctionSymbol>.Empty : builder.ToImmutable();
@@ -2106,24 +2120,25 @@ public sealed class BoundScope
     {
         var suffix = "#" + name;
         HashSet<string>? otherKeys = null;
-        for (var s = this; s != null; s = s.Parent)
+        BoundScope? scope = this;
+        while (scope != null)
         {
-            if (s.extensionFunctionsByName == null)
+            if (scope.extensionFunctionsByName != null)
             {
-                continue;
-            }
-
-            foreach (var key in s.extensionFunctionsByName.Keys)
-            {
-                if (string.Equals(key, excludeKey, StringComparison.Ordinal)
-                    || !key.EndsWith(suffix, StringComparison.Ordinal))
+                foreach (var key in scope.extensionFunctionsByName.Keys)
                 {
-                    continue;
-                }
+                    if (string.Equals(key, excludeKey, StringComparison.Ordinal)
+                        || !key.EndsWith(suffix, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
 
-                otherKeys ??= new HashSet<string>(StringComparer.Ordinal);
-                otherKeys.Add(key);
+                    otherKeys ??= new HashSet<string>(StringComparer.Ordinal);
+                    otherKeys.Add(key);
+                }
             }
+
+            scope = scope.Parent;
         }
 
         if (otherKeys == null)

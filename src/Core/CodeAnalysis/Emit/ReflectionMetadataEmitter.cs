@@ -5162,11 +5162,13 @@ internal sealed class ReflectionMetadataEmitter
         // symbolic form, instance-method calls on the receiver would emit
         // `callvirt` + value-on-stack instead of `call` + managed pointer,
         // producing PEVerify-rejected IL.
-        if (type is NullableTypeSymbol nullableTp
-            && nullableTp.UnderlyingType is TypeParameterSymbol tp
-            && tp.HasValueTypeConstraint)
+        if (type is NullableTypeSymbol nullableTp)
         {
-            return true;
+            var tp = nullableTp.UnderlyingType as TypeParameterSymbol;
+            if (tp?.HasValueTypeConstraint == true)
+            {
+                return true;
+            }
         }
 
         // Issue #1298: `E?` over a user-declared enum lowers to the CLR struct
