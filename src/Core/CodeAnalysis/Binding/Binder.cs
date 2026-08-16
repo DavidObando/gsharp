@@ -4575,11 +4575,7 @@ public sealed class Binder
         {
             hasSymbolicArgument = true;
 
-            // Issue #3087: a tuple must retain its ValueTuple shape while its
-            // symbolic elements ride through erased CLR placeholders.
-            if ((type is TupleTypeSymbol
-                    or NullableTypeSymbol { UnderlyingType: TupleTypeSymbol })
-                && MemberLookup.TryProjectErasedClrType(type, out var projected))
+            if (MemberLookup.TryProjectErasedClrType(type, out var projected))
             {
                 return scope.References.MapClrTypeToReferences(projected);
             }
@@ -5595,6 +5591,12 @@ public sealed class Binder
                 var allClr = true;
                 for (var i = 0; i < substitutedArgs.Length; i++)
                 {
+                    if (TypeSymbol.RequiresSymbolicProjection(substitutedArgs[i]))
+                    {
+                        allClr = false;
+                        break;
+                    }
+
                     var clr = substitutedArgs[i].ClrType;
                     if (clr == null)
                     {
@@ -5621,6 +5623,35 @@ public sealed class Binder
                         // rather than crash.
                         var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", clrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
                         System.Diagnostics.Debug.WriteLine(assertMessage);
+                    }
+                }
+            }
+
+            if (it.OpenDefinition != null)
+            {
+                var erasedArgs = new System.Type[substitutedArgs.Length];
+                var allErased = true;
+                for (var i = 0; i < substitutedArgs.Length; i++)
+                {
+                    if (!MemberLookup.TryProjectErasedClrType(substitutedArgs[i], out var erased)
+                        || erased == null)
+                    {
+                        allErased = false;
+                        break;
+                    }
+
+                    erasedArgs[i] = mapClrType != null ? mapClrType(erased) : erased;
+                }
+
+                if (allErased)
+                {
+                    try
+                    {
+                        var erasedClosed = it.OpenDefinition.MakeGenericType(erasedArgs);
+                        return ImportedTypeSymbol.GetConstructed(erasedClosed, it.OpenDefinition, substitutedArgs);
+                    }
+                    catch (System.ArgumentException)
+                    {
                     }
                 }
             }

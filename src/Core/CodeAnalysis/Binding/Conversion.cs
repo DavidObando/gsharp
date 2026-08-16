@@ -2592,6 +2592,11 @@ public sealed class Conversion
             return false;
         }
 
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b))
+        {
+            return true;
+        }
+
         var elementConversion = Classify(a, b);
         return elementConversion.Exists && elementConversion.IsIdentity;
     }

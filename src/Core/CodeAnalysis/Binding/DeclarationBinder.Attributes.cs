@@ -557,8 +557,16 @@ internal sealed partial class DeclarationBinder
         return null;
     }
 
-    private static bool IsAttributeType(TypeSymbol? typeSymbol)
+    private bool IsAttributeType(TypeSymbol? typeSymbol)
+        => IsAttributeType(typeSymbol, new HashSet<TypeSymbol>());
+
+    private bool IsAttributeType(TypeSymbol? typeSymbol, HashSet<TypeSymbol> visited)
     {
+        if (typeSymbol == null || !visited.Add(typeSymbol))
+        {
+            return false;
+        }
+
         // Issue #1921: a same-compilation user class deriving from
         // System.Attribute (via either the `@Attribute` sugar or a plain
         // `: Attribute` / `: System.Attribute` base clause) has no CLR type
@@ -567,7 +575,23 @@ internal sealed partial class DeclarationBinder
         // walks the symbol-level BaseClass chain instead of relying on ClrType.
         if (typeSymbol is StructSymbol structSym)
         {
-            return structSym.DerivesFromSystemAttribute();
+            if (structSym.DerivesFromSystemAttribute())
+            {
+                return true;
+            }
+
+            if (structSym.Declaration != null)
+            {
+                foreach (var baseClause in structSym.Declaration.BaseTypeClauses)
+                {
+                    if (IsAttributeType(bindTypeClause(baseClause), visited))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         var clr = typeSymbol?.ClrType;

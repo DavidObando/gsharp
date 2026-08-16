@@ -335,12 +335,17 @@ internal sealed partial class OverloadResolver
         // nullable/reference widening (e.g. []uint8 -> []?uint8). Drop such
         // non-convertible candidates here, conservatively (see skips below), so
         // the unique applicable overload is selected without a spurious GS0266.
-        if (applicable.Count > 1 && !HasNamedArguments(argumentNames))
+        if (applicable.Count > 1)
         {
             var convertible = new List<FunctionSymbol>(applicable.Count);
             foreach (var cand in applicable)
             {
-                if (IsConvertibilityApplicable(cand, argumentCount, boundArguments, GetCandidateSubstitution(cand)))
+                if (IsConvertibilityApplicable(
+                        cand,
+                        argumentCount,
+                        argumentNames,
+                        boundArguments,
+                        GetCandidateSubstitution(cand)))
                 {
                     convertible.Add(cand);
                 }
@@ -970,6 +975,7 @@ internal sealed partial class OverloadResolver
     private bool IsConvertibilityApplicable(
         FunctionSymbol candidate,
         int argumentCount,
+        ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
     {
@@ -988,13 +994,24 @@ internal sealed partial class OverloadResolver
         var count = Math.Min(argumentCount, paramLen);
         for (var i = 0; i < count && i < boundArguments.Count; i++)
         {
+            var parameterSlot = MapArgumentIndexToParameterSlot(
+                candidate,
+                argumentNames,
+                i,
+                parameterOffset,
+                paramLen);
+            if (parameterSlot < 0)
+            {
+                return false;
+            }
+
             // The variadic tail binds its element(s) elsewhere; do not reject.
-            if (isVariadic && i >= fixedParamCount)
+            if (isVariadic && parameterSlot >= fixedParamCount)
             {
                 continue;
             }
 
-            var parameter = candidate.Parameters[i + parameterOffset];
+            var parameter = candidate.Parameters[parameterSlot + parameterOffset];
 
             // By-ref/out/in parameters have their own exact-type rules.
             if (parameter.RefKind != RefKind.None)
@@ -1061,6 +1078,7 @@ internal sealed partial class OverloadResolver
         // implicitly converts to the variadic element type — keeping
         // applicability/ranking in agreement with the final element coercion.
         if (isVariadic
+            && !HasNamedArguments(argumentNames)
             && candidate.Parameters[candidate.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice)
         {
             var elementType = variadicSlice.ElementType;

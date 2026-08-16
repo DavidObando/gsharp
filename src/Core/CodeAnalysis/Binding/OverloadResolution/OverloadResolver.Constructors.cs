@@ -794,6 +794,17 @@ internal sealed partial class OverloadResolver
         // Issue #1214: for a closed generic construction, the constructor table
         // lives on the open definition (EffectiveExplicitConstructors).
         var ctorOverloads = classType.EffectiveExplicitConstructors;
+        var accessibleCtorOverloads = ctorOverloads
+            .Where(ctor => AccessibilityChecker.IsAccessible(
+                ctor.Function.Accessibility,
+                ctor.DeclaringType ?? classType,
+                getCurrentFunction()))
+            .ToImmutableArray();
+        if (!accessibleCtorOverloads.IsDefaultOrEmpty)
+        {
+            ctorOverloads = accessibleCtorOverloads;
+        }
+
         var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var ai = 0; ai < syntax.Arguments.Count; ai++)
         {

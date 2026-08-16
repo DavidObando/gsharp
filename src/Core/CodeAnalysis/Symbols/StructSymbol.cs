@@ -2540,7 +2540,9 @@ public sealed class StructSymbol : TypeSymbol
             var resolvedClrArgs = new System.Type[substitutedArgs.Count];
             for (var i = 0; i < substitutedArgs.Count; i++)
             {
-                var clr = substitutedArgs[i].ClrType ?? typeof(object);
+                var clr = MemberLookup.TryProjectErasedClrType(substitutedArgs[i], out var projected)
+                    ? projected
+                    : substitutedArgs[i].ClrType ?? typeof(object);
                 resolvedClrArgs[i] = mapClrType != null ? mapClrType(clr) : clr;
             }
 
