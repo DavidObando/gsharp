@@ -574,7 +574,10 @@ internal sealed partial class OverloadResolver
                     syntax.Arguments,
                     boundArguments.ToImmutable(),
                     parameters.Length,
-                    p => parameters[p].Name,
+                    p =>
+                    {
+                        return parameters[p].Name;
+                    },
                     classType.Name,
                     out parameterSyntax,
                     out var permutedBound))
