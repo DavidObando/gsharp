@@ -345,10 +345,11 @@ remain green. Core compile diagnostics moved:
 | 62 | 116 | Explicit statement-array element typing |
 | 63 | 115 | Mutable narrowing-frame locals |
 | 64 | 111 | Positional-record property deduplication |
-| 65 | **110** | Nullable reference interface-signature matching |
+| 65 | 110 | Nullable reference interface-signature matching |
+| 66 | **108** | Final remeasurement after CI repairs |
 
-Continuation reduction is 291 → 110 (181 removed, 62.2%). From cycle 14,
-Core semantic diagnostics are 1,126 → 110 (1,016 removed, 90.2%).
+Continuation reduction is 291 → 108 (183 removed, 62.9%). From cycle 14,
+Core semantic diagnostics are 1,126 → 108 (1,018 removed, 90.4%).
 
 Durable continuation fixes include capturing recursive and mutually recursive
 local-function lifting with transitive captures and by-ref mutable state;
@@ -358,7 +359,7 @@ open generic CLR type aliases; exhaustive-switch out-parameter analysis;
 nullable array-allocation element preservation; positional-record property
 deduplication; and nullable-reference-insensitive CLR interface matching.
 
-Cycle 65's largest remaining IDs are GS0155 (21), GS0159 (19), GS0158 (17),
+Cycle 66's largest remaining IDs are GS0155 (21), GS0159 (19), GS0158 (17),
 GS0154 (11), GS0266 (6), and GS0125 (6). Core still does not compile, so
 ILVerify, test parity, self-hosted Core recompilation, and downstream project
 migrations remain gated exactly as before.
