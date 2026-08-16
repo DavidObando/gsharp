@@ -538,4 +538,15 @@ public class LexerTests
         Assert.Equal("   ", tokens[0].Text);
         Assert.Same(tokens[0].Text, tokens[1].Text);
     }
+
+    [Fact]
+    public void UniformWhitespaceRuns_AcrossLexers_ShareTextInstance()
+    {
+        var first = SyntaxTree.ParseTokens("a    b")
+            .Single(t => t.Kind == SyntaxKind.WhitespaceToken);
+        var second = SyntaxTree.ParseTokens("c    d")
+            .Single(t => t.Kind == SyntaxKind.WhitespaceToken);
+
+        Assert.Same(first.Text, second.Text);
+    }
 }

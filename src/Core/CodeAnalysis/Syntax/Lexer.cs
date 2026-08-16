@@ -584,7 +584,13 @@ public sealed class Lexer
 
             if (uniform)
             {
-                return WhitespaceRunCache.GetOrAdd((ch, length), _ => this.text.ToString(start, length));
+                var key = (ch, length);
+                if (WhitespaceRunCache.TryGetValue(key, out var cached))
+                {
+                    return cached;
+                }
+
+                return WhitespaceRunCache.GetOrAdd(key, this.text.ToString(start, length));
             }
         }
 
