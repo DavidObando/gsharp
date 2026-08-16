@@ -416,8 +416,17 @@ public sealed class InterpolatedStringHandlerInfo
         }
         else
         {
-            method = candidates.FirstOrDefault(candidate => candidate.IsGenericMethodDefinition)
-                ?? candidates[0];
+            method = null;
+            foreach (var candidate in candidates)
+            {
+                if (candidate.IsGenericMethodDefinition)
+                {
+                    method = candidate;
+                    break;
+                }
+            }
+
+            method ??= candidates[0];
         }
 
         if (!method.IsGenericMethodDefinition)

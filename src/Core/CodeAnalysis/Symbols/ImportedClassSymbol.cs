@@ -91,17 +91,34 @@ public sealed class ImportedClassSymbol : Symbol
     {
         _ = ne;
         var level = FindNearestNamedMemberLevel(text);
-        var property = level.Properties.FirstOrDefault(p =>
-            p.GetIndexParameters().Length == 0
-            && IsStatic(p)
-            && IsVisibleToCurrentCompilation(p));
+        PropertyInfo? property = null;
+        foreach (var candidate in level.Properties)
+        {
+            if (candidate.GetIndexParameters().Length == 0
+                && IsStatic(candidate)
+                && IsVisibleToCurrentCompilation(candidate))
+            {
+                property = candidate;
+                break;
+            }
+        }
+
         if (property != null)
         {
             member = property;
             return true;
         }
 
-        var field = level.Fields.FirstOrDefault(f => f.IsStatic && IsVisibleToCurrentCompilation(f));
+        FieldInfo? field = null;
+        foreach (var candidate in level.Fields)
+        {
+            if (candidate.IsStatic && IsVisibleToCurrentCompilation(candidate))
+            {
+                field = candidate;
+                break;
+            }
+        }
+
         if (field != null)
         {
             member = field;

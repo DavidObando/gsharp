@@ -336,8 +336,18 @@ internal sealed partial class OverloadResolver
         ExpressionSyntax?[] parameterSyntax;
         var permutedArgs = boundArguments;
         Func<int, string> parameterNameAt = parameterIndex => parameterNames[parameterIndex];
-        bool hasNamedArguments =
-            syntax.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);
+        var hasNamedArguments = false;
+        var firstNamedArgumentName = string.Empty;
+        foreach (var argument in syntax.Arguments)
+        {
+            if (argument is NamedArgumentExpressionSyntax namedArgument)
+            {
+                hasNamedArguments = true;
+                firstNamedArgumentName = namedArgument.NameToken.Text;
+                break;
+            }
+        }
+
         if (hasNamedArguments)
         {
             if (parameterNames.IsDefaultOrEmpty || parameterNames.Length != functionType.Arity)
@@ -345,11 +355,7 @@ internal sealed partial class OverloadResolver
                 Diagnostics.ReportNamedArgumentParameterNotFound(
                     syntax.Identifier.Location,
                     calleeName,
-                    FirstNamedArgumentName(
-                        syntax.Arguments
-                            .OfType<NamedArgumentExpressionSyntax>()
-                            .Select(argument => argument.NameToken.Text)
-                            .ToImmutableArray()));
+                    firstNamedArgumentName);
                 return false;
             }
 
