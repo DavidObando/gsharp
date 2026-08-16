@@ -88,6 +88,75 @@ namespace Demo
     }
 
     [Fact]
+    public void NullablePromotedNestedGenericLocal_RetainsContainingType()
+    {
+        const string source = """
+            #nullable enable
+            using System.Collections.Immutable;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public void M()
+                    {
+                        var builder = ImmutableArray.CreateBuilder<int>();
+                        builder = null;
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("builder ImmutableArray[int32].Builder?", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void NamedTuplePropertyPattern_UsesPositionalMember()
+    {
+        const string source = """
+            #nullable enable
+
+            namespace Demo
+            {
+                public static class C
+                {
+                    public static bool HasValue((int Id, string? FunctionType)? target) =>
+                        target is { FunctionType: not null };
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("target!!.Item2 != nil", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("target!!.FunctionType", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public void PositionalRecordProperty_RedeclarationDoesNotDuplicateMember()
     {
         const string source = @"

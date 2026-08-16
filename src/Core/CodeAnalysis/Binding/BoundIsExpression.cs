@@ -62,5 +62,6 @@ public sealed class BoundIsExpression : BoundExpression
     public TypeSymbol? TargetType => Pattern is BoundTypePattern typePattern ? typePattern.TargetType : null;
 
     /// <summary>Gets a value indicating whether this is a plain type test with no recursive suffix.</summary>
-    public bool IsSimpleTypeTest => Pattern is BoundTypePattern { PropertyPattern: null };
+    public bool IsSimpleTypeTest =>
+        Pattern is BoundTypePattern typePattern && typePattern.PropertyPattern == null;
 }

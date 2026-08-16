@@ -474,6 +474,223 @@ public class Issue3394InlineOutTupleBindingTests
     }
 
     [Fact]
+    public void ImportedStaticGenericByRef_PreservesSourceReferenceType()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Threading
+
+            class Item {
+                prop Value int32
+            }
+
+            let item = Item()
+            item.Value = 42
+            var source Item? = item
+            let value = Volatile.Read(&source)
+            var destination Item? = nil
+            Volatile.Write(&destination, value)
+            destination!!.Value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void GenericSourceEnumerable_ToImmutableArrayPreservesElementType()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections
+            import System.Collections.Generic
+            import System.Collections.Immutable
+
+            class Item {}
+
+            class Items[T] : IEnumerable[T] {
+                func GetEnumerator() IEnumerator[T] -> List[T]().GetEnumerator()
+                private func GetEnumerator() IEnumerator -> GetEnumerator()
+            }
+
+            let items = Items[Item]()
+            let values ImmutableArray[Item] = items.ToImmutableArray()
+            values.Length
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void UserGenericNestedImportedReturn_PreservesIterationElementType()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Generic
+
+            open class Base {}
+            class Item : Base {}
+
+            func group[T Base](value T) List[List[T]] {
+                let result = List[List[T]]()
+                let items = List[T]()
+                items.Add(value)
+                result.Add(items)
+                return result
+            }
+
+            var count = 0
+            for items in group(Item()) {
+                let item Item = items[0]
+                count += if item != nil { items.Count } else { 0 }
+            }
+            count
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void ConcurrentDictionaryGetOrAdd_PrefersFactoryForGenericSliceValue()
+    {
+        const string Source = """
+            import System.Collections.Concurrent
+
+            open class Item {}
+            class Value : Item {}
+
+            class Cache[T Item] {
+                shared {
+                    let Values ConcurrentDictionary[(string, int32), []T] =
+                        ConcurrentDictionary[(string, int32), []T]()
+                }
+            }
+
+            func get[T Item]() []T ->
+                Cache[T].Values.GetOrAdd(("items", 0), (key (string, int32)) -> [0]T)
+
+            get[Value]().Length
+            """;
+
+        var result = EmittedOracle.Evaluate(Source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void ConcurrentDictionaryGetOrAdd_SubstitutesConcreteMethodTypeArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            import System.Collections.Concurrent
+
+            class Item {}
+
+            func create(type_ Type, name string) Item -> Item()
+
+            let cache = ConcurrentDictionary[Type, Item]()
+            cache.GetOrAdd(typeof(Item), create, "consumer").GetType().Name
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Item", result.Value);
+    }
+
+    [Fact]
+    public void SliceReferenceElementNullability_IsRuntimeIdentity()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Item {}
+
+            let values = [1]Item
+            let nullableValues []Item? = values
+            nullableValues.Length
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void ConstructorOverload_RejectsSiblingForShorterCandidate()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Owner {}
+            class StructOwner : Owner {}
+            class InterfaceOwner : Owner {}
+
+            class Symbol {
+                init(receiver StructOwner?) {}
+                init(receiver Owner?, isOpen bool = false, isOverride bool = false) {}
+            }
+
+            Symbol(receiver: InterfaceOwner())
+            42
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ConstructorOverload_IgnoresInaccessiblePrivateCandidate()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Expression {}
+            class Variable : Expression {}
+
+            class Assignment {
+                init(receiver Variable?) {}
+                private init(receiver Expression) {}
+            }
+
+            Assignment(nil)
+            42
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ImportedClassConstraint_ExposesInstanceProperties()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            import System.Reflection
+
+            func name[T MemberInfo](member T) string -> member.Name
+
+            let property = typeof(string).GetProperty("Length")!!
+            name(property)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("Length", result.Value);
+    }
+
+    [Fact]
+    public void CrossFileAttributeUse_BindsBeforeExplicitBaseDeclaration()
+    {
+        var result = EmittedOracle.Evaluate(
+            new[]
+            {
+                """
+                package P
+                @Note
+                class C {}
+                """,
+                """
+                package P
+                import System
+                @AttributeUsage(AttributeTargets.Class)
+                class NoteAttribute : Attribute {}
+                """,
+            });
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void ImmutableArrayCreate_PassesThroughSourceTypeSlice()
     {
         var result = EmittedOracle.Evaluate("""

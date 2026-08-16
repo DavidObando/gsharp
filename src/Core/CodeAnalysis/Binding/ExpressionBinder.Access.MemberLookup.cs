@@ -3580,6 +3580,38 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        var importedClassConstraint = tpRecv.ClassConstraint;
+        var importedClass = importedClassConstraint?.ClrType;
+        if (importedClassConstraint != null
+            && importedClass != null)
+        {
+            var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                importedClass,
+                memberName,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (clrProperty != null && clrProperty.GetIndexParameters().Length == 0)
+            {
+                if (clrProperty.GetGetMethod(nonPublic: false) == null)
+                {
+                    Diagnostics.ReportCannotAssign(ne.Location, memberName);
+                    return new BoundErrorExpression(null);
+                }
+
+                var propertyType = MemberLookup.GetClrPropertyTypeSymbol(importedClassConstraint, clrProperty);
+                var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                    importedClassConstraint,
+                    clrProperty);
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    new BoundClrPropertyAccessExpression(
+                        null,
+                        receiver,
+                        clrProperty,
+                        propertyType,
+                        constrainedReceiverTypeParameter: tpRecv,
+                        constrainedInterfaceType: declaringConstraint));
+            }
+        }
+
         // Interface constraint: an instance property declared on the (non-generic)
         // interface or any base interface. The getter dispatches through a
         // verifiable `box !!T; callvirt I::get_X` in the emitter.

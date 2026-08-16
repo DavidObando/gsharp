@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -35,7 +36,10 @@ public class Issue2919ImportedGenericProjectionTests
                 nested List[Src].Enumerator,
                 unqualifiedEnum List[Mode],
                 qualifiedEnum System.Collections.Generic.List[Mode],
-                nestedEnum List[Mode].Enumerator) {}
+                nestedEnum List[Mode].Enumerator,
+                unqualifiedNullableEnum List[Mode?],
+                qualifiedNullableEnum System.Collections.Generic.List[Mode?],
+                nestedNullableEnum List[Mode?].Enumerator) {}
             """);
 
         Assert.Empty(scope.Diagnostics);
@@ -56,6 +60,34 @@ public class Issue2919ImportedGenericProjectionTests
             "System.Collections.Generic.List`1+Enumerator",
             "System.Object",
             "Mode");
+        AssertNullableEnumProjection(
+            parameters[6].Type,
+            "System.Collections.Generic.List`1");
+        AssertNullableEnumProjection(
+            parameters[7].Type,
+            "System.Collections.Generic.List`1");
+        AssertNullableEnumProjection(
+            parameters[8].Type,
+            "System.Collections.Generic.List`1+Enumerator");
+    }
+
+    [Fact]
+    public void NullableSourceEnum_GenericArguments_EmitAndRun()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Generic
+
+            enum Mode { First, Second }
+
+            let unqualified = List[Mode?]()
+            let qualified = System.Collections.Generic.List[Mode?]()
+            unqualified.Add(Mode.Second)
+            qualified.Add(Mode.First)
+            unqualified[0] == Mode.Second && qualified[0] == Mode.First
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
     }
 
     private static void AssertProjection(
@@ -69,6 +101,21 @@ public class Issue2919ImportedGenericProjectionTests
         Assert.Equal(expectedOpenDefinition, imported.OpenDefinition.FullName);
         Assert.Equal(expectedClrArgument, Assert.Single(imported.ClrType.GetGenericArguments()).FullName);
         Assert.Equal(expectedSymbolicArgument, Assert.Single(imported.TypeArguments).Name);
+    }
+
+    private static void AssertNullableEnumProjection(
+        TypeSymbol type,
+        string expectedOpenDefinition)
+    {
+        var imported = Assert.IsType<ImportedTypeSymbol>(type);
+        Assert.NotNull(imported.OpenDefinition);
+        Assert.Equal(expectedOpenDefinition, imported.OpenDefinition.FullName);
+        Assert.Equal(
+            typeof(object).FullName,
+            Assert.Single(imported.ClrType.GetGenericArguments()).FullName);
+
+        var symbolicArgument = Assert.IsType<NullableTypeSymbol>(Assert.Single(imported.TypeArguments));
+        Assert.Equal("Mode", symbolicArgument.UnderlyingType.Name);
     }
 
     private static BoundGlobalScope BindSource(string source)

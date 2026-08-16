@@ -363,3 +363,55 @@ Cycle 66's largest remaining IDs are GS0155 (21), GS0159 (19), GS0158 (17),
 GS0154 (11), GS0266 (6), and GS0125 (6). Core still does not compile, so
 ILVerify, test parity, self-hosted Core recompilation, and downstream project
 migrations remain gated exactly as before.
+
+## Continuation through cycle 83
+
+Branch `oats/3394-core-compile-continuation-2`, based on `bf2602b6`, moved the
+Core semantic frontier from 108 to **60** diagnostics:
+
+| Cycle | Diagnostics | Milestone |
+|---:|---:|---|
+| 67 | 108 | Fresh-main review baseline |
+| 68 | 101 | Imported static generic managed by-ref projection; #3400 closed |
+| 69 | 93 | Source collection interface element inference |
+| 70 | 89 | Nested imported generic return substitution |
+| 71–73 | 88 → 87 → 86 | Structural generic erasure and method-type substitution |
+| 74 | 81 | Reference-nullable array/slice runtime identity |
+| 75 | 74 | Named-argument convertibility-aware overload selection |
+| 76 | 72 | Constructor accessibility filtering |
+| 77–79 | 67 → 66 → 65 | Imported class-constraint properties and pattern access |
+| 80–82 | 62 → 61 → 60 | Nullable nested-type rendering, named tuple patterns, attribute order |
+| 83 | **60** | Final remeasurement |
+
+Final run:
+
+```text
+artifacts/issue-3394/core-cycle-83-final/2026-08-16T05-20-12Z_936f92
+translate: PASS
+compile:  FAIL(60)
+```
+
+Continuation-2 removed 48 diagnostics (44.4%); the complete semantic effort is
+now 1,126 → 60 (1,066 removed, 94.7%).
+
+Durable fixes include:
+
+- recursive erased CLR projection for symbolic managed by-ref arguments,
+  proving generic `Volatile.Read/Write` over same-compilation reference types;
+- source collection-interface element inference;
+- preservation of symbolic nested imported generics through method/member
+  substitution;
+- structural erasure for slices, tuples, arrays, maps, and delegate targets;
+- runtime identity for reference-nullability-only wrapper differences;
+- convertibility-aware named-argument overload selection and inaccessible
+  constructor filtering;
+- imported class-constraint property access;
+- cross-file attribute-base recognition before base binding completes;
+- nullable promotion retaining nested containing types and array rank;
+- named tuple property patterns lowering to positional tuple members.
+
+Cycle 83's largest IDs are GS0159 (10), GS0155 (8), GS0158 (8), GS0125 (6),
+and GS0154 (4). The largest file remains
+`ExpressionBinder.Access.Accessor.gs` with 13 diagnostics. Core still does not
+compile; ILVerify, test parity, self-hosted Core recompilation, and downstream
+project migrations remain gated.

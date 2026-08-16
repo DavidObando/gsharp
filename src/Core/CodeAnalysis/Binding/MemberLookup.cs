@@ -1971,6 +1971,16 @@ internal sealed class MemberLookup
                 }
 
                 return false;
+            case ByRefTypeSymbol byRef:
+                if (TryProjectErasedClrType(byRef.PointeeType, out var byRefPointee)
+                    && byRefPointee != null
+                    && !byRefPointee.IsByRef)
+                {
+                    erased = byRefPointee.MakeByRefType();
+                    return true;
+                }
+
+                return false;
             case PointerTypeSymbol pointer:
                 // Issue #2838: `*T` under `T : unmanaged` — canonically the
                 // pointer bound by `fixed p *T = span` — has a null ClrType
@@ -5519,7 +5529,7 @@ internal sealed class MemberLookup
 
     private static TypeSymbol? TryGetElementType(TypeSymbol t)
     {
-        return t switch
+        var direct = t switch
         {
             SliceTypeSymbol s => s.ElementType,
             ArrayTypeSymbol a => a.ElementType,
@@ -5528,6 +5538,24 @@ internal sealed class MemberLookup
             AsyncSequenceTypeSymbol aseq => aseq.ElementType,
             _ => null,
         };
+        if (direct != null || t is not StructSymbol sourceType)
+        {
+            return direct;
+        }
+
+        foreach (var implemented in sourceType.ImplementedClrInterfaces)
+        {
+            if (implemented is ImportedTypeSymbol imported
+                && TryGetConstructedImportedProjection(imported, out var projected)
+                && projected != null
+                && TryMapThroughImplemented(projected, typeof(IEnumerable<>), out var arguments)
+                && arguments.Length == 1)
+            {
+                return arguments[0];
+            }
+        }
+
+        return null;
     }
 
     private static bool TryMapThroughImplemented(ImportedTypeSymbol imp, Type targetOpenDef, out ImmutableArray<TypeSymbol> liftedArgs)

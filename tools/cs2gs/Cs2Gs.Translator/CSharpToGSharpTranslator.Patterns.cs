@@ -1117,7 +1117,7 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression memberTest;
                     if (sub.NameColon != null)
                     {
-                        string memberName = sub.NameColon.Name.Identifier.Text;
+                        string memberName = this.GetSubpatternMemberName(sub);
                         GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
                         ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
                         memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
@@ -1230,6 +1230,19 @@ public sealed partial class CSharpToGSharpTranslator
                 IFieldSymbol f => f.Type,
                 _ => null,
             };
+        }
+
+        private string GetSubpatternMemberName(SubpatternSyntax sub)
+        {
+            string name = sub.NameColon?.Name.Identifier.Text;
+            if (sub.NameColon != null
+                && this.context.SemanticModel.GetSymbolInfo(sub.NameColon.Name).Symbol
+                    is IFieldSymbol { ContainingType.IsTupleType: true } tupleField)
+            {
+                name = (tupleField.CorrespondingTupleField ?? tupleField).Name;
+            }
+
+            return name;
         }
 
         // Splits an extended property subpattern's dotted member path

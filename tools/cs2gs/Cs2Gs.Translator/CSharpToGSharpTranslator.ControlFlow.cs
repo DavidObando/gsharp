@@ -1394,9 +1394,9 @@ public sealed partial class CSharpToGSharpTranslator
             return reference switch
             {
                 NamedTypeReference named =>
-                    new NamedTypeReference(named.Name, named.TypeArguments) { IsNullable = true },
+                    new NamedTypeReference(named.Name, named.TypeArguments, named.ContainingType) { IsNullable = true },
                 ArrayTypeReference array =>
-                    new ArrayTypeReference(array.ElementType) { IsNullable = true },
+                    new ArrayTypeReference(array.ElementType, array.Rank) { IsNullable = true },
                 PointerTypeReference pointer =>
                     new PointerTypeReference(pointer.ElementType) { IsNullable = true },
                 TupleTypeReference tuple =>

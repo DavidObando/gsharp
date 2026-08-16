@@ -1361,7 +1361,21 @@ internal sealed class ConversionClassifier
         // `Expression<Func<TEntity,TRelated>>`) is substituted in the SAME pass
         // as the receiver's `TEntity` — rather than only ever substituting one
         // or the other depending on which happens to be tried first.
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, imported.TypeArguments, openMethod, symbolicMethodTypeArgs);
+        var effectiveMethodTypeArgs = symbolicMethodTypeArgs;
+        if (effectiveMethodTypeArgs.IsDefaultOrEmpty
+            && method.IsGenericMethod
+            && !method.ContainsGenericParameters)
+        {
+            effectiveMethodTypeArgs = ImmutableArray.CreateRange<TypeSymbol?>(
+                method.GetGenericArguments().Select(static argument => TypeSymbol.FromClrType(argument)));
+        }
+
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+            openParamType,
+            openDef,
+            imported.TypeArguments,
+            openMethod,
+            effectiveMethodTypeArgs);
         mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
         return mapped != null
             && mapped != TypeSymbol.Error
