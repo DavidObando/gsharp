@@ -246,6 +246,19 @@ public sealed partial class CSharpToGSharpTranslator
                     typeArguments = this.MapTypeArguments(liftedGeneric);
                 }
             }
+            else if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.LocalFunction } groupMember
+                && this.state.RecursiveLocalFunctionGroups.TryGetValue(
+                    groupMember, out RecursiveLocalFunctionGroup recursiveGroup)
+                && recursiveGroup.Members.Contains(groupMember, SymbolEqualityComparer.Default))
+            {
+                // Issue #3399: a call to a recursive SCC partner from inside a
+                // closure body — the partner is a nullable function-typed local,
+                // so pass it through a postfix null assertion (`X!!`, ADR-0069)
+                // that unwraps the declared local's `nil` default.
+                target = new NonNullAssertionExpression(
+                    new IdentifierExpression(recursiveGroup.NameOf(groupMember)));
+            }
             else if (invocation.Expression is GenericNameSyntax generic)
             {
                 target = new IdentifierExpression(SanitizeIdentifier(generic.Identifier.Text));

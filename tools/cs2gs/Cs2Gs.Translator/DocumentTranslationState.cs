@@ -206,6 +206,28 @@ internal sealed class DocumentTranslationState
     public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
 
+    // Issue #3399: local functions participating (directly or transitively) in
+    // recursion/mutual recursion that cannot be lifted as static helpers
+    // (they capture sibling locals), so G#'s non-recursive `let name = func …`
+    // binding fails with GS0130/GS0125. Each such strongly-connected component
+    // is instead lowered to G#'s nullable-function-local scheme: every member
+    // is FIRST declared nil-initialized as `var Name (… -> R)? = nil` (G#
+    // closures cannot forward-reference not-yet-declared siblings, so the whole
+    // SCC's declarations must precede its first assignment), then each member
+    // binds its function literal `Name = func …`; SCC partners are reached from
+    // a closure body through the nullable local via a postfix null assertion
+    // `Partner!!(…)` (ADR-0137/ADR-0069). Reference-capture semantics preserve
+    // C#'s shared mutation of the captured locals.
+    public Dictionary<IMethodSymbol, RecursiveLocalFunctionGroup> RecursiveLocalFunctionGroups { get; } =
+        new Dictionary<IMethodSymbol, RecursiveLocalFunctionGroup>(SymbolEqualityComparer.Default);
+
+    // Issue #3399: state-level dedup for the SCC declarations emission — the
+    // first member translated for a group is the one that emits the shared
+    // nil-initialized declarations; tracked by member symbol (not by group
+    // instance) so re-registered copies of the same SCC cannot double-emit.
+    public HashSet<IMethodSymbol> EmittedRecursiveGroupMembers { get; } =
+        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+
     // The exception variable bound by the innermost enclosing `catch` clause,
     // used to translate a C# re-throw (`throw;`) — which has no bare G# form —
     // to `throw <caughtVar>` (ADR-0115 §B).
@@ -253,6 +275,46 @@ internal sealed class LiftedLocalFunctionCapture
 /// scope nodes compare by reference (the same <c>SyntaxNode</c> instance is what
 /// every call site passes for a given symbol).
 /// </summary>
+/// <summary>
+/// Issue #3399: the per-SCC emission state for the nullable-function-local
+/// lowering of a capturing recursive C# local function (see
+/// <see cref="DocumentTranslationState.RecursiveLocalFunctionGroups"/>).
+/// Member names and the shared nil-initialized declarations are resolved at
+/// registration time; <see cref="DeclarationsEmitted"/> lets the FIRST member
+/// translated in document order emit the whole SCC's `var Name … = nil`
+/// declarations ahead of its own `Name = func …` assignment (all declarations
+/// must precede the first assignment, because a G# closure body cannot
+/// reference a sibling local that is not yet declared).
+/// </summary>
+internal sealed class RecursiveLocalFunctionGroup
+{
+    public RecursiveLocalFunctionGroup(
+        IEnumerable<IMethodSymbol> members,
+        IReadOnlyList<string> names,
+        IReadOnlyList<GStatement> declarations)
+    {
+        this.MemberNames = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+        int index = 0;
+        foreach (IMethodSymbol member in members)
+        {
+            this.MemberNames[member] = names[index++];
+        }
+
+        this.Members = new HashSet<IMethodSymbol>(this.MemberNames.Keys, SymbolEqualityComparer.Default);
+        this.Declarations = declarations;
+    }
+
+    public HashSet<IMethodSymbol> Members { get; }
+
+    public Dictionary<IMethodSymbol, string> MemberNames { get; }
+
+    public IReadOnlyList<GStatement> Declarations { get; }
+
+    public bool DeclarationsEmitted { get; set; }
+
+    public string NameOf(IMethodSymbol symbol) => this.MemberNames[symbol];
+}
+
 internal sealed class SymbolScopeKeyComparer : IEqualityComparer<(ISymbol Symbol, SyntaxNode Scope)>
 {
     public static readonly SymbolScopeKeyComparer Instance = new SymbolScopeKeyComparer();
