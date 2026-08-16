@@ -583,11 +583,13 @@ internal sealed partial class StatementBinder
         }
 
         var descendants = DescendantsAndSelf(function.Declaration.Body).ToArray();
-        if (descendants.Any(node =>
-                node is VariableDeclarationSyntax variable
-                && string.Equals(variable.Identifier.Text, function.Type.Name, StringComparison.Ordinal)))
+        foreach (var node in descendants)
         {
-            return false;
+            if (node is VariableDeclarationSyntax variable
+                && string.Equals(variable.Identifier.Text, function.Type.Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
         }
 
         var returns = descendants.OfType<ReturnStatementSyntax>().ToArray();

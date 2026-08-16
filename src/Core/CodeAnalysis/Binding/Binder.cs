@@ -1756,22 +1756,29 @@ public sealed class Binder
                 }
 
                 var (functionDeclaration, functionBody) = RequireDeclaredBody(function);
-                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, functionBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
-                {
-                    var binder = new Binder(parentScope, function);
-                    var body = binder.statements.BindBlockStatement(functionBody);
-                    binder.statements.FinalizeUserLabels();
-                    var lowered = Lowerer.Lower(body);
-
-                    if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                var loweredBody = BindBodyWithPackage(
+                    parentScope,
+                    function.Package?.Name,
+                    functionBody.SyntaxTree,
+                    () =>
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
-                    }
+                        return BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
+                        {
+                            var binder = new Binder(parentScope, function);
+                            var body = binder.statements.BindBlockStatement(functionBody);
+                            binder.statements.FinalizeUserLabels();
+                            var lowered = Lowerer.Lower(body);
 
-                    AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
+                            if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                            {
+                                binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
+                            }
 
-                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                }));
+                            AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
+
+                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                        });
+                    });
 
                 functionBodies.Add(function, loweredBody);
             }
@@ -1805,22 +1812,29 @@ public sealed class Binder
                 }
 
                 var (methodDeclaration, methodBody) = RequireDeclaredBody(method);
-                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, methodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
-                {
-                    var binder = new Binder(parentScope, method);
-                    var body = binder.statements.BindBlockStatement(methodBody);
-                    binder.statements.FinalizeUserLabels();
-                    var lowered = Lowerer.Lower(body, structSym);
-
-                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                var loweredBody = BindBodyWithPackage(
+                    parentScope,
+                    structSym.PackageName,
+                    methodBody.SyntaxTree,
+                    () =>
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
-                    }
+                        return BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
+                        {
+                            var binder = new Binder(parentScope, method);
+                            var body = binder.statements.BindBlockStatement(methodBody);
+                            binder.statements.FinalizeUserLabels();
+                            var lowered = Lowerer.Lower(body, structSym);
 
-                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                            {
+                                binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
+                            }
 
-                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                }));
+                            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+
+                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                        });
+                    });
 
                 functionBodies.Add(method, loweredBody);
             }

@@ -525,8 +525,21 @@ internal sealed partial class ExpressionBinder
     /// non-null, so the projection is a pure annotation widening, never a data
     /// loss.
     /// </summary>
-    private static ImmutableArray<TypeSymbol?> AsNullableElements(ImmutableArray<TypeSymbol> types) =>
-        types.IsDefault ? default : ImmutableArray.CreateRange<TypeSymbol, TypeSymbol?>(types, static t => t);
+    private static ImmutableArray<TypeSymbol?> AsNullableElements(ImmutableArray<TypeSymbol> types)
+    {
+        if (types.IsDefault)
+        {
+            return default;
+        }
+
+        var nullableTypes = ImmutableArray.CreateBuilder<TypeSymbol?>(types.Length);
+        foreach (var type in types)
+        {
+            nullableTypes.Add(type);
+        }
+
+        return nullableTypes.MoveToImmutable();
+    }
 
     /// <summary>
     /// Issue #891: determines whether the supplied expression is an arrow
