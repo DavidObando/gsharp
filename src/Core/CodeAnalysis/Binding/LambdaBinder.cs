@@ -2974,7 +2974,7 @@ internal sealed class LambdaBinder
             base.VisitExpression(node);
         }
 
-        public override void VisitPattern(BoundPattern node)
+        public override void VisitPattern(BoundPattern? node)
         {
             if (node == null || Found != null)
             {

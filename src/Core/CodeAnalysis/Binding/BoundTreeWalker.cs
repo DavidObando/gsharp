@@ -356,8 +356,8 @@ public abstract class BoundTreeWalker
     }
 
     /// <summary>Dispatch on a pattern.</summary>
-    /// <param name="node">The pattern to visit.</param>
-    public virtual void VisitPattern(BoundPattern node)
+    /// <param name="node">The pattern to visit. Recursive walkers may forward an absent optional pattern.</param>
+    public virtual void VisitPattern(BoundPattern? node)
     {
         if (node == null)
         {
