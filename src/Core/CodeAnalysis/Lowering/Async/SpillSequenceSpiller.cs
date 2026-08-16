@@ -1061,11 +1061,14 @@ public static class SpillSequenceSpiller
                 case BoundCapExpression cap:
                     return SpillOneOperand(cap, cap.Operand, operand => new BoundCapExpression(null, operand));
                 case BoundAppendExpression append:
+                    Func<BoundExpression, BoundExpression, BoundExpression> rebuildAppend =
+                        (slice, element) =>
+                            new BoundAppendExpression(null, slice, element, append.SliceType);
                     return SpillTwoOperand(
                         append,
                         append.Slice,
                         append.Element,
-                        (slice, element) => new BoundAppendExpression(null, slice, element, append.SliceType));
+                        rebuildAppend);
                 case BoundStructLiteralExpression structLiteral:
                     return SpillStructLiteral(structLiteral);
                 case BoundMakeChannelExpression makeChannel:

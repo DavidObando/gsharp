@@ -1381,19 +1381,35 @@ internal sealed partial class ExpressionBinder
             case DefaultExpressionSyntax { TypeClause: null }:
                 return targetType != TypeSymbol.Error && targetType != TypeSymbol.Void;
             case LambdaExpressionSyntax lambda:
-                if (lambda.Parameters.All(parameter => parameter.Type != null))
+                var allParametersTyped = true;
+                foreach (var parameter in lambda.Parameters)
+                {
+                    allParametersTyped &= parameter.Type != null;
+                }
+
+                if (allParametersTyped)
                 {
                     return true;
                 }
 
-                return MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var functionType)
-                    && functionType != null
-                    && functionType.Arity == lambda.Parameters.Count
-                    && lambda.Parameters
-                        .Select((parameter, index) =>
-                            parameter.IsVariadic
-                            == (!functionType.IsVariadic.IsDefaultOrEmpty && functionType.IsVariadic[index]))
-                        .All(matches => matches);
+                if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var functionType)
+                    || functionType == null
+                    || functionType.Arity != lambda.Parameters.Count)
+                {
+                    return false;
+                }
+
+                for (var i = 0; i < lambda.Parameters.Count; i++)
+                {
+                    var targetIsVariadic =
+                        !functionType.IsVariadic.IsDefaultOrEmpty && functionType.IsVariadic[i];
+                    if (lambda.Parameters[i].IsVariadic != targetIsVariadic)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             case ConditionalExpressionSyntax conditional:
                 return CanTargetDependentExpression(conditional.WhenTrue, targetType)
                     && CanTargetDependentExpression(conditional.WhenFalse, targetType);
