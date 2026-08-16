@@ -3775,10 +3775,18 @@ internal sealed class MemberLookup
                 out var declaringTypeArguments)
             && openDefinition != null)
         {
-            var openEvent = ClrTypeUtilities.SafeGetEvents(
-                    openDefinition,
-                    BindingFlags.Public | BindingFlags.Instance)
-                .FirstOrDefault(candidate => candidate.Name == closedEvent.Name);
+            EventInfo? openEvent = null;
+            foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
+                         openDefinition,
+                         BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (candidate.Name == closedEvent.Name)
+                {
+                    openEvent = candidate;
+                    break;
+                }
+            }
+
             if (openEvent?.EventHandlerType != null)
             {
                 var mapped = MapOpenClrTypeToSymbolic(
