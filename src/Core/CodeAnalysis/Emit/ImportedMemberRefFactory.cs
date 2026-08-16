@@ -97,7 +97,6 @@ internal sealed class ImportedMemberRefFactory
         // the `element.ClrType != null` branch via the NullableTypeSymbol
         // ctor that copies `underlying.ClrType`).
         if (element is NullableTypeSymbol nullableElement
-            && !NullableLifting.RequiresSymbolicNullableGetValue(nullableElement)
             && nullableElement.UnderlyingType?.ClrType is { IsValueType: true } nullableInnerClr)
         {
             // Issue #571: route Nullable<T> through the ReferenceResolver so the

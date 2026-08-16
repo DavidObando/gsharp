@@ -151,19 +151,6 @@ internal sealed class SignatureEncoder
         {
             var inner = nullable.UnderlyingType;
 
-            if (inner is ImportedTypeSymbol symbolicValueType
-                && symbolicValueType.OpenDefinition?.IsValueType == true
-                && !symbolicValueType.TypeArguments.IsDefaultOrEmpty)
-            {
-                var nullableOpen = typeof(System.Nullable<>);
-                var genericNullable = encoder.GenericInstantiation(
-                    this.outer.memberRefs.GetTypeReference(nullableOpen),
-                    genericArgumentCount: 1,
-                    isValueType: true);
-                this.EncodeTypeSymbol(genericNullable.AddArgument(), symbolicValueType);
-                return;
-            }
-
             // P2-7 / Issue #421: nullable over a value type encodes as
             // System.Nullable<T> (generic instantiation). We support inner
             // types backed by a CLR value type (primitives, BCL value types).

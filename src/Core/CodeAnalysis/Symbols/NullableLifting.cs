@@ -208,9 +208,6 @@ public static class NullableLifting
     {
         return IsUserValueTypeNullable(nullable)
             || nullable?.UnderlyingType is TupleTypeSymbol { ClrType: null }
-            || (nullable?.UnderlyingType is ImportedTypeSymbol imported
-                && imported.OpenDefinition?.IsValueType == true
-                && !imported.TypeArguments.IsDefaultOrEmpty)
             || (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint);
     }
 
