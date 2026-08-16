@@ -557,12 +557,16 @@ public sealed class ReferenceResolver : IDisposable
             return Default();
         }
 
-        var paths = referencePaths
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Where(File.Exists)
-            .ToArray();
+        var paths = new List<string>();
+        foreach (var path in referencePaths)
+        {
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                paths.Add(path);
+            }
+        }
 
-        if (paths.Length == 0)
+        if (paths.Count == 0)
         {
             return Default();
         }
@@ -575,7 +579,12 @@ public sealed class ReferenceResolver : IDisposable
         // not enumerate (typical when a user DLL pulls in extra BCL pieces).
         var resolverPaths = new List<string>(paths);
         var hostPaths = GetHostTrustedPlatformAssemblies();
-        var userPathFileNames = new HashSet<string>(paths.Select(p => Path.GetFileName(p)), StringComparer.OrdinalIgnoreCase);
+        var userPathFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            userPathFileNames.Add(Path.GetFileName(path));
+        }
+
         var fallbackHostPaths = new List<string>();
         var seenResolverFile = new HashSet<string>(userPathFileNames, StringComparer.OrdinalIgnoreCase);
         foreach (var host in hostPaths)
@@ -588,7 +597,7 @@ public sealed class ReferenceResolver : IDisposable
         }
 
         var resolver = new FallbackMetadataAssemblyResolver(resolverPaths, fallbackHostPaths);
-        var mlc = new MetadataLoadContext(resolver, coreAssemblyName: ChooseCoreAssemblyName(resolverPaths.ToArray()));
+        var mlc = new MetadataLoadContext(resolver, coreAssemblyName: ChooseCoreAssemblyName(resolverPaths));
 
         var builder = ImmutableArray.CreateBuilder<Assembly>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -625,7 +634,16 @@ public sealed class ReferenceResolver : IDisposable
         // references include at least one non-BCL/runtime path: callers that
         // pass only raw BCL (e.g. integration tests pinning a single
         // System.Private.CoreLib) get exactly the surface they asked for.
-        var userHasNonBcl = paths.Any(p => !IsBclOrRuntimeAssemblyPath(p));
+        var userHasNonBcl = false;
+        foreach (var path in paths)
+        {
+            if (!IsBclOrRuntimeAssemblyPath(path))
+            {
+                userHasNonBcl = true;
+                break;
+            }
+        }
+
         if (userHasNonBcl)
         {
             foreach (var host in fallbackHostPaths)
@@ -1422,27 +1440,26 @@ public sealed class ReferenceResolver : IDisposable
         return builder.ToImmutable();
     }
 
-    private static string? ChooseCoreAssemblyName(string[] paths)
+    private static string? ChooseCoreAssemblyName(IReadOnlyList<string> paths)
     {
         // MetadataLoadContext needs a "core assembly" — the one declaring the
         // primitive types (Object, String, etc.). For modern .NET reference
         // packs this is System.Runtime.dll; older targets ship mscorlib.dll
         // as the canonical home. Pick whichever we can see in the supplied
         // reference set, falling back to letting MLC autodetect.
-        var fileNames = paths.Select(Path.GetFileNameWithoutExtension)
-                             .ToArray();
-
-        if (fileNames.Any(n => string.Equals(n, "System.Runtime", StringComparison.OrdinalIgnoreCase)))
+        var hasMscorlib = false;
+        foreach (var path in paths)
         {
-            return "System.Runtime";
+            var fileName = Path.GetFileNameWithoutExtension(path);
+            if (string.Equals(fileName, "System.Runtime", StringComparison.OrdinalIgnoreCase))
+            {
+                return "System.Runtime";
+            }
+
+            hasMscorlib |= string.Equals(fileName, "mscorlib", StringComparison.OrdinalIgnoreCase);
         }
 
-        if (fileNames.Any(n => string.Equals(n, "mscorlib", StringComparison.OrdinalIgnoreCase)))
-        {
-            return "mscorlib";
-        }
-
-        return null;
+        return hasMscorlib ? "mscorlib" : null;
     }
 
     /// <summary>

@@ -533,21 +533,39 @@ public sealed class ImportedClassSymbol : Symbol
 
         for (Type? current = ClassType; current != null; current = GetBaseTypeSafe(current))
         {
-            var methods = ClrTypeUtilities.SafeGetMethods(current, Flags)
-                .Where(m =>
-                    string.Equals(m.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(m))
-                .ToImmutableArray();
-            var properties = ClrTypeUtilities.SafeGetProperties(current, Flags)
-                .Where(p =>
-                    string.Equals(p.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(p))
-                .ToImmutableArray();
-            var fields = ClrTypeUtilities.SafeGetFields(current, Flags)
-                .Where(f =>
-                    string.Equals(f.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(f))
-                .ToImmutableArray();
+            var methodBuilder = ImmutableArray.CreateBuilder<MethodInfo>();
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(current, Flags))
+            {
+                if (string.Equals(method.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(method))
+                {
+                    methodBuilder.Add(method);
+                }
+            }
+
+            var methods = methodBuilder.ToImmutable();
+            var propertyBuilder = ImmutableArray.CreateBuilder<PropertyInfo>();
+            foreach (var property in ClrTypeUtilities.SafeGetProperties(current, Flags))
+            {
+                if (string.Equals(property.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(property))
+                {
+                    propertyBuilder.Add(property);
+                }
+            }
+
+            var properties = propertyBuilder.ToImmutable();
+            var fieldBuilder = ImmutableArray.CreateBuilder<FieldInfo>();
+            foreach (var field in ClrTypeUtilities.SafeGetFields(current, Flags))
+            {
+                if (string.Equals(field.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(field))
+                {
+                    fieldBuilder.Add(field);
+                }
+            }
+
+            var fields = fieldBuilder.ToImmutable();
             var declaresEvent = false;
             foreach (var eventInfo in ClrTypeUtilities.SafeGetEvents(current, Flags))
             {

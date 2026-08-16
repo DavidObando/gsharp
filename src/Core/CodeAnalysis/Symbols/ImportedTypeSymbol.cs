@@ -575,9 +575,15 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
     private static void ApplyPrimaryConstructorDefaults(Type type, ImmutableArray<ParameterSymbol> parameters)
     {
+        var parameterNames = ImmutableArray.CreateBuilder<string>(parameters.Length);
+        foreach (var parameter in parameters)
+        {
+            parameterNames.Add(parameter.Name);
+        }
+
         var clrParameters = FindPrimaryConstructorParameters(
             type,
-            parameters.Select(static parameter => parameter.Name).ToImmutableArray());
+            parameterNames.MoveToImmutable());
         for (var i = 0; i < parameters.Length && i < clrParameters.Length; i++)
         {
             if (TryGetOptionalDefault(clrParameters[i], out var defaultValue))
@@ -592,8 +598,22 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(type, BindingFlags.Public | BindingFlags.Instance))
         {
             var parameters = constructor.GetParameters();
-            if (parameters.Length == names.Length
-                && parameters.Select(static p => p.Name).SequenceEqual(names, StringComparer.Ordinal))
+            if (parameters.Length != names.Length)
+            {
+                continue;
+            }
+
+            var namesMatch = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (!string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal))
+                {
+                    namesMatch = false;
+                    break;
+                }
+            }
+
+            if (namesMatch)
             {
                 return parameters;
             }

@@ -250,9 +250,18 @@ public sealed class Binder
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
             getCurrentFunction: () => this.function,
-            bindLambdaWithTarget: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
-            bindUserTypeStaticCall: (structSym, ce) => Expressions.BindUserTypeStaticCall(structSym, ce),
-            bindImportedClrStaticCall: (clrType, ce) => Expressions.BindAccessorCall(receiver: null, new ImportedClassSymbol(clrType, ce, references: scope.References), ce));
+            bindLambdaWithTarget: (syntax, targetType) =>
+            {
+                return Lambdas.BindLambdaExpression(syntax, targetType);
+            },
+            bindUserTypeStaticCall: (structSym, ce) =>
+            {
+                return Expressions.BindUserTypeStaticCall(structSym, ce);
+            },
+            bindImportedClrStaticCall: (clrType, ce) =>
+            {
+                return Expressions.BindAccessorCall(receiver: null, new ImportedClassSymbol(clrType, ce, references: scope.References), ce);
+            });
         patterns = new PatternBinder(
             binderCtx,
             conversions,
