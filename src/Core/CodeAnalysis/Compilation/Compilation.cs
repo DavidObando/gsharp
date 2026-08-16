@@ -559,13 +559,16 @@ public class Compilation
 
         Emit.EmitDiagnosticException? anchoredException = null;
         var rootEx = ex;
-        for (var current = ex; current is not null; current = current.InnerException)
+        Exception? current = ex;
+        while (current is not null)
         {
             rootEx = current;
             if (current is Emit.EmitDiagnosticException { Anchor: not null } emitException)
             {
                 anchoredException = emitException;
             }
+
+            current = current.InnerException;
         }
 
         var anchor = anchoredException?.Anchor;
