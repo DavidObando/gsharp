@@ -292,7 +292,10 @@ public sealed class Binder
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
             bindLambdaBodyExpression: BindLambdaBodyExpressionForLambdas,
-            bindTypeParameterList: syntax => Declarations.BindTypeParameterList(syntax));
+            bindTypeParameterList: syntax =>
+            {
+                return Declarations.BindTypeParameterList(syntax);
+            });
         BoundExpression BindExpressionWithTargetTypeForStatements(
             ExpressionSyntax syntax,
             TypeSymbol targetType) =>
@@ -2510,22 +2513,29 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
         var (structMethodDeclaration, structMethodBody) = RequireDeclaredBody(method);
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, structMethodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, structMethodBody, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, method);
-            var body = binder.statements.BindBlockStatement(structMethodBody);
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body, structSym);
-
-            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            structSym.PackageName,
+            structMethodBody.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, method, structMethodBody, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindBlockStatement(structMethodBody);
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body, structSym);
 
-            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location);
+                    }
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(method, loweredBody);
     }

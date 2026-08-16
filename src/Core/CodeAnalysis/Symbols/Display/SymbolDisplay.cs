@@ -1012,7 +1012,7 @@ public static class SymbolDisplay
 
         return ownArguments.Length == 0
             ? name
-            : $"{name}[{string.Join(", ", ownArguments.Select(a => FormatClrTypeName(a, qualifyNames)))}]";
+            : $"{name}[{FormatClrTypeArguments(ownArguments, qualifyNames)}]";
     }
 
     private static string FormatImportedGenericTypeName(
@@ -1042,6 +1042,17 @@ public static class SymbolDisplay
 
     private static string FormatGenericTypeArgument(TypeSymbol type)
         => type == null ? "?" : FormatType(type);
+
+    private static string FormatClrTypeArguments(Type[] arguments, bool qualifyNames)
+    {
+        var formatted = new string[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            formatted[i] = FormatClrTypeName(arguments[i], qualifyNames);
+        }
+
+        return string.Join(", ", formatted);
+    }
 
     private static bool TryGetGSharpPrimitiveName(Type clrType, [NotNullWhen(true)] out string? name)
     {

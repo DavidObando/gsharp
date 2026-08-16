@@ -2199,10 +2199,22 @@ internal sealed partial class DeclarationBinder
                 return new[] { variableDeclaration.Identifier.Text };
 
             case TupleDeconstructionStatementSyntax tupleDeconstruction:
-                return tupleDeconstruction.Identifiers.Select(t => t.Text).ToArray();
+                var tupleNames = new string[tupleDeconstruction.Identifiers.Count];
+                for (var i = 0; i < tupleDeconstruction.Identifiers.Count; i++)
+                {
+                    tupleNames[i] = tupleDeconstruction.Identifiers[i].Text;
+                }
+
+                return tupleNames;
 
             case NamedDeconstructionStatementSyntax namedDeconstruction:
-                return namedDeconstruction.Fields.Select(f => f.LocalIdentifier.Text).ToArray();
+                var fieldNames = new string[namedDeconstruction.Fields.Count];
+                for (var i = 0; i < namedDeconstruction.Fields.Count; i++)
+                {
+                    fieldNames[i] = namedDeconstruction.Fields[i].LocalIdentifier.Text;
+                }
+
+                return fieldNames;
 
             case GuardLetStatementSyntax guardLet:
                 var names = new string[guardLet.Bindings.Count];

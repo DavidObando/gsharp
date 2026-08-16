@@ -591,8 +591,20 @@ internal sealed partial class StatementBinder
         }
 
         var returns = descendants.OfType<ReturnStatementSyntax>().ToArray();
-        return returns.Length > 0
-            && returns.All(statement => IsDefinitelyNonNullSyntax(statement.Expression, function.Type));
+        if (returns.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var statement in returns)
+        {
+            if (!IsDefinitelyNonNullSyntax(statement.Expression, function.Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool IsDefinitelyNonNullSyntax(ExpressionSyntax? expression, TypeSymbol expectedType)
