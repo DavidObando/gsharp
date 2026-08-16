@@ -2464,27 +2464,34 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         TextLocation? allPathsReturnLocation = null)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, member);
-
-            // BindStatement returns null only for a SyntaxKind.CommentToken
-            // node; a member body is never a bare comment.
-            var body = Invariant.Required(binder.statements.BindStatement(bodySyntax), "a member body statement is never a bare comment token");
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body, structSym);
-
-            if (allPathsReturnLocation != null
-                && !IsIteratorReturnType(member.Type)
-                && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            structSym.PackageName,
+            bodySyntax.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, member);
 
-            AnalyzeFunctionBody(lowered, member, binder.Diagnostics);
+                    // BindStatement returns null only for a SyntaxKind.CommentToken
+                    // node; a member body is never a bare comment.
+                    var body = Invariant.Required(binder.statements.BindStatement(bodySyntax), "a member body statement is never a bare comment token");
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body, structSym);
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    if (allPathsReturnLocation != null
+                        && !IsIteratorReturnType(member.Type)
+                        && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
+                    }
+
+                    AnalyzeFunctionBody(lowered, member, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(member, loweredBody);
     }
