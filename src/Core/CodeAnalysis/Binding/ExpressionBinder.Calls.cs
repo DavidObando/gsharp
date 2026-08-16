@@ -277,9 +277,14 @@ internal sealed partial class ExpressionBinder
         }
 
         var resultType = target.Type;
-        var hasNonIndexedElement = syntax.Elements.Any(e => e is not IndexedCollectionElementSyntax);
-        var hasSpreadElement = syntax.Elements.Any(
-            e => e is ExpressionCollectionElementSyntax { Expression: SpreadElementExpressionSyntax });
+        var hasNonIndexedElement = false;
+        var hasSpreadElement = false;
+        foreach (var element in syntax.Elements)
+        {
+            hasNonIndexedElement |= element is not IndexedCollectionElementSyntax;
+            var expressionElement = element as ExpressionCollectionElementSyntax;
+            hasSpreadElement |= expressionElement?.Expression is SpreadElementExpressionSyntax;
+        }
 
         // A collection initializer requires an accessible instance `Add` for the
         // bare / key:value element forms. Indexed `[k] = v` entries go through
@@ -792,15 +797,21 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var nestedObjectAssignments = braced.Elements
-            .Select(element => (element as ExpressionCollectionElementSyntax)?.Expression as AssignmentExpressionSyntax)
-            .ToImmutableArray();
-        var isNestedObjectInitializer =
-            nestedObjectAssignments.Length > 0 &&
-            nestedObjectAssignments.All(assignment => assignment != null);
-        var hasNonIndexedElement = braced.Elements.Any(e => e is not IndexedCollectionElementSyntax);
-        var hasSpreadElement = braced.Elements.Any(
-            e => e is ExpressionCollectionElementSyntax { Expression: SpreadElementExpressionSyntax });
+        var nestedObjectAssignments = ImmutableArray.CreateBuilder<AssignmentExpressionSyntax?>(braced.Elements.Count);
+        var hasNonIndexedElement = false;
+        var hasSpreadElement = false;
+        var allElementsAreAssignments = braced.Elements.Count > 0;
+        foreach (var element in braced.Elements)
+        {
+            var expressionElement = element as ExpressionCollectionElementSyntax;
+            var assignment = expressionElement?.Expression as AssignmentExpressionSyntax;
+            nestedObjectAssignments.Add(assignment);
+            allElementsAreAssignments &= assignment is not null;
+            hasNonIndexedElement |= element is not IndexedCollectionElementSyntax;
+            hasSpreadElement |= expressionElement?.Expression is SpreadElementExpressionSyntax;
+        }
+
+        var isNestedObjectInitializer = allElementsAreAssignments;
         if (!isNestedObjectInitializer &&
             ((hasNonIndexedElement && !HasCollectionAdd(propRead.Type)) ||
              (hasSpreadElement && !HasUnaryCollectionAdd(propRead.Type))))
@@ -1273,14 +1284,32 @@ internal sealed partial class ExpressionBinder
             if (ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _))
             {
                 var primaryParameterCount = dataClassAggregate.PrimaryConstructorParameters.Length;
-                var primaryAcceptsArity =
-                    syntax.Arguments.Count <= primaryParameterCount
-                    && dataClassAggregate.PrimaryConstructorParameters
-                        .Skip(syntax.Arguments.Count)
-                        .All(parameter => parameter.HasExplicitDefaultValue);
-                if (!primaryAcceptsArity
-                    && ClrTypeUtilities.SafeGetConstructors(resolvedClrType, BindingFlags.Public | BindingFlags.Instance)
-                        .Any(ctor => ctor.GetParameters().Length == syntax.Arguments.Count))
+                var primaryAcceptsArity = syntax.Arguments.Count <= primaryParameterCount;
+                if (primaryAcceptsArity)
+                {
+                    for (var i = syntax.Arguments.Count; i < primaryParameterCount; i++)
+                    {
+                        primaryAcceptsArity &=
+                            dataClassAggregate.PrimaryConstructorParameters[i].HasExplicitDefaultValue;
+                    }
+                }
+
+                var hasMatchingSecondaryConstructor = false;
+                if (!primaryAcceptsArity)
+                {
+                    foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(
+                                 resolvedClrType,
+                                 BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (constructor.GetParameters().Length == syntax.Arguments.Count)
+                        {
+                            hasMatchingSecondaryConstructor = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!primaryAcceptsArity && hasMatchingSecondaryConstructor)
                 {
                     var boundSecondary = TryBindClrConstructorFromType(
                         resolvedClrType,
@@ -1522,7 +1551,11 @@ internal sealed partial class ExpressionBinder
         // to the single-arg conversion path and reports the misleading GS0162
         // "named arguments are only supported for data-struct .copy(...)".
         var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
-        var ctorParameterLists = ctors.Select(c => c.GetParameters()).ToList();
+        var ctorParameterLists = new List<ParameterInfo[]>(ctors.Length);
+        foreach (var constructor in ctors)
+        {
+            ctorParameterLists.Add(constructor.GetParameters());
+        }
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         var symbolicCtorDelegateTargets = new Dictionary<int, TypeSymbol>();
@@ -1644,9 +1677,14 @@ internal sealed partial class ExpressionBinder
             // implicit reference conversion. Threaded as a call-local
             // parameter (not a shared static) so concurrent/nested binds never
             // observe another call's closure.
-            Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
-                ? (source, target) => IsUserClassAssignableToInterface(boundArguments, argTypes, source, target)
-                : null;
+            Func<Type, Type, bool>? supplementaryInterfaceCheck = null;
+            if (hasUserClassArg)
+            {
+                supplementaryInterfaceCheck = CheckUserClassInterface;
+            }
+
+            bool CheckUserClassInterface(Type source, Type target) =>
+                IsUserClassAssignableToInterface(boundArguments, argTypes, source, target);
 
             var resolution = ClrOverloadResolution.Resolve(
                 ctors,

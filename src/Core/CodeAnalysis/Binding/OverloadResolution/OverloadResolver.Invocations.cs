@@ -335,6 +335,7 @@ internal sealed partial class OverloadResolver
 
         ExpressionSyntax?[] parameterSyntax;
         var permutedArgs = boundArguments;
+        Func<int, string> parameterNameAt = parameterIndex => parameterNames[parameterIndex];
         bool hasNamedArguments =
             syntax.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);
         if (hasNamedArguments)
@@ -361,7 +362,7 @@ internal sealed partial class OverloadResolver
                     !ValidateExpandedVariadicNamedArguments(
                         argumentNames,
                         fixedCount,
-                        p => parameterNames[p],
+                        parameterNameAt,
                         calleeName,
                         syntax))
                 {
@@ -374,7 +375,7 @@ internal sealed partial class OverloadResolver
                          syntax.Arguments,
                          boundArguments,
                          functionType.Arity,
-                         p => parameterNames[p],
+                         parameterNameAt,
                          calleeName,
                          out parameterSyntax,
                          out permutedArgs))
@@ -397,6 +398,7 @@ internal sealed partial class OverloadResolver
             // (applies #1493 element coercion when packing).
             var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.Arity - 1];
             var hasElementErrors = false;
+            Func<int, TextLocation> argumentLocation = argumentIndex => syntax.Arguments[argumentIndex].Location;
             permutedArgs = PackOrPassThroughVariadicArguments(
                 conversions,
                 Diagnostics,
@@ -405,7 +407,7 @@ internal sealed partial class OverloadResolver
                 fixedCount,
                 sliceType,
                 calleeName,
-                i => syntax.Arguments[i].Location,
+                argumentLocation,
                 ref hasElementErrors);
 
             if (hasElementErrors)
@@ -438,7 +440,7 @@ internal sealed partial class OverloadResolver
         convertedArgs = PreserveNamedArgumentEvaluationOrder(
             syntax.Arguments,
             convertedBuilder.MoveToImmutable(),
-            p => parameterNames[p]);
+            parameterNameAt);
         return true;
     }
 
@@ -454,6 +456,9 @@ internal sealed partial class OverloadResolver
         argumentRefKinds = default;
 
         var parameters = delegateType.Parameters;
+        Func<int, string> parameterNameAt = parameterIndex => parameters[parameterIndex].Name;
+        Func<int, bool> parameterIsOptional =
+            parameterIndex => parameters[parameterIndex].HasExplicitDefaultValue;
         var isVariadic = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic;
         var fixedCount = isVariadic ? parameters.Length - 1 : parameters.Length;
         if (isVariadic)
@@ -495,8 +500,8 @@ internal sealed partial class OverloadResolver
                     syntax.Arguments,
                     boundArguments,
                     parameters.Length,
-                    p => parameters[p].Name,
-                    p => parameters[p].HasExplicitDefaultValue,
+                    parameterNameAt,
+                    parameterIsOptional,
                     calleeName,
                     out parameterSyntax,
                     out arguments))
@@ -518,7 +523,7 @@ internal sealed partial class OverloadResolver
                 !ValidateExpandedVariadicNamedArguments(
                     argumentNames,
                     fixedCount,
-                    p => parameters[p].Name,
+                    parameterNameAt,
                     calleeName,
                     syntax))
             {
@@ -665,7 +670,7 @@ internal sealed partial class OverloadResolver
         convertedArgs = PreserveNamedArgumentEvaluationOrder(
             syntax.Arguments,
             converted.MoveToImmutable(),
-            p => parameters[p].Name);
+            parameterNameAt);
         argumentRefKinds = hasRefKinds ? refKinds.MoveToImmutable() : default;
         return true;
     }
@@ -1079,14 +1084,18 @@ internal sealed partial class OverloadResolver
         // the reorder below.
         ExpressionSyntax?[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
+        Func<int, string> extensionParameterNameAt =
+            parameterIndex => extension.Parameters[parameterIndex + 1].Name;
+        Func<int, bool> extensionParameterIsOptional =
+            parameterIndex => extension.Parameters[parameterIndex + 1].HasExplicitDefaultValue;
         if (!argumentNames.IsDefault)
         {
             if (!TryReorderUserCallArguments(
                     ce.Arguments,
                     arguments,
                     userParamCount,
-                    p => extension.Parameters[p + 1].Name,
-                    p => extension.Parameters[p + 1].HasExplicitDefaultValue,
+                    extensionParameterNameAt,
+                    extensionParameterIsOptional,
                     extension.Name,
                     out permutedSyntax,
                     out permutedArguments))
@@ -1271,7 +1280,7 @@ internal sealed partial class OverloadResolver
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             ce.Arguments,
             convertedArgs.MoveToImmutable(),
-            p => extension.Parameters[p + 1].Name,
+            extensionParameterNameAt,
             parameterOffset: 1);
 
         if (substitution != null)
@@ -1323,6 +1332,10 @@ internal sealed partial class OverloadResolver
         var isVariadic = method.Parameters.Length > 0
             && method.Parameters[method.Parameters.Length - 1].IsVariadic;
         var fixedCallableParamCount = isVariadic ? callableParameterCount - 1 : callableParameterCount;
+        Func<int, string> callableParameterNameAt =
+            parameterIndex => method.Parameters[parameterIndex + parameterOffset].Name;
+        Func<int, bool> callableParameterIsOptional =
+            parameterIndex => method.Parameters[parameterIndex + parameterOffset].HasExplicitDefaultValue;
 
         // ADR-0063 / issue #1319: count the leading non-optional callable
         // parameters. An instance / constructor call may omit any trailing
@@ -1347,7 +1360,7 @@ internal sealed partial class OverloadResolver
             !ValidateExpandedVariadicNamedArguments(
                 argumentNames,
                 fixedCallableParamCount,
-                p => method.Parameters[p + parameterOffset].Name,
+                callableParameterNameAt,
                 method.Name,
                 ce))
         {
@@ -1380,8 +1393,8 @@ internal sealed partial class OverloadResolver
                     ce.Arguments,
                     arguments,
                     callableParameterCount,
-                    p => method.Parameters[p + parameterOffset].Name,
-                    p => method.Parameters[p + parameterOffset].HasExplicitDefaultValue,
+                    callableParameterNameAt,
+                    callableParameterIsOptional,
                     method.Name,
                     out permutedSyntax,
                     out permutedArguments))
@@ -1689,7 +1702,7 @@ internal sealed partial class OverloadResolver
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             ce.Arguments,
             convertedArgs.ToImmutable(),
-            p => method.Parameters[p + parameterOffset].Name);
+            callableParameterNameAt);
 
         BoundUserInstanceCallExpression MakeCall(TypeSymbol? returnTypeOverride)
         {

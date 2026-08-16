@@ -656,8 +656,17 @@ internal sealed class ImportedMemberRefFactory
         }
 
         var parameters = ctor.GetParameters();
-        var fallback = open.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(candidate => candidate.GetParameters().Length == parameters.Length);
+        ConstructorInfo? fallback = null;
+        foreach (var candidate in open.GetConstructors(
+                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.GetParameters().Length == parameters.Length)
+            {
+                fallback = candidate;
+                break;
+            }
+        }
+
         if (fallback != null)
         {
             return fallback;
@@ -1483,8 +1492,17 @@ internal sealed class ImportedMemberRefFactory
             }
         }
 
-        var fallback = openDefinition.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(candidate => candidate.GetParameters().Length == ctor.GetParameters().Length);
+        ConstructorInfo? fallback = null;
+        foreach (var candidate in openDefinition.GetConstructors(
+                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.GetParameters().Length == ctor.GetParameters().Length)
+            {
+                fallback = candidate;
+                break;
+            }
+        }
+
         return fallback ?? ctor;
     }
 

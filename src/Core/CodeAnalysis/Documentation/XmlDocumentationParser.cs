@@ -183,10 +183,26 @@ public static class XmlDocumentationParser
         var items = ImmutableArray.CreateBuilder<DocListItem>();
 
         // <listheader> describes the columns; model it as the first item's term/description.
-        foreach (var item in element.Elements().Where(e => e.Name.LocalName is "item" or "listheader"))
+        foreach (var item in element.Elements())
         {
-            var term = item.Elements().FirstOrDefault(e => e.Name.LocalName == "term");
-            var description = item.Elements().FirstOrDefault(e => e.Name.LocalName == "description");
+            if (item.Name.LocalName is not ("item" or "listheader"))
+            {
+                continue;
+            }
+
+            XElement? term = null;
+            XElement? description = null;
+            foreach (var child in item.Elements())
+            {
+                if (child.Name.LocalName == "term")
+                {
+                    term ??= child;
+                }
+                else if (child.Name.LocalName == "description")
+                {
+                    description ??= child;
+                }
+            }
 
             if (term == null && description == null)
             {

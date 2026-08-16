@@ -758,22 +758,34 @@ internal sealed class DataStructSynthesizer
 
         if (baseClass.ClrType is { } importedBase)
         {
-            var candidates = ClrTypeUtilities.SafeGetMethods(
-                    importedBase,
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Where(method =>
-                    method.Name == "<Clone>$"
-                    && !method.IsGenericMethod
-                    && method.GetParameters().Length == 0
-                    && method.IsVirtual
-                    && ClrTypeUtilities.AreSame(method.ReturnType, importedBase))
-                .ToArray();
-            if (candidates.Length != 1)
+            MethodInfo? cloneMethod = null;
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         importedBase,
+                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                if (method.Name != "<Clone>$"
+                    || method.IsGenericMethod
+                    || method.GetParameters().Length != 0
+                    || !method.IsVirtual
+                    || !ClrTypeUtilities.AreSame(method.ReturnType, importedBase))
+                {
+                    continue;
+                }
+
+                if (cloneMethod is not null)
+                {
+                    return false;
+                }
+
+                cloneMethod = method;
+            }
+
+            if (cloneMethod is null)
             {
                 return false;
             }
 
-            cloneToken = this.resolveImportedMethodRef(candidates[0], baseClass);
+            cloneToken = this.resolveImportedMethodRef(cloneMethod, baseClass);
             return true;
         }
 

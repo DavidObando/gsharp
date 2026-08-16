@@ -329,6 +329,13 @@ internal sealed partial class ExpressionBinder
                     // Issue #208: apply any [MemberNotNull] narrowing so that
                     // chained access like `_name.Length` after a [MemberNotNull]
                     // call is accepted without a nil-guard.
+                    Func<TypeSymbol, BoundExpression> makeNarrowedField = narrowedType =>
+                        new BoundFieldAccessExpression(
+                            null,
+                            new BoundVariableExpression(null, implicitField.Receiver),
+                            implicitField.StructType,
+                            implicitField.Field,
+                            narrowedType);
                     receiver = BuildNarrowedRead(
                         new BoundFieldAccessExpression(
                             null,
@@ -337,12 +344,7 @@ internal sealed partial class ExpressionBinder
                             implicitField.Field),
                         implicitField.Field.Type,
                         TryGetNarrowedType(implicitField),
-                        nt => new BoundFieldAccessExpression(
-                            null,
-                            new BoundVariableExpression(null, implicitField.Receiver),
-                            implicitField.StructType,
-                            implicitField.Field,
-                            nt));
+                        makeNarrowedField);
                 }
                 else if (variable is ImplicitStaticFieldVariableSymbol implicitStaticField)
                 {
@@ -416,11 +418,13 @@ internal sealed partial class ExpressionBinder
                 }
                 else
                 {
+                    Func<TypeSymbol, BoundExpression> makeNarrowedVariable =
+                        narrowedType => new BoundVariableExpression(null, variable, narrowedType);
                     receiver = BuildNarrowedRead(
                         new BoundVariableExpression(null, variable),
                         variable.Type,
                         TryGetNarrowedType(variable),
-                        narrowed => new BoundVariableExpression(null, variable, narrowed));
+                        makeNarrowedVariable);
                 }
             }
             else if (TryBindInheritedClrInstanceMemberByBareName(name, out var inheritedClrHead))
@@ -3253,22 +3257,27 @@ internal sealed partial class ExpressionBinder
         foreach (var argument in ce.Arguments)
         {
             var inner = OverloadResolver.UnwrapNamedArgumentValue(argument);
-            if (inner is RefArgumentExpressionSyntax refArg)
+            BoundExpression? boundArgument = null;
+            var refArgument = inner as RefArgumentExpressionSyntax;
+            if (refArgument is not null)
             {
-                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
+                boundArgument = BindRefArgumentExpression(refArgument, parameter: null);
             }
-            else if (IsUntypedArrowLambda(inner))
+
+            if (boundArgument is null && IsUntypedArrowLambda(inner))
             {
                 // Issue #951: defer un-typed arrow lambdas until the static
                 // method overload (and its delegate-typed parameters) is known.
                 (deferredStaticLambdaIndices ??= new List<int>()).Add(staticArgIndex);
-                boundArguments.Add(new BoundErrorExpression(inner));
-            }
-            else
-            {
-                boundArguments.Add(BindExpression(inner));
+                boundArgument = new BoundErrorExpression(inner);
             }
 
+            if (boundArgument is null)
+            {
+                boundArgument = BindExpression(inner);
+            }
+
+            boundArguments.Add(boundArgument);
             staticArgIndex++;
         }
 
@@ -3372,6 +3381,10 @@ internal sealed partial class ExpressionBinder
             // argument before the per-position conversion loop.
             var isVariadic = method.Parameters.Length > 0 && method.Parameters[method.Parameters.Length - 1].IsVariadic;
             var fixedParamCount = isVariadic ? method.Parameters.Length - 1 : method.Parameters.Length;
+            Func<int, string> methodParameterNameAt =
+                parameterIndex => method.Parameters[parameterIndex].Name;
+            Func<int, bool> methodParameterIsOptional =
+                parameterIndex => method.Parameters[parameterIndex].HasExplicitDefaultValue;
 
             // ADR-0063 / issue #936: count the leading non-optional parameters.
             // A static (`shared`) call may omit any trailing parameter that
@@ -3409,7 +3422,7 @@ internal sealed partial class ExpressionBinder
                 !overloads.ValidateExpandedVariadicNamedArguments(
                     argumentNames,
                     fixedParamCount,
-                    p => method.Parameters[p].Name,
+                    methodParameterNameAt,
                     method.Name,
                     ce))
             {
@@ -3423,8 +3436,8 @@ internal sealed partial class ExpressionBinder
                         ce.Arguments,
                         arguments,
                         method.Parameters.Length,
-                        p => method.Parameters[p].Name,
-                        p => method.Parameters[p].HasExplicitDefaultValue,
+                        methodParameterNameAt,
+                        methodParameterIsOptional,
                         method.Name,
                         out parameterSyntax,
                         out arguments))
@@ -3577,6 +3590,8 @@ internal sealed partial class ExpressionBinder
                 // uncoerced elements here). Coerce against the SUBSTITUTED
                 // slice's element type since generic type arguments may have
                 // been inferred/substituted above.
+                Func<int, TextLocation> variadicArgumentLocation =
+                    i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Identifier.Location;
                 permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
                     conversions,
                     Diagnostics,
@@ -3585,7 +3600,7 @@ internal sealed partial class ExpressionBinder
                     fixedParamCount,
                     substitutedSlice,
                     variadicParam.Name,
-                    i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Identifier.Location,
+                    variadicArgumentLocation,
                     ref hasVariadicErrors);
 
                 if (hasVariadicErrors)
@@ -3712,7 +3727,7 @@ internal sealed partial class ExpressionBinder
             var finalArguments = overloads.PreserveNamedArgumentEvaluationOrder(
                 ce.Arguments,
                 convertedArgs.ToImmutable(),
-                p => method.Parameters[p].Name);
+                methodParameterNameAt);
 
             BoundCallExpression MakeStaticGenericCall(TypeSymbol? substitutedReturnOverride)
             {

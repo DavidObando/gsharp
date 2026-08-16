@@ -858,11 +858,23 @@ public class TypeSymbol : Symbol
         var rightParts = GetWrappedTypes(right).ToArray();
         if (leftParts.Length > 0 || rightParts.Length > 0)
         {
-            return leftParts.Length == rightParts.Length
-                && (left.ClrType == null
-                    || right.ClrType == null
-                    || ClrTypeUtilities.AreSame(left.ClrType, right.ClrType))
-                && leftParts.Zip(rightParts, AreRuntimeEquivalentIgnoringReferenceNullability).All(equal => equal);
+            if (leftParts.Length != rightParts.Length
+                || (left.ClrType != null
+                    && right.ClrType != null
+                    && !ClrTypeUtilities.AreSame(left.ClrType, right.ClrType)))
+            {
+                return false;
+            }
+
+            for (var i = 0; i < leftParts.Length; i++)
+            {
+                if (!AreRuntimeEquivalentIgnoringReferenceNullability(leftParts[i], rightParts[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         return left.ClrType != null

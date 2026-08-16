@@ -1223,25 +1223,41 @@ public static class ClrTypeUtilities
         Type[] openTypeArguments,
         Type[] typeArguments)
     {
-        var matches = openType.GetMethods()
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .Where(method =>
+        var matches = new List<MethodInfo>(2);
+        foreach (var method in openType.GetMethods())
+        {
+            if (!string.Equals(method.Name, name, StringComparison.Ordinal))
             {
-                var parameters = method.GetParameters();
-                return parameters.Length == parameterTypes.Length
-                    && parameters.Select(parameter => parameter.ParameterType)
-                    .Zip(parameterTypes, (open, constructed) =>
-                        MatchesConstructedParameterType(
-                            open,
-                            constructed,
-                            openTypeArguments,
-                            typeArguments))
-                    .All(matches => matches);
-            })
-            .Take(2)
-            .ToArray();
+                continue;
+            }
 
-        return matches.Length switch
+            var parameters = method.GetParameters();
+            if (parameters.Length != parameterTypes.Length)
+            {
+                continue;
+            }
+
+            var parametersMatch = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                parametersMatch &= MatchesConstructedParameterType(
+                    parameters[i].ParameterType,
+                    parameterTypes[i],
+                    openTypeArguments,
+                    typeArguments);
+            }
+
+            if (parametersMatch)
+            {
+                matches.Add(method);
+                if (matches.Count == 2)
+                {
+                    break;
+                }
+            }
+        }
+
+        return matches.Count switch
         {
             0 => null,
             1 => matches[0],
@@ -1306,19 +1322,33 @@ public static class ClrTypeUtilities
 
         if (open.IsConstructedGenericType || constructed.IsConstructedGenericType)
         {
-            return open.IsConstructedGenericType
-                && constructed.IsConstructedGenericType
-                && open.GetGenericTypeDefinition() == constructed.GetGenericTypeDefinition()
-                && open.GetGenericArguments()
-                    .Zip(
-                        constructed.GetGenericArguments(),
-                        (openArgument, constructedArgument) =>
-                            MatchesConstructedParameterType(
-                                openArgument,
-                                constructedArgument,
-                                openTypeArguments,
-                                typeArguments))
-                    .All(matches => matches);
+            if (!open.IsConstructedGenericType
+                || !constructed.IsConstructedGenericType
+                || open.GetGenericTypeDefinition() != constructed.GetGenericTypeDefinition())
+            {
+                return false;
+            }
+
+            var openArguments = open.GetGenericArguments();
+            var constructedArguments = constructed.GetGenericArguments();
+            if (openArguments.Length != constructedArguments.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < openArguments.Length; i++)
+            {
+                if (!MatchesConstructedParameterType(
+                        openArguments[i],
+                        constructedArguments[i],
+                        openTypeArguments,
+                        typeArguments))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         return open == constructed;

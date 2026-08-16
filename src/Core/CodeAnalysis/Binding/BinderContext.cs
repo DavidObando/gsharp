@@ -536,6 +536,12 @@ internal sealed class BinderContext
         return new ConstructorInitializerContextScope(this);
     }
 
+    /// <summary>Leaves a base or delegating-constructor argument context.</summary>
+    public void LeaveConstructorInitializerContext()
+    {
+        ConstructorInitializerDepth--;
+    }
+
     /// <summary>
     /// Issue #1881. Enters a `checked`/`unchecked` arithmetic context for the
     /// lifetime of the returned token; disposing the token restores the
@@ -590,7 +596,7 @@ internal sealed class BinderContext
         {
             if (owner != null)
             {
-                owner.ConstructorInitializerDepth--;
+                owner.LeaveConstructorInitializerContext();
             }
         }
     }

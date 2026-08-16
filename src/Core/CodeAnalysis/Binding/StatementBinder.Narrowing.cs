@@ -1960,16 +1960,23 @@ internal sealed partial class StatementBinder
         foreach (var probe in probes)
         {
             var receiverOffset = probe.ReceiverParameterOffset;
-            var candidates = probe.Methods
-                .Where(method =>
+            var candidates = new List<MethodInfo>();
+            foreach (var candidate in probe.Methods)
+            {
+                var candidateParameters = candidate.GetParameters();
+                var parametersMatch = candidate.ReturnType.FullName == typeof(void).FullName
+                    && candidateParameters.Length == identifiers.Count + receiverOffset;
+                for (var i = receiverOffset; parametersMatch && i < candidateParameters.Length; i++)
                 {
-                    var parameters = method.GetParameters();
-                    return method.ReturnType.FullName == typeof(void).FullName
-                        && parameters.Length == identifiers.Count + receiverOffset
-                        && parameters.Skip(receiverOffset).All(parameter =>
-                            parameter.IsOut && parameter.ParameterType.IsByRef);
-                })
-                .ToList();
+                    parametersMatch &= candidateParameters[i].IsOut && candidateParameters[i].ParameterType.IsByRef;
+                }
+
+                if (parametersMatch)
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
             if (candidates.Count == 0)
             {
                 continue;
@@ -1981,37 +1988,36 @@ internal sealed partial class StatementBinder
                 inferenceTypes[0] = receiverClrType;
             }
 
-            candidates = candidates
-                .Select(method =>
+            var closedCandidates = new List<MethodInfo>();
+            foreach (var candidate in candidates)
+            {
+                if (!candidate.IsGenericMethodDefinition)
                 {
-                    if (!method.IsGenericMethodDefinition)
+                    closedCandidates.Add(candidate);
+                    continue;
+                }
+
+                if (!ClrOverloadResolution.TryInferTypeArguments(candidate, inferenceTypes, out var typeArguments))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    for (var i = 0; i < typeArguments.Length; i++)
                     {
-                        return method;
+                        typeArguments[i] = scope.References.MapClrTypeToReferences(typeArguments[i])
+                            ?? typeArguments[i];
                     }
 
-                    if (!ClrOverloadResolution.TryInferTypeArguments(method, inferenceTypes, out var typeArguments))
-                    {
-                        return null;
-                    }
+                    closedCandidates.Add(candidate.MakeGenericMethod(typeArguments));
+                }
+                catch (ArgumentException)
+                {
+                }
+            }
 
-                    try
-                    {
-                        for (var i = 0; i < typeArguments.Length; i++)
-                        {
-                            typeArguments[i] = scope.References.MapClrTypeToReferences(typeArguments[i])
-                                ?? typeArguments[i];
-                        }
-
-                        return method.MakeGenericMethod(typeArguments);
-                    }
-                    catch (ArgumentException)
-                    {
-                        return null;
-                    }
-                })
-                .Where(method => method != null)
-                .Cast<MethodInfo>()
-                .ToList();
+            candidates = closedCandidates;
             if (candidates.Count == 0)
             {
                 continue;
@@ -2029,17 +2035,23 @@ internal sealed partial class StatementBinder
                 startIndex: receiverOffset,
                 count: identifiers.Count);
 
-            var resolution = ClrOverloadResolution.Resolve(
+            var resolution = ClrOverloadResolution.Resolve<MethodInfo>(
                 candidates,
                 argumentTypes,
                 projectTypeArgument: scope.References.MapClrTypeToReferences);
             if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
             {
+                var signatures = new string[resolution.Ambiguous.Length];
+                for (var i = 0; i < signatures.Length; i++)
+                {
+                    signatures[i] = ClrOverloadResolution.FormatMethodSignature(resolution.Ambiguous[i]);
+                }
+
                 Diagnostics.ReportAmbiguousOverload(
                     location,
                     "Deconstruct",
                     resolution.Ambiguous.Length,
-                    resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+                    signatures);
                 DeclareErrorTypedLocals(identifiers);
                 statements = ImmutableArray<BoundStatement>.Empty;
                 return true;

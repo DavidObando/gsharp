@@ -1191,9 +1191,15 @@ internal sealed class LambdaBinder
         var closesStaticReceiver = method.IsStatic && group.Receiver != null;
         var parameterOffset = closesStaticReceiver ? 1 : 0;
         var invoke = targetFunctionType.ClrType?.GetMethodSafe("Invoke");
+        var hasByRefParameter = false;
+        foreach (var parameter in methodParameters)
+        {
+            hasByRefParameter |= parameter.ParameterType.IsByRef;
+        }
+
         if (invoke == null
             || methodParameters.Length != targetFunctionType.ParameterTypes.Length + parameterOffset
-            || methodParameters.Any(p => p.ParameterType.IsByRef))
+            || hasByRefParameter)
         {
             return group;
         }

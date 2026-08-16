@@ -312,6 +312,7 @@ internal sealed partial class OverloadResolver
         }
 
         var parameters = classType.PrimaryConstructorParameters;
+        Func<int, string> parameterNameAt = parameterIndex => parameters[parameterIndex].Name;
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         foreach (var argument in syntax.Arguments)
         {
@@ -517,7 +518,7 @@ internal sealed partial class OverloadResolver
             var optionalFinalArguments = PreserveNamedArgumentEvaluationOrder(
                 syntax.Arguments,
                 boundArguments.ToImmutable(),
-                p => parameters[p].Name);
+                parameterNameAt);
             return new BoundConstructorCallExpression(syntax, classType, optionalFinalArguments);
         }
 
@@ -722,7 +723,7 @@ internal sealed partial class OverloadResolver
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             syntax.Arguments,
             boundArguments.ToImmutable(),
-            p => parameters[p].Name);
+            parameterNameAt);
 
         if (classType.IsInline)
         {
@@ -817,17 +818,28 @@ internal sealed partial class OverloadResolver
                 parameterForArg = ctorOverloads[0].Parameters[ai];
             }
 
-            if (argument is RefArgumentExpressionSyntax refArg)
+            BoundExpression? boundArgument = null;
+            var refArgument = argument as RefArgumentExpressionSyntax;
+            if (refArgument is not null)
             {
                 // The callback uses null to mean that overload resolution has
                 // not identified the ref parameter yet; its legacy non-null
                 // annotation predates that two-pass binding contract.
-                boundArgumentsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg!));
+                boundArgument = bindRefArgumentExpression(refArgument, parameterForArg!);
             }
-            else
+
+            var lambdaArgument = argument as LambdaExpressionSyntax;
+            var lambdaTarget = parameterForArg?.Type as FunctionTypeSymbol;
+            if (boundArgument is null
+                && lambdaArgument is not null
+                && lambdaTarget is not null
+                && bindLambdaWithTarget is not null)
             {
-                boundArgumentsBuilder.Add(BindOverloadArgumentValue(argument));
+                boundArgument = bindLambdaWithTarget(lambdaArgument, lambdaTarget);
             }
+
+            boundArgument ??= BindOverloadArgumentValue(argument);
+            boundArgumentsBuilder.Add(boundArgument);
         }
 
         ConstructorSymbol? selectedCtor;
@@ -885,6 +897,7 @@ internal sealed partial class OverloadResolver
 
         selectedCtor = Invariant.Required(selectedCtor, "an applicable explicit constructor has a selected constructor symbol");
         var parameters = selectedCtor.Parameters;
+        Func<int, string> parameterNameAt = parameterIndex => parameters[parameterIndex].Name;
 
         // Issue #1214: for a closed generic construction, surface the
         // constructor's parameter types with the construction's type arguments
@@ -1181,7 +1194,7 @@ internal sealed partial class OverloadResolver
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             syntax.Arguments,
             convertedArguments.ToImmutable(),
-            p => parameters[p].Name);
+            parameterNameAt);
         return new BoundConstructorCallExpression(syntax, classType, finalArguments, selectedCtor);
     }
 

@@ -2507,10 +2507,22 @@ internal sealed partial class ExpressionBinder
             // name lookup on the open type with the same instance-binding
             // flags is sufficient for the single-name, non-indexer
             // properties that surface real receiver-type generics.
-            var openType = closedProperty.DeclaringType != imp.ClrType && closedProperty.DeclaringType?.IsGenericType == true
-                ? imp.OpenDefinition.GetInterfaces().FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == closedProperty.DeclaringType.GetGenericTypeDefinition())
-                    ?? imp.OpenDefinition
-                : imp.OpenDefinition;
+            var openType = imp.OpenDefinition;
+            if (closedProperty.DeclaringType != imp.ClrType
+                && closedProperty.DeclaringType?.IsGenericType == true)
+            {
+                foreach (var candidateInterface in imp.OpenDefinition.GetInterfaces())
+                {
+                    if (candidateInterface.IsGenericType
+                        && candidateInterface.GetGenericTypeDefinition()
+                            == closedProperty.DeclaringType.GetGenericTypeDefinition())
+                    {
+                        openType = candidateInterface;
+                        break;
+                    }
+                }
+            }
+
             var openProperty = ClrTypeUtilities.SafeGetProperty(
                 openType,
                 closedProperty.Name,
@@ -2998,10 +3010,11 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindArraySlice(BoundExpression target, RangeExpressionSyntax range, TypeSymbol elementType)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => new BoundLenExpression(null, src),
+            lengthOf,
             statements);
 
         var resultType = SliceTypeSymbol.Get(elementType);
@@ -3032,10 +3045,11 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindStringSlice(BoundExpression target, RangeExpressionSyntax range)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => new BoundLenExpression(null, src),
+            lengthOf,
             statements);
 
         // System.String always declares the exact Substring(int, int) method.
@@ -3053,10 +3067,12 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindSpanLikeSlice(BoundExpression target, RangeExpressionSyntax range, MemberInfo lengthMember, MethodInfo sliceMethod)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        Func<BoundExpression, BoundExpression> lengthOf =
+            src => new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32);
         var (srcRef, startRef, lenRef) = BuildSliceBounds(
             target,
             range,
-            src => (BoundExpression)new BoundClrPropertyAccessExpression(null, src, lengthMember, TypeSymbol.Int32),
+            lengthOf,
             statements);
 
         var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
@@ -3170,10 +3186,11 @@ internal sealed partial class ExpressionBinder
         if (arrayElement != null)
         {
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
             var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
                 target,
                 rangeValue,
-                src => new BoundLenExpression(null, src),
+                lengthOf,
                 statements);
 
             var resultType = SliceTypeSymbol.Get(arrayElement);
@@ -3196,10 +3213,11 @@ internal sealed partial class ExpressionBinder
         if (target.Type == TypeSymbol.String)
         {
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            Func<BoundExpression, BoundExpression> lengthOf = src => new BoundLenExpression(null, src);
             var (srcRef, startRef, lenRef) = BuildRangeValueBounds(
                 target,
                 rangeValue,
-                src => new BoundLenExpression(null, src),
+                lengthOf,
                 statements);
 
             // System.String always declares the exact Substring(int, int) method.

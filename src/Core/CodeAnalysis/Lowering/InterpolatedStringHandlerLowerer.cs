@@ -754,8 +754,15 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             }
         }
 
-        return HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .First(m => m.Name == "AppendFormatted" && m.IsGenericMethodDefinition);
+        foreach (var method in HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (method.Name == "AppendFormatted" && method.IsGenericMethodDefinition)
+            {
+                return method;
+            }
+        }
+
+        throw new InvalidOperationException("DefaultInterpolatedStringHandler.AppendFormatted<T> was not found.");
     }
 
     private static ImmutableArray<TypeSymbol?> ToNullableTypeArguments(ImmutableArray<TypeSymbol> typeArguments)

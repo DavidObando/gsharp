@@ -1475,12 +1475,14 @@ public sealed class Lowerer : BoundTreeRewriter
 
                 currentType ??= GetClrMemberType(currentMember);
 
-                moveNextCallFactory = receiver => new BoundImportedInstanceCallExpression(
-                    null,
-                    receiver,
-                    moveNext,
-                    TypeSymbol.Bool,
-                    ImmutableArray<BoundExpression>.Empty);
+                Func<BoundExpression, BoundExpression> createMoveNextCall =
+                    receiver => new BoundImportedInstanceCallExpression(
+                        null,
+                        receiver,
+                        moveNext,
+                        TypeSymbol.Bool,
+                        ImmutableArray<BoundExpression>.Empty);
+                moveNextCallFactory = createMoveNextCall;
                 currentAccessFactory = receiver => new BoundClrPropertyAccessExpression(
                     null,
                     receiver,

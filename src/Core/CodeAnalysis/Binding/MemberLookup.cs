@@ -3260,20 +3260,34 @@ internal sealed class MemberLookup
         resolvedArguments = default;
 
         var properties = CollectVisibleClrIndexers(targetType, clrTarget);
-        var hasSymbolicArgument = boundArguments.Any(static argument =>
-            argument.Type?.ClrType == null
-            || TypeSymbol.ContainsTypeParameter(argument.Type)
-            || TypeSymbol.ContainsSameCompilationUserType(argument.Type)
-            || argument.Type is ImportedTypeSymbol { HasSubstitutableTypeArgument: true });
-        var hasSetOnlyIndexer = properties.Any(static property => property.GetGetMethod(nonPublic: false) == null);
+        var hasSymbolicArgument = false;
+        foreach (var argument in boundArguments)
+        {
+            hasSymbolicArgument |= argument.Type?.ClrType == null
+                || TypeSymbol.ContainsTypeParameter(argument.Type)
+                || TypeSymbol.ContainsSameCompilationUserType(argument.Type)
+                || argument.Type is ImportedTypeSymbol { HasSubstitutableTypeArgument: true };
+        }
+
+        var hasSetOnlyIndexer = false;
+        foreach (var property in properties)
+        {
+            hasSetOnlyIndexer |= property.GetGetMethod(nonPublic: false) == null;
+        }
+
         if (hasSymbolicArgument || hasSetOnlyIndexer)
         {
             var applicable = new List<(PropertyInfo Property, ImmutableArray<TypeSymbol> ParameterTypes)>();
             foreach (var property in properties)
             {
                 var parameters = property.GetIndexParameters();
-                if (boundArguments.Length > parameters.Length
-                    || parameters.Skip(boundArguments.Length).Any(static parameter => !parameter.IsOptional))
+                var hasRequiredOmittedParameter = false;
+                for (var i = boundArguments.Length; i < parameters.Length; i++)
+                {
+                    hasRequiredOmittedParameter |= !parameters[i].IsOptional;
+                }
+
+                if (boundArguments.Length > parameters.Length || hasRequiredOmittedParameter)
                 {
                     continue;
                 }
@@ -3363,13 +3377,16 @@ internal sealed class MemberLookup
             }
         }
 
-        var resolution = ClrOverloadResolution.Resolve(
-            properties
-                .Select(static property => property.GetMethod)
-                .Where(static method => method != null)
-                .Cast<MethodInfo>()
-                .ToArray(),
-            argTypes);
+        var getterMethods = new List<MethodInfo>();
+        foreach (var property in properties)
+        {
+            if (property.GetMethod is not null)
+            {
+                getterMethods.Add(property.GetMethod);
+            }
+        }
+
+        var resolution = ClrOverloadResolution.Resolve<MethodInfo>(getterMethods, argTypes);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3381,7 +3398,20 @@ internal sealed class MemberLookup
             return false;
         }
 
-        indexer = properties.First(property => ReferenceEquals(property.GetMethod, best));
+        foreach (var property in properties)
+        {
+            if (ReferenceEquals(property.GetMethod, best))
+            {
+                indexer = property;
+                break;
+            }
+        }
+
+        if (indexer is null)
+        {
+            return false;
+        }
+
         resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
             boundArguments,
             resolution.ParameterMapping,
@@ -3421,9 +3451,17 @@ internal sealed class MemberLookup
         var result = new List<ImportedMethodProbe>();
         if (staticClassType != null)
         {
-            var statics = ClrTypeUtilities.SafeGetMethods(staticClassType, BindingFlags.Static | BindingFlags.Public)
-                .Where(m => string.Equals(m.Name, methodName, StringComparison.Ordinal))
-                .ToList();
+            var statics = new List<MethodInfo>();
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         staticClassType,
+                         BindingFlags.Static | BindingFlags.Public))
+            {
+                if (string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                {
+                    statics.Add(method);
+                }
+            }
+
             if (statics.Count > 0)
             {
                 result.Add(new ImportedMethodProbe(statics, receiverParameterOffset: 0));
@@ -3550,7 +3588,7 @@ internal sealed class MemberLookup
                 }
                 catch (ReflectionTypeLoadException ex)
                 {
-                    types = ex.Types.Where(t => t != null);
+                    types = ex.Types;
                 }
                 catch
                 {

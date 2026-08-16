@@ -2572,7 +2572,13 @@ public sealed class StructSymbol : TypeSymbol
                 // a bug. Log for diagnosability and fall back to the erased
                 // constructed form so both debug and release builds degrade
                 // gracefully rather than crash.
-                var assertMessage = $"StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", resolvedClrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                var renderedArguments = new string[resolvedClrArgs.Length];
+                for (var i = 0; i < resolvedClrArgs.Length; i++)
+                {
+                    renderedArguments[i] = resolvedClrArgs[i].ToString();
+                }
+
+                var assertMessage = $"StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", renderedArguments)}] even after mapClrType projection.";
                 System.Diagnostics.Debug.WriteLine(assertMessage);
                 return imported;
             }

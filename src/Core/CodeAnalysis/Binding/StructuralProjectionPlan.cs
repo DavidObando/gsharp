@@ -409,9 +409,19 @@ internal static class StructuralProjectionPlanner
         ConstructorInfo? constructor = null;
         ParameterInfo[] constructorParameters = Array.Empty<ParameterInfo>();
         var constructors = ClrTypeUtilities.SafeGetConstructors(clrType, PublicInstance);
+        ConstructorInfo? parameterlessConstructor = null;
+        foreach (var candidate in constructors)
+        {
+            if (candidate.GetParameters().Length == 0)
+            {
+                parameterlessConstructor = candidate;
+                break;
+            }
+        }
+
         if (!clrType.IsValueType)
         {
-            constructor = constructors.FirstOrDefault(c => c.GetParameters().Length == 0);
+            constructor = parameterlessConstructor;
             if (constructor == null)
             {
                 foreach (var candidate in constructors)
@@ -435,7 +445,7 @@ internal static class StructuralProjectionPlanner
         }
         else
         {
-            constructor = constructors.FirstOrDefault(c => c.GetParameters().Length == 0);
+            constructor = parameterlessConstructor;
             if (constructor == null)
             {
                 foreach (var candidate in constructors)

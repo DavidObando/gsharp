@@ -149,6 +149,7 @@ internal sealed partial class OverloadResolver
         ImmutableArray<string> argumentNames)
     {
         var parameterCount = method.Parameters.Length;
+        Func<int, string> parameterNameAt = parameterIndex => method.Parameters[parameterIndex].Name;
         if (boundArguments.Length != parameterCount)
         {
             Diagnostics.ReportWrongArgumentCount(syntax.Location, method.Name, parameterCount, boundArguments.Length);
@@ -163,7 +164,7 @@ internal sealed partial class OverloadResolver
                     syntax.Arguments,
                     boundArguments,
                     parameterCount,
-                    p => method.Parameters[p].Name,
+                    parameterNameAt,
                     method.Name,
                     out permutedSyntax,
                     out permutedArguments))
@@ -194,7 +195,7 @@ internal sealed partial class OverloadResolver
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             syntax.Arguments,
             convertedArgs.MoveToImmutable(),
-            p => method.Parameters[p].Name);
+            parameterNameAt);
         return new BoundCallExpression(null, method, finalArguments);
     }
 
@@ -929,6 +930,8 @@ internal sealed partial class OverloadResolver
         var fpSym = fpVar?.Type as FunctionPointerTypeSymbol;
         if (fpVar != null && fpSym != null)
         {
+            Func<int, string> functionPointerParameterNameAt =
+                parameterIndex => fpVar.CallableParameterNames[parameterIndex];
             if (syntax.Arguments.Count != fpSym.Arity)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, fpVar.Name, fpSym.Arity, syntax.Arguments.Count);
@@ -953,7 +956,7 @@ internal sealed partial class OverloadResolver
                         syntax.Arguments,
                         fpArguments,
                         fpSym.Arity,
-                        p => fpVar.CallableParameterNames[p],
+                        functionPointerParameterNameAt,
                         fpVar.Name,
                         out fpParameterSyntax,
                         out fpArguments))
@@ -982,7 +985,7 @@ internal sealed partial class OverloadResolver
             var finalArguments = PreserveNamedArgumentEvaluationOrder(
                 syntax.Arguments,
                 fpConvertedArgs.MoveToImmutable(),
-                p => fpVar.CallableParameterNames[p]);
+                functionPointerParameterNameAt);
 
             return new BoundFunctionPointerInvocationExpression(
                 null,
@@ -1191,15 +1194,30 @@ internal sealed partial class OverloadResolver
                 }
 
                 explicitOverloadTypeArguments = explicitArguments.MoveToImmutable();
-                var constraintMatches = overloadSet
-                    .Where(candidate => candidate.TypeParameters.Length == explicitOverloadTypeArguments.Length)
-                    .Where(candidate => candidate.TypeParameters
-                        .Select((typeParameter, index) => satisfiesConstraint(explicitOverloadTypeArguments[index], typeParameter))
-                        .All(matches => matches))
-                    .ToImmutableArray();
-                if (!constraintMatches.IsDefaultOrEmpty)
+                var constraintMatches = ImmutableArray.CreateBuilder<FunctionSymbol>();
+                foreach (var candidate in overloadSet)
                 {
-                    overloadSet = constraintMatches;
+                    if (candidate.TypeParameters.Length != explicitOverloadTypeArguments.Length)
+                    {
+                        continue;
+                    }
+
+                    var constraintsSatisfied = true;
+                    for (var i = 0; i < candidate.TypeParameters.Length; i++)
+                    {
+                        constraintsSatisfied &=
+                            satisfiesConstraint(explicitOverloadTypeArguments[i], candidate.TypeParameters[i]);
+                    }
+
+                    if (constraintsSatisfied)
+                    {
+                        constraintMatches.Add(candidate);
+                    }
+                }
+
+                if (constraintMatches.Count > 0)
+                {
+                    overloadSet = constraintMatches.ToImmutable();
                 }
             }
 
@@ -1247,6 +1265,10 @@ internal sealed partial class OverloadResolver
 
         var isVariadic = function.Parameters.Length > 0 && function.Parameters[function.Parameters.Length - 1].IsVariadic;
         var fixedParamCount = isVariadic ? function.Parameters.Length - 1 : function.Parameters.Length;
+        Func<int, string> functionParameterNameAt =
+            parameterIndex => function.Parameters[parameterIndex].Name;
+        Func<int, bool> functionParameterIsOptional =
+            parameterIndex => function.Parameters[parameterIndex].HasExplicitDefaultValue;
 
         // ADR-0063: count of leading non-optional parameters (the minimum a
         // call must supply when there are no variadic parameters).
@@ -1267,7 +1289,7 @@ internal sealed partial class OverloadResolver
             !ValidateExpandedVariadicNamedArguments(
                 argumentNames,
                 fixedParamCount,
-                p => function.Parameters[p].Name,
+                functionParameterNameAt,
                 function.Name,
                 syntax))
         {
@@ -1334,8 +1356,8 @@ internal sealed partial class OverloadResolver
                     syntax.Arguments,
                     boundArguments.ToImmutable(),
                     function.Parameters.Length,
-                    p => function.Parameters[p].Name,
-                    hasOptional ? (p => function.Parameters[p].HasExplicitDefaultValue) : null,
+                    functionParameterNameAt,
+                    hasOptional ? functionParameterIsOptional : null,
                     function.Name,
                     out parameterSyntax,
                     out var permutedBound))
@@ -1943,6 +1965,8 @@ internal sealed partial class OverloadResolver
 
             // Issue #1630: pack/pass-through through the canonical helper
             // (applies #1493 element coercion when packing).
+            Func<int, TextLocation> argumentLocation =
+                argumentIndex => syntax.Arguments[argumentIndex].Location;
             var packedArgs = PackOrPassThroughVariadicArguments(
                 conversions,
                 Diagnostics,
@@ -1951,7 +1975,7 @@ internal sealed partial class OverloadResolver
                 fixedParamCount,
                 sliceType,
                 variadicParam.Name,
-                i => syntax.Arguments[i].Location,
+                argumentLocation,
                 ref hasErrors);
 
             if (!hasErrors)
@@ -1985,7 +2009,7 @@ internal sealed partial class OverloadResolver
         var finalBoundArguments = PreserveNamedArgumentEvaluationOrder(
             syntax.Arguments,
             boundArguments.ToImmutable(),
-            p => function.Parameters[p].Name);
+            functionParameterNameAt);
 
         if (substitution != null)
         {

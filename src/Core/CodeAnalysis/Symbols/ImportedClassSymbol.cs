@@ -327,9 +327,14 @@ public sealed class ImportedClassSymbol : Symbol
         // Issue #658 / #1634: supplementary interface check for user-class args,
         // threaded as a call-local parameter into Resolve instead of a shared
         // static so nested/concurrent binds can't clobber it.
-        Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
-            ? (source, target) => IsUserClassAssignableToInterface(arguments, argTypes, source, target)
-            : null;
+        Func<Type, Type, bool>? supplementaryInterfaceCheck = null;
+        if (hasUserClassArg)
+        {
+            supplementaryInterfaceCheck = CheckUserClassInterface;
+        }
+
+        bool CheckUserClassInterface(Type source, Type target) =>
+            IsUserClassAssignableToInterface(arguments, argTypes, source, target);
 
         // Issue #1325: recover the symbolic type-argument vector per candidate
         // so the generic-constraint check can see through the `object`

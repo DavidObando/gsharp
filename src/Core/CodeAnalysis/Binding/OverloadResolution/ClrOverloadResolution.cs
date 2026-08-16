@@ -2390,7 +2390,7 @@ internal static class ClrOverloadResolution
                         // the recovered symbols satisfy the real constraints.
                         if (TryCloseOverUserValueTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                         {
-                            paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                            paramTypeRewrite = RewriteUserValueTypePlaceholder;
                         }
                         else if (!TryCloseOverUserReferenceTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                         {
@@ -2462,18 +2462,32 @@ internal static class ClrOverloadResolution
                             parameterToSource[sourceToParameter[sourceIndex]] = sourceIndex;
                         }
 
-                        inferenceMethodGroup = (parameterIndex, delegateParameters) =>
+                        (Type[] Parameters, Type Return)? MapNamedMethodGroup(
+                            int parameterIndex,
+                            IReadOnlyList<Type> delegateParameters) =>
                             parameterIndex >= 0
                                 && parameterIndex < parameterToSource.Length
                                 && parameterToSource[parameterIndex] >= 0
-                                ? methodGroupInference(parameterToSource[parameterIndex], delegateParameters)
-                                : null;
+                                    ? methodGroupInference(
+                                        parameterToSource[parameterIndex],
+                                        delegateParameters)
+                                    : null;
+                        inferenceMethodGroup = MapNamedMethodGroup;
                     }
                 }
 
                 var symbolicTypeArgs = recoverTypeArgSymbols?.Invoke(mi, false) ?? default;
                 Type[]? typeArgs = null;
-                var useRecoveredInference = deferredInferenceArgs?.Any(static deferred => deferred) == true
+                var hasDeferredInferenceArgument = false;
+                if (deferredInferenceArgs is not null)
+                {
+                    foreach (var deferred in deferredInferenceArgs)
+                    {
+                        hasDeferredInferenceArgument |= deferred;
+                    }
+                }
+
+                var useRecoveredInference = hasDeferredInferenceArgument
                     && TryRecoverErasedTypeArguments(
                         mi,
                         symbolicTypeArgs,
@@ -2534,7 +2548,7 @@ internal static class ClrOverloadResolution
                     // satisfy the real constraints.
                     if (TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                     {
-                        paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                        paramTypeRewrite = RewriteUserValueTypePlaceholder;
                     }
                     else if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                     {
@@ -2760,7 +2774,7 @@ internal static class ClrOverloadResolution
                     var explicitTypeArgsArray = explicitTypeArgs.ToArray();
                     if (TryCloseOverUserValueTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                     {
-                        paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                        paramTypeRewrite = RewriteUserValueTypePlaceholder;
                     }
                     else if (!TryCloseOverUserReferenceTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                     {
@@ -2821,7 +2835,7 @@ internal static class ClrOverloadResolution
                 recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, true) ?? default;
                 if (TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                 {
-                    paramTypeRewrite = static t => SubstituteClrType(t, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
+                    paramTypeRewrite = RewriteUserValueTypePlaceholder;
                 }
                 else if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                 {
@@ -4699,6 +4713,9 @@ internal static class ClrOverloadResolution
 
         return true;
     }
+
+    private static Type RewriteUserValueTypePlaceholder(Type type) =>
+        SubstituteClrType(type, typeof(UserValueTypeConstraintPlaceholder), typeof(object));
 
     /// <summary>
     /// Issue #1325: structurally rewrites every occurrence of

@@ -851,12 +851,16 @@ internal sealed partial class ExpressionBinder
         whenTrueNarrowing = MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue);
         whenFalseNarrowing = MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse);
 
+        Func<BoundExpression> bindWhenTrue =
+            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
+        Func<BoundExpression> bindWhenFalse =
+            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
         var whenTrue = BindWithNarrowing(
             whenTrueNarrowing,
-            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType));
+            bindWhenTrue);
         var whenFalse = BindWithNarrowing(
             whenFalseNarrowing,
-            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType));
+            bindWhenFalse);
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {
@@ -1050,7 +1054,7 @@ internal sealed partial class ExpressionBinder
         bool canBeVoid = false,
         TypeSymbol? targetType = null,
         bool preserveEmptyBlock = false)
-        => BindInBlockExpressionScope(() => BindBlockExpressionValueCore(
+        => BindInBlockExpressionScope<BoundExpression>(() => BindBlockExpressionValueCore(
             syntax,
             canBeVoid,
             targetType,
@@ -1130,7 +1134,7 @@ internal sealed partial class ExpressionBinder
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
-            return BindInBlockExpressionScope(() => BindLambdaBlockBodyExpression(block));
+            return BindInBlockExpressionScope<BoundExpression>(() => BindLambdaBlockBodyExpression(block));
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);

@@ -403,14 +403,33 @@ public sealed class ReferenceResolver : IDisposable
     /// <returns>The effective reference paths.</returns>
     public static IReadOnlyList<string> ResolveDriverReferencePaths(IEnumerable<string> referencePaths)
     {
-        var paths = referencePaths?
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .ToList()
-            ?? new List<string>();
+        var paths = new List<string>();
+        if (referencePaths is not null)
+        {
+            foreach (var path in referencePaths)
+            {
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    paths.Add(path);
+                }
+            }
+        }
 
         var extensionPath = FindBundledExtensionPath(AppContext.BaseDirectory);
-        if (extensionPath != null
-            && !paths.Any(path => string.Equals(Path.GetFullPath(path), extensionPath, StringComparison.OrdinalIgnoreCase)))
+        var hasExtensionPath = false;
+        if (extensionPath != null)
+        {
+            foreach (var path in paths)
+            {
+                if (string.Equals(Path.GetFullPath(path), extensionPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    hasExtensionPath = true;
+                    break;
+                }
+            }
+        }
+
+        if (extensionPath != null && !hasExtensionPath)
         {
             paths.Add(extensionPath);
         }
@@ -474,8 +493,13 @@ public sealed class ReferenceResolver : IDisposable
         var runtimeAssemblies = new List<Assembly>();
         if (referencePaths is not null)
         {
-            foreach (var path in referencePaths.Where(path => !string.IsNullOrWhiteSpace(path)))
+            foreach (var path in referencePaths)
             {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
                 var fullPath = Path.GetFullPath(path);
                 var assembly = runtimeContext.LoadReference(fullPath);
                 RegisterAssemblyOriginalPath(assembly, fullPath);
@@ -483,16 +507,25 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        var runtimeNames = runtimeAssemblies
-            .Select(assembly => assembly.GetName().FullName)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var assemblies = BuildHostAssemblies()
-            .Where(assembly => !runtimeNames.Contains(assembly.GetName().FullName))
-            .Concat(runtimeAssemblies)
-            .ToImmutableArray();
+        var runtimeNames = new HashSet<string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var assembly in runtimeAssemblies)
+        {
+            runtimeNames.Add(assembly.GetName().FullName);
+        }
+
+        var assemblies = ImmutableArray.CreateBuilder<Assembly>();
+        foreach (var assembly in BuildHostAssemblies())
+        {
+            if (!runtimeNames.Contains(assembly.GetName().FullName))
+            {
+                assemblies.Add(assembly);
+            }
+        }
+
+        assemblies.AddRange(runtimeAssemblies);
 
         return new ReferenceResolver(
-            assemblies,
+            assemblies.ToImmutable(),
             metadataContext: null,
             missingTransitiveReferences: ImmutableArray<string>.Empty,
             runtimeContext: runtimeContext);

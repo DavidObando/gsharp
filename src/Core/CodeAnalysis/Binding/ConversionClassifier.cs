@@ -1599,8 +1599,12 @@ internal sealed class ConversionClassifier
 
         var invokeParams = invoke.GetParameters();
         var targetParameterRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(invoke);
-        var closesExtensionReceiver = group.Receiver != null
-            && group.Candidates.All(candidate => candidate.IsStatic);
+        var closesExtensionReceiver = group.Receiver != null;
+        foreach (var candidate in group.Candidates)
+        {
+            closesExtensionReceiver &= candidate.IsStatic;
+        }
+
         var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
         if (closesExtensionReceiver)
         {

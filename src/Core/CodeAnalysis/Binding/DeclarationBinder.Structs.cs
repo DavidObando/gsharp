@@ -1443,8 +1443,19 @@ internal sealed partial class DeclarationBinder
 
                     var primaryConstructorParameters = syntax.PrimaryConstructorParameters
                         ?? throw new InvalidOperationException("A data positional property requires primary constructor parameters.");
-                    var parameterSyntax = primaryConstructorParameters
-                        .First(candidate => candidate.Identifier.Text == parameter.Name);
+                    ParameterSyntax? parameterSyntax = null;
+                    foreach (var candidate in primaryConstructorParameters)
+                    {
+                        if (candidate.Identifier.Text == parameter.Name)
+                        {
+                            parameterSyntax = candidate;
+                            break;
+                        }
+                    }
+
+                    parameterSyntax = Invariant.Required(
+                        parameterSyntax,
+                        "a data positional property has matching primary constructor syntax");
                     var propertyAttributes = BindDataPositionalPropertyAttributes(parameterSyntax);
                     if (!propertyAttributes.IsDefaultOrEmpty)
                     {

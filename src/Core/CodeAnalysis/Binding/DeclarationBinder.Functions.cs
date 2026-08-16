@@ -2565,9 +2565,20 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var candidateClr = candidateIface.ClrType;
-                if (candidateClr != null
-                    && candidateClr.GetInterfaces().Any(inherited =>
-                        ClrTypeUtilities.AreSame(inherited, boundType.ClrType)))
+                var inheritsBoundInterface = false;
+                if (candidateClr != null)
+                {
+                    foreach (var inherited in candidateClr.GetInterfaces())
+                    {
+                        if (ClrTypeUtilities.AreSame(inherited, boundType.ClrType))
+                        {
+                            inheritsBoundInterface = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (inheritsBoundInterface)
                 {
                     return boundType;
                 }

@@ -273,14 +273,20 @@ public sealed class Binder
                 ParameterAllowedTargets,
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
-            bindLambdaBodyExpression: syntax => Expressions.BindLambdaBodyExpression(syntax),
+            bindLambdaBodyExpression: BindLambdaBodyExpressionForLambdas,
             bindTypeParameterList: syntax => Declarations.BindTypeParameterList(syntax));
+        BoundExpression BindExpressionWithTargetTypeForStatements(
+            ExpressionSyntax syntax,
+            TypeSymbol targetType) =>
+            Expressions.BindExpression(syntax, targetType);
+        BoundExpression BindLambdaBodyExpressionForLambdas(ExpressionSyntax syntax) =>
+            Expressions.BindLambdaBodyExpression(syntax);
         statements = new StatementBinder(
             binderCtx,
             conversions,
             patterns,
             bindExpression: (syntax, canBeVoid) => Expressions.BindExpression(syntax, canBeVoid),
-            bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
+            bindExpressionWithTargetType: BindExpressionWithTargetTypeForStatements,
             bindTypeClause: BindTypeClause,
             bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
             bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility),
@@ -295,13 +301,17 @@ public sealed class Binder
             bindLambdaWithTargetType: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
             bindGenericLocalFunctionDeclaration: syntax => Lambdas.BindGenericLocalFunctionDeclaration(syntax),
             checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
+        BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
+            Expressions.BindTypeOfExpression(syntax);
+        BoundExpression BindExpressionForDeclarations(ExpressionSyntax syntax) =>
+            Expressions.BindExpression(syntax);
         declarations = new DeclarationBinder(
             binderCtx,
             conversions,
-            bindExpression: syntax => Expressions.BindExpression(syntax),
+            bindExpression: BindExpressionForDeclarations,
             bindTypeClause: BindTypeClause,
             bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
-            bindTypeOfExpression: syntax => Expressions.BindTypeOfExpression(syntax),
+            bindTypeOfExpression: BindTypeOfExpressionForDeclarations,
             bindArrayCreationExpression: syntax => Expressions.BindArrayCreationExpression(syntax),
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
@@ -1032,13 +1042,28 @@ public sealed class Binder
                 var requestedPackage = nonNullBaseType.HasQualifier
                     ? nonNullBaseType.DottedName[..^(baseName.Length + 1)]
                     : symbol.PackageName;
-                var matchingPackage = candidates.Where(candidate =>
-                    declaredStructs[candidate].Symbol.IsClass &&
-                    declaredStructs[candidate].Symbol.PackageName == requestedPackage).ToList();
+                var matchingPackage = new List<int>();
+                var classCandidateCount = 0;
+                var soleClassCandidate = -1;
+                foreach (var candidate in candidates)
+                {
+                    if (!declaredStructs[candidate].Symbol.IsClass)
+                    {
+                        continue;
+                    }
+
+                    classCandidateCount++;
+                    soleClassCandidate = candidate;
+                    if (declaredStructs[candidate].Symbol.PackageName == requestedPackage)
+                    {
+                        matchingPackage.Add(candidate);
+                    }
+                }
+
                 var baseIndex = matchingPackage.Count == 1
                     ? matchingPackage[0]
-                    : candidates.Count(candidate => declaredStructs[candidate].Symbol.IsClass) == 1
-                        ? candidates.Single(candidate => declaredStructs[candidate].Symbol.IsClass)
+                    : classCandidateCount == 1
+                        ? soleClassCandidate
                         : -1;
                 if (baseIndex >= 0)
                 {
@@ -4995,6 +5020,13 @@ public sealed class Binder
             return;
         }
 
+        var importedParameterType = parameterType as ImportedTypeSymbol;
+        if (importedParameterType is not null && importedParameterType.HasTypeParameterArgument)
+        {
+            InferImportedTypeArguments(importedParameterType, argumentType, substitution);
+            return;
+        }
+
         if (parameterType is NullableTypeSymbol pn)
         {
             // Issue #1931: a `T?` parameter also accepts a non-nullable argument
@@ -5139,76 +5171,59 @@ public sealed class Binder
                 }
             }
         }
+    }
 
-        var importedParameterType = parameterType as ImportedTypeSymbol;
-        if (importedParameterType is not null && importedParameterType.HasTypeParameterArgument)
+    private static void InferImportedTypeArguments(
+        ImportedTypeSymbol parameterType,
+        TypeSymbol argumentType,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        var argumentClrArguments = GetClrGenericArguments(argumentType);
+        if (!argumentClrArguments.IsDefaultOrEmpty
+            && argumentClrArguments.Length == parameterType.TypeArguments.Length)
         {
-            var pit = importedParameterType;
+            for (var i = 0; i < parameterType.TypeArguments.Length; i++)
+            {
+                InferTypeArguments(
+                    parameterType.TypeArguments[i],
+                    argumentClrArguments[i],
+                    substitution);
+            }
 
-            // #313: infer from a generic type parameterized by an in-scope type
-            // parameter (e.g. parameter `List[T]` matched against argument
-            // `List<int32>`). Unify the symbolic type arguments positionally
-            // against the argument's CLR generic arguments.
-            var argClrArgs = GetClrGenericArguments(
-                Invariant.Required(argumentType, "generic inference requires an argument type"));
-            if (!argClrArgs.IsDefaultOrEmpty && argClrArgs.Length == pit.TypeArguments.Length)
+            return;
+        }
+
+        var argumentClrType = argumentType.ClrType;
+        var matchedInterface = argumentClrType != null
+            && argumentClrType.IsArray
+            && parameterType.OpenDefinition != null
+                ? FindMatchingInterface(argumentClrType, parameterType.OpenDefinition)
+                : null;
+        if (matchedInterface != null)
+        {
+            var matchedArguments = matchedInterface.GetGenericArguments();
+            if (matchedArguments.Length == parameterType.TypeArguments.Length)
             {
-                for (var i = 0; i < pit.TypeArguments.Length; i++)
+                for (var i = 0; i < parameterType.TypeArguments.Length; i++)
                 {
-                    InferTypeArguments(pit.TypeArguments[i], argClrArgs[i], substitution);
+                    InferTypeArguments(
+                        parameterType.TypeArguments[i],
+                        TypeSymbol.FromClrType(matchedArguments[i]),
+                        substitution);
                 }
             }
-            else if (argClrArgs.IsDefaultOrEmpty)
-            {
-                // #611: slice/array → interface inference. A slice `[]T` or
-                // fixed-array `[N]T` is backed by CLR `T[]` which is not
-                // generic itself but implements generic interfaces
-                // (IEnumerable<T>, IReadOnlyList<T>, IList<T>, etc.). Walk
-                // the array's interface set to find a match for the
-                // parameter's open definition and extract its arguments.
-                var argClr = argumentType?.ClrType;
-                var matched = argClr != null && argClr.IsArray && pit.OpenDefinition != null
-                    ? FindMatchingInterface(argClr, pit.OpenDefinition)
-                    : null;
-                if (matched != null)
-                {
-                    var matchedArgs = matched.GetGenericArguments();
-                    if (matchedArgs.Length == pit.TypeArguments.Length)
-                    {
-                        for (var i = 0; i < pit.TypeArguments.Length; i++)
-                        {
-                            InferTypeArguments(pit.TypeArguments[i], TypeSymbol.FromClrType(matchedArgs[i]), substitution);
-                        }
-                    }
-                }
-                else if ((argumentType is SliceTypeSymbol || argumentType is ArrayTypeSymbol)
-                    && pit.TypeArguments.Length == 1
-                    && IsArrayCompatibleOpenInterface(pit.OpenDefinition))
-                {
-                    // Issue #2416: the reflection-based lookup above requires a
-                    // real CLR `Type` for the slice/array (`argumentType.ClrType`),
-                    // which is null for a same-compilation SOURCE element type
-                    // that has not been emitted yet (e.g. a source `struct`/
-                    // `class` used as `[]Chapter`). A CLR single-dimensional
-                    // array unconditionally implements `IEnumerable<T>`,
-                    // `ICollection<T>`, `IList<T>`, `IReadOnlyCollection<T>`,
-                    // and `IReadOnlyList<T>` with `T` equal to its own element
-                    // type — a guarantee of the CLR array contract, not
-                    // something that needs reflection to confirm. Unify
-                    // symbolically against the slice/array's own
-                    // <see cref="SliceTypeSymbol.ElementType"/> /
-                    // <see cref="ArrayTypeSymbol.ElementType"/> so this generic
-                    // extension/method inference doesn't depend on whether the
-                    // element type has a `ClrType` yet. This keeps working the
-                    // same way regardless of whether the array receiver came
-                    // from a bare member access, a null-asserted chain
-                    // (`x!!.Member`), a nested chain, or a for-loop element.
-                    var elementType = argumentType is SliceTypeSymbol slice
-                        ? slice.ElementType
-                        : ((ArrayTypeSymbol)argumentType).ElementType;
-                    InferTypeArguments(pit.TypeArguments[0], elementType, substitution);
-                }
-            }
+
+            return;
+        }
+
+        if ((argumentType is SliceTypeSymbol || argumentType is ArrayTypeSymbol)
+            && parameterType.TypeArguments.Length == 1
+            && IsArrayCompatibleOpenInterface(parameterType.OpenDefinition))
+        {
+            var elementType = argumentType is SliceTypeSymbol slice
+                ? slice.ElementType
+                : ((ArrayTypeSymbol)argumentType).ElementType;
+            InferTypeArguments(parameterType.TypeArguments[0], elementType, substitution);
         }
     }
 
@@ -5530,9 +5545,13 @@ public sealed class Binder
         // it surfaces as `Box[int32].Tag`. `Tag` declares no own type arguments,
         // so the emitter parents its use-site references/slots at
         // `Box`1+Tag`1<int32>` rather than the open `Box`1+Tag`1<!0>`.
+        Func<TypeSymbol, TypeSymbol> substituteEnclosingType =
+            nestedType => SubstituteType(nestedType, substitution, mapClrType);
         if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
         {
-            var newEnclosing = StructSymbol.SubstituteEnclosingArguments(nestedRef, t => SubstituteType(t, substitution, mapClrType));
+            var newEnclosing = StructSymbol.SubstituteEnclosingArguments(
+                nestedRef,
+                substituteEnclosingType);
             if (!newEnclosing.IsDefault)
             {
                 return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing, mapClrType);
@@ -5541,7 +5560,9 @@ public sealed class Binder
 
         if (type is EnumSymbol nestedEnum)
         {
-            var newEnclosing = EnumSymbol.SubstituteEnclosingArguments(nestedEnum, t => SubstituteType(t, substitution, mapClrType));
+            var newEnclosing = EnumSymbol.SubstituteEnclosingArguments(
+                nestedEnum,
+                substituteEnclosingType);
             if (!newEnclosing.IsDefault)
             {
                 return EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, newEnclosing);

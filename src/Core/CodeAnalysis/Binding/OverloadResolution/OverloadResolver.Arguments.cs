@@ -661,8 +661,13 @@ internal sealed partial class OverloadResolver
         System.Func<int, string> parameterNameAt,
         int parameterOffset = 0)
     {
-        if (sourceArguments.Count == 0 ||
-            !sourceArguments.Any(argument => argument is NamedArgumentExpressionSyntax))
+        var hasNamedArgument = false;
+        foreach (var argument in sourceArguments)
+        {
+            hasNamedArgument |= argument is NamedArgumentExpressionSyntax;
+        }
+
+        if (sourceArguments.Count == 0 || !hasNamedArgument)
         {
             return parameterOrderedArguments;
         }
@@ -1052,8 +1057,7 @@ internal sealed partial class OverloadResolver
             }
 
             knownNames ??= MemberLookup.CollectClrParameterNames(receiverClrType, methodName, bindingFlags);
-            if (!knownNames.Any(parameterName =>
-                    ClrParameterNameMatches(parameterName, name)))
+            if (!ContainsClrParameterName(knownNames, name))
             {
                 var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
                 Diagnostics.ReportNamedArgumentParameterNotFound(location, methodName, name);
@@ -1090,11 +1094,23 @@ internal sealed partial class OverloadResolver
             }
 
             knownNames ??= MemberLookup.CollectClrConstructorParameterNames(clrType);
-            if (!knownNames.Any(parameterName =>
-                    ClrParameterNameMatches(parameterName, name)))
+            if (!ContainsClrParameterName(knownNames, name))
             {
                 var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
                 Diagnostics.ReportNamedArgumentParameterNotFound(location, clrType.Name, name);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsClrParameterName(IEnumerable<string> parameterNames, string name)
+    {
+        foreach (var parameterName in parameterNames)
+        {
+            if (ClrParameterNameMatches(parameterName, name))
+            {
                 return true;
             }
         }

@@ -538,11 +538,18 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out FunctionTypeSymbol? naturalType)
     {
         naturalType = null;
-        var closesReceiver = group.Receiver != null && group.Candidates.All(candidate => candidate.IsStatic);
+        var closesReceiver = group.Receiver != null;
+        foreach (var candidate in group.Candidates)
+        {
+            closesReceiver &= candidate.IsStatic;
+        }
+
         var receiverClr = closesReceiver
             ? NullableTypeSymbol.GetEffectiveClrType(Invariant.Required(group.Receiver, "a closed method group has a receiver").Type)
             : null;
-        var matches = new List<(MethodInfo Method, ClrOverloadResolution.ImplicitConversionKind ReceiverConversion)>();
+        MethodInfo? bestMethod = null;
+        var bestReceiverConversion = ClrOverloadResolution.ImplicitConversionKind.None;
+        var bestIsTied = false;
 
         foreach (var candidate in group.Candidates)
         {
@@ -552,8 +559,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var parameters = candidate.GetParameters();
-            if (parameters.Any(parameter => parameter.ParameterType.IsByRef)
-                || (closesReceiver && (parameters.Length == 0 || receiverClr == null)))
+            var hasByRefParameter = false;
+            foreach (var parameter in parameters)
+            {
+                hasByRefParameter |= parameter.ParameterType.IsByRef;
+            }
+
+            if (hasByRefParameter || (closesReceiver && (parameters.Length == 0 || receiverClr == null)))
             {
                 continue;
             }
@@ -561,37 +573,43 @@ internal sealed partial class ExpressionBinder
             var receiverConversion = closesReceiver
                 ? ClrOverloadResolution.ClassifyImplicit(parameters[0].ParameterType, receiverClr)
                 : ClrOverloadResolution.ImplicitConversionKind.Identity;
-            if (receiverConversion != ClrOverloadResolution.ImplicitConversionKind.None)
+            if (receiverConversion == ClrOverloadResolution.ImplicitConversionKind.None)
             {
-                matches.Add((candidate, receiverConversion));
+                continue;
+            }
+
+            if (bestMethod is null || (int)receiverConversion < (int)bestReceiverConversion)
+            {
+                bestMethod = candidate;
+                bestReceiverConversion = receiverConversion;
+                bestIsTied = false;
+            }
+            else if (receiverConversion == bestReceiverConversion)
+            {
+                bestIsTied = true;
             }
         }
 
-        if (matches.Count == 0)
+        if (bestMethod is null || bestIsTied)
         {
             return false;
         }
 
-        var bestReceiverConversion = matches.Min(match => (int)match.ReceiverConversion);
-        var best = matches.Where(match => (int)match.ReceiverConversion == bestReceiverConversion).ToArray();
-        if (best.Length != 1)
-        {
-            return false;
-        }
-
-        var method = best[0].Method;
+        var method = bestMethod;
         var methodParameters = method.GetParameters();
         var offset = closesReceiver ? 1 : 0;
-        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(methodParameters.Length - offset);
+        var parameterTypes = new TypeSymbol[methodParameters.Length - offset];
         for (var i = offset; i < methodParameters.Length; i++)
         {
-            parameterTypes.Add(ClrNullability.GetParameterTypeSymbol(methodParameters[i]));
+            parameterTypes[i - offset] = ClrNullability.GetParameterTypeSymbol(methodParameters[i]);
         }
 
         var returnType = method.ReturnType.IsSameAs(typeof(void))
             ? TypeSymbol.Void
             : ClrNullability.GetReturnTypeSymbol(method);
-        naturalType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+        naturalType = FunctionTypeSymbol.Get(
+            ImmutableArray.CreateRange<TypeSymbol>(parameterTypes),
+            returnType);
         return naturalType.ClrType != null;
     }
 
@@ -1617,9 +1635,7 @@ internal sealed partial class ExpressionBinder
     {
         // The object-initializer lowering needs a constructed instance; require a
         // public parameterless constructor (the C# object-initializer contract).
-        var parameterlessCtor = ClrTypeUtilities
-            .SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
-            .FirstOrDefault(c => c.GetParameters().Length == 0);
+        var parameterlessCtor = FindPublicParameterlessConstructor(clrType);
         if (parameterlessCtor == null)
         {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, syntax.TypeIdentifier.Text);
@@ -1659,9 +1675,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindImportedValueTypeLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
     {
         var resultType = TypeSymbol.FromClrType(clrType);
-        var parameterlessCtor = ClrTypeUtilities
-            .SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
-            .FirstOrDefault(c => c.GetParameters().Length == 0);
+        var parameterlessCtor = FindPublicParameterlessConstructor(clrType);
         BoundExpression construction = parameterlessCtor != null
             ? new BoundClrConstructorCallExpression(
                 syntax,
@@ -1672,6 +1686,21 @@ internal sealed partial class ExpressionBinder
             : new BoundDefaultExpression(syntax, resultType);
 
         return BindImportedTypeObjectInitializer(syntax, clrType, resultType, construction);
+    }
+
+    private static ConstructorInfo? FindPublicParameterlessConstructor(Type clrType)
+    {
+        foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(
+                     clrType,
+                     BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (constructor.GetParameters().Length == 0)
+            {
+                return constructor;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -2230,7 +2259,16 @@ internal sealed partial class ExpressionBinder
             elementType = CloseNestedEnumOverCurrentTypeParameters(bareElementEnum);
         }
 
-        if (syntax.Elements?.Any(element => element is SpreadElementExpressionSyntax) == true)
+        var hasSpreadElement = false;
+        if (syntax.Elements is not null)
+        {
+            foreach (var element in syntax.Elements)
+            {
+                hasSpreadElement |= element is SpreadElementExpressionSyntax;
+            }
+        }
+
+        if (hasSpreadElement)
         {
             return BindSpreadArrayCreationExpression(syntax, elementType);
         }
@@ -2415,9 +2453,9 @@ internal sealed partial class ExpressionBinder
             closedListType,
             openListType,
             ImmutableArray.Create(elementType));
-        var constructor = ClrTypeUtilities
-            .SafeGetConstructors(closedListType, BindingFlags.Public | BindingFlags.Instance)
-            .Single(candidate => candidate.GetParameters().Length == 0);
+        var constructor = Invariant.Required(
+            FindPublicParameterlessConstructor(closedListType),
+            "List<T> has a public parameterless constructor");
         return new BoundClrConstructorCallExpression(
             syntax,
             closedListType,

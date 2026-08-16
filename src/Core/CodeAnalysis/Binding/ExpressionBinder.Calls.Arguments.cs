@@ -635,6 +635,8 @@ internal sealed partial class ExpressionBinder
             // trailing elements get the same per-element coercion applied
             // at every other variadic pack site (previously packed raw,
             // uncoerced elements here).
+            Func<int, TextLocation> variadicArgumentLocation =
+                i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
             permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
                 conversions,
                 Diagnostics,
@@ -643,7 +645,7 @@ internal sealed partial class ExpressionBinder
                 fldFixedCount,
                 sliceType,
                 methodName,
-                i => i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location,
+                variadicArgumentLocation,
                 ref hasVariadicErrors);
 
             if (hasVariadicErrors)
@@ -1074,13 +1076,24 @@ internal sealed partial class ExpressionBinder
         // Issue #658 / #1634: supplementary interface check for user-class args,
         // threaded as a call-local parameter into Resolve instead of a shared
         // static so nested/concurrent binds can't clobber it.
-        Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
-            ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
-            : null;
+        Func<Type, Type, bool>? supplementaryInterfaceCheck = null;
+        if (hasUserClassArg)
+        {
+            supplementaryInterfaceCheck = CheckUserClassInterface;
+        }
+
+        bool CheckUserClassInterface(Type source, Type target) =>
+            IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
 
         var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
             null,
             ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
+        Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverInheritedTypeArgs =
+            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                typeArgSymbols,
+                inheritedSymbolicArgs,
+                isExpanded);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -1088,11 +1101,7 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
             argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
-            recoverTypeArgSymbols: (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                typeArgSymbols,
-                inheritedSymbolicArgs,
-                isExpanded),
+            recoverTypeArgSymbols: recoverInheritedTypeArgs,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
@@ -1411,22 +1420,34 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (deferredInferenceArgs.Any(static deferred => deferred)
-            && receiverClrType is { IsGenericType: true })
+        var hasDeferredInferenceArgument = false;
+        foreach (var deferred in deferredInferenceArgs)
+        {
+            hasDeferredInferenceArgument |= deferred;
+        }
+
+        if (hasDeferredInferenceArgument && receiverClrType is { IsGenericType: true })
         {
             var receiverDefinition = receiverClrType.GetGenericTypeDefinition();
-            if (candidates.Any(candidate =>
+            var candidateMatchesReceiver = false;
+            foreach (var candidate in candidates)
             {
-                var parameters = candidate.GetParameters();
-                if (parameters.Length == 0 || !parameters[0].ParameterType.IsGenericType)
+                var candidateParameters = candidate.GetParameters();
+                if (candidateParameters.Length == 0 || !candidateParameters[0].ParameterType.IsGenericType)
                 {
-                    return false;
+                    continue;
                 }
 
-                return ClrTypeUtilities.AreSame(
-                    receiverDefinition,
-                    parameters[0].ParameterType.GetGenericTypeDefinition());
-            }))
+                if (ClrTypeUtilities.AreSame(
+                        receiverDefinition,
+                        candidateParameters[0].ParameterType.GetGenericTypeDefinition()))
+                {
+                    candidateMatchesReceiver = true;
+                    break;
+                }
+            }
+
+            if (candidateMatchesReceiver)
             {
                 Array.Clear(deferredInferenceArgs);
             }
@@ -1479,9 +1500,15 @@ internal sealed partial class ExpressionBinder
         // Issue #658 / #1634: supplementary interface check for user-class args,
         // threaded as a call-local parameter into Resolve instead of a shared
         // static so nested/concurrent binds can't clobber it.
-        Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
-            ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
-            : null;
+        Func<Type, Type, bool>? supplementaryInterfaceCheck = null;
+        if (hasUserClassArg)
+        {
+            supplementaryInterfaceCheck = CheckUserClassInterface;
+        }
+
+        bool CheckUserClassInterface(Type source, Type target) =>
+            IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target);
+
         var argumentStructuralProjectionCheck = MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1);
         bool ExtensionStructuralProjectionCheck(int index, Type target) =>
             index == 0
@@ -1498,6 +1525,16 @@ internal sealed partial class ExpressionBinder
         // consistently with the instance/inherited/static/ctor paths. Offset by
         // 1 (receiverArgCount) since slot 0 here is the receiver, not a
         // user-supplied argument.
+        Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverExtensionTypeArgs =
+            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                typeArgSymbols,
+                extensionSymbolicArgs,
+                isExpanded);
+        Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
+            argumentIndex > 0
+            && argumentIndex - 1 < arguments.Length
+            && arguments[argumentIndex - 1] is BoundFunctionLiteralExpression;
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -1505,11 +1542,7 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             ComputeInterpolatedStringArgFlags(ce.Arguments, argTypes.Length, receiverArgCount: 1),
             argumentNames: extensionArgumentNames,
-            recoverTypeArgSymbols: (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                typeArgSymbols,
-                extensionSymbolicArgs,
-                isExpanded),
+            recoverTypeArgSymbols: recoverExtensionTypeArgs,
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
             structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
@@ -1517,10 +1550,7 @@ internal sealed partial class ExpressionBinder
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
             deferredInferenceArgs: deferredInferenceArgs,
-            functionLiteralArgumentCheck: argumentIndex =>
-                argumentIndex > 0
-                && argumentIndex - 1 < arguments.Length
-                && arguments[argumentIndex - 1] is BoundFunctionLiteralExpression);
+            functionLiteralArgumentCheck: functionLiteralArgumentCheck);
 
         switch (resolution.Outcome)
         {
