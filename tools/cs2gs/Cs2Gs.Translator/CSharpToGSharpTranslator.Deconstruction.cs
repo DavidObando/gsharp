@@ -1196,6 +1196,80 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol recursiveLocal
+                && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
+                    recursiveLocal,
+                    out LiftedRecursiveLocalFunction recursiveLift))
+            {
+                bool liftedIsAsync = localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
+                List<Parameter> liftedParameters = this.MapParameters(
+                    recursiveLocal,
+                    localFunction.ParameterList,
+                    skipFirst: false);
+                foreach (LiftedLocalFunctionCapture capture in recursiveLift.Captures)
+                {
+                    ITypeSymbol captureType = capture.Symbol switch
+                    {
+                        ILocalSymbol local => local.Type,
+                        IParameterSymbol parameter => parameter.Type,
+                        _ => null,
+                    };
+                    if (captureType == null)
+                    {
+                        continue;
+                    }
+
+                    if (captureType.IsReferenceType
+                        && !CaptureHasExplicitNullableType(capture.Symbol))
+                    {
+                        captureType = captureType.WithNullableAnnotation(
+                            NullableAnnotation.NotAnnotated);
+                    }
+
+                    liftedParameters.Add(new Parameter(
+                        SanitizeIdentifier(capture.Symbol.Name),
+                        this.typeMapper.Map(
+                            captureType,
+                            this.context,
+                            capture.Symbol.Locations.FirstOrDefault()),
+                        refKind: capture.IsByRef ? "ref" : null));
+                }
+
+                GTypeReference liftedReturnType = this.MapDelegateLikeReturnType(
+                    recursiveLocal,
+                    liftedIsAsync,
+                    localFunction.ReturnType.GetLocation());
+                List<TypeParameter> liftedTypeParameters = this.MapMethodTypeParameters(recursiveLocal);
+                BlockStatement liftedBody = this.TranslateBody(
+                    localFunction,
+                    $"recursive local function '{localFunction.Identifier.Text}'");
+                var helper = new MethodDeclaration(
+                    recursiveLift.Name,
+                    liftedParameters,
+                    liftedReturnType,
+                    liftedBody,
+                    liftedTypeParameters,
+                    visibility: Visibility.Private,
+                    isAsync: liftedIsAsync,
+                    isRefReturn: recursiveLocal.ReturnsByRef);
+                if (recursiveLift.IsStatic)
+                {
+                    (this.state.PendingStaticSynthHelpers
+                        ?? throw new InvalidOperationException(
+                            "A recursive static local-function lift must be emitted inside an aggregate."))
+                        .Add(helper);
+                }
+                else
+                {
+                    (this.state.PendingInstanceSynthHelpers
+                        ?? throw new InvalidOperationException(
+                            "A recursive instance local-function lift must be emitted inside an aggregate."))
+                        .Add(helper);
+                }
+
+                return new RawStatement($"// lifted recursive local function {recursiveLift.Name}");
+            }
+
             if (localFunction.Modifiers.Any(SyntaxKind.StaticKeyword)
                 && this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol staticLocal
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(staticLocal, out string liftedName)
@@ -1339,6 +1413,28 @@ public sealed partial class CSharpToGSharpTranslator
                 .ToList();
 
             return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda, typeParameters);
+        }
+
+        private static bool CaptureHasExplicitNullableType(ISymbol symbol)
+        {
+            foreach (SyntaxReference reference in symbol.DeclaringSyntaxReferences)
+            {
+                SyntaxNode syntax = reference.GetSyntax();
+                TypeSyntax type = syntax switch
+                {
+                    ParameterSyntax parameter => parameter.Type,
+                    VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax declaration } =>
+                        declaration.Type,
+                    _ => null,
+                };
+
+                if (type is NullableTypeSyntax)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

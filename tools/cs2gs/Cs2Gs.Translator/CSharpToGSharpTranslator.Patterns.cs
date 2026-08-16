@@ -1883,22 +1883,33 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GTypeReference GetArrayElementType(ExpressionSyntax arrayExpression, TypeSyntax elementTypeSyntax)
         {
+            bool nullableElementSyntax = elementTypeSyntax is NullableTypeSyntax;
+
             TypeInfo info = this.context.GetTypeInfo(arrayExpression);
             ITypeSymbol arrayType = info.Type ?? info.ConvertedType;
             if (arrayType is IArrayTypeSymbol array)
             {
-                return this.typeMapper.Map(array.ElementType, this.context, arrayExpression.GetLocation());
+                GTypeReference mapped = this.typeMapper.Map(
+                    array.ElementType,
+                    this.context,
+                    arrayExpression.GetLocation());
+                return nullableElementSyntax ? MakeNullable(mapped) : mapped;
             }
 
             if (arrayType is INamedTypeSymbol { IsGenericType: true } generic &&
                 generic.TypeArguments.Length == 1)
             {
-                return this.typeMapper.Map(generic.TypeArguments[0], this.context, arrayExpression.GetLocation());
+                GTypeReference mapped = this.typeMapper.Map(
+                    generic.TypeArguments[0],
+                    this.context,
+                    arrayExpression.GetLocation());
+                return nullableElementSyntax ? MakeNullable(mapped) : mapped;
             }
 
             if (elementTypeSyntax != null)
             {
-                return this.MapTypeSyntax(elementTypeSyntax);
+                GTypeReference mapped = this.MapTypeSyntax(elementTypeSyntax);
+                return nullableElementSyntax ? MakeNullable(mapped) : mapped;
             }
 
             return new NamedTypeReference("object");

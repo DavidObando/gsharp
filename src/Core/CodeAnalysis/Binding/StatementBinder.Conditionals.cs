@@ -31,7 +31,9 @@ internal sealed partial class StatementBinder
             // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
             // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
             // is intentionally deferred for the nil-guard classifier.
-            var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
+            Dictionary<AccessPath, TypeSymbol>? thenNarrow;
+            Dictionary<AccessPath, TypeSymbol>? elseNarrow;
+            (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
             if (thenNarrow == null && elseNarrow == null)
             {
                 (thenNarrow, elseNarrow) = TryClassifyBoolCallNarrowing(condition);
@@ -71,7 +73,9 @@ internal sealed partial class StatementBinder
         var initStatement = BindStatement(syntax.Initializer);
         var initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
 
-        var (initThenNarrow, initElseNarrow) = TryClassifyNilGuard(initCondition);
+        Dictionary<AccessPath, TypeSymbol>? initThenNarrow;
+        Dictionary<AccessPath, TypeSymbol>? initElseNarrow;
+        (initThenNarrow, initElseNarrow) = TryClassifyNilGuard(initCondition);
         if (initThenNarrow == null && initElseNarrow == null)
         {
             (initThenNarrow, initElseNarrow) = TryClassifyBoolCallNarrowing(initCondition);
@@ -965,8 +969,8 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindMultiAssignmentStatement(MultiAssignmentStatementSyntax syntax)
     {
-        var targets = syntax.Targets.ToImmutableArray();
-        var values = syntax.Values.ToImmutableArray();
+        ImmutableArray<ExpressionSyntax> targets = syntax.Targets.ToImmutableArray();
+        ImmutableArray<ExpressionSyntax> values = syntax.Values.ToImmutableArray();
 
         var isShortDecl = syntax.OperatorToken.Kind == SyntaxKind.ColonEqualsToken;
 

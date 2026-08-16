@@ -3997,21 +3997,16 @@ internal static class ClrOverloadResolution
         candidate = PeelByRef(candidate) ?? candidate;
         other = PeelByRef(other) ?? other;
 
+        // C# better-member specificity treats a concrete type as more specific
+        // than a method type parameter. Two type-parameter slots are tied.
+        if (candidate.IsGenericParameter || other.IsGenericParameter)
+        {
+            return other.IsGenericParameter;
+        }
+
         if (ClrTypeUtilities.AreSame(candidate, other))
         {
             return true;
-        }
-
-        // C# better-member specificity treats a concrete type as more specific
-        // than a method type parameter. Two type-parameter slots are tied.
-        if (other.IsGenericParameter)
-        {
-            return true;
-        }
-
-        if (candidate.IsGenericParameter)
-        {
-            return false;
         }
 
         if (candidate.IsArray && other.IsArray

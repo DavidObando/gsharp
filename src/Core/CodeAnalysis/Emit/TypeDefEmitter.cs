@@ -195,8 +195,12 @@ internal sealed class TypeDefEmitter
         EnsureStructFirstField(firstFieldRow, ref firstField);
 
         var (typeAccessibility, structNamespace) = this.ResolveStructNamespaceAndAccessibility(structSym);
-        var (typeAttrs, baseType) = this.ResolveStructTypeShape(structSym, typeAccessibility);
-        typeAttrs = SuppressBeforeFieldInitForStruct(structSym, typeAttrs);
+        var (resolvedTypeAttrs, baseType) = this.ResolveStructTypeShape(
+            structSym,
+            typeAccessibility);
+        var typeAttrs = SuppressBeforeFieldInitForStruct(
+            structSym,
+            resolvedTypeAttrs);
         var handle2 = this.EmitStructTypeDefinition(
             structSym, typeAttrs, structNamespace, baseType, firstField, methodListRow);
         this.EmitStructClassLayout(handle2, structSym);

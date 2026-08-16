@@ -148,6 +148,36 @@ namespace Demo
     }
 
     [Fact]
+    public void NestedSourceHomonym_DoesNotQualifyImportedTopLevelGeneric()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Container
+    {
+        public class List { }
+    }
+
+    public class C
+    {
+        public int Count()
+        {
+            var values = new System.Collections.Generic.List<int> { 1 };
+            values.Add(2);
+            return values.Count;
+        }
+    }
+}");
+
+        Assert.Contains("import System.Collections.Generic", printed);
+        Assert.Contains(
+            "import __cs2gs_System_Collections_Generic_List = System.Collections.Generic.List",
+            printed);
+        Assert.Contains("let values = __cs2gs_System_Collections_Generic_List[int32]", printed);
+        Assert.DoesNotContain("let values = System.Collections.Generic.List", printed);
+    }
+
+    [Fact]
     public void NamespaceAlreadyCoveredByUsing_NoDuplicateImportSynthesized()
     {
         // Control: when a `using` already exists for the shortened

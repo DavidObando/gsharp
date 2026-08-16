@@ -140,10 +140,8 @@ namespace Demo
     }
 
     [Fact]
-    public void LocalFunction_StaysFuncLiteral()
+    public void RecursiveLocalFunction_LiftsToMethod()
     {
-        // A C# local function is NOT an arrow lambda: it keeps the
-        // function-literal form with an explicit return type (supports recursion).
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -166,10 +164,10 @@ namespace Demo
             return Fact(5);
         }
     }
-}",
-            "Recursive local functions lower to non-recursive let bindings, a documented G# letrec limitation.");
+}");
 
-        Assert.Contains("let Fact = func (n int32) int32 {", printed);
+        Assert.Contains("__local_F_Fact_", printed);
+        Assert.DoesNotContain("let Fact = func", printed);
         Assert.DoesNotContain("(n int32) -> {", printed);
     }
 

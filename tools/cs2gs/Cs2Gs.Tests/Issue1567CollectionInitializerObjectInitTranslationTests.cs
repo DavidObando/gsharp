@@ -3,11 +3,14 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -44,7 +47,9 @@ namespace Demo
             Converters = { new JsonStringEnumConverter() },
         };
     }
-}");
+}",
+            MetadataReference.CreateFromFile(
+                typeof(System.Text.Json.JsonSerializerOptions).Assembly.Location));
 
         // Braced member form, not an array-literal assignment.
         Assert.Contains("Converters: {", printed);
@@ -107,9 +112,20 @@ namespace Demo
         Assert.Contains("\"b\"", printed);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(
+        string source,
+        params MetadataReference[] additionalReferences)
     {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+        IReadOnlyList<MetadataReference> references = additionalReferences.Length == 0
+            ? null
+            : CSharpProjectLoader.RuntimeReferences()
+                .Concat(additionalReferences)
+                .GroupBy(reference => reference.Display, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) },
+            references);
         Assert.True(
             project.BoundWithoutErrors,
             "Snippet should bind with no C# errors: " +

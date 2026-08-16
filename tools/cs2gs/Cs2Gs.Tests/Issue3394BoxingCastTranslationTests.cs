@@ -41,7 +41,7 @@ namespace Demo
     }
 
     [Fact]
-    public void TypeParameterPatternBinding_UsesExplicitNarrowingCast()
+    public void TypeParameterPatternBinding_UsesScopedIfLet()
     {
         const string source = @"
 using System.Reflection;
@@ -65,7 +65,7 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("(value as MethodInfo)!!", rendered, StringComparison.Ordinal);
+        Assert.Contains("if let method = value as MethodInfo", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

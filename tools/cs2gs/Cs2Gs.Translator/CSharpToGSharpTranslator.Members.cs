@@ -126,6 +126,18 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case PropertyDeclarationSyntax property:
                     var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
+                    if (ownerKind is TypeDeclarationKind.DataClass or TypeDeclarationKind.DataStruct
+                        && primaryCtorParamNames?.Contains(
+                            property.Identifier.Text,
+                            StringComparer.Ordinal) == true
+                        && propertySymbol is { IsStatic: false }
+                        && property.AccessorList?.Accessors.All(accessor =>
+                            accessor.Body == null
+                            && accessor.ExpressionBody == null) == true)
+                    {
+                        break;
+                    }
+
                     if (propertySymbol != null &&
                         lift.PropertiesAsPrimaryParameters.Contains(propertySymbol))
                     {

@@ -331,6 +331,23 @@ public class Issue3394InlineOutTupleBindingTests
     }
 
     [Fact]
+    public void NullAssertedListOfSourceType_PreservesAdd()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Generic
+
+            class Item {}
+
+            let items = List[Item]()
+            items!!.Add(Item())
+            items.Count
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
     public void LinqWhere_PreservesNestedSymbolicTupleReceiver()
     {
         var result = EmittedOracle.Evaluate("""
@@ -432,6 +449,70 @@ public class Issue3394InlineOutTupleBindingTests
     }
 
     [Fact]
+    public void UserCall_PreservesOutRefKindForImportedGenericOfSourceType()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Immutable
+
+            enum Kind { A }
+
+            class C {
+                func inner(out value ImmutableArray[Kind]) bool {
+                    value = default(ImmutableArray[Kind])
+                    return true
+                }
+            }
+
+            func run(c C, out value ImmutableArray[Kind]) bool -> c.inner(out value)
+
+            var value ImmutableArray[Kind] = default
+            run(C(), out value)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void ImmutableArrayCreate_PassesThroughSourceTypeSlice()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Immutable
+
+            class Item {}
+
+            func build(values []Item?) ImmutableArray[Item?] ->
+                ImmutableArray.Create(values)
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ClrOverloadResolution_PrefersNormalParamsArrayShape()
+    {
+        var candidates = typeof(ImmutableArray).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(method => method.Name == nameof(ImmutableArray.Create) && method.IsGenericMethodDefinition)
+            .ToArray();
+        var paramsCandidate = candidates.Single(method =>
+            method.GetParameters() is [var parameter]
+            && ClrOverloadResolution.IsParamsArrayParameter(parameter));
+
+        var paramsOnly = ClrOverloadResolution.Resolve(new[] { paramsCandidate }, new[] { typeof(object[]) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, paramsOnly.Outcome);
+
+        var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(object[]) });
+
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.False(result.IsExpanded);
+        Assert.True(
+            ClrOverloadResolution.IsParamsArrayParameter(Assert.Single(result.Best!.GetParameters())),
+            ClrOverloadResolution.FormatMethodSignature(result.Best));
+    }
+
+    [Fact]
     public void LinqMethodGroup_PreservesSameCompilationElementType()
     {
         var result = EmittedOracle.Evaluate("""
@@ -496,4 +577,39 @@ public class Issue3394InlineOutTupleBindingTests
         Assert.Empty(result.Diagnostics);
         Assert.Equal(true, result.Value);
     }
+
+    [Fact]
+    public void DictionaryTryGetValue_PreservesSourceTupleKeyAndImportedValue()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System.Collections.Generic
+            import System.Reflection.Metadata
+
+            class Item {}
+
+            let values = Dictionary[(Item, EntityHandle), EntityHandle]()
+            let found = values.TryGetValue((Item(), default(EntityHandle)), out var handle)
+            !found && handle.IsNil
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void NullableReferenceParameter_ImplementsSymbolicClrInterfaceSlot()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            class Item : IEquatable[Item] {
+                func Equals(other Item?) bool -> other != nil
+            }
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
 }

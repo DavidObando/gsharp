@@ -568,9 +568,18 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            if (ifStatement.Condition is not IsPatternExpressionSyntax isPattern ||
+            DecomposeConjunction(
+                ifStatement.Condition,
+                out ExpressionSyntax leftmost,
+                out List<ExpressionSyntax> guards);
+            if (leftmost is not IsPatternExpressionSyntax isPattern ||
                 !TryExtractSingleVarTypePattern(
                     isPattern.Pattern, out TypeSyntax typeSyntax, out SingleVariableDesignationSyntax single))
+            {
+                return false;
+            }
+
+            if (guards.Any(guard => ContainsSpillHoistingConstruct(guard, includeOutVarDeclarations: false)))
             {
                 return false;
             }
@@ -592,7 +601,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (targetSymbol.IsValueType)
             {
-                result = this.BuildPositiveValueGuardHoist(ifStatement, localName, targetType, receiver);
+                result = this.BuildPositiveValueGuardHoist(ifStatement, guards, localName, targetType, receiver);
                 return true;
             }
 
@@ -621,6 +630,11 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression guard = targetSymbol.IsValueType
                 ? new BinaryExpression(local, "is", new TypeExpression(targetType))
                 : new BinaryExpression(local, "!=", LiteralExpression.Null());
+            foreach (ExpressionSyntax conjunct in guards)
+            {
+                guard = new BinaryExpression(guard, "&&", this.TranslateExpression(conjunct));
+            }
+
             BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
 
             GStatement elseBranch = null;
@@ -651,6 +665,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IReadOnlyList<GStatement> BuildPositiveValueGuardHoist(
             IfStatementSyntax ifStatement,
+            IReadOnlyList<ExpressionSyntax> guards,
             string localName,
             GTypeReference targetType,
             GExpression receiver)
@@ -695,11 +710,28 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 new AssignmentStatement(new IdentifierExpression(localName), narrowed),
             };
-            thenStatements.AddRange(this.TranslateStatementAsBlock(ifStatement.Statement).Statements);
 
             GStatement elseBranch = ifStatement.Else == null
                 ? null
                 : this.TranslateElseStatement(ifStatement.Else.Statement);
+            BlockStatement body = this.TranslateStatementAsBlock(ifStatement.Statement);
+            if (guards.Count == 0)
+            {
+                thenStatements.AddRange(body.Statements);
+            }
+            else
+            {
+                GExpression guardExpression = null;
+                foreach (ExpressionSyntax guardClause in guards)
+                {
+                    GExpression translated = this.TranslateExpression(guardClause);
+                    guardExpression = guardExpression == null
+                        ? translated
+                        : new BinaryExpression(guardExpression, "&&", translated);
+                }
+
+                thenStatements.Add(new IfStatement(guardExpression, body, elseBranch));
+            }
 
             var statements = new List<GStatement>();
             if (hoist != null)
@@ -708,7 +740,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             statements.Add(binder);
-            statements.Add(new IfStatement(guard, new BlockStatement(thenStatements), elseBranch));
+            statements.Add(new IfStatement(
+                guard,
+                new BlockStatement(thenStatements),
+                guards.Count == 0 ? elseBranch : null));
             return statements;
         }
 
@@ -791,6 +826,11 @@ public sealed partial class CSharpToGSharpTranslator
 
             var terms = new List<ExpressionSyntax>();
             CollectLogicalOrTerms(ifStatement.Condition, terms);
+            if (this.TryBuildNestedNegatedGuardHoist(ifStatement, terms, out result))
+            {
+                return true;
+            }
+
             int negatedPatternCount = terms.Count(term =>
                 TryExtractNegatedGuardPattern(term, out _, out _, out _, out _));
             if (negatedPatternCount > 1)
@@ -833,7 +873,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (patternIndex > 0
-                && (ifStatement.Else != null || !StatementAlwaysExits(ifStatement.Statement)))
+                && ifStatement.Else == null
+                && !StatementAlwaysExits(ifStatement.Statement))
             {
                 return false;
             }
@@ -862,15 +903,20 @@ public sealed partial class CSharpToGSharpTranslator
                 targetType = this.MapTypeSyntax(typeSyntax);
                 if (targetSymbol.IsValueType)
                 {
-                    if (this.context.GetTypeInfo(isPattern.Expression).Type is not INamedTypeSymbol receiverType
-                        || receiverType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
-                        || receiverType.TypeArguments.Length != 1
-                        || !SymbolEqualityComparer.Default.Equals(receiverType.TypeArguments[0], targetSymbol))
+                    if (this.context.GetTypeInfo(isPattern.Expression).Type is INamedTypeSymbol receiverType
+                        && receiverType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                        && receiverType.TypeArguments.Length == 1
+                        && SymbolEqualityComparer.Default.Equals(receiverType.TypeArguments[0], targetSymbol))
                     {
-                        return false;
+                        hoistInitializer = receiver;
                     }
-
-                    hoistInitializer = receiver;
+                    else
+                    {
+                        hoistInitializer = new BinaryExpression(
+                            receiver,
+                            "as",
+                            new TypeExpression(MakeNullable(targetType)));
+                    }
                 }
                 else
                 {
@@ -956,11 +1002,163 @@ public sealed partial class CSharpToGSharpTranslator
                         : new BinaryExpression(prefixGuard, "||", translated);
                 }
 
+                if (elseBranch != null)
+                {
+                    result = new GStatement[]
+                    {
+                        new IfStatement(
+                            prefixGuard,
+                            then,
+                            new BlockStatement(
+                                new GStatement[]
+                                {
+                                    hoist,
+                                    new IfStatement(guard, then, elseBranch),
+                                })),
+                    };
+                    return true;
+                }
+
                 statements.Add(new IfStatement(prefixGuard, then));
             }
 
             statements.Add(hoist);
             statements.Add(new IfStatement(guard, then, elseBranch));
+            result = statements;
+            return true;
+        }
+
+        private bool TryBuildNestedNegatedGuardHoist(
+            IfStatementSyntax ifStatement,
+            IReadOnlyList<ExpressionSyntax> terms,
+            out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+            if (ifStatement.Else != null || !StatementAlwaysExits(ifStatement.Statement))
+            {
+                return false;
+            }
+
+            IsPatternExpressionSyntax isPattern = null;
+            PatternSyntax positivePattern = null;
+            SingleVariableDesignationSyntax designation = null;
+            int patternIndex = -1;
+            for (var i = 0; i < terms.Count; i++)
+            {
+                if (!TryGetNegatedPattern(
+                        terms[i],
+                        out IsPatternExpressionSyntax candidatePattern,
+                        out PatternSyntax candidatePositive))
+                {
+                    continue;
+                }
+
+                var designations = candidatePositive.DescendantNodesAndSelf()
+                    .OfType<SingleVariableDesignationSyntax>()
+                    .ToList();
+                if (designations.Count != 1
+                    || candidatePositive is DeclarationPatternSyntax
+                    || candidatePositive is RecursivePatternSyntax
+                    {
+                        Designation: SingleVariableDesignationSyntax,
+                    })
+                {
+                    continue;
+                }
+
+                if (patternIndex >= 0)
+                {
+                    return false;
+                }
+
+                patternIndex = i;
+                isPattern = candidatePattern;
+                positivePattern = candidatePositive;
+                designation = designations[0];
+            }
+
+            if (patternIndex < 0
+                || this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder
+                || terms.Where((_, index) => index != patternIndex)
+                    .Any(term => term.DescendantNodesAndSelf()
+                        .OfType<IsPatternExpressionSyntax>()
+                        .Any(pattern => PatternIntroducesBinding(pattern.Pattern))))
+            {
+                return false;
+            }
+
+            BlockStatement then = this.TranslateStatementAsBlock(ifStatement.Statement);
+            var statements = new List<GStatement>();
+            for (var i = 0; i < patternIndex; i++)
+            {
+                statements.Add(new IfStatement(this.TranslateExpression(terms[i]), then));
+            }
+
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            if (!IsTrivialOperand(receiver))
+            {
+                string spillName = $"__spill{this.state.SpillCounter++}";
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    spillName,
+                    initializer: receiver));
+                receiver = new IdentifierExpression(spillName);
+            }
+
+            bool hadPrevious = this.state.PatternBindings.TryGetValue(
+                binder,
+                out GExpression previous);
+            GExpression positiveTest;
+            GExpression replacement;
+            try
+            {
+                positiveTest = this.TranslatePatternTest(
+                    receiver,
+                    positivePattern,
+                    this.context.GetTypeInfo(isPattern.Expression).Type,
+                    isPattern.Expression);
+                this.state.PatternBindings.TryGetValue(binder, out replacement);
+            }
+            finally
+            {
+                if (hadPrevious)
+                {
+                    this.state.PatternBindings[binder] = previous;
+                }
+                else
+                {
+                    this.state.PatternBindings.Remove(binder);
+                }
+            }
+
+            if (replacement == null)
+            {
+                return false;
+            }
+
+            string localName = SanitizeIdentifier(designation.Identifier.Text);
+            GTypeReference localType = MakeNullable(
+                this.typeMapper.Map(
+                    binder.Type,
+                    this.context,
+                    designation.GetLocation()));
+            statements.Add(new LocalDeclarationStatement(
+                BindingKind.Var,
+                localName,
+                localType));
+            statements.Add(new IfStatement(Negate(positiveTest), then));
+            statements.Add(new AssignmentStatement(
+                new IdentifierExpression(localName),
+                replacement));
+
+            var narrowed = new NonNullAssertionExpression(
+                new IdentifierExpression(localName));
+            this.state.PatternBindings[binder] = narrowed;
+            for (var i = patternIndex + 1; i < terms.Count; i++)
+            {
+                statements.Add(new IfStatement(this.TranslateExpression(terms[i]), then));
+            }
+
             result = statements;
             return true;
         }
@@ -1100,26 +1298,12 @@ public sealed partial class CSharpToGSharpTranslator
             out VariableDesignationSyntax designation,
             out RecursivePatternSyntax residualPattern)
         {
-            condition = Unparenthesize(condition);
-            PatternSyntax negatedPattern;
-            if (condition is IsPatternExpressionSyntax directPattern
-                && directPattern.Pattern is UnaryPatternSyntax notPattern
-                && notPattern.IsKind(SyntaxKind.NotPattern))
+            if (!TryGetNegatedPattern(condition, out isPattern, out PatternSyntax negatedPattern))
             {
-                isPattern = directPattern;
-                negatedPattern = notPattern.Pattern;
-            }
-            else if (condition is PrefixUnaryExpressionSyntax logicalNot
-                && logicalNot.IsKind(SyntaxKind.LogicalNotExpression)
-                && Unparenthesize(logicalNot.Operand) is IsPatternExpressionSyntax parenthesizedPattern)
-            {
-                isPattern = parenthesizedPattern;
-                negatedPattern = parenthesizedPattern.Pattern;
-            }
-            else
-            {
-                isPattern = null;
-                negatedPattern = null;
+                typeSyntax = null;
+                designation = null;
+                residualPattern = null;
+                return false;
             }
 
             typeSyntax = null;
@@ -1161,6 +1345,35 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        private static bool TryGetNegatedPattern(
+            ExpressionSyntax condition,
+            out IsPatternExpressionSyntax isPattern,
+            out PatternSyntax positivePattern)
+        {
+            condition = Unparenthesize(condition);
+            if (condition is IsPatternExpressionSyntax directPattern
+                && directPattern.Pattern is UnaryPatternSyntax notPattern
+                && notPattern.IsKind(SyntaxKind.NotPattern))
+            {
+                isPattern = directPattern;
+                positivePattern = notPattern.Pattern;
+                return true;
+            }
+
+            if (condition is PrefixUnaryExpressionSyntax logicalNot
+                && logicalNot.IsKind(SyntaxKind.LogicalNotExpression)
+                && Unparenthesize(logicalNot.Operand) is IsPatternExpressionSyntax parenthesizedPattern)
+            {
+                isPattern = parenthesizedPattern;
+                positivePattern = parenthesizedPattern.Pattern;
+                return true;
+            }
+
+            isPattern = null;
+            positivePattern = null;
+            return false;
         }
 
         private static bool StatementAlwaysExits(StatementSyntax statement) =>

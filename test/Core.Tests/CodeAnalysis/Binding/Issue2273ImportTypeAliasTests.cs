@@ -60,6 +60,20 @@ var result = R.Sqrt(16.0)
     }
 
     [Fact]
+    public void Alias_To_Imported_Open_Generic_Type_Accepts_Type_Arguments()
+    {
+        var result = Evaluate(@"
+import L = System.Collections.Generic.List
+
+let values = L[int32]()
+values.Add(42)
+var result = values[0]
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void Alias_To_CrossPackage_Source_Type_Resolves_In_TypeClause_Position()
     {
         var holderTree = @"

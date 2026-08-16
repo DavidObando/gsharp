@@ -231,24 +231,45 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Eligibility is decided BEFORE anything is translated: a mid-way
             // bail-out would leave a half-emitted spill prologue behind.
-            DecomposeConjunction(ifStatement.Condition, out ExpressionSyntax leftmost, out List<ExpressionSyntax> guards);
+            var clauses = new List<ExpressionSyntax>();
+            FlattenAndClauses(ifStatement.Condition, clauses);
+            IsPatternExpressionSyntax isPattern = null;
+            SingleVariableDesignationSyntax designation = null;
+            RecursivePatternSyntax residualPattern = null;
+            TypeSyntax typeSyntax = null;
+            var patternIndex = -1;
+            for (var i = 0; i < clauses.Count; i++)
+            {
+                if (clauses[i] is not IsPatternExpressionSyntax candidatePattern
+                    || !TryExtractSingleTopLevelIfLetPattern(
+                        candidatePattern.Pattern,
+                        out TypeSyntax candidateType,
+                        out SingleVariableDesignationSyntax candidateDesignation,
+                        out RecursivePatternSyntax candidateResidual))
+                {
+                    continue;
+                }
 
-            if (leftmost is not IsPatternExpressionSyntax isPattern)
+                if (patternIndex >= 0)
+                {
+                    return false;
+                }
+
+                patternIndex = i;
+                isPattern = candidatePattern;
+                typeSyntax = candidateType;
+                designation = candidateDesignation;
+                residualPattern = candidateResidual;
+            }
+
+            if (patternIndex < 0)
             {
                 return false;
             }
 
-            SingleVariableDesignationSyntax designation;
-            RecursivePatternSyntax residualPattern;
+            List<ExpressionSyntax> prefix = clauses.Take(patternIndex).ToList();
+            List<ExpressionSyntax> guards = clauses.Skip(patternIndex + 1).ToList();
             GTypeReference asTarget = null;
-            if (!TryExtractSingleTopLevelIfLetPattern(
-                isPattern.Pattern,
-                out TypeSyntax typeSyntax,
-                out designation,
-                out residualPattern))
-            {
-                return false;
-            }
 
             bool bareNonNullPattern = typeSyntax == null;
             if (!bareNonNullPattern)
@@ -262,10 +283,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
                 }
 
-                if (IsTrivialPatternReceiver(isPattern.Expression)
-                    || (residualPattern == null
-                        && guards.Count == 0
-                        && !targetSymbol.IsValueType))
+                if (prefix.Count == 0
+                    && guards.Count == 0
+                    && (IsTrivialPatternReceiver(isPattern.Expression)
+                        || (residualPattern == null && !targetSymbol.IsValueType)))
                 {
                     return false;
                 }
@@ -304,7 +325,15 @@ public sealed partial class CSharpToGSharpTranslator
             // A guard that itself hoists a spill would need a statement seam
             // ahead of the `if`, but the spill may read the binding — which is
             // only in scope inside the `if let`. Leave those to the general path.
-            if (guards.Any(ContainsSpillHoistingConstruct))
+            if (prefix.Concat(guards).Any(guard =>
+                    ContainsSpillHoistingConstruct(
+                        guard,
+                        includeOutVarDeclarations: false))
+                || prefix.SelectMany(clause => clause.DescendantNodesAndSelf())
+                    .OfType<SingleVariableDesignationSyntax>()
+                    .Any(designationNode =>
+                        this.context.GetDeclaredSymbol(designationNode) is ILocalSymbol prefixBinder
+                        && ReadsSymbol(ifStatement.Statement, prefixBinder)))
             {
                 return false;
             }
@@ -381,42 +410,61 @@ public sealed partial class CSharpToGSharpTranslator
                 elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
+            GStatement inner;
             if (directBinding)
             {
-                result = new GStatement[]
+                inner = new BlockStatement(
+                    new GStatement[]
+                    {
+                        new LocalDeclarationStatement(
+                            this.IsLocalReassigned(binder)
+                                ? BindingKind.Var
+                                : BindingKind.Let,
+                            name,
+                            initializer: initializer),
+                        new IfStatement(
+                            guard ?? LiteralExpression.Bool(true),
+                            then,
+                            elseBranch),
+                    });
+            }
+            else
+            {
+                // Statement-form `if let` has no guard clause. Nest the residual
+                // test/extra conjuncts inside its binding scope. Reuse the same else
+                // branch both when binding fails and when the nested guard fails.
+                if (guard != null)
                 {
-                    new BlockStatement(
-                        new GStatement[]
-                        {
-                            new LocalDeclarationStatement(
-                                this.IsLocalReassigned(binder)
-                                    ? BindingKind.Var
-                                    : BindingKind.Let,
-                                name,
-                                initializer: initializer),
-                            new IfStatement(
-                                guard ?? LiteralExpression.Bool(true),
-                                then,
-                                elseBranch),
-                        }),
-                };
+                    then = new BlockStatement(
+                        new GStatement[] { new IfStatement(guard, then, elseBranch) });
+                }
+
+                inner = new IfLetStatement(
+                    new List<IfLetBinding> { new IfLetBinding(name, initializer) },
+                    then,
+                    elseBranch);
+            }
+
+            if (prefix.Count == 0)
+            {
+                result = new[] { inner };
                 return true;
             }
 
-            // Statement-form `if let` has no guard clause. Nest the residual
-            // test/extra conjuncts inside its binding scope. Reuse the same else
-            // branch both when binding fails and when the nested guard fails.
-            if (guard != null)
+            GExpression prefixGuard = null;
+            foreach (ExpressionSyntax clause in prefix)
             {
-                then = new BlockStatement(
-                    new GStatement[] { new IfStatement(guard, then, elseBranch) });
+                GExpression translated = this.TranslateExpression(clause);
+                prefixGuard = prefixGuard == null
+                    ? translated
+                    : new BinaryExpression(prefixGuard, "&&", translated);
             }
 
             result = new GStatement[]
             {
-                new IfLetStatement(
-                    new List<IfLetBinding> { new IfLetBinding(name, initializer) },
-                    then,
+                new IfStatement(
+                    prefixGuard,
+                    new BlockStatement(new[] { inner }),
                     elseBranch),
             };
             return true;
@@ -869,7 +917,12 @@ public sealed partial class CSharpToGSharpTranslator
         /// Anonymous-function bodies are skipped: they open their own seam and
         /// can never leak into this one.
         /// </summary>
-        private static bool ContainsSpillHoistingConstruct(SyntaxNode node)
+        private static bool ContainsSpillHoistingConstruct(SyntaxNode node) =>
+            ContainsSpillHoistingConstruct(node, includeOutVarDeclarations: true);
+
+        private static bool ContainsSpillHoistingConstruct(
+            SyntaxNode node,
+            bool includeOutVarDeclarations)
         {
             foreach (SyntaxNode descendant in node.DescendantNodesAndSelf(
                 descendIntoChildren: n => n is not AnonymousFunctionExpressionSyntax || n == node))
@@ -882,7 +935,7 @@ public sealed partial class CSharpToGSharpTranslator
                         when PatternIntroducesBinding(isPattern.Pattern):
                     case AssignmentExpressionSyntax assignment
                         when AssignmentRequiresStatementLowering(assignment):
-                    case DeclarationExpressionSyntax:
+                    case DeclarationExpressionSyntax when includeOutVarDeclarations:
                     case SwitchExpressionSyntax:
                         return true;
 

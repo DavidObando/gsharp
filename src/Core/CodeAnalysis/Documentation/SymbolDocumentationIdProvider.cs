@@ -17,10 +17,10 @@ internal static class SymbolDocumentationIdProvider
     {
         return symbol switch
         {
-            PackageSymbol package => GetDocumentationId(package),
-            TypeSymbol type when IsSourceNamedType(type) => GetDocumentationId(type),
-            EnumMemberSymbol enumMember => GetDocumentationId(enumMember),
-            FunctionSymbol function => GetDocumentationId(function),
+            PackageSymbol package => GetDocumentationId(package: package),
+            TypeSymbol type when IsSourceNamedType(type) => GetDocumentationId(type: type),
+            EnumMemberSymbol enumMember => GetDocumentationId(member: enumMember),
+            FunctionSymbol function => GetDocumentationId(function: function),
             _ => null,
         };
     }
@@ -29,10 +29,10 @@ internal static class SymbolDocumentationIdProvider
     {
         return member switch
         {
-            FieldSymbol field => GetDocumentationId(field, ownerType),
-            PropertySymbol property => GetDocumentationId(property, ownerType),
-            EventSymbol @event => GetDocumentationId(@event, ownerType),
-            FunctionSymbol function => GetDocumentationId(function),
+            FieldSymbol field => GetDocumentationId(field: field, ownerType: ownerType),
+            PropertySymbol property => GetDocumentationId(property: property, ownerType: ownerType),
+            EventSymbol @event => GetDocumentationId(@event: @event, ownerType: ownerType),
+            FunctionSymbol function => GetDocumentationId(function: function),
             _ => null,
         };
     }
@@ -673,25 +673,28 @@ internal static class SymbolDocumentationIdProvider
 
     private static bool DeclaresTypeParameter(TypeSymbol type, TypeParameterSymbol typeParameter)
     {
-        var ordinal = typeParameter.Ordinal;
-        if (ordinal < 0)
+        if (typeParameter.Ordinal < 0)
         {
             return false;
         }
 
-        switch (type)
+        foreach (var parameter in GetOwnTypeParameters(type))
         {
-            case StructSymbol { Declaration.TypeParameterList: { } list }:
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
-            case InterfaceSymbol { Declaration.TypeParameterList: { } list }:
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
-            case DelegateTypeSymbol { Declaration.TypeParameterList: { } list }:
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
+            if (ReferenceEquals(parameter, typeParameter)
+                || string.Equals(
+                    parameter.Name,
+                    typeParameter.Name,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
         }
 
+        return false;
+    }
+
+    private static ImmutableArray<TypeParameterSymbol> GetOwnTypeParameters(TypeSymbol type)
+    {
         var parameters = type switch
         {
             StructSymbol structType => structType.TypeParameters,
@@ -699,9 +702,10 @@ internal static class SymbolDocumentationIdProvider
             DelegateTypeSymbol delegateType => delegateType.TypeParameters,
             _ => ImmutableArray<TypeParameterSymbol>.Empty,
         };
-        return ordinal < parameters.Length &&
-            (ReferenceEquals(parameters[ordinal], typeParameter) ||
-             string.Equals(parameters[ordinal].Name, typeParameter.Name, StringComparison.Ordinal));
+        var ownArity = GetOwnArity(type);
+        return ownArity > 0 && parameters.Length > ownArity
+            ? parameters.Slice(parameters.Length - ownArity, ownArity)
+            : parameters;
     }
 
     private static void AppendClrTypeReference(StringBuilder builder, Type? type)

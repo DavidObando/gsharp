@@ -354,6 +354,19 @@ public sealed partial class CSharpToGSharpTranslator
         // skipping the file's own package (needs no import) and any namespace
         // an explicit `using` already covers.
         var allImports = imports is List<ImportDirective> list ? list : imports.ToList();
+        var existingAliases = new HashSet<string>(
+            allImports.Where(import => import.Alias != null).Select(import => import.Alias),
+            StringComparer.Ordinal);
+        foreach (var alias in typeMapper.SynthesizedTypeAliases.OrderBy(
+            pair => pair.Key,
+            StringComparer.Ordinal))
+        {
+            if (existingAliases.Add(alias.Key))
+            {
+                allImports.Add(new ImportDirective(alias.Value, alias.Key));
+            }
+        }
+
         var alreadyImported = new HashSet<string>(allImports.Select(i => i.Name));
         foreach (string ns in typeMapper.ShortenedNamespaces.OrderBy(n => n, System.StringComparer.Ordinal))
         {

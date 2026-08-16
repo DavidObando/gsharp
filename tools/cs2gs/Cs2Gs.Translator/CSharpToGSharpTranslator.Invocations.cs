@@ -40,6 +40,78 @@ public sealed partial class CSharpToGSharpTranslator
                 this.typeMapper.TrackExtensionMethodNamespace(invocationExtMethod);
             }
 
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.LocalFunction } recursiveLocal
+                && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
+                    recursiveLocal,
+                    out LiftedRecursiveLocalFunction recursiveLift))
+            {
+                var recursiveArguments = this.TranslateCallArguments(
+                    invocation,
+                    invocation.ArgumentList.Arguments).ToList();
+                for (var i = recursiveArguments.Count; i < recursiveLocal.Parameters.Length; i++)
+                {
+                    IParameterSymbol parameter = recursiveLocal.Parameters[i];
+                    GTypeReference parameterType = this.typeMapper.Map(
+                        parameter.Type,
+                        this.context,
+                        parameter.Locations.FirstOrDefault());
+                    recursiveArguments.Add(
+                        this.BuildOptionalParameterDefault(
+                            parameter,
+                            parameterType,
+                            invocation)
+                        ?? LiteralExpression.Null());
+                }
+
+                foreach (LiftedLocalFunctionCapture capture in recursiveLift.Captures)
+                {
+                    GExpression captureArgument =
+                        new IdentifierExpression(SanitizeIdentifier(capture.Symbol.Name));
+                    recursiveArguments.Add(capture.IsByRef
+                        ? new UnaryExpression("&", captureArgument)
+                        : captureArgument);
+                }
+
+                GExpression recursiveTarget = recursiveLift.IsStatic
+                    && recursiveLocal.ContainingType is { } recursiveContainingType
+                        ? new MemberAccessExpression(
+                            this.StaticQualifierReceiver(recursiveContainingType, invocation.GetLocation()),
+                            recursiveLift.Name)
+                        : new IdentifierExpression(recursiveLift.Name);
+                IReadOnlyList<GTypeReference> recursiveTypeArguments =
+                    invocation.Expression is GenericNameSyntax recursiveGeneric
+                        ? this.MapTypeArguments(recursiveGeneric)
+                        : null;
+                return new InvocationExpression(
+                    recursiveTarget,
+                    recursiveArguments,
+                    recursiveTypeArguments);
+            }
+
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol enumTryParse
+                && enumTryParse.ContainingType.SpecialType == SpecialType.System_Enum
+                && enumTryParse.Name == "TryParse"
+                && enumTryParse.IsGenericMethod
+                && invocation.Expression is MemberAccessExpressionSyntax enumMember)
+            {
+                target = new MemberAccessExpression(
+                    this.TranslateExpression(enumMember.Expression),
+                    "TryParse");
+                typeArguments = enumTryParse.TypeArguments
+                    .Select(type => this.typeMapper.Map(
+                        type,
+                        this.context,
+                        invocation.GetLocation()))
+                    .ToList();
+                return new InvocationExpression(
+                    target,
+                    this.TranslateCallArguments(
+                        invocation,
+                        invocation.ArgumentList.Arguments),
+                    typeArguments);
+            }
+
             // C# delegate/event invocation `d.Invoke(args)` / `d?.Invoke(args)` maps
             // to G#'s direct function-call form `d(args)` / `d?(args)`: G# invokes a
             // function-typed value (delegate field or event) directly and has no

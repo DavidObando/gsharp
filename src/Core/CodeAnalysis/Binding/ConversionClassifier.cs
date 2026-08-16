@@ -2041,7 +2041,9 @@ internal sealed class ConversionClassifier
             if (argument is BoundAddressOfExpression addr)
             {
                 var operandType = addr.Operand?.Type;
-                if (operandType == expectedType || operandType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
+                if (DeclarationBinder.TypeSignaturesEquivalent(operandType, expectedType)
+                    || operandType == TypeSymbol.Error
+                    || expectedType == TypeSymbol.Error)
                 {
                     return argument;
                 }
@@ -2055,7 +2057,9 @@ internal sealed class ConversionClassifier
                 // parameter positions. The shared pointee type was validated
                 // by BindConditionalRefArgument.
                 var pointeeType = condAddr.PointeeType;
-                if (pointeeType == expectedType || pointeeType == TypeSymbol.Error || expectedType == TypeSymbol.Error)
+                if (DeclarationBinder.TypeSignaturesEquivalent(pointeeType, expectedType)
+                    || pointeeType == TypeSymbol.Error
+                    || expectedType == TypeSymbol.Error)
                 {
                     return argument;
                 }

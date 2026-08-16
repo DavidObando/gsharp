@@ -438,7 +438,9 @@ public static class IteratorMoveNextBodyBuilder
 
             return new BoundBlockStatement(
                 null,
-                ImmutableArray.Create(new BoundLabelStatement(null, entryLabel), result));
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundLabelStatement(null, entryLabel),
+                    result));
         }
 
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)

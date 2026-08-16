@@ -390,14 +390,19 @@ internal sealed partial class OverloadResolver
             return clrCtorCall;
         }
 
-        if (!hasNonConstructorCallable && syntax.Arguments.Count == 1 && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is TypeSymbol type)
+        var conversionType = lookupTypeWithArity(
+            syntax.Identifier.Text,
+            ctorPreferredArity);
+        if (!hasNonConstructorCallable
+            && syntax.Arguments.Count == 1
+            && conversionType is TypeSymbol)
         {
             // Issue #663: when the call carries a `?` token (e.g. `string?(x)`),
             // wrap the resolved type in NullableTypeSymbol so the conversion
             // targets the nullable form.
             if (syntax.NullableQuestionToken != null)
             {
-                type = NullableTypeSymbol.Get(type);
+                conversionType = NullableTypeSymbol.Get(conversionType);
             }
 
             // A single-arg call to a primitive-typed name is a conversion
@@ -409,7 +414,7 @@ internal sealed partial class OverloadResolver
             // value struct (e.g. a `data struct`) declaring a primary
             // constructor is likewise positionally constructible — `Entry(1)`
             // builds the struct, not a conversion to it.
-            if (!(type is StructSymbol singleArgStruct
+            if (!(conversionType is StructSymbol singleArgStruct
                   && (singleArgStruct.IsClass
                       || singleArgStruct.IsInline
                       || singleArgStruct.HasPrimaryConstructor
@@ -417,8 +422,14 @@ internal sealed partial class OverloadResolver
             {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
-                reportObsoleteUseIfApplicable(syntax.Identifier.Location, type, type.Name);
-                return conversions.BindConversion(syntax.Arguments[0], type, allowExplicit: true);
+                reportObsoleteUseIfApplicable(
+                    syntax.Identifier.Location,
+                    conversionType,
+                    conversionType.Name);
+                return conversions.BindConversion(
+                    syntax.Arguments[0],
+                    conversionType,
+                    allowExplicit: true);
             }
         }
 
@@ -1582,7 +1593,8 @@ internal sealed partial class OverloadResolver
                         continue;
                     }
 
-                    if (operandType != expectedType && operandType != TypeSymbol.Error)
+                    if (!DeclarationBinder.TypeSignaturesEquivalent(operandType, expectedType)
+                        && operandType != TypeSymbol.Error)
                     {
                         Diagnostics.ReportWrongArgumentType(
                             Invariant.Required(parameterSyntax[i], "a ref argument has source syntax").Location,

@@ -96,6 +96,9 @@ public sealed class CSharpTypeMapper
     /// </summary>
     private readonly List<TypeDeclaration> pendingAnonymousDataClasses = new();
 
+    private readonly Dictionary<string, string> synthesizedTypeAliases =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared type simple
     /// names (built lazily on first use), used to decide whether a source nested
@@ -151,6 +154,12 @@ public sealed class CSharpTypeMapper
     /// this mapper so far (see <see cref="shortenedNamespaces"/>).
     /// </summary>
     public IReadOnlyCollection<string> ShortenedNamespaces => this.shortenedNamespaces;
+
+    /// <summary>
+    /// Gets metadata type aliases synthesized to disambiguate source homonyms.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> SynthesizedTypeAliases =>
+        this.synthesizedTypeAliases;
 
     /// <summary>
     /// Gets the synthesized anonymous-type <c>data class</c> declarations
@@ -731,6 +740,19 @@ public sealed class CSharpTypeMapper
                 return this.MapDelegate(named.DelegateInvokeMethod, context, location);
             }
 
+            if (named.ContainingType != null
+                && named.Name == "Builder"
+                && named.ContainingType.OriginalDefinition.ToDisplayString()
+                    == "System.Collections.Immutable.ImmutableArray<T>")
+            {
+                return new NamedTypeReference(
+                    "Builder",
+                    containingType: this.Map(
+                        named.ContainingType,
+                        context,
+                        location));
+            }
+
             if (HasGenericContainingType(named))
             {
                 IReadOnlyList<ITypeSymbol> ownTypeArguments = named.Arity == 0
@@ -844,6 +866,21 @@ public sealed class CSharpTypeMapper
             if (!ambiguous)
             {
                 return simpleName;
+            }
+
+            if (!named.Locations.Any(candidate => candidate.IsInSource)
+                && named.Name == "List"
+                && named.ContainingNamespace?.ToDisplayString()
+                    == "System.Collections.Generic"
+                && named.ContainingNamespace is { IsGlobalNamespace: false } aliasNamespace)
+            {
+                // ponytail: Core only needs the List<T> collision. Generalize
+                // when imported CLR type aliases bind reliably in type and
+                // constructor positions for arbitrary metadata types.
+                string target = $"{aliasNamespace.ToDisplayString()}.{simpleName}";
+                string alias = $"__cs2gs_{target.Replace('.', '_')}";
+                this.synthesizedTypeAliases[alias] = target;
+                return alias;
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs
