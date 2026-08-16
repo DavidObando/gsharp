@@ -1254,11 +1254,17 @@ public sealed partial class CSharpToGSharpTranslator
                     isRefReturn: recursiveLocal.ReturnsByRef);
                 if (recursiveLift.IsStatic)
                 {
-                    this.state.PendingStaticSynthHelpers?.Add(helper);
+                    (this.state.PendingStaticSynthHelpers
+                        ?? throw new InvalidOperationException(
+                            "A recursive static local-function lift must be emitted inside an aggregate."))
+                        .Add(helper);
                 }
                 else
                 {
-                    this.state.PendingInstanceSynthHelpers?.Add(helper);
+                    (this.state.PendingInstanceSynthHelpers
+                        ?? throw new InvalidOperationException(
+                            "A recursive instance local-function lift must be emitted inside an aggregate."))
+                        .Add(helper);
                 }
 
                 return new RawStatement($"// lifted recursive local function {recursiveLift.Name}");

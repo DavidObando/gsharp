@@ -874,6 +874,9 @@ public sealed class CSharpTypeMapper
                     == "System.Collections.Generic"
                 && named.ContainingNamespace is { IsGlobalNamespace: false } aliasNamespace)
             {
+                // ponytail: Core only needs the List<T> collision. Generalize
+                // when imported CLR type aliases bind reliably in type and
+                // constructor positions for arbitrary metadata types.
                 string target = $"{aliasNamespace.ToDisplayString()}.{simpleName}";
                 string alias = $"__cs2gs_{target.Replace('.', '_')}";
                 this.synthesizedTypeAliases[alias] = target;

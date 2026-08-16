@@ -1883,8 +1883,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GTypeReference GetArrayElementType(ExpressionSyntax arrayExpression, TypeSyntax elementTypeSyntax)
         {
-            bool nullableElementSyntax =
-                elementTypeSyntax?.ToString().EndsWith("?", System.StringComparison.Ordinal) == true;
+            bool nullableElementSyntax = elementTypeSyntax is NullableTypeSyntax;
 
             TypeInfo info = this.context.GetTypeInfo(arrayExpression);
             ITypeSymbol arrayType = info.Type ?? info.ConvertedType;

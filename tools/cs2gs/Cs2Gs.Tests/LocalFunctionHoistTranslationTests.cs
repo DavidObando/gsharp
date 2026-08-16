@@ -3,12 +3,11 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
-using System.Text;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -31,6 +30,8 @@ public class LocalFunctionHoistTranslationTests
     public void LocalFunctionCalledBeforeDeclaration_IsHoistedToTop()
     {
         string printed = TranslateUnit(@"
+using System;
+
 namespace Demo
 {
     public class C
@@ -106,13 +107,15 @@ namespace Demo
             declIndex < useIndex,
             "Local function must still be hoisted above its first use.\n" + printed);
 
-        CompileAndRun(printed, "C().M()");
+        CompileAndRun(printed, "Console.WriteLine(C().M())", "6");
     }
 
     [Fact]
     public void ExpressionBodiedLocalFunction_ReturnsConditionalValue()
     {
         string printed = TranslateUnit(@"
+using System;
+
 namespace Demo
 {
     public class C
@@ -126,7 +129,7 @@ namespace Demo
 }");
 
         Assert.Contains("return if first", printed, StringComparison.Ordinal);
-        CompileAndRun(printed, "C().M(true)");
+        CompileAndRun(printed, "Console.WriteLine(C().M(true))", "first");
     }
 
     [Fact]
@@ -158,7 +161,10 @@ namespace Demo
             declIndex < actionIndex,
             "`let handler` must be hoisted above `let action = handler`.\n" + printed);
 
-        CompileAndRun(printed, "C().M()");
+        CompileAndRun(
+            printed,
+            "C().M()\nConsole.WriteLine(\"ok\")",
+            "ok");
     }
 
     [Fact]
@@ -261,7 +267,10 @@ namespace Demo
     Assert.DoesNotContain("let Add", printed, StringComparison.Ordinal);
     Assert.Contains("ref sum int32", printed, StringComparison.Ordinal);
     Assert.Contains("__local_Run_Add_", printed, StringComparison.Ordinal);
-    CompileAndRun(printed, "C().Run(3)");
+    CompileAndRun(
+        printed,
+        "C().Run(3)\nConsole.WriteLine(\"ok\")",
+        "ok");
     }
 
     [Fact]
@@ -308,7 +317,10 @@ namespace Demo
     Assert.DoesNotContain("let AddOdd", printed, StringComparison.Ordinal);
     Assert.Contains("__local_Run_AddEven_", printed, StringComparison.Ordinal);
     Assert.Contains("__local_Run_AddOdd_", printed, StringComparison.Ordinal);
-    CompileAndRun(printed, "C().Run(3)");
+    CompileAndRun(
+        printed,
+        "C().Run(3)\nConsole.WriteLine(\"ok\")",
+        "ok");
     }
 
     [Fact]
@@ -342,7 +354,10 @@ namespace Demo
     Assert.DoesNotContain("let Read", printed, StringComparison.Ordinal);
     Assert.Contains("__local_Run_Read_", printed, StringComparison.Ordinal);
     Assert.Contains("out doubled int32", printed, StringComparison.Ordinal);
-    CompileAndRun(printed, "C().Run(3)");
+    CompileAndRun(
+        printed,
+        "C().Run(3)\nConsole.WriteLine(\"ok\")",
+        "ok");
     }
 
     [Fact]
@@ -379,13 +394,18 @@ namespace Demo
 
     Assert.Contains("values List[int32]", printed, StringComparison.Ordinal);
     Assert.DoesNotContain("values List[int32]?", printed, StringComparison.Ordinal);
-    CompileAndRun(printed, "C().Run(3)");
+    CompileAndRun(
+        printed,
+        "C().Run(3)\nConsole.WriteLine(\"ok\")",
+        "ok");
     }
 
     [Fact]
     public void StaticRecursiveLocalFunction_IsLiftedToSharedHelper()
     {
         string printed = TranslateUnit(@"
+using System;
+
 namespace Demo
 {
     public class C
@@ -408,7 +428,10 @@ namespace Demo
         Assert.DoesNotContain("let IsBaseCase", printed, StringComparison.Ordinal);
         Assert.Contains("__local_Factorial_Visit_", printed, StringComparison.Ordinal);
         Assert.Contains("__local_Factorial_IsBaseCase_", printed, StringComparison.Ordinal);
-        CompileAndRun(printed, "C().Factorial(5)");
+        CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Factorial(5))",
+            "120");
     }
 
     [Fact]
@@ -433,9 +456,16 @@ class C {
         string dllPath = Path.Combine(workDir, "Snippet.dll");
         File.WriteAllText(gsPath, Source);
 
-        (int exit, string output) = RunDotnet($"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
-        Assert.True(exit != 0, "Forward-referencing `let` recursion is expected to still fail today:\n" + output);
-        Assert.Contains("GS0130", output, StringComparison.Ordinal);
+        ProcessRunResult compile = ProcessRunner.Run(
+            "dotnet",
+            new[] { compiler, "/target:exe", $"/out:{dllPath}", gsPath },
+            timeout: TimeSpan.FromSeconds(30));
+        Assert.False(compile.TimedOut, compile.Output);
+        Assert.True(
+            compile.ExitCode != 0,
+            "Forward-referencing `let` recursion is expected to still fail today:\n" +
+                compile.Output);
+        Assert.Contains("GS0130", compile.Output, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source, string roundTripOnlyReason = null)
@@ -468,7 +498,10 @@ class C {
     /// forward-reference bug is a binder-time error that a parse-only round-trip
     /// cannot catch).
     /// </summary>
-    private static void CompileAndRun(string printed, string callExpression)
+    private static void CompileAndRun(
+        string printed,
+        string callExpression,
+        string expectedOutput)
     {
         string compiler = FindCompiler();
         Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
@@ -479,32 +512,30 @@ class C {
         string dllPath = Path.Combine(workDir, "Snippet.dll");
         File.WriteAllText(gsPath, printed + Environment.NewLine + callExpression + Environment.NewLine);
 
-        (int compileExit, string compileOut) = RunDotnet(
-            $"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
+        ProcessRunResult compile = ProcessRunner.Run(
+            "dotnet",
+            new[] { compiler, "/target:exe", $"/out:{dllPath}", gsPath },
+            timeout: TimeSpan.FromSeconds(30));
+        Assert.False(
+            compile.TimedOut,
+            $"gsc timed out and was killed. Output:\n{compile.Output}");
         Assert.True(
-            compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
-            "gsc must compile the translated snippet with zero errors. Output:\n" + compileOut +
+            compile.ExitCode == 0
+                && !compile.Output.Contains("error", StringComparison.OrdinalIgnoreCase),
+            "gsc must compile the translated snippet with zero errors. Output:\n" + compile.Output +
                 "\n\nTranslated G#:\n" + printed);
 
-        (int runExit, string runOut) = RunDotnet($"\"{dllPath}\"");
-        Assert.True(runExit == 0, "Translated snippet must run successfully. Output:\n" + runOut);
-    }
-
-    private static (int Exit, string Output) RunDotnet(string arguments)
-    {
-        var psi = new ProcessStartInfo("dotnet", arguments)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-
-        using var process = Process.Start(psi);
-        var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
-        return (process.ExitCode, output.ToString());
+        ProcessRunResult run = ProcessRunner.Run(
+            "dotnet",
+            new[] { dllPath },
+            timeout: TimeSpan.FromSeconds(30));
+        Assert.False(
+            run.TimedOut,
+            $"Translated program timed out and was killed. Output:\n{run.Output}");
+        Assert.True(
+            run.ExitCode == 0,
+            "Translated snippet must run successfully. Output:\n" + run.Output);
+        Assert.Equal(expectedOutput, run.Stdout.Trim());
     }
 
     private static string FindCompiler()

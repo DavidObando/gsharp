@@ -673,51 +673,28 @@ internal static class SymbolDocumentationIdProvider
 
     private static bool DeclaresTypeParameter(TypeSymbol type, TypeParameterSymbol typeParameter)
     {
-        var ordinal = typeParameter.Ordinal;
-        if (ordinal < 0)
+        if (typeParameter.Ordinal < 0)
         {
             return false;
         }
 
-        if (type is StructSymbol structSymbol)
+        foreach (var parameter in GetOwnTypeParameters(type))
         {
-            var list = structSymbol.Declaration?.TypeParameterList;
-            if (list != null)
+            if (ReferenceEquals(parameter, typeParameter)
+                || string.Equals(
+                    parameter.Name,
+                    typeParameter.Name,
+                    StringComparison.Ordinal))
             {
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(
-                        list.Parameters[ordinal].Identifier.Text,
-                        typeParameter.Name,
-                        StringComparison.Ordinal);
+                return true;
             }
         }
 
-        if (type is InterfaceSymbol interfaceSymbol)
-        {
-            var list = interfaceSymbol.Declaration?.TypeParameterList;
-            if (list != null)
-            {
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(
-                        list.Parameters[ordinal].Identifier.Text,
-                        typeParameter.Name,
-                        StringComparison.Ordinal);
-            }
-        }
+        return false;
+    }
 
-        if (type is DelegateTypeSymbol delegateSymbol)
-        {
-            var list = delegateSymbol.Declaration?.TypeParameterList;
-            if (list != null)
-            {
-                return ordinal < list.Parameters.Count &&
-                    string.Equals(
-                        list.Parameters[ordinal].Identifier.Text,
-                        typeParameter.Name,
-                        StringComparison.Ordinal);
-            }
-        }
-
+    private static ImmutableArray<TypeParameterSymbol> GetOwnTypeParameters(TypeSymbol type)
+    {
         var parameters = type switch
         {
             StructSymbol structType => structType.TypeParameters,
@@ -725,9 +702,10 @@ internal static class SymbolDocumentationIdProvider
             DelegateTypeSymbol delegateType => delegateType.TypeParameters,
             _ => ImmutableArray<TypeParameterSymbol>.Empty,
         };
-        return ordinal < parameters.Length &&
-            (ReferenceEquals(parameters[ordinal], typeParameter) ||
-             string.Equals(parameters[ordinal].Name, typeParameter.Name, StringComparison.Ordinal));
+        var ownArity = GetOwnArity(type);
+        return ownArity > 0 && parameters.Length > ownArity
+            ? parameters.Slice(parameters.Length - ownArity, ownArity)
+            : parameters;
     }
 
     private static void AppendClrTypeReference(StringBuilder builder, Type? type)
