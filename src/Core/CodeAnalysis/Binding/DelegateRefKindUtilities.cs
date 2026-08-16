@@ -31,9 +31,13 @@ internal static class DelegateRefKindUtilities
             case BoundClrMethodGroupExpression group:
                 return TryGetClrMethodGroupParameterRefKinds(group, out refKinds);
             case { Type: DelegateTypeSymbol sourceDelegate }:
-                refKinds = sourceDelegate.Parameters
-                    .Select(parameter => parameter.RefKind)
-                    .ToImmutableArray();
+                var sourceDelegateKinds = ImmutableArray.CreateBuilder<RefKind>(sourceDelegate.Parameters.Length);
+                foreach (var parameter in sourceDelegate.Parameters)
+                {
+                    sourceDelegateKinds.Add(parameter.RefKind);
+                }
+
+                refKinds = sourceDelegateKinds.MoveToImmutable();
                 return true;
             case { Type.ClrType: System.Type sourceType }
                 when ClrTypeUtilities.IsDelegateType(sourceType):
@@ -46,8 +50,13 @@ internal static class DelegateRefKindUtilities
 
                 break;
             case { Type: FunctionTypeSymbol sourceFunction }:
-                refKinds = ImmutableArray.CreateRange(
-                    Enumerable.Repeat(RefKind.None, sourceFunction.Arity));
+                var sourceFunctionKinds = ImmutableArray.CreateBuilder<RefKind>(sourceFunction.Arity);
+                for (var i = 0; i < sourceFunction.Arity; i++)
+                {
+                    sourceFunctionKinds.Add(RefKind.None);
+                }
+
+                refKinds = sourceFunctionKinds.MoveToImmutable();
                 return true;
         }
 
@@ -60,10 +69,14 @@ internal static class DelegateRefKindUtilities
         bool skipFirstParameter = false)
     {
         var parameters = method.GetParameters();
-        return parameters
-            .Skip(skipFirstParameter ? 1 : 0)
-            .Select(GetParameterRefKind)
-            .ToImmutableArray();
+        var offset = skipFirstParameter ? 1 : 0;
+        var refKinds = ImmutableArray.CreateBuilder<RefKind>(parameters.Length - offset);
+        for (var i = offset; i < parameters.Length; i++)
+        {
+            refKinds.Add(GetParameterRefKind(parameters[i]));
+        }
+
+        return refKinds.MoveToImmutable();
     }
 
     private static bool TryGetMethodGroupParameterRefKinds(
@@ -76,9 +89,13 @@ internal static class DelegateRefKindUtilities
             return true;
         }
 
-        return TryGetCommonParameterRefKinds(
-            group.Candidates.Select(candidate => GetParameterRefKinds(candidate, group.Receiver)),
-            out refKinds);
+        var candidateKinds = new List<ImmutableArray<RefKind>>(group.Candidates.Length);
+        foreach (var candidate in group.Candidates)
+        {
+            candidateKinds.Add(GetParameterRefKinds(candidate, group.Receiver));
+        }
+
+        return TryGetCommonParameterRefKinds(candidateKinds, out refKinds);
     }
 
     private static bool TryGetClrMethodGroupParameterRefKinds(
@@ -93,11 +110,15 @@ internal static class DelegateRefKindUtilities
             return true;
         }
 
-        return TryGetCommonParameterRefKinds(
-            group.Candidates.Select(candidate => GetParameterRefKinds(
+        var candidateKinds = new List<ImmutableArray<RefKind>>(group.Candidates.Length);
+        foreach (var candidate in group.Candidates)
+        {
+            candidateKinds.Add(GetParameterRefKinds(
                 candidate,
-                skipFirstParameter: group.Receiver != null && candidate.IsStatic)),
-            out refKinds);
+                skipFirstParameter: group.Receiver != null && candidate.IsStatic));
+        }
+
+        return TryGetCommonParameterRefKinds(candidateKinds, out refKinds);
     }
 
     private static ImmutableArray<RefKind> GetParameterRefKinds(
@@ -105,10 +126,13 @@ internal static class DelegateRefKindUtilities
         BoundExpression? receiver)
     {
         var parameterOffset = function.IsExtension && receiver != null ? 1 : 0;
-        return function.Parameters
-            .Skip(parameterOffset)
-            .Select(parameter => parameter.RefKind)
-            .ToImmutableArray();
+        var refKinds = ImmutableArray.CreateBuilder<RefKind>(function.Parameters.Length - parameterOffset);
+        for (var i = parameterOffset; i < function.Parameters.Length; i++)
+        {
+            refKinds.Add(function.Parameters[i].RefKind);
+        }
+
+        return refKinds.MoveToImmutable();
     }
 
     private static bool TryGetCommonParameterRefKinds(
@@ -122,7 +146,7 @@ internal static class DelegateRefKindUtilities
             {
                 refKinds = candidate;
             }
-            else if (!refKinds.SequenceEqual(candidate))
+            else if (!RefKindsEqual(refKinds, candidate))
             {
                 refKinds = default;
                 return false;
@@ -130,6 +154,24 @@ internal static class DelegateRefKindUtilities
         }
 
         return !refKinds.IsDefault;
+    }
+
+    private static bool RefKindsEqual(ImmutableArray<RefKind> left, ImmutableArray<RefKind> right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (left[i] != right[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static RefKind GetParameterRefKind(ParameterInfo parameter) =>

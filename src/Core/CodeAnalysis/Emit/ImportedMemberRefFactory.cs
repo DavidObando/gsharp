@@ -617,12 +617,19 @@ internal sealed class ImportedMemberRefFactory
         }
 
         var parameters = method.GetParameters();
-        var fallback = open.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(candidate =>
-                candidate.Name == method.Name
+        MethodInfo? fallback = null;
+        foreach (var candidate in open.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.Name == method.Name
                 && candidate.IsStatic == method.IsStatic
                 && candidate.IsGenericMethod == method.IsGenericMethod
-                && candidate.GetParameters().Length == parameters.Length);
+                && candidate.GetParameters().Length == parameters.Length)
+            {
+                fallback = candidate;
+                break;
+            }
+        }
+
         if (fallback != null)
         {
             return fallback;
@@ -1287,12 +1294,19 @@ internal sealed class ImportedMemberRefFactory
             }
         }
 
-        var fallback = openDefinition.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(candidate =>
-                candidate.Name == method.Name
+        MethodInfo? fallback = null;
+        foreach (var candidate in openDefinition.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (candidate.Name == method.Name
                 && candidate.IsStatic == method.IsStatic
                 && candidate.IsGenericMethod == method.IsGenericMethod
-                && candidate.GetParameters().Length == method.GetParameters().Length);
+                && candidate.GetParameters().Length == method.GetParameters().Length)
+            {
+                fallback = candidate;
+                break;
+            }
+        }
+
         return fallback ?? method;
     }
 

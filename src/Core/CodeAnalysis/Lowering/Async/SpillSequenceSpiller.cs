@@ -1066,9 +1066,21 @@ public static class SpillSequenceSpiller
                 case BoundStackAllocExpression stackAlloc:
                     return SpillStackAlloc(stackAlloc);
                 case BoundLenExpression len:
-                    return SpillOneOperand(len, len.Operand, operand => new BoundLenExpression(null, operand));
+                    return SpillOneOperand(
+                        len,
+                        len.Operand,
+                        operand =>
+                        {
+                            return new BoundLenExpression(null, operand);
+                        });
                 case BoundCapExpression cap:
-                    return SpillOneOperand(cap, cap.Operand, operand => new BoundCapExpression(null, operand));
+                    return SpillOneOperand(
+                        cap,
+                        cap.Operand,
+                        operand =>
+                        {
+                            return new BoundCapExpression(null, operand);
+                        });
                 case BoundAppendExpression append:
                     Func<BoundExpression, BoundExpression, BoundExpression> rebuildAppend =
                         (slice, element) =>

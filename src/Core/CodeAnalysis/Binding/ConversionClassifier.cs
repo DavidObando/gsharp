@@ -2747,14 +2747,19 @@ internal sealed class ConversionClassifier
         }
 
         returnRefKind = invoke.ReturnType.IsByRef ? RefKind.Ref : RefKind.None;
-        return invoke.GetParameters().Select(parameter =>
-            !parameter.ParameterType.IsByRef
+        var refKinds = ImmutableArray.CreateBuilder<RefKind>();
+        foreach (var parameter in invoke.GetParameters())
+        {
+            refKinds.Add(!parameter.ParameterType.IsByRef
                 ? RefKind.None
                 : parameter.IsOut
                     ? RefKind.Out
                     : parameter.IsIn
                         ? RefKind.In
-                        : RefKind.Ref).ToImmutableArray();
+                        : RefKind.Ref);
+        }
+
+        return refKinds.ToImmutable();
     }
 
     // ADR-0062: an inner ref-kind modifier on a conditional ref-argument branch

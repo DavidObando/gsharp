@@ -130,10 +130,16 @@ public static class ExhaustivenessAnalyzer
                 }
             }
 
-            missingNames = enumVariants
-                .Where(member => !coveredValues.Contains(member.Value))
-                .Select(member => member.Name)
-                .ToImmutableArray();
+            var missing = ImmutableArray.CreateBuilder<string>();
+            foreach (var member in enumVariants)
+            {
+                if (!coveredValues.Contains(member.Value))
+                {
+                    missing.Add(member.Name);
+                }
+            }
+
+            missingNames = missing.ToImmutable();
             return missingNames.Length > 0;
         }
 
