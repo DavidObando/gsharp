@@ -55,6 +55,28 @@ public sealed partial class CSharpToGSharpTranslator
                     liftedName);
             }
 
+            // Issue #3399: a member of a recursive/mutually recursive SCC of
+            // capturing local functions is bound through a nullable function-typed
+            // local (`var X ((…) -> …)? = nil; X = func …`), so a bare reference
+            // from another SCC member's closure body must go through the local
+            // itself — `X` would be GS0125 at its declared type, which has the
+            // `nil` default. The postfix null assertion unwraps the nullable
+            // (ADR-0069), mirroring gsc's own lowering (its `var` decl also
+            // emits as `(p) → R? = nil`).
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol
+                    { MethodKind: MethodKind.LocalFunction } recursiveLocal
+                && this.state.RecursiveLocalFunctionGroups.TryGetValue(
+                    recursiveLocal, out RecursiveLocalFunctionGroup recursiveGroup)
+                && recursiveGroup.Members.Contains(recursiveLocal))
+            {
+                // `IsDirectWrite` is intentionally NOT consulted: a write to a
+                // function-typed function local would be a C# compile error
+                // ("Cannot assign to ... because it is a local function"), so a
+                // rewrite here cannot change meaning.
+                return new NonNullAssertionExpression(
+                    new IdentifierExpression(recursiveGroup.NameOf(recursiveLocal)));
+            }
+
             // A switch-expression property-pattern binding (`Circle { Radius: var r }`)
             // has no G# equivalent; references to the bound local are rewritten to a
             // member access on the arm's type-pattern designator (`circle.Radius`).

@@ -264,9 +264,13 @@ namespace Demo
     }
 }");
 
+    // Issue #3399 hybrid: a capturing recursive local lowers to G#'s
+    // nullable function-typed local, not a synthesized capture-passing helper.
     Assert.DoesNotContain("let Add", printed, StringComparison.Ordinal);
-    Assert.Contains("ref sum int32", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_Run_Add_", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_Run_Add_", printed, StringComparison.Ordinal);
+    Assert.Contains("var Add", printed, StringComparison.Ordinal);
+    Assert.Contains("Add = func", printed, StringComparison.Ordinal);
+    Assert.Contains("Add!!(", printed, StringComparison.Ordinal);
     CompileAndRun(
         printed,
         "C().Run(3)\nConsole.WriteLine(\"ok\")",
@@ -313,10 +317,16 @@ namespace Demo
     }
 }");
 
+    // Issue #3399 hybrid: a capturing mutually recursive SCC lowers to G#'s
+    // nullable function-typed locals, not synthesized capture-passing helpers.
     Assert.DoesNotContain("let AddEven", printed, StringComparison.Ordinal);
     Assert.DoesNotContain("let AddOdd", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_Run_AddEven_", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_Run_AddOdd_", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_Run_AddEven_", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_Run_AddOdd_", printed, StringComparison.Ordinal);
+    Assert.Contains("var AddEven", printed, StringComparison.Ordinal);
+    Assert.Contains("var AddOdd", printed, StringComparison.Ordinal);
+    Assert.Contains("AddEven!!(", printed, StringComparison.Ordinal);
+    Assert.Contains("AddOdd!!(", printed, StringComparison.Ordinal);
     CompileAndRun(
         printed,
         "C().Run(3)\nConsole.WriteLine(\"ok\")",
@@ -392,8 +402,11 @@ namespace Demo
     }
 }");
 
-    Assert.Contains("values List[int32]", printed, StringComparison.Ordinal);
-    Assert.DoesNotContain("values List[int32]?", printed, StringComparison.Ordinal);
+    // Issue #3399 hybrid: the captured local stays a plain non-nullable G#
+    // local (`let values = List[int32]()`) captured by the nullable function
+    // literal — no nullable reference type is introduced for the capture.
+    Assert.Contains("let values = List[int32]()", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("List[int32]?", printed, StringComparison.Ordinal);
     CompileAndRun(
         printed,
         "C().Run(3)\nConsole.WriteLine(\"ok\")",
@@ -468,7 +481,7 @@ class C {
         Assert.Contains("GS0130", compile.Output, StringComparison.Ordinal);
     }
 
-    private static string TranslateUnit(string source, string roundTripOnlyReason = null)
+    internal static string TranslateUnit(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -498,10 +511,10 @@ class C {
     /// forward-reference bug is a binder-time error that a parse-only round-trip
     /// cannot catch).
     /// </summary>
-    private static void CompileAndRun(
+    internal static void CompileAndRun(
         string printed,
         string callExpression,
-        string expectedOutput)
+        string expectedOutput = null)
     {
         string compiler = FindCompiler();
         Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
@@ -535,10 +548,13 @@ class C {
         Assert.True(
             run.ExitCode == 0,
             "Translated snippet must run successfully. Output:\n" + run.Output);
-        Assert.Equal(expectedOutput, run.Stdout.Trim());
+        if (expectedOutput is not null)
+        {
+            Assert.Equal(expectedOutput, run.Stdout.Trim());
+        }
     }
 
-    private static string FindCompiler()
+    internal static string FindCompiler()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)

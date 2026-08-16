@@ -251,6 +251,7 @@ public sealed partial class CSharpToGSharpTranslator
             List<StatementSyntax> flatStatements = globalStatements.Select(gs => gs.Statement).ToList();
             TextSpan enclosingSpan = TextSpan.FromBounds(flatStatements[0].SpanStart, flatStatements[^1].Span.End);
             IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(flatStatements, enclosingSpan);
+            this.RegisterCapturingRecursiveLocalFunctions(ordered);
 
             // Issue #1904 (mirrored here): the synthesized top-level entry
             // point's own implicit parameter is always literally named "args"

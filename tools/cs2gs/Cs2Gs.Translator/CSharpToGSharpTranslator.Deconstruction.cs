@@ -1194,7 +1194,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        private GStatement TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
+        private IReadOnlyList<GStatement> TranslateLocalFunction(LocalFunctionStatementSyntax localFunction)
         {
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol recursiveLocal
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
@@ -1267,7 +1267,10 @@ public sealed partial class CSharpToGSharpTranslator
                         .Add(helper);
                 }
 
-                return new RawStatement($"// lifted recursive local function {recursiveLift.Name}");
+                return new GStatement[]
+                {
+                    new RawStatement($"// lifted recursive local function {recursiveLift.Name}"),
+                };
             }
 
             if (localFunction.Modifiers.Any(SyntaxKind.StaticKeyword)
@@ -1297,7 +1300,10 @@ public sealed partial class CSharpToGSharpTranslator
                     visibility: Visibility.Private,
                     isAsync: liftedIsAsync,
                     isRefReturn: staticLocal.ReturnsByRef));
-                return new RawStatement($"// lifted static local function {liftedName}");
+                return new GStatement[]
+                {
+                    new RawStatement($"// lifted static local function {liftedName}"),
+                };
             }
 
             // Issue #1900: a ref-returning local function (`static ref int
@@ -1316,7 +1322,10 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.ReportUnsupported(
                     localFunction,
                     $"ref-returning local function '{localFunction.Identifier.Text}' has no canonical G# form: a local function lowers to a `func` literal, and G#'s `ref` return modifier only exists on a genuine top-level/method function declaration (issue #1900).");
-                return new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'");
+                return new GStatement[]
+                {
+                    new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'"),
+                };
             }
 
             // A C# local function maps to a G# local `let` bound to a function
@@ -1412,7 +1421,46 @@ public sealed partial class CSharpToGSharpTranslator
                 .Select(tp => SanitizeIdentifier(tp.Identifier.Text))
                 .ToList();
 
-            return new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda, typeParameters);
+            // Issue #3399: this local participates in a recursive/mutually
+            // recursive SCC of capturing local functions — a bare non-recursive
+            // `let` binding of the literal cannot reference itself, so gsc loses
+            // the binding for every call (GS0130/GS0125). Lower the whole SCC via
+            // G#'s nullable-function-local scheme instead: emit the members'
+            // nil-initialized `var Name (… -> R)? = nil` declarations exactly once
+            // (the first member translated in document order; all declarations
+            // must precede the first assignment because a G# closure body cannot
+            // reference a not-yet-declared sibling local), then assign this
+            // member's function literal to its own local. SCC partners are
+            // reached from a closure body through the nullable local via `!!`
+            // (see the TranslateIdentifierName/Invocations rewrite). G#'s
+            // capture-by-reference closures preserve C#'s shared mutation of the
+            // captured sibling locals.
+            if (localSymbol is not null
+                && this.state.RecursiveLocalFunctionGroups.TryGetValue(
+                    localSymbol, out RecursiveLocalFunctionGroup recursiveBinding))
+            {
+                var statements = new List<GStatement>();
+                if (!recursiveBinding.Members.Any(m => this.state.EmittedRecursiveGroupMembers.Contains(m)))
+                {
+                    recursiveBinding.DeclarationsEmitted = true;
+                    foreach (IMethodSymbol member in recursiveBinding.Members)
+                    {
+                        this.state.EmittedRecursiveGroupMembers.Add(member);
+                    }
+
+                    statements.AddRange(recursiveBinding.Declarations);
+                }
+
+                statements.Add(new AssignmentStatement(
+                    new IdentifierExpression(recursiveBinding.NameOf(localSymbol)),
+                    lambda));
+                return statements;
+            }
+
+            return new GStatement[]
+            {
+                new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda, typeParameters),
+            };
         }
 
         private static bool CaptureHasExplicitNullableType(ISymbol symbol)
