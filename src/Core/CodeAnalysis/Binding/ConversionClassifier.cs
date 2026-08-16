@@ -2846,8 +2846,16 @@ internal sealed class ConversionClassifier
                 }
             }
 
-            var attribute = parameter.GetCustomAttributesData().FirstOrDefault(static candidate =>
-                candidate.AttributeType.FullName == "System.Runtime.CompilerServices.DateTimeConstantAttribute");
+            CustomAttributeData? attribute = null;
+            foreach (var candidate in parameter.GetCustomAttributesData())
+            {
+                if (candidate.AttributeType.FullName == "System.Runtime.CompilerServices.DateTimeConstantAttribute")
+                {
+                    attribute = candidate;
+                    break;
+                }
+            }
+
             if (attribute != null
                 && attribute.ConstructorArguments.Count == 1)
             {

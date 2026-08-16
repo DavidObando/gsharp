@@ -248,41 +248,46 @@ internal static class ImportedAssemblySemantics
         }
 
         var methods = ClrTypeUtilities.SafeGetMethods(type, PublicInstance | PublicStatic);
-        var hasTypedEquals = methods.Any(method =>
-            method.Name == "Equals"
-            && !method.IsStatic
-            && method.ReturnType.FullName == "System.Boolean"
-            && method.GetParameters() is [{ } parameter]
-            && parameter.ParameterType.FullName == type.FullName
-            && IsCompilerGenerated(method));
-        var hasEquality = methods.Any(method =>
-            method.Name == "op_Equality"
-            && method.IsStatic
-            && method.ReturnType.FullName == "System.Boolean"
-            && method.GetParameters() is [{ } left, { } right]
-            && left.ParameterType.FullName == type.FullName
-            && right.ParameterType.FullName == type.FullName
-            && IsCompilerGenerated(method));
-        var hasInequality = methods.Any(method =>
-            method.Name == "op_Inequality"
-            && method.IsStatic
-            && method.ReturnType.FullName == "System.Boolean"
-            && method.GetParameters() is [{ } left, { } right]
-            && left.ParameterType.FullName == type.FullName
-            && right.ParameterType.FullName == type.FullName
-            && IsCompilerGenerated(method));
-        var hasToString = methods.Any(method =>
-            method.Name == "ToString"
-            && !method.IsStatic
-            && method.ReturnType.FullName == "System.String"
-            && method.GetParameters().Length == 0
-            && IsCompilerGenerated(method));
-        var hasGetHashCode = methods.Any(method =>
-            method.Name == "GetHashCode"
-            && !method.IsStatic
-            && method.ReturnType.FullName == "System.Int32"
-            && method.GetParameters().Length == 0
-            && IsCompilerGenerated(method));
+        var hasTypedEquals = false;
+        var hasEquality = false;
+        var hasInequality = false;
+        var hasToString = false;
+        var hasGetHashCode = false;
+        foreach (var method in methods)
+        {
+            if (!IsCompilerGenerated(method))
+            {
+                continue;
+            }
+
+            var parameters = method.GetParameters();
+            hasTypedEquals |= method.Name == "Equals"
+                && !method.IsStatic
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 1
+                && parameters[0].ParameterType.FullName == type.FullName;
+            hasEquality |= method.Name == "op_Equality"
+                && method.IsStatic
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 2
+                && parameters[0].ParameterType.FullName == type.FullName
+                && parameters[1].ParameterType.FullName == type.FullName;
+            hasInequality |= method.Name == "op_Inequality"
+                && method.IsStatic
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 2
+                && parameters[0].ParameterType.FullName == type.FullName
+                && parameters[1].ParameterType.FullName == type.FullName;
+            hasToString |= method.Name == "ToString"
+                && !method.IsStatic
+                && method.ReturnType.FullName == "System.String"
+                && parameters.Length == 0;
+            hasGetHashCode |= method.Name == "GetHashCode"
+                && !method.IsStatic
+                && method.ReturnType.FullName == "System.Int32"
+                && parameters.Length == 0;
+        }
+
         return hasTypedEquals && hasEquality && hasInequality && hasToString && hasGetHashCode;
     }
 
