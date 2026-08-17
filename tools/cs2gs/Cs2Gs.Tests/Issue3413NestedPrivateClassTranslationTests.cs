@@ -156,6 +156,48 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
+    public void ExtensionUsingPrivateNestedGenericHelper_StaysOnOwnerAndBinds()
+    {
+        const string source = """
+            using System;
+
+            namespace Issue3413
+            {
+                public static class Program
+                {
+                    public static void Main() => Console.WriteLine(42.Identity());
+                }
+
+                public static class ExtensionOwner
+                {
+                    private static class Cache<T>
+                    {
+                        public static T Echo(T value) => value;
+                    }
+
+                    public static T Identity<T>(this T value) => Cache<T>.Echo(value);
+                }
+            }
+            """;
+
+        (CompilationUnit unit, _) = Translate(source);
+        TypeDeclaration owner = unit.Members
+            .OfType<TypeDeclaration>()
+            .Single(type => type.Name == "ExtensionOwner");
+        TypeDeclaration cache = Assert.Single(owner.Members.OfType<TypeDeclaration>());
+        string rendered = GSharpPrinter.Print(unit);
+        TranslationTestValidation.AssertBinds(rendered);
+        SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
+
+        Assert.Equal(Visibility.Private, cache.Visibility);
+        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+        Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+        Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
+        Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Pipeline_CompilesVerifiesRunsAndEmitsNestedPrivateGenericMetadata()
     {
         string compiler = FindCompiler();
