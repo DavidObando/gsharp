@@ -286,7 +286,10 @@ internal sealed partial class StatementBinder
             conversions,
             bindTypeClause,
             syntax => bindExpression(syntax),
-            (identifier, isReadOnly, type) => bindLocalVariable(identifier, isReadOnly, type));
+            (identifier, isReadOnly, type) =>
+            {
+                return bindLocalVariable(identifier, isReadOnly, type);
+            });
 
         var declaration = new BoundVariableDeclaration(binding, bound.Variable, bound.Initializer);
         return bound.IsValid

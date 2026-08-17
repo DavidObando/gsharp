@@ -317,9 +317,18 @@ public sealed class Binder
             bindExpression: (syntax, canBeVoid) => Expressions.BindExpression(syntax, canBeVoid),
             bindExpressionWithTargetType: BindExpressionWithTargetTypeForStatements,
             bindTypeClause: BindTypeClause,
-            bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
-            bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility),
-            bindVariableReference: (name, location) => Expressions.BindVariableReference(name, location),
+            bindLocalVariable: (identifier, isReadOnly, type) =>
+            {
+                return Declarations.BindVariableDeclaration(identifier, isReadOnly, type);
+            },
+            bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) =>
+            {
+                return Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility);
+            },
+            bindVariableReference: (name, location) =>
+            {
+                return Expressions.BindVariableReference(name, location);
+            },
             bindInterpolatedStringAsFormattable: (syntax, targetType) =>
             {
                 return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);

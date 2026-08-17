@@ -383,17 +383,23 @@ public sealed class ImportedClassSymbol : Symbol
             projectTypeArgument,
             ComputeInterpolatedStringArgFlags(callExpression, arguments.Length),
             argumentNames,
-            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                typeArgSymbols,
-                symbolicArgVector,
-                isExpanded),
+            (closed, isExpanded) =>
+            {
+                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    closed,
+                    typeArgSymbols,
+                    symbolicArgVector,
+                    isExpanded);
+            },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
             delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
                 arguments,
-                type => Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable")));
+                type =>
+                {
+                    return Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable");
+                }));
 
         switch (result.Outcome)
         {
