@@ -61,7 +61,12 @@ public static class Program
             var arg = args[i];
             if (TryParseReferenceSwitch(arg, out var referencePath))
             {
-                references.Add(referencePath!);
+                if (referencePath is null)
+                {
+                    throw new InvalidOperationException("A matched reference switch must have a value.");
+                }
+
+                references.Add(referencePath);
                 continue;
             }
 

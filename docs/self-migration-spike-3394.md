@@ -530,7 +530,7 @@ remaining #3394 sequence:
 | 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
 | 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
 | 305 | gsc | translate, compile, target-assembly ILVerify PASS; no parity oracle |
-| 304 | gsi | translate, compile, target-assembly ILVerify PASS; no parity oracle |
+| 308 | gsi | translate, compile, target-assembly ILVerify PASS; no parity oracle |
 | 306 | gsgen | translate, compile, target-assembly ILVerify PASS; no parity oracle |
 | 307 | cs2gs | translate, compile, target-assembly ILVerify PASS; no parity oracle |
 
