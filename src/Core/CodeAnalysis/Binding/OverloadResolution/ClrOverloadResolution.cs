@@ -699,7 +699,7 @@ internal static class ClrOverloadResolution
 
         foreach (var rawCandidate in candidateList)
         {
-            if (rawCandidate == null)
+            if (ReferenceEquals(rawCandidate, null))
             {
                 continue;
             }
@@ -733,7 +733,7 @@ internal static class ClrOverloadResolution
         {
             foreach (var rawCandidate in candidateList)
             {
-                if (rawCandidate == null)
+                if (ReferenceEquals(rawCandidate, null))
                 {
                     continue;
                 }
@@ -4559,7 +4559,7 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        var current = symbol;
+        TypeSymbol? current = symbol;
         while (current != null)
         {
             switch (current)
