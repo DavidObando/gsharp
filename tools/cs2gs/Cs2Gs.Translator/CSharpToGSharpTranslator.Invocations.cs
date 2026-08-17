@@ -1197,11 +1197,12 @@ public sealed partial class CSharpToGSharpTranslator
             // CoerceNumericArgumentToConverted (issue #1281) emits the bare operand
             // when gsc accepts the conversion on its own and keeps the explicit
             // `T(x)` wrap only where gsc still needs it.
+            GExpression exactCallable = this.TranslateExactCallableArgument(argument);
             GExpression translated = this.CoercePointerConversion(
                 argument.Expression,
                 this.CoerceNumericArgumentToConverted(
                     argument,
-                    this.TranslateExpression(argument.Expression)));
+                    exactCallable ?? this.TranslateExpression(argument.Expression)));
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
@@ -1216,6 +1217,213 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return translated;
+        }
+
+        // Issue #3414: Roslyn has already fixed the converted delegate signature
+        // at a direct argument. Preserve it when the callable's natural signature
+        // differs, instead of leaving gsc to materialize the wrong delegate ABI.
+        private GExpression TranslateExactCallableArgument(ArgumentSyntax argument)
+        {
+            ExpressionSyntax expression = argument.Expression;
+            if (expression is AnonymousFunctionExpressionSyntax lambda
+                && this.TryGetConvertedDelegateInvoke(lambda, out IMethodSymbol lambdaInvoke))
+            {
+                return this.typeMapper.WithMetadataImportCollisionQualification(
+                    () => this.LambdaResultNeedsExactTarget(lambda, lambdaInvoke)
+                        ? this.TranslateLambda(lambda, lambdaInvoke)
+                        : this.TranslateLambda(lambda));
+            }
+
+            if (this.TryGetMethodGroupArgument(
+                    argument,
+                    out IMethodSymbol method,
+                    out IMethodSymbol methodGroupInvoke)
+                && MethodGroupNeedsExactTarget(method, methodGroupInvoke))
+            {
+                return this.typeMapper.WithMetadataImportCollisionQualification(
+                    () => this.TranslateExactMethodGroupArgument(
+                        expression,
+                        method,
+                        methodGroupInvoke));
+            }
+
+            return null;
+        }
+
+        private bool TryGetMethodGroupArgument(
+            ArgumentSyntax argument,
+            out IMethodSymbol method,
+            out IMethodSymbol invoke)
+        {
+            method = null;
+            invoke = null;
+            if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation argumentOperation
+                || argumentOperation.Value is not IDelegateCreationOperation delegateCreation
+                || delegateCreation.Target is not IMethodReferenceOperation methodReference
+                || delegateCreation.Type is not INamedTypeSymbol delegateType)
+            {
+                return false;
+            }
+
+            method = methodReference.Method;
+            invoke = delegateType.DelegateInvokeMethod;
+            return method != null && invoke != null;
+        }
+
+        private bool TryGetConvertedDelegateInvoke(
+            ExpressionSyntax expression,
+            out IMethodSymbol invoke)
+        {
+            invoke = (this.context.GetTypeInfo(expression).ConvertedType as INamedTypeSymbol)
+                ?.DelegateInvokeMethod;
+            return invoke != null;
+        }
+
+        private bool LambdaResultNeedsExactTarget(
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol invoke)
+        {
+            if (lambda.Body is not ExpressionSyntax body
+                || invoke.ReturnsVoid)
+            {
+                return false;
+            }
+
+            ITypeSymbol targetResult = invoke.ReturnType;
+            if (lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
+                && targetResult is INamedTypeSymbol task
+                && task.Name == "Task"
+                && task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
+            {
+                if (!task.IsGenericType)
+                {
+                    return false;
+                }
+
+                targetResult = task.TypeArguments[0];
+            }
+
+            ITypeSymbol bodyType = this.context.GetTypeInfo(body).Type;
+            return bodyType != null
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    bodyType,
+                    targetResult);
+        }
+
+        private static bool MethodGroupNeedsExactTarget(
+            IMethodSymbol method,
+            IMethodSymbol invoke)
+        {
+            if (method.Parameters.Length != invoke.Parameters.Length
+                || method.ReturnsVoid != invoke.ReturnsVoid)
+            {
+                return true;
+            }
+
+            for (int index = 0; index < method.Parameters.Length; index++)
+            {
+                IParameterSymbol methodParameter = method.Parameters[index];
+                IParameterSymbol invokeParameter = invoke.Parameters[index];
+                if (methodParameter.RefKind != invokeParameter.RefKind
+                    || !SymbolEqualityComparer.IncludeNullability.Equals(
+                        methodParameter.Type,
+                        invokeParameter.Type))
+                {
+                    return true;
+                }
+            }
+
+            return !method.ReturnsVoid
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    method.ReturnType,
+                    invoke.ReturnType);
+        }
+
+        private GExpression TranslateExactMethodGroupArgument(
+            ExpressionSyntax expression,
+            IMethodSymbol method,
+            IMethodSymbol invoke)
+        {
+            var parameters = new List<Parameter>(invoke.Parameters.Length);
+            var arguments = new List<GExpression>(invoke.Parameters.Length);
+            for (int index = 0; index < invoke.Parameters.Length; index++)
+            {
+                IParameterSymbol invokeParameter = invoke.Parameters[index];
+                Parameter mapped = this.MapParameter(
+                    invokeParameter,
+                    expression,
+                    promoteNullability: false);
+                string name = $"__arg{index}";
+                parameters.Add(new Parameter(
+                    name,
+                    mapped.Type,
+                    mapped.IsVariadic,
+                    mapped.RefKind));
+
+                GExpression forwarded = new IdentifierExpression(name);
+                if (invokeParameter.RefKind is RefKind.Ref or RefKind.Out)
+                {
+                    forwarded = new UnaryExpression("&", forwarded);
+                }
+
+                arguments.Add(forwarded);
+            }
+
+            GExpression target = this.TranslateMethodGroupInvocationTarget(
+                expression,
+                method);
+            IReadOnlyList<GTypeReference> typeArguments = method.IsGenericMethod
+                ? method.TypeArguments
+                    .Select(type => this.typeMapper.Map(
+                        type,
+                        this.context,
+                        expression.GetLocation()))
+                    .ToList()
+                : null;
+            var call = new InvocationExpression(target, arguments, typeArguments);
+            GTypeReference returnType = this.MapDelegateLikeReturnType(
+                invoke,
+                isAsync: false,
+                expression.GetLocation());
+            var statements = returnType == null
+                ? new GStatement[] { new ExpressionStatement(call) }
+                : new GStatement[] { new ReturnStatement(call) };
+            return new LambdaExpression(
+                parameters,
+                blockBody: new BlockStatement(statements),
+                returnType: returnType,
+                isFunctionLiteral: true);
+        }
+
+        private GExpression TranslateMethodGroupInvocationTarget(
+            ExpressionSyntax expression,
+            IMethodSymbol method)
+        {
+            if (method.IsStatic
+                && method.MethodKind != MethodKind.LocalFunction
+                && method.ContainingType is { IsImplicitlyDeclared: false } owner
+                && !SymbolEqualityComparer.Default.Equals(
+                    owner.OriginalDefinition,
+                    this.entryType?.OriginalDefinition))
+            {
+                return new MemberAccessExpression(
+                    this.StaticQualifierReceiver(owner, expression.GetLocation()),
+                    SanitizeIdentifier(method.Name));
+            }
+
+            if (expression is MemberAccessExpressionSyntax member
+                && !method.IsStatic
+                && !this.TryGetStaticExtensionHelper(method, out _, out _))
+            {
+                GExpression receiver = this.CaptureMethodGroupReceiver(
+                    this.TranslateReceiverWithNullForgiveness(member.Expression),
+                    member.Expression);
+                return new MemberAccessExpression(
+                    receiver,
+                    SanitizeIdentifier(member.Name.Identifier.ValueText));
+            }
+
+            return this.TranslateExpression(expression);
         }
 
         private bool IsXunitNullAssertionArgument(ArgumentSyntax argument)

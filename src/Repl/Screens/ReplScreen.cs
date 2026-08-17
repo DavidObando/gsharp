@@ -98,19 +98,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
         get
         {
             var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
-            var diag = 0;
-            // Oats #3414: migrated gsi loses SelectMany/Count lambda result types (GS0158/GS0159).
-            foreach (var cell in engine.Cells)
-            {
-                foreach (var diagnostic in cell.Diagnostics)
-                {
-                    if (diagnostic.IsError)
-                    {
-                        diag++;
-                    }
-                }
-            }
-
+            var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
             return diag == 0
                 ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
                 : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";

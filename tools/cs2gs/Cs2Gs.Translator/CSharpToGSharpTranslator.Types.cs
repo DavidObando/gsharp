@@ -22,7 +22,9 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
-        private GExpression TranslateLambda(AnonymousFunctionExpressionSyntax lambda)
+        private GExpression TranslateLambda(
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol exactTargetInvoke = null)
         {
             var parameters = new List<Parameter>();
             ParameterListSyntax parameterList = lambda switch
@@ -78,6 +80,12 @@ public sealed partial class CSharpToGSharpTranslator
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
             IMethodSymbol lambdaSymbol = this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol
                 ?? (this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol)?.DelegateInvokeMethod;
+            GTypeReference exactReturnType = exactTargetInvoke != null
+                ? this.MapDelegateLikeReturnType(
+                    exactTargetInvoke,
+                    isAsync,
+                    lambda.GetLocation())
+                : null;
             bool hasUnderscoreParameter = (lambda is SimpleLambdaExpressionSyntax simpleLambda
                 && simpleLambda.Parameter.Identifier.ValueText == "_")
                 || parameterList?.Parameters.Any(parameter => parameter.Identifier.ValueText == "_") == true;
@@ -232,11 +240,27 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (spillPrologue.Count == 0)
                 {
+                    if (exactTargetInvoke != null)
+                    {
+                        return new LambdaExpression(
+                            parameters,
+                            blockBody: new BlockStatement(
+                                new GStatement[] { new ReturnStatement(expressionBody) }),
+                            isAsync: isAsync,
+                            returnType: exactReturnType,
+                            isFunctionLiteral: true);
+                    }
+
                     return new LambdaExpression(parameters, expressionBody: expressionBody, isAsync: isAsync);
                 }
 
                 var bodyStatements = new List<GStatement>(spillPrologue) { new ReturnStatement(expressionBody) };
-                return new LambdaExpression(parameters, blockBody: new BlockStatement(bodyStatements), isAsync: isAsync);
+                return new LambdaExpression(
+                    parameters,
+                    blockBody: new BlockStatement(bodyStatements),
+                    isAsync: isAsync,
+                    returnType: exactReturnType,
+                    isFunctionLiteral: exactTargetInvoke != null);
             }
             finally
             {

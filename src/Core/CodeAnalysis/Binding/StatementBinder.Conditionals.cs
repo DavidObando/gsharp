@@ -1310,18 +1310,13 @@ internal sealed partial class StatementBinder
         switch (bound)
         {
             case BoundAssignmentExpression assignment:
-                Func<BoundExpression, BoundExpression> createVariableWrite =
-                    value =>
-                    {
-                        return new BoundAssignmentExpression(
-                            assignment.Syntax,
-                            assignment.Variable,
-                            value,
-                            assignment.AssignedValueType);
-                    };
                 plan = new MultiAssignmentTargetPlan(
                     assignment.Expression,
-                    createVariableWrite);
+                    value => new BoundAssignmentExpression(
+                        assignment.Syntax,
+                        assignment.Variable,
+                        value,
+                        assignment.AssignedValueType));
                 return true;
 
             case BoundFieldAssignmentExpression field:
@@ -1358,41 +1353,31 @@ internal sealed partial class StatementBinder
                 var propertyReceiver = property.Receiver == null
                     ? null
                     : CaptureMultiAssignmentReceiver(property.Receiver, targetSyntax, captures);
-                Func<BoundExpression, BoundExpression> createPropertyWrite =
-                    value =>
-                    {
-                        return new BoundPropertyAssignmentExpression(
-                            property.Syntax,
-                            propertyReceiver,
-                            property.StructType,
-                            property.Property,
-                            value);
-                    };
                 plan = new MultiAssignmentTargetPlan(
                     property.Value,
-                    createPropertyWrite);
+                    value => new BoundPropertyAssignmentExpression(
+                        property.Syntax,
+                        propertyReceiver,
+                        property.StructType,
+                        property.Property,
+                        value));
                 return true;
 
             case BoundClrPropertyAssignmentExpression clrProperty:
                 var clrPropertyReceiver = clrProperty.Receiver == null
                     ? null
                     : CaptureMultiAssignmentReceiver(clrProperty.Receiver, targetSyntax, captures);
-                Func<BoundExpression, BoundExpression> createClrPropertyWrite =
-                    value =>
-                    {
-                        return new BoundClrPropertyAssignmentExpression(
-                            clrProperty.Syntax,
-                            clrPropertyReceiver,
-                            clrProperty.Member,
-                            value,
-                            clrProperty.Type,
-                            clrProperty.StaticContainerType,
-                            clrProperty.ConstrainedReceiverTypeParameter,
-                            clrProperty.ConstrainedInterfaceType);
-                    };
                 plan = new MultiAssignmentTargetPlan(
                     clrProperty.Value,
-                    createClrPropertyWrite);
+                    value => new BoundClrPropertyAssignmentExpression(
+                        clrProperty.Syntax,
+                        clrPropertyReceiver,
+                        clrProperty.Member,
+                        value,
+                        clrProperty.Type,
+                        clrProperty.StaticContainerType,
+                        clrProperty.ConstrainedReceiverTypeParameter,
+                        clrProperty.ConstrainedInterfaceType));
                 return true;
 
             case BoundIndexAssignmentExpression index:
@@ -1406,15 +1391,12 @@ internal sealed partial class StatementBinder
                     var capturedIndex = CaptureMultiAssignmentValue(index.Index, targetSyntax, captures);
                     plan = new MultiAssignmentTargetPlan(
                         index.Value,
-                        value =>
-                        {
-                            return BoundIndexAssignmentExpression.WithExpressionTarget(
-                                index.Syntax,
-                                capturedTarget,
-                                capturedIndex,
-                                value,
-                                index.Type);
-                        });
+                        value => BoundIndexAssignmentExpression.WithExpressionTarget(
+                            index.Syntax,
+                            capturedTarget,
+                            capturedIndex,
+                            value,
+                            index.Type));
                     return true;
                 }
 
@@ -1449,18 +1431,15 @@ internal sealed partial class StatementBinder
 
                 plan = new MultiAssignmentTargetPlan(
                     clrIndex.Value,
-                    value =>
-                    {
-                        return BoundClrIndexAssignmentExpression.WithExpressionTarget(
-                            clrIndex.Syntax,
-                            capturedClrTarget,
-                            clrIndex.Indexer,
-                            capturedArguments.ToImmutable(),
-                            value,
-                            clrIndex.Type,
-                            clrIndex.ConstrainedReceiverTypeParameter,
-                            clrIndex.ConstrainedInterfaceType);
-                    });
+                    value => BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                        clrIndex.Syntax,
+                        capturedClrTarget,
+                        clrIndex.Indexer,
+                        capturedArguments.ToImmutable(),
+                        value,
+                        clrIndex.Type,
+                        clrIndex.ConstrainedReceiverTypeParameter,
+                        clrIndex.ConstrainedInterfaceType));
                 return true;
 
             case BoundIndirectAssignmentExpression indirect:
@@ -1487,17 +1466,12 @@ internal sealed partial class StatementBinder
         ImmutableArray<BoundStatement>.Builder captures)
     {
         var address = CaptureMultiAssignmentAddress(storage, targetSyntax, captures);
-        Func<BoundExpression, BoundExpression> createWrite =
-            value =>
-            {
-                return new BoundIndirectAssignmentExpression(
-                    targetSyntax,
-                    new BoundVariableExpression(null, address),
-                    value);
-            };
         return new MultiAssignmentTargetPlan(
             assignedValue,
-            createWrite);
+            value => new BoundIndirectAssignmentExpression(
+                targetSyntax,
+                new BoundVariableExpression(null, address),
+                value));
     }
 
     private LocalVariableSymbol CaptureMultiAssignmentAddress(

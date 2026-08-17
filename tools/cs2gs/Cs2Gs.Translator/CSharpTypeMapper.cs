@@ -323,17 +323,8 @@ public sealed class CSharpTypeMapper
         TranslationContext context,
         Location location)
     {
-        bool previous = this.qualifyMetadataImportCollisions;
-        this.qualifyMetadataImportCollisions = true;
-        GTypeReference mapped;
-        try
-        {
-            mapped = this.Map(type, context, location);
-        }
-        finally
-        {
-            this.qualifyMetadataImportCollisions = previous;
-        }
+        GTypeReference mapped = this.WithMetadataImportCollisionQualification(
+            () => this.Map(type, context, location));
 
         if (!mapped.IsNullable)
         {
@@ -416,6 +407,27 @@ public sealed class CSharpTypeMapper
     /// <returns>A reference to the synthesized (or already-cached) data class.</returns>
     public NamedTypeReference GetOrCreateAnonymousDataClass(INamedTypeSymbol anonymousType, TranslationContext context, Location location) =>
         this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
+
+    /// <summary>
+    /// Maps an exact inferred contract while qualifying metadata homonyms
+    /// reachable through the current file's imports.
+    /// </summary>
+    /// <typeparam name="T">The mapped result type.</typeparam>
+    /// <param name="map">Mapping operation to run under collision qualification.</param>
+    /// <returns>The mapped result.</returns>
+    internal T WithMetadataImportCollisionQualification<T>(Func<T> map)
+    {
+        bool previous = this.qualifyMetadataImportCollisions;
+        this.qualifyMetadataImportCollisions = true;
+        try
+        {
+            return map();
+        }
+        finally
+        {
+            this.qualifyMetadataImportCollisions = previous;
+        }
+    }
 
     internal (NamedTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) GetOrCreateAnonymousDataClassShape(
         INamedTypeSymbol anonymousType,
