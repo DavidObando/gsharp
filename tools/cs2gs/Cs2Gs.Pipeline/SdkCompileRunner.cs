@@ -237,11 +237,8 @@ public sealed class SdkCompileRunner
 
         (List<(string Id, string Version)> packages, List<string> references) =
             PartitionReferences(referencePaths ?? Array.Empty<string>(), nugetPackagesRoot, runtimeDir);
-        bool hasDeclaredPackageReferences = HasDeclaredPackageReferences(packageReferences);
-        if (hasDeclaredPackageReferences)
-        {
-            packages.Clear();
-        }
+        bool hasDeclaredPackageReferences =
+            ApplyDeclaredPackageReferencePolicy(packages, packageReferences);
 
         if (projectReferences?.Any(item => !string.IsNullOrEmpty(item.SourceInclude)) == true)
         {
@@ -936,6 +933,19 @@ public sealed class SdkCompileRunner
     internal static bool HasDeclaredPackageReferences(
         IReadOnlyList<DeclaredProjectItem> packageReferences) =>
         (packageReferences?.Count ?? 0) > 0;
+
+    internal static bool ApplyDeclaredPackageReferencePolicy(
+        List<(string Id, string Version)> packages,
+        IReadOnlyList<DeclaredProjectItem> packageReferences)
+    {
+        bool hasDeclaredPackageReferences = HasDeclaredPackageReferences(packageReferences);
+        if (hasDeclaredPackageReferences)
+        {
+            packages.Clear();
+        }
+
+        return hasDeclaredPackageReferences;
+    }
 
     private static string FindInheritedBuildProps(string projectDirectory)
     {

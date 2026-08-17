@@ -302,16 +302,52 @@ public class SdkCompileRunnerTests
     }
 
     [Fact]
-    public void HasDeclaredPackageReferences_EmptyListKeepsReconstructedPackages()
+    public void ReconstructedPackages_SurviveProjectReferences_AndClearForPackageReferences()
     {
-        Assert.False(SdkCompileRunner.HasDeclaredPackageReferences(null));
-        Assert.False(SdkCompileRunner.HasDeclaredPackageReferences(Array.Empty<DeclaredProjectItem>()));
-        Assert.True(SdkCompileRunner.HasDeclaredPackageReferences(new[]
+        var packages = new List<(string Id, string Version)> { ("example", "1.0.0") };
+        var projectReferences = new[]
+        {
+            new DeclaredProjectItem(
+                null,
+                System.Xml.Linq.XElement.Parse("<ProjectReference Include=\"../Lib/Lib.csproj\" />")),
+        };
+
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "Program.gs" },
+            packages,
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            projectReferences: projectReferences);
+
+        Assert.Contains("<PackageReference Include=\"example\" Version=\"1.0.0\" />", xml);
+        Assert.Contains("<ProjectReference Include=\"../Lib/Lib.csproj\" />", xml);
+
+        SdkCompileRunner.ApplyDeclaredPackageReferencePolicy(packages, new[]
         {
             new DeclaredProjectItem(
                 null,
                 System.Xml.Linq.XElement.Parse("<PackageReference Include=\"Example\" />")),
-        }));
+        });
+        Assert.Empty(packages);
+    }
+
+    [Fact]
+    public void BuildProjectXml_EmitsCapturedSourceAssemblyName()
+    {
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Library,
+            rootNamespace: null,
+            gsFilePaths: new[] { "Program.gs" },
+            packages: Array.Empty<(string Id, string Version)>(),
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>(),
+            assemblyName: "gsi");
+
+        Assert.Contains("<AssemblyName>gsi</AssemblyName>", xml);
     }
 
     [Theory]
