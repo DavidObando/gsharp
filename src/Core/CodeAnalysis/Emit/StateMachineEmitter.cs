@@ -608,8 +608,7 @@ internal sealed class StateMachineEmitter
             // symbolic encoder so the GetEnumerator signature stays
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
-                TypeSymbol.ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
-                || plan.ElementType.ClrType == null
+                TypeSymbol.RequiresSymbolicProjection(plan.ElementType)
                 || plan.ElementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
             var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(

@@ -908,8 +908,6 @@ internal sealed class MethodBodyPlanner
         // loop in RME — outer-method TPs translate to Var(idx)). For closed
         // element types we keep the original CLR-erased path so existing
         // closed-iterator behaviour is unchanged.
-        var elementContainsTp = TypeSymbol.ContainsTypeParameter(elementType);
-
         // Issue #990: a user-declared element type (a `class` or `data
         // struct` emitted in this same assembly) has no ClrType, so the
         // CLR-erased `MakeGenericType(elementType.ClrType ?? object)` path
@@ -924,7 +922,7 @@ internal sealed class MethodBodyPlanner
         // Hold the reified CLR element type rather than a bare
         // `needs symbolic` flag: the reified branch below needs the value, and
         // a separate bool cannot carry the fact that it is present.
-        var elementClr = elementContainsTp
+        var elementClr = TypeSymbol.RequiresSymbolicProjection(elementType)
             || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
             ? null
             : elementType.ClrType;

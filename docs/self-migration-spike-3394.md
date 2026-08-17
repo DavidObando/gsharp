@@ -564,6 +564,21 @@ with that guard verified the intended migrated assembly.
 Generated `.gs` sources, compiler payloads, logs, packages, and migration
 artifacts remain uncommitted.
 
+## Iterator source-shape restoration (#3412)
+
+Issue #3412 restores iterator/yield helpers that the first self-host pass had
+materialized into concrete lists. The root fix keeps `sequence[T]` symbolic
+through MetadataLoadContext-backed foreach lowering, imported member
+references, method signatures, state-machine interfaces, and `GetEnumerator`
+returns, including nested same-compilation element types. cs2gs also preserves
+qualified open-generic `typeof` operands needed by the restored Core gate,
+closing the related #3425 blocker.
+
+The restored Core source translates, compiles, IL-verifies, and passes pipeline
+parity. Replacing the SDK compiler payload's Core implementation with that
+migrated assembly then recompiles Core successfully, and the second-generation
+assembly IL-verifies with zero errors.
+
 ## Pinned code-exploder continuation (#3395)
 
 The downstream pinned corpus at

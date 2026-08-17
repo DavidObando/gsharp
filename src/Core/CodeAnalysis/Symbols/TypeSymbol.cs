@@ -998,95 +998,92 @@ public class TypeSymbol : Symbol
     /// <returns>The type's immediate inner type(s); empty for a leaf kind.</returns>
     internal static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
     {
-        var wrapped = new List<TypeSymbol>();
         switch (type)
         {
             case NullableTypeSymbol n:
-                wrapped.Add(Invariant.Required(
+                yield return Invariant.Required(
                     n.UnderlyingType,
-                    "a nullable type has an underlying type"));
+                    "a nullable type has an underlying type");
                 break;
             case SliceTypeSymbol s:
-                wrapped.Add(s.ElementType);
+                yield return s.ElementType;
                 break;
             case ArrayTypeSymbol a:
-                wrapped.Add(a.ElementType);
+                yield return a.ElementType;
                 break;
             case RectangularArrayTypeSymbol a:
-                wrapped.Add(a.ElementType);
+                yield return a.ElementType;
                 break;
             case PinnedTypeSymbol p:
-                wrapped.Add(p.UnderlyingType);
+                yield return p.UnderlyingType;
                 break;
             case NullabilityAnnotatedTypeSymbol na:
-                wrapped.Add(na.BaseType);
+                yield return na.BaseType;
                 break;
             case SequenceTypeSymbol seq:
-                wrapped.Add(seq.ElementType);
+                yield return seq.ElementType;
                 break;
             case AsyncSequenceTypeSymbol aseq:
-                wrapped.Add(aseq.ElementType);
+                yield return aseq.ElementType;
                 break;
             case ChannelTypeSymbol ch:
-                wrapped.Add(ch.ElementType);
+                yield return ch.ElementType;
                 break;
             case ByRefTypeSymbol br:
-                wrapped.Add(br.PointeeType);
+                yield return br.PointeeType;
                 break;
             case PointerTypeSymbol ptr:
-                wrapped.Add(ptr.PointeeType);
+                yield return ptr.PointeeType;
                 break;
             case MapTypeSymbol m:
-                wrapped.Add(m.KeyType);
-                wrapped.Add(m.ValueType);
+                yield return m.KeyType;
+                yield return m.ValueType;
                 break;
             case FunctionTypeSymbol fn:
                 foreach (var param in fn.ParameterTypes)
                 {
-                    wrapped.Add(Invariant.Required(
+                    yield return Invariant.Required(
                         param,
-                        "a function parameter has a type"));
+                        "a function parameter has a type");
                 }
 
-                wrapped.Add(Invariant.Required(
+                yield return Invariant.Required(
                     fn.ReturnType,
-                    "a function has a return type"));
+                    "a function has a return type");
 
                 break;
             case FunctionPointerTypeSymbol fp:
                 foreach (var param in fp.ParameterTypes)
                 {
-                    wrapped.Add(Invariant.Required(
+                    yield return Invariant.Required(
                         param,
-                        "a function-pointer parameter has a type"));
+                        "a function-pointer parameter has a type");
                 }
 
-                wrapped.Add(Invariant.Required(
+                yield return Invariant.Required(
                     fp.ReturnType,
-                    "a function pointer has a return type"));
+                    "a function pointer has a return type");
 
                 break;
             case TupleTypeSymbol tup:
                 foreach (var elem in tup.ElementTypes)
                 {
-                    wrapped.Add(Invariant.Required(
+                    yield return Invariant.Required(
                         elem,
-                        "a tuple element has a type"));
+                        "a tuple element has a type");
                 }
 
                 break;
             case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in it.TypeArguments)
                 {
-                    wrapped.Add(Invariant.Required(
+                    yield return Invariant.Required(
                         arg,
-                        "an imported generic type argument has a type"));
+                        "an imported generic type argument has a type");
                 }
 
                 break;
         }
-
-        return wrapped;
     }
 
     /// <summary>

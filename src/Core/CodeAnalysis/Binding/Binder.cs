@@ -6411,18 +6411,7 @@ public sealed class Binder
             ?? ImmutableArray<TypeSymbol>.Empty;
         var constraintClrArgs = constraintClr.GetGenericArguments();
 
-        var candidates = new List<Type>();
-        if (typeArgClr.IsInterface)
-        {
-            candidates.Add(typeArgClr);
-        }
-
-        foreach (var interfaceType in typeArgClr.GetInterfaces())
-        {
-            candidates.Add(interfaceType);
-        }
-
-        foreach (var candidate in candidates)
+        foreach (var candidate in EnumerateSelfAndInterfaces(typeArgClr))
         {
             if (!candidate.IsGenericType
                 || !string.Equals(candidate.GetGenericTypeDefinition().FullName, openDefName, StringComparison.Ordinal))
@@ -6442,6 +6431,19 @@ public sealed class Binder
         }
 
         return false;
+    }
+
+    private static IEnumerable<Type> EnumerateSelfAndInterfaces(Type type)
+    {
+        if (type.IsInterface)
+        {
+            yield return type;
+        }
+
+        foreach (var interfaceType in type.GetInterfaces())
+        {
+            yield return interfaceType;
+        }
     }
 
     private static bool GenericConstraintArgumentsMatch(

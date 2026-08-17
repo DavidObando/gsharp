@@ -76,17 +76,36 @@ internal sealed partial class ExpressionBinder
         var typeClause = syntax.TypeClause;
         TypeSymbol? typeSymbol = null;
         if (typeClause.Identifier is { } typeClauseIdentifier
-            && !typeClause.HasQualifier
             && !typeClause.IsArray
             && !typeClause.IsNullable)
         {
-            if (!typeClause.HasTypeArguments)
+            if (!typeClause.HasQualifier && !typeClause.HasTypeArguments)
             {
                 TryResolveOpenGenericImportedType(typeClauseIdentifier.Text, out typeSymbol);
             }
-            else if (TryGetUnboundGenericArity(typeClause, out var arity))
+            else if (typeClause.HasTypeArguments
+                && TryGetUnboundGenericArity(typeClause, out var arity))
             {
-                if (!TryResolveOpenGenericImportedTypeWithArity(typeClauseIdentifier.Text, arity, out typeSymbol, out var isAmbiguous))
+                bool resolved;
+                bool isAmbiguous;
+                if (typeClause.HasQualifier)
+                {
+                    resolved = scope.References.TryResolveType(
+                        typeClause.DottedName + "`" + arity,
+                        out var qualifiedType);
+                    typeSymbol = resolved ? TypeSymbol.FromClrType(qualifiedType) : null;
+                    isAmbiguous = false;
+                }
+                else
+                {
+                    resolved = TryResolveOpenGenericImportedTypeWithArity(
+                        typeClauseIdentifier.Text,
+                        arity,
+                        out typeSymbol,
+                        out isAmbiguous);
+                }
+
+                if (!resolved)
                 {
                     // Issue #2012 (N3): "ambiguous across imports" and "no
                     // match at all" are different failure modes and deserve
@@ -98,7 +117,7 @@ internal sealed partial class ExpressionBinder
                     }
                     else
                     {
-                        Diagnostics.ReportUndefinedType(typeClause.Location, typeClauseIdentifier.Text + "`" + arity);
+                        Diagnostics.ReportUndefinedType(typeClause.Location, typeClause.DottedName + "`" + arity);
                     }
 
                     return new BoundErrorExpression(null);

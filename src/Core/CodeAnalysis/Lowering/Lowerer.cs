@@ -1334,7 +1334,11 @@ public sealed class Lowerer : BoundTreeRewriter
 
         switch (collectionType)
         {
-            case SequenceTypeSymbol seq when seq.ClrType == null:
+            // Iterator-returned sequence values always use the symbolic
+            // IEnumerable<T> path. MetadataLoadContext-backed concrete element
+            // types can make reflection GetEnumerator lookup fail even though
+            // SequenceTypeSymbol.ClrType is non-null.
+            case SequenceTypeSymbol seq:
                 openDef = typeof(System.Collections.Generic.IEnumerable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(seq.ElementType);
                 break;

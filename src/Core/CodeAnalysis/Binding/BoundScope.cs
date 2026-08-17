@@ -737,12 +737,11 @@ public sealed class BoundScope
     /// hoist.
     /// </summary>
     /// <returns>The distinct imported static-import CLR types, in import order.</returns>
-    public List<System.Type> EnumerateStaticImportClrTypes()
+    public IEnumerable<System.Type> EnumerateStaticImportClrTypes()
     {
-        var result = new List<System.Type>();
         if (References == null)
         {
-            return result;
+            yield break;
         }
 
         System.Collections.Generic.HashSet<System.Type>? seen = null;
@@ -765,12 +764,10 @@ public sealed class BoundScope
                 seen ??= new System.Collections.Generic.HashSet<System.Type>();
                 if (seen.Add(type))
                 {
-                    result.Add(type);
+                    yield return type;
                 }
             }
         }
-
-        return result;
     }
 
     /// <summary>
@@ -1732,9 +1729,8 @@ public sealed class BoundScope
     /// scope first, yielding each key only once (the nearest-scope value wins,
     /// matching <see cref="TryGetTypeAliasInChain"/>).
     /// </summary>
-    private List<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
+    private IEnumerable<KeyValuePair<string, TypeSymbol>> EnumerateTypeAliasesInChain()
     {
-        var result = new List<KeyValuePair<string, TypeSymbol>>();
         var seen = new HashSet<string>();
         BoundScope? scope = this;
         while (scope != null)
@@ -1745,15 +1741,13 @@ public sealed class BoundScope
                 {
                     if (seen.Add(pair.Key))
                     {
-                        result.Add(pair);
+                        yield return pair;
                     }
                 }
             }
 
             scope = scope.Parent;
         }
-
-        return result;
     }
 
     /// <summary>
