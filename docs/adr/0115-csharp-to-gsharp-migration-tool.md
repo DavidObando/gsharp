@@ -157,6 +157,14 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 
 C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` for non-owned receivers and `func extension (self T) M(…) R` for enum/owned receivers that cannot become canonical in-body members (ADR-0019/0165).
 
+Issue #3413 adds one ownership-preserving exception: when the declaring static
+class contains a private nested aggregate, its extension methods stay as
+ordinary static methods in that owner's `shared` block. Translated call sites
+use `Owner.M(receiver, …)`, including calls from sibling migrated projects.
+Lifting those bodies to top-level receiver funcs would move them onto the
+synthetic `<Program>` type, which cannot legally access the retained private
+nested type or members whose signatures contain it.
+
 #### B.6 Inheritance and the `:` clause — ADR-0017, spec §Type declarations
 
 - C# classes are sealed-by-default in G#; a base class that is subclassed must be emitted `open class`, and the overriding member must carry `override` (ADR-0017). The translator uses Roslyn's `INamedTypeSymbol.IsSealed`/`IsAbstract`/inheritance graph to decide: a class that any other corpus type derives from → `open`; a C# `abstract`/`virtual` member that is overridden → `open`/`override` on the pair. C# `sealed class` → plain `class` (already the default) or `sealed class` when it participates in a closed hierarchy switched on exhaustively (ADR-0078).
@@ -269,7 +277,7 @@ with a triage note.
 | other `static` method of the entry class | **top-level `func`** (siblings call each other unqualified at top level, which resolves) |
 | the entry `static class` itself / a `shared { }` wrapper | **dropped** — neither is emitted |
 
-The mapping is recorded as an Info diagnostic. Only the type that *contains the entry point* is hoisted; other `static` utility classes still map to a class whose members sit in a `shared { }` block (§B.11, ADR-0053). This applies to executable compilations (a library compilation has no entry point, so its static classes keep the `shared { }` mapping).
+The mapping is recorded as an Info diagnostic. An entry class that declares a nested aggregate type is preserved instead, with `Main` and its sibling static methods in the class's `shared { }` block. G# supports a class-scoped static `Main`; retaining that form preserves the nested type's declaring owner and accessibility, while ordinary nested translation preserves its generic context. Only the type that *contains the entry point* is otherwise hoisted; other `static` utility classes still map to a class whose members sit in a `shared { }` block (§B.11, ADR-0053). This applies to executable compilations (a library compilation has no entry point, so its static classes keep the `shared { }` mapping).
 
 #### B.12 Numeric type names and identifiers — ADR-0049, ADR-0098
 

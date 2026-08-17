@@ -25,6 +25,15 @@ namespace GSharp.Compiler;
 /// </summary>
 public class Program
 {
+    private const int Success = 0;
+    private const int Error = 1;
+
+    private enum OutputTarget
+    {
+        Exe,
+        Library,
+    }
+
     /// <summary>
     /// Entry point to the GSharp compiler.
     /// </summary>
@@ -35,7 +44,7 @@ public class Program
         if (args.Length == 0)
         {
             Console.Error.WriteLine("Must specify path to a file via arguments.");
-            return CompilerExitCodes.Error;
+            return Error;
         }
 
         CommandLineArgs parsed;
@@ -46,7 +55,7 @@ public class Program
         catch (CommandLineException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return CompilerExitCodes.Error;
+            return Error;
         }
         catch (IOException ex)
         {
@@ -60,13 +69,13 @@ public class Program
         if (parsed.ShowHelp)
         {
             PrintHelp();
-            return CompilerExitCodes.Success;
+            return Success;
         }
 
         if (parsed.SourceFiles.Count == 0)
         {
             Console.Error.WriteLine("Must specify at least one source file.");
-            return CompilerExitCodes.Error;
+            return Error;
         }
 
         try
@@ -81,7 +90,7 @@ public class Program
             {
                 if (!TryRunGsgen(parsed, out var generatedGsFiles))
                 {
-                    return CompilerExitCodes.Error;
+                    return Error;
                 }
 
                 allSourceFiles = new List<string>(parsed.SourceFiles);
@@ -94,7 +103,7 @@ public class Program
                 if (!File.Exists(path))
                 {
                     Console.Error.WriteLine($"Unable to find specified file {path}");
-                    return CompilerExitCodes.Error;
+                    return Error;
                 }
 
                 // Resolve to an absolute path so the document name recorded in the
@@ -109,7 +118,7 @@ public class Program
             if (!ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError))
             {
                 Console.Error.WriteLine(referenceError);
-                return CompilerExitCodes.Error;
+                return Error;
             }
 
             var referencePaths = ReferenceResolver.ResolveDriverReferencePaths(parsed.References);
@@ -260,7 +269,7 @@ public class Program
             Console.Out.WriteLine(ex.ToString());
         }
 
-        return CompilerExitCodes.Error;
+        return Error;
     }
 
     private static int ReportFatalIOError(Exception ex)
@@ -270,7 +279,7 @@ public class Program
         // MSBuild error rather than an opaque process crash.
         var descriptor = DiagnosticDescriptors.FatalCompilerIOError;
         Console.Error.WriteLine($"gsc: error {descriptor.Id}: {string.Format(descriptor.MessageFormat, ex.Message)}");
-        return CompilerExitCodes.Error;
+        return Error;
     }
 
     private static void ReportMissingTransitiveReferences(ReferenceResolver references, CommandLineArgs args)
@@ -319,7 +328,7 @@ public class Program
             if (effective.Any(d => d.IsError))
             {
                 Console.Error.WriteLine("Failed.");
-                return CompilerExitCodes.Error;
+                return Error;
             }
         }
 
@@ -332,7 +341,7 @@ public class Program
         }
 
         Console.WriteLine("Success.");
-        return CompilerExitCodes.Success;
+        return Success;
     }
 
     private static int Emit(Compilation compilation, CommandLineArgs args, string outputPath)
@@ -438,7 +447,7 @@ public class Program
             }
 
             Console.Error.WriteLine("Failed.");
-            return CompilerExitCodes.Error;
+            return Error;
         }
 
         if (args.Target == OutputTarget.Exe)
@@ -452,7 +461,7 @@ public class Program
             Console.WriteLine($"Wrote {refOutputPath}");
         }
 
-        return CompilerExitCodes.Success;
+        return Success;
     }
 
     private static string? GetTargetFrameworkMoniker(string? targetFramework)
@@ -1268,5 +1277,91 @@ public class Program
 
         var head = arg.AsSpan(1, colon - 1);
         return head.IndexOfAny('/', '\\') < 0;
+    }
+
+    private sealed class CommandLineArgs
+    {
+        public List<string> SourceFiles { get; } = new();
+
+        public List<string> References { get; } = new();
+
+        /// <summary>Gets the managed resources to embed, as source path and logical name pairs.</summary>
+        public List<(string Path, string Name, bool IsPublic)> Resources { get; } = new();
+
+        /// <summary>Gets the analyzer/generator assembly paths (from /analyzer:&lt;path&gt;). Non-empty triggers a gsgen run (issue #2215).</summary>
+        public List<string> AnalyzerPaths { get; } = new();
+
+        /// <summary>Gets the raw additional-file specs (from /additionalfile:&lt;path[;key=value]&gt;) forwarded to gsgen (issue #2223).</summary>
+        public List<string> AdditionalFiles { get; } = new();
+
+        /// <summary>Gets the raw generator global options (from /globaloption:&lt;key=value&gt;) forwarded to gsgen (issue #2223).</summary>
+        public List<string> GlobalOptions { get; } = new();
+
+        /// <summary>Gets or sets an explicit override for the resolved gsgen.dll path (from /gsgentool:&lt;path&gt;).</summary>
+        public string? GsgenToolPath { get; set; }
+
+        public string? OutputPath { get; set; }
+
+        public string? RefOutputPath { get; set; }
+
+        public string? AssemblyName { get; set; }
+
+        public OutputTarget Target { get; set; } = OutputTarget.Exe;
+
+        public string? TargetFramework { get; set; }
+
+        public bool ShowHelp { get; set; }
+
+        public bool ImplicitSystemImport { get; set; } = true;
+
+        /// <summary>Gets the set of diagnostic IDs to suppress (from /nowarn).</summary>
+        public HashSet<string> NoWarnIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets or sets a value indicating whether all warnings should be treated as errors (from /warnaserror without IDs).</summary>
+        public bool TreatAllWarningsAsErrors { get; set; }
+
+        /// <summary>Gets the set of diagnostic IDs that should be promoted to errors (from /warnaserror+:&lt;ids&gt;).</summary>
+        public HashSet<string> WarnAsErrorIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets the set of diagnostic IDs that should remain as warnings (from /warnaserror-:&lt;ids&gt;), overriding /warnaserror.</summary>
+        public HashSet<string> WarnNotAsErrorIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets or sets the requested PDB emit format (from /debug, /debug:&lt;value&gt;, /debug+/-). Defaults to None.</summary>
+        public DebugInformationFormat DebugFormat { get; set; } = DebugInformationFormat.None;
+
+        /// <summary>Gets or sets a value indicating whether emitted assemblies allow JIT optimization (from /optimize, /optimize+/-). Defaults to true.</summary>
+        public bool Optimize { get; set; } = true;
+
+        /// <summary>Gets or sets a value indicating whether a /debug, /debug+, or /debug- switch was observed on the command line. Used so that a bare /pdb:&lt;path&gt; can default the format to Portable without overriding a later /debug-.</summary>
+        public bool DebugFlagSeen { get; set; }
+
+        /// <summary>Gets or sets the explicit sidecar PDB path (from /pdb:&lt;path&gt;). Null means "default to {OutputPath}.pdb".</summary>
+        public string? PdbPath { get; set; }
+
+        /// <summary>Gets or sets the XML documentation output path (from /doc:&lt;path&gt;).</summary>
+        public string? DocumentationFile { get; set; }
+
+        /// <summary>Gets or sets the path to a Source Link JSON file (from /sourcelink:&lt;path&gt;).</summary>
+        public string? SourceLinkPath { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether the emit should be deterministic (from /deterministic, /deterministic+/-).</summary>
+        public bool Deterministic { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether all primary source files are embedded in the Portable PDB (from /embed, /embed+/-).</summary>
+        public bool EmbedAllSources { get; set; }
+
+        /// <summary>Gets or sets the informational version string stamped on the output assembly (from /version:).</summary>
+        public string? Version { get; set; }
+
+        /// <summary>Gets or sets the log file path (from /log:&lt;file&gt;). When non-null, a <see cref="FileLogger"/> is created and attached to the compilation.</summary>
+        public string? LogPath { get; set; }
+    }
+
+    private sealed class CommandLineException : Exception
+    {
+        public CommandLineException(string message)
+            : base(message)
+        {
+        }
     }
 }
