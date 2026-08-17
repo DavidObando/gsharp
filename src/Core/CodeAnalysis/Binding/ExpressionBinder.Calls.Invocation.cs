@@ -3157,10 +3157,13 @@ internal sealed partial class ExpressionBinder
             for (var i = 0; i < arguments.Length; i++)
             {
                 if (argumentNames.IsDefault
+                    && arguments[i].Type is TupleTypeSymbol tupleArgument
+                    && tupleArgument.ElementTypes.Any(element => element == TypeSymbol.Null)
                     && TryProjectArgumentClrTypeFromSymbolicReceiver(
                         candidates,
                         i,
                         effectiveReceiverType,
+                        arguments[i].Type,
                         out var receiverProjectedArgumentType))
                 {
                     argTypes[i] = receiverProjectedArgumentType;
@@ -3443,6 +3446,7 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<MethodInfo> candidates,
         int argumentIndex,
         TypeSymbol receiverType,
+        TypeSymbol argumentType,
         [NotNullWhen(true)] out Type? projectedType)
     {
         projectedType = null;
@@ -3453,6 +3457,11 @@ internal sealed partial class ExpressionBinder
                 argumentIndex,
                 receiverType);
             if (symbolicTarget == null)
+            {
+                continue;
+            }
+
+            if (!CanConvertToSymbolicReceiverTarget(argumentType, symbolicTarget))
             {
                 continue;
             }
@@ -3478,6 +3487,46 @@ internal sealed partial class ExpressionBinder
         }
 
         return projectedType != null;
+    }
+
+    private static bool CanConvertToSymbolicReceiverTarget(
+        TypeSymbol source,
+        TypeSymbol target)
+    {
+        if (Conversion.Classify(source, target).IsImplicit)
+        {
+            return true;
+        }
+
+        if (source is not TupleTypeSymbol sourceTuple
+            || target is not TupleTypeSymbol targetTuple
+            || sourceTuple.ElementTypes.Length != targetTuple.ElementTypes.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < sourceTuple.ElementTypes.Length; i++)
+        {
+            var sourceElement = sourceTuple.ElementTypes[i];
+            var targetElement = targetTuple.ElementTypes[i];
+            if (sourceElement == TypeSymbol.Null)
+            {
+                if (targetElement is NullableTypeSymbol
+                    || targetElement.ClrType is { IsValueType: false })
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (!Conversion.Classify(sourceElement, targetElement).IsImplicit)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool IsApplicableNullableUnderlyingCall(

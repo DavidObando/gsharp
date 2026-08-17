@@ -534,6 +534,7 @@ The independently machine-readable self-host checkpoint is
 | 309 | Core ordinary checkpoint | translate, compile, ILVerify PASS after final review fixes |
 | 310 | Core review follow-up | accessor/property-pattern regressions and invariant hardening; gate PASS |
 | 311 | Core/compiler follow-through | high-arity delegates, symbolic imported bases, conversion and named-extension ABI fixes; gate PASS |
+| 312 | CI hardening follow-up | nullable-tuple projection narrowed to its literal shape; translate, compile, ILVerify, parity PASS |
 | 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
 | 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
 | 305 | gsc | translate, compile, target-assembly ILVerify PASS; no parity oracle |
@@ -567,7 +568,7 @@ artifacts remain uncommitted.
 The downstream pinned corpus at
 `4edc419ada45049297096ae367b6d23915e235b4` now has two clean proofs:
 
-- diagnostic cycle 8: **12/12** applications passed translation, compilation,
+- diagnostic cycle 9: **12/12** applications passed translation, compilation,
   ILVerify, and test parity;
 - full repository cycle 2: **17/17** source and test projects passed all four
   stages.
