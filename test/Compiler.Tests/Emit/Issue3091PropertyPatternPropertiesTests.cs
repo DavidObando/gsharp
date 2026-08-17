@@ -146,6 +146,28 @@ public sealed class Issue3091PropertyPatternPropertiesTests
         Assert.Equal($"1{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
     }
 
+    [Fact]
+    public void ImportedClrTypePropertyPattern_NullableReceiver_FallbackMatchesAndMissesExactly()
+    {
+        const string Source = """
+            package Issue3091.ClrPropertyFallbackNullable
+            import System
+
+            func Classify(value Version?) int32 {
+                return switch value {
+                    case { Major: 7, Minor: 2 }: 1
+                    default: 0
+                }
+            }
+
+            Console.WriteLine(Classify(Version(7, 2)))
+            Console.WriteLine(Classify(Version(7, 0)))
+            Console.WriteLine(Classify(nil))
+            """;
+
+        Assert.Equal($"1{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var directory = Path.Combine(

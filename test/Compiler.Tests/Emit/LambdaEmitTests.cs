@@ -73,6 +73,23 @@ public class LambdaEmitTests
     }
 
     [Fact]
+    public void FuncNineArgs_AssignedAndInvoked()
+    {
+        var source = """
+            package P
+            import System
+
+            var sum = func(a int32, b int32, c int32, d int32, e int32, f int32, g int32, h int32, i int32) int32 {
+                return a + b + c + d + e + f + g + h + i
+            }
+            Console.WriteLine(sum(1, 2, 3, 4, 5, 6, 7, 8, 9))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"45{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void IndirectCall_ThroughFunctionTypedParameter()
     {
         var source = """

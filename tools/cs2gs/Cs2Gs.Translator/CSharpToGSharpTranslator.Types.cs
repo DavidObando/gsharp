@@ -76,6 +76,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+            IMethodSymbol lambdaSymbol = this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol
+                ?? (this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol)?.DelegateInvokeMethod;
+            bool hasUnderscoreParameter = (lambda is SimpleLambdaExpressionSyntax simpleLambda
+                && simpleLambda.Parameter.Identifier.ValueText == "_")
+                || parameterList?.Parameters.Any(parameter => parameter.Identifier.ValueText == "_") == true;
 
             // Issue #2438: an async lambda directly targeting a VOID delegate
             // (`EventHandler h = async (s, e) => await Foo();`,
@@ -88,7 +93,7 @@ public sealed partial class CSharpToGSharpTranslator
             // `Func<Task>`/`Func<T, Task>` etc. has `ReturnsVoid == false` and is
             // untouched. See BuildAsyncVoidHandlerWrapperBody.
             bool isAsyncVoidTarget = isAsync &&
-                this.context.GetSymbolInfo(lambda).Symbol is IMethodSymbol lambdaSymbol &&
+                lambdaSymbol != null &&
                 IsCSharpAsyncVoidHandler(lambdaSymbol);
 
             // A block-bodied lambda's body is its own evaluation scope: a spill
@@ -134,7 +139,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // expression itself, e.g. a bare `await voidTask`, has no
                     // value to produce anyway).
                     BlockStatement innerBody = lambda.Body is BlockSyntax asyncVoidBlock
-                        ? this.TranslateBlock(asyncVoidBlock)
+                        ? this.WithParameterShadows(lambda, this.TranslateBlock(asyncVoidBlock))
                         : new BlockStatement(this.WithSpillSeam(
                             () => this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()).ToList());
 
@@ -152,7 +157,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // infers its return type, so no explicit return type is emitted.
                     return new LambdaExpression(
                         parameters,
-                        blockBody: this.TranslateBlock(block),
+                        blockBody: this.WithParameterShadows(lambda, this.TranslateBlock(block)),
                         isAsync: isAsync);
                 }
 
@@ -177,9 +182,8 @@ public sealed partial class CSharpToGSharpTranslator
                         isAsync: false);
                 }
 
-                if (lambda.Body is AssignmentExpressionSyntax
-                    && this.context.GetSymbolInfo(lambda).Symbol is IMethodSymbol
-                        { ReturnsVoid: true })
+                if (lambda.Body is AssignmentExpressionSyntax assignmentBody
+                    && lambdaSymbol is { ReturnsVoid: true })
                 {
                     // A C# assignment-bodied lambda converted to a void delegate
                     // discards the assignment's value. Keep that discard explicit
@@ -188,7 +192,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return new LambdaExpression(
                         parameters,
                         blockBody: new BlockStatement(this.WithSpillSeam(
-                            () => this.TranslateExpressionStatements((ExpressionSyntax)lambda.Body).ToList()).ToList()),
+                            () => this.TranslateExpressionStatements(
+                                hasUnderscoreParameter
+                                && assignmentBody.Left is IdentifierNameSyntax { Identifier.ValueText: "_" }
+                                    ? assignmentBody.Right
+                                    : assignmentBody).ToList()).ToList()),
                         isAsync: isAsync);
                 }
 
@@ -1315,7 +1323,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         if (sub.NameColon != null)
                         {
-                            string fieldName = SanitizeIdentifier(sub.NameColon.Name.Identifier.Text);
+                            string fieldName = SanitizeIdentifier(this.GetSubpatternMemberName(sub));
                             fields.Add(new PropertyPatternField(
                                 fieldName,
                                 this.TranslatePattern(
@@ -1470,7 +1478,7 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                 {
                     List<string> memberPath = sub.NameColon != null
-                        ? new List<string> { sub.NameColon.Name.Identifier.Text }
+                        ? new List<string> { this.GetSubpatternMemberName(sub) }
                         : sub.ExpressionColon != null
                             ? SplitMemberPath(sub.ExpressionColon.Expression)
                             : null;

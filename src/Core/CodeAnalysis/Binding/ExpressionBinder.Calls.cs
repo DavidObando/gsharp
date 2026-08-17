@@ -1561,7 +1561,19 @@ internal sealed partial class ExpressionBinder
         // and fails to match the `Func<...>` parameter; the call then misroutes
         // to the single-arg conversion path and reports the misleading GS0162
         // "named arguments are only supported for data-struct .copy(...)".
-        var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance);
+        bool canAccessInternalConstructors = scope.References.CanAccessInternalMembers(clrType.Assembly);
+        BindingFlags constructorFlags = BindingFlags.Public | BindingFlags.Instance;
+        if (canAccessInternalConstructors)
+        {
+            constructorFlags |= BindingFlags.NonPublic;
+        }
+
+        var ctors = ClrTypeUtilities.SafeGetConstructors(clrType, constructorFlags)
+            .Where(constructor =>
+                constructor.IsPublic
+                || (canAccessInternalConstructors
+                    && (constructor.IsAssembly || constructor.IsFamilyOrAssembly)))
+            .ToArray();
         var ctorParameterLists = new List<ParameterInfo[]>(ctors.Length);
         foreach (var constructor in ctors)
         {

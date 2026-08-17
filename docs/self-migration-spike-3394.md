@@ -525,11 +525,15 @@ defects (#3419).
 Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
 remaining #3394 sequence:
 
+The independently machine-readable self-host checkpoint is
+[`self-host-stage-3394.json`](self-host-stage-3394.json).
+
 | Cycle | Target | Result |
 |---:|---|---|
 | 278 | Core ordinary migration | translate, compile, ILVerify PASS; no pipeline parity oracle |
 | 309 | Core ordinary checkpoint | translate, compile, ILVerify PASS after final review fixes |
 | 310 | Core review follow-up | accessor/property-pattern regressions and invariant hardening; gate PASS |
+| 311 | Core/compiler follow-through | high-arity delegates, symbolic imported bases, conversion and named-extension ABI fixes; gate PASS |
 | 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
 | 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
 | 305 | gsc | translate, compile, target-assembly ILVerify PASS; no parity oracle |
@@ -557,3 +561,16 @@ with that guard verified the intended migrated assembly.
 
 Generated `.gs` sources, compiler payloads, logs, packages, and migration
 artifacts remain uncommitted.
+
+## Pinned code-exploder continuation (#3395)
+
+The downstream pinned corpus at
+`4edc419ada45049297096ae367b6d23915e235b4` now has two clean proofs:
+
+- diagnostic cycle 8: **12/12** applications passed translation, compilation,
+  ILVerify, and test parity;
+- full repository cycle 2: **17/17** source and test projects passed all four
+  stages.
+
+The durable gate is `build/run-cs2gs-code-exploder.sh`, backed by
+`tools/cs2gs/external/code-exploder.json` and the `cs2gs-code-exploder` CI job.

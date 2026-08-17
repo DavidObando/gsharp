@@ -2189,6 +2189,19 @@ internal sealed partial class ExpressionBinder
                     Invariant.Required(liftedClrResultType, "a lifted CLR operator has a result type"));
             }
 
+            var clrParameters = clrMethod.GetParameters();
+            var leftParameterType = TypeSymbol.FromClrType(clrParameters[0].ParameterType);
+            if (ConversionClassifier.HasUserDefinedImplicitConversionForTypes(left.Type, leftParameterType))
+            {
+                left = conversions.BindConversion(leftLocation, left, leftParameterType);
+            }
+
+            var rightParameterType = TypeSymbol.FromClrType(clrParameters[1].ParameterType);
+            if (ConversionClassifier.HasUserDefinedImplicitConversionForTypes(right.Type, rightParameterType))
+            {
+                right = conversions.BindConversion(rightLocation, right, rightParameterType);
+            }
+
             return new BoundClrBinaryOperatorExpression(
                 null,
                 opKind,

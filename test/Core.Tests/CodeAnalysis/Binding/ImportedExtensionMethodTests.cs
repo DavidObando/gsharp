@@ -280,6 +280,22 @@ func Run() string {
     }
 
     [Fact]
+    public void ExtensionMethod_DelegateParameter_NineArgumentLambda_Binds()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.Fixtures
+
+func Run() string {
+    return ""x"".Handle(func(a int32, b int32, c int32, d int32, e int32, f int32, g int32, h int32, i int32) string {
+        return ""ok""
+    })
+}
+";
+        AssertBindsWithoutErrors(source);
+    }
+
+    [Fact]
     public void ExtensionMethod_DelegateParameter_VarBoundArgument_Binds()
     {
         // Companion to the lambda-literal case: the documented workaround

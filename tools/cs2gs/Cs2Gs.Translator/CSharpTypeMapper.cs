@@ -843,6 +843,10 @@ public sealed class CSharpTypeMapper
         {
             this.TrackShortenedNamespace(named);
             string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+            if (IsDeclaredInContainingNamespace(named, location))
+            {
+                return simpleName;
+            }
 
             // Issue #2222: a bare top-level type name is ambiguous in G#'s flat
             // import scope when another top-level type of the SAME simple name
@@ -916,6 +920,23 @@ public sealed class CSharpTypeMapper
             && outermost.ContainingNamespace is { IsGlobalNamespace: false } outerNamespace
                 ? $"{outerNamespace.ToDisplayString()}.{nestedName}"
                 : nestedName;
+    }
+
+    private static bool IsDeclaredInContainingNamespace(INamedTypeSymbol named, Location location)
+    {
+        if (location?.SourceTree == null || named.ContainingNamespace is not { IsGlobalNamespace: false } containingNamespace)
+        {
+            return false;
+        }
+
+        SyntaxNode root = location.SourceTree.GetRoot();
+        int position = System.Math.Min(location.SourceSpan.Start, root.FullSpan.End - 1);
+        BaseNamespaceDeclarationSyntax currentNamespace = root.FindToken(position)
+            .Parent?
+            .AncestorsAndSelf()
+            .OfType<BaseNamespaceDeclarationSyntax>()
+            .FirstOrDefault();
+        return currentNamespace?.Name.ToString() == containingNamespace.ToDisplayString();
     }
 
     private static bool IsWithinContainingType(

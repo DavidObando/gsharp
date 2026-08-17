@@ -886,7 +886,20 @@ public sealed partial class CSharpToGSharpTranslator
                     }));
             }
 
-            return new Parameter(SanitizeIdentifier(symbol.Name), type, variadic, refKind, defaultValue, attributes);
+            return new Parameter(MapParameterName(symbol, fallbackNode), type, variadic, refKind, defaultValue, attributes);
+        }
+
+        private static string MapParameterName(IParameterSymbol symbol, SyntaxNode fallbackNode)
+        {
+            if (symbol.Name != "_" || fallbackNode is not ParameterSyntax underscoreParameter)
+            {
+                return SanitizeIdentifier(symbol.Name);
+            }
+
+            int underscoreCount = underscoreParameter.Parent is ParameterListSyntax parameterList
+                ? parameterList.Parameters.Count(p => p.Identifier.ValueText == "_")
+                : 1;
+            return underscoreCount == 1 ? "__underscore" : "_";
         }
 
         /// <summary>
@@ -1281,23 +1294,26 @@ public sealed partial class CSharpToGSharpTranslator
         // are never reassigned, or that are already `ref`/`out`/`in`, are left alone.
         private BlockStatement WithParameterShadows(SyntaxNode bodyOwner, BlockStatement body)
         {
-            BaseParameterListSyntax parameterList = bodyOwner switch
+            IReadOnlyList<ParameterSyntax> parameters = bodyOwner switch
             {
-                MethodDeclarationSyntax method => method.ParameterList,
-                OperatorDeclarationSyntax op => op.ParameterList,
-                ConversionOperatorDeclarationSyntax conversion => conversion.ParameterList,
-                ConstructorDeclarationSyntax ctor => ctor.ParameterList,
-                LocalFunctionStatementSyntax localFunction => localFunction.ParameterList,
+                MethodDeclarationSyntax method => method.ParameterList.Parameters,
+                OperatorDeclarationSyntax op => op.ParameterList.Parameters,
+                ConversionOperatorDeclarationSyntax conversion => conversion.ParameterList.Parameters,
+                ConstructorDeclarationSyntax ctor => ctor.ParameterList.Parameters,
+                LocalFunctionStatementSyntax localFunction => localFunction.ParameterList.Parameters,
+                ParenthesizedLambdaExpressionSyntax lambda => lambda.ParameterList.Parameters,
+                AnonymousMethodExpressionSyntax { ParameterList: not null } anonymous => anonymous.ParameterList.Parameters,
+                SimpleLambdaExpressionSyntax simple => new[] { simple.Parameter },
                 _ => null,
             };
 
-            if (parameterList == null || parameterList.Parameters.Count == 0)
+            if (parameters == null || parameters.Count == 0)
             {
                 return body;
             }
 
             var shadows = new List<GStatement>();
-            foreach (ParameterSyntax parameter in parameterList.Parameters)
+            foreach (ParameterSyntax parameter in parameters)
             {
                 if (this.context.GetDeclaredSymbol(parameter) is not IParameterSymbol symbol
                     || symbol.RefKind != RefKind.None
@@ -1306,7 +1322,7 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                string name = SanitizeIdentifier(parameter.Identifier.Text);
+                string name = MapParameterName(symbol, parameter);
                 shadows.Add(new LocalDeclarationStatement(
                     BindingKind.Var, name, type: null, new IdentifierExpression(name)));
             }

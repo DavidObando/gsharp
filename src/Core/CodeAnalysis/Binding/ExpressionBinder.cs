@@ -2316,14 +2316,69 @@ internal sealed partial class ExpressionBinder
         switch (member)
         {
             case PropertyInfo clrProp when clrProp.CanRead:
-                bound = new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+                bound = new BoundClrPropertyAccessExpression(
+                    null,
+                    receiver,
+                    clrProp,
+                    GetInheritedClrMemberType(receiver.Type, clrProp, clrProp.PropertyType));
                 return true;
             case FieldInfo clrFld:
-                bound = new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+                bound = new BoundClrPropertyAccessExpression(
+                    null,
+                    receiver,
+                    clrFld,
+                    GetInheritedClrMemberType(receiver.Type, clrFld, clrFld.FieldType));
                 return true;
             default:
                 return false;
         }
+    }
+
+    private static TypeSymbol GetInheritedClrMemberType(
+        TypeSymbol receiverType,
+        MemberInfo member,
+        Type reflectedMemberType)
+    {
+        if (receiverType is StructSymbol receiverStruct)
+        {
+            for (StructSymbol? current = receiverStruct; current != null; current = current.BaseClass)
+            {
+                if (current.ImportedBaseType is not ImportedTypeSymbol importedBase
+                    || importedBase.OpenDefinition is not { } openDefinition
+                    || importedBase.TypeArguments.IsDefaultOrEmpty
+                    || member.DeclaringType == null
+                    || !member.DeclaringType.IsConstructedGenericType
+                    || member.DeclaringType.GetGenericTypeDefinition() != openDefinition)
+                {
+                    continue;
+                }
+
+                MemberInfo? openMember = openDefinition
+                    .GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .FirstOrDefault(candidate =>
+                        candidate.MetadataToken == member.MetadataToken
+                        && candidate.Module == member.Module);
+                Type? openMemberType = openMember switch
+                {
+                    PropertyInfo property => property.PropertyType,
+                    FieldInfo field => field.FieldType,
+                    _ => null,
+                };
+                if (openMemberType != null)
+                {
+                    var symbolic = MemberLookup.MapOpenClrTypeToSymbolic(
+                        openMemberType,
+                        openDefinition,
+                        importedBase.TypeArguments);
+                    if (symbolic != TypeSymbol.Error)
+                    {
+                        return symbolic;
+                    }
+                }
+            }
+        }
+
+        return TypeSymbol.FromClrType(reflectedMemberType);
     }
 
     /// <summary>

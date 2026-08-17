@@ -1172,6 +1172,22 @@ internal sealed class ImportedMemberRefFactory
     {
         switch (containingTypeSymbol)
         {
+            case StructSymbol userType:
+                for (StructSymbol? current = userType; current != null; current = current.BaseClass)
+                {
+                    if (current.ImportedBaseType != null
+                        && TryNormalizeToSymbolicContainer(
+                            current.ImportedBaseType,
+                            out openDefinition,
+                            out typeArguments))
+                    {
+                        return true;
+                    }
+                }
+
+                openDefinition = null;
+                typeArguments = default;
+                return false;
             case ImportedTypeSymbol imp when imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty:
                 openDefinition = imp.OpenDefinition;
                 typeArguments = imp.TypeArguments;

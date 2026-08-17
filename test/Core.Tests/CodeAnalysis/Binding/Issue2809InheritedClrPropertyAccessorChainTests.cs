@@ -89,6 +89,27 @@ public sealed class Issue2809InheritedClrPropertyAccessorChainTests
             """));
     }
 
+    [Fact]
+    public void ImportedGenericBaseProperty_PreservesSymbolicReceiverArgument()
+    {
+        Assert.Empty(Bind("""
+            package Consumer
+            import Project1
+
+            class SharedOptions {
+                prop Header string {
+                    get -> "X-User"
+                }
+            }
+
+            class Handler : GenericBase[SharedOptions] {
+                func Read() string {
+                    return Options.Header
+                }
+            }
+            """));
+    }
+
     private static IReadOnlyList<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         using var resolver = ReferenceResolver.WithReferences(new[] { LibraryPath });
@@ -119,6 +140,11 @@ public sealed class Issue2809InheritedClrPropertyAccessorChainTests
                 public class B
                 {
                     public int All() => 1;
+                }
+
+                public class GenericBase<T>
+                {
+                    public T Options { get; } = default!;
                 }
             }
             """;

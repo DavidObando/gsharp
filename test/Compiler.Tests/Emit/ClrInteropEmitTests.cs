@@ -3,8 +3,10 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -197,7 +199,54 @@ public class ClrInteropEmitTests
         Assert.Equal($"0{Environment.NewLine}", output);
     }
 
-    private static string CompileAndRun(string source)
+    [Fact]
+    public void ConstructedGenericListAdd_PreservesNullableTupleSlots()
+    {
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            var items = List[(string, string?)]()
+            items.Add(("x", nil))
+            Console.WriteLine(items.Count)
+            """;
+
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ClrBinaryOperator_AppliesImplicitOperandConversion()
+    {
+        var source = """
+            package P
+            import System
+            import System.IO
+
+            let cutoff = DateTimeOffset.UtcNow
+            Console.WriteLine(Directory.GetLastWriteTimeUtc(".") < cutoff)
+            """;
+
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ImportedExtension_NamedOptionalArgument_WithEmptyParams_PreservesReceiver()
+    {
+        var source = """
+            package P
+            import System
+            import GSharp.Compiler.Tests.Emit
+
+            Console.WriteLine("route".Describe(200, contentType: "text/html"))
+            """;
+
+        Assert.Equal(
+            $"route:200:text/html:0{Environment.NewLine}",
+            CompileAndRun(source, typeof(NamedParamsExtensionFixture).Assembly.Location));
+    }
+
+    private static string CompileAndRun(string source, params string[] references)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName;
         try
@@ -215,13 +264,15 @@ public class ClrInteropEmitTests
             int compileExit;
             try
             {
-                compileExit = Program.Main(new[]
+                var args = new List<string>
                 {
                     "/out:" + outPath,
                     "/target:exe",
                     "/targetframework:net10.0",
-                    srcPath,
-                });
+                };
+                args.AddRange(references.Select(reference => "/r:" + reference));
+                args.Add(srcPath);
+                compileExit = Program.Main(args.ToArray());
             }
             finally
             {
@@ -232,7 +283,14 @@ public class ClrInteropEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-            IlVerifier.Verify(outPath);
+            IlVerifier.Verify(outPath, references);
+            foreach (var reference in references)
+            {
+                File.Copy(
+                    reference,
+                    Path.Combine(tempDir, Path.GetFileName(reference)),
+                    overwrite: true);
+            }
 
             var psi = new ProcessStartInfo("dotnet")
             {
@@ -260,5 +318,22 @@ public class ClrInteropEmitTests
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+}
+
+/// <summary>Imported extension fixture for named optional and params argument ordering.</summary>
+public static class NamedParamsExtensionFixture
+{
+    /// <summary>Returns the observed imported argument order.</summary>
+    public static string Describe(
+        this string source,
+        int statusCode,
+        Type responseType = null,
+        string contentType = null,
+        params string[] contentTypes)
+    {
+        _ = responseType;
+        return $"{source}:{statusCode}:{contentType}:{contentTypes.Length}";
     }
 }

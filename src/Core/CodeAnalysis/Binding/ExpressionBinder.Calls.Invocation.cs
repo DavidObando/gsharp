@@ -3156,6 +3156,17 @@ internal sealed partial class ExpressionBinder
             var hasUserClassArg = false;
             for (var i = 0; i < arguments.Length; i++)
             {
+                if (argumentNames.IsDefault
+                    && TryProjectArgumentClrTypeFromSymbolicReceiver(
+                        candidates,
+                        i,
+                        effectiveReceiverType,
+                        out var receiverProjectedArgumentType))
+                {
+                    argTypes[i] = receiverProjectedArgumentType;
+                    continue;
+                }
+
                 // Issue #977: an inline `out var`/`out let`/`out _` argument was
                 // bound to a placeholder address-of (Error pointee) in the eager
                 // pass because the parameter type was unknown. Feed a sentinel so
@@ -3426,6 +3437,47 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    private bool TryProjectArgumentClrTypeFromSymbolicReceiver(
+        IReadOnlyList<MethodInfo> candidates,
+        int argumentIndex,
+        TypeSymbol receiverType,
+        [NotNullWhen(true)] out Type? projectedType)
+    {
+        projectedType = null;
+        foreach (var candidate in candidates)
+        {
+            var symbolicTarget = ConversionClassifier.TrySubstituteParameterTypeFromReceiver(
+                candidate,
+                argumentIndex,
+                receiverType);
+            if (symbolicTarget == null)
+            {
+                continue;
+            }
+
+            var targetClr = NullableLifting.GetEffectiveClrType(symbolicTarget)
+                ?? (MemberLookup.TryProjectErasedClrType(symbolicTarget, out var projected)
+                    ? projected
+                    : null);
+            if (targetClr == null || targetClr.IsSameAs(typeof(object)))
+            {
+                continue;
+            }
+
+            var referenceTarget = scope.References.MapClrTypeToReferences(targetClr);
+            if (projectedType != null
+                && !ClrTypeUtilities.AreSame(projectedType, referenceTarget))
+            {
+                projectedType = null;
+                return false;
+            }
+
+            projectedType = referenceTarget;
+        }
+
+        return projectedType != null;
     }
 
     private bool IsApplicableNullableUnderlyingCall(

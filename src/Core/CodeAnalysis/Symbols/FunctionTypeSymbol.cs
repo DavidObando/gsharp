@@ -578,6 +578,14 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 case 6: return typeof(System.Action<,,,,,>).MakeGenericType(paramClr);
                 case 7: return typeof(System.Action<,,,,,,>).MakeGenericType(paramClr);
                 case 8: return typeof(System.Action<,,,,,,,>).MakeGenericType(paramClr);
+                case 9: return typeof(System.Action<,,,,,,,,>).MakeGenericType(paramClr);
+                case 10: return typeof(System.Action<,,,,,,,,,>).MakeGenericType(paramClr);
+                case 11: return typeof(System.Action<,,,,,,,,,,>).MakeGenericType(paramClr);
+                case 12: return typeof(System.Action<,,,,,,,,,,,>).MakeGenericType(paramClr);
+                case 13: return typeof(System.Action<,,,,,,,,,,,,>).MakeGenericType(paramClr);
+                case 14: return typeof(System.Action<,,,,,,,,,,,,,>).MakeGenericType(paramClr);
+                case 15: return typeof(System.Action<,,,,,,,,,,,,,,>).MakeGenericType(paramClr);
+                case 16: return typeof(System.Action<,,,,,,,,,,,,,,,>).MakeGenericType(paramClr);
                 default: return null;
             }
         }
@@ -602,6 +610,14 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             case 6: return typeof(System.Func<,,,,,,>).MakeGenericType(args);
             case 7: return typeof(System.Func<,,,,,,,>).MakeGenericType(args);
             case 8: return typeof(System.Func<,,,,,,,,>).MakeGenericType(args);
+            case 9: return typeof(System.Func<,,,,,,,,,>).MakeGenericType(args);
+            case 10: return typeof(System.Func<,,,,,,,,,,>).MakeGenericType(args);
+            case 11: return typeof(System.Func<,,,,,,,,,,,>).MakeGenericType(args);
+            case 12: return typeof(System.Func<,,,,,,,,,,,,>).MakeGenericType(args);
+            case 13: return typeof(System.Func<,,,,,,,,,,,,,>).MakeGenericType(args);
+            case 14: return typeof(System.Func<,,,,,,,,,,,,,,>).MakeGenericType(args);
+            case 15: return typeof(System.Func<,,,,,,,,,,,,,,,>).MakeGenericType(args);
+            case 16: return typeof(System.Func<,,,,,,,,,,,,,,,,>).MakeGenericType(args);
             default: return null;
         }
     }

@@ -99,6 +99,15 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslateBinaryExpression(binary);
 
                 case PrefixUnaryExpressionSyntax prefix:
+                    if (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                        || prefix.IsKind(SyntaxKind.PreDecrementExpression))
+                    {
+                        return new AssignmentExpression(
+                            this.TranslateExpression(prefix.Operand),
+                            LiteralExpression.Int("1"),
+                            prefix.IsKind(SyntaxKind.PreIncrementExpression) ? "+=" : "-=");
+                    }
+
                     // Issue #1894: a C# from-end index `^n` (SyntaxKind.IndexExpression)
                     // shares its `^` token with bitwise complement, and gsc's own G#
                     // grammar only recognises a bare `^n` as "from-end" INSIDE an
@@ -269,6 +278,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // applies to the plain form must also apply here, or the
                     // print emits a bare property-style access on a func member
                     // — a silent-wrong `?.` read.
+                    string bindingMemberName = this.GetPatternMemberName(memberBinding.Name);
                     if (this.context.GetSymbolInfo(memberBinding).Symbol is IPropertySymbol extBindingProperty
                         && !extBindingProperty.IsStatic
                         && TryGetExtensionBlockOwner(extBindingProperty, out _))
@@ -277,7 +287,7 @@ public sealed partial class CSharpToGSharpTranslator
                             new MemberAccessExpression(
                                 this.state.ConditionalReceiverReplacement ??
                                     new ConditionalReceiverExpression(),
-                                SanitizeIdentifier(memberBinding.Name.Identifier.Text)),
+                                SanitizeIdentifier(bindingMemberName)),
                             new List<GExpression>(),
                             null);
                     }
@@ -288,7 +298,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return new MemberAccessExpression(
                         this.state.ConditionalReceiverReplacement ??
                             new ConditionalReceiverExpression(),
-                        SanitizeIdentifier(memberBinding.Name.Identifier.Text));
+                        SanitizeIdentifier(bindingMemberName));
 
                 case ElementBindingExpressionSyntax elementBinding:
                     GExpression bindingReceiver =
@@ -1243,15 +1253,20 @@ public sealed partial class CSharpToGSharpTranslator
 
         private string GetSubpatternMemberName(SubpatternSyntax sub)
         {
-            string name = sub.NameColon?.Name.Identifier.Text;
-            if (sub.NameColon != null
-                && this.context.SemanticModel.GetSymbolInfo(sub.NameColon.Name).Symbol
-                    is IFieldSymbol { ContainingType.IsTupleType: true } tupleField)
+            return sub.NameColon == null
+                ? null
+                : this.GetPatternMemberName(sub.NameColon.Name);
+        }
+
+        private string GetPatternMemberName(SimpleNameSyntax name)
+        {
+            if (this.context.SemanticModel.GetSymbolInfo(name).Symbol
+                is IFieldSymbol { ContainingType.IsTupleType: true } tupleField)
             {
-                name = (tupleField.CorrespondingTupleField ?? tupleField).Name;
+                return (tupleField.CorrespondingTupleField ?? tupleField).Name;
             }
 
-            return name;
+            return name.Identifier.Text;
         }
 
         // Splits an extended property subpattern's dotted member path
@@ -1259,17 +1274,20 @@ public sealed partial class CSharpToGSharpTranslator
         // (`["Start", "X"]`, `["A", "B", "C"]`), unsanitized. Shared by the
         // is-form guard builder (<see cref="TranslateExtendedPropertyMemberTest"/>)
         // and the switch-arm nested-field builder (<see cref="ExtendedPropertyFieldTree"/>).
-        private static List<string> SplitMemberPath(ExpressionSyntax memberPath)
+        private List<string> SplitMemberPath(ExpressionSyntax memberPath)
         {
             var names = new List<string>();
             ExpressionSyntax current = memberPath;
             while (current is MemberAccessExpressionSyntax memberAccess)
             {
-                names.Insert(0, memberAccess.Name.Identifier.Text);
+                names.Insert(0, this.GetPatternMemberName(memberAccess.Name));
                 current = memberAccess.Expression;
             }
 
-            names.Insert(0, current.ToString());
+            string rootName = current is SimpleNameSyntax simpleName
+                ? this.GetPatternMemberName(simpleName)
+                : current.ToString();
+            names.Insert(0, rootName);
             return names;
         }
 
@@ -1962,7 +1980,10 @@ public sealed partial class CSharpToGSharpTranslator
                     targetRef.TypeArguments.Count > 0 ? targetRef.TypeArguments : null);
             }
 
-            GTypeReference elementType = this.GetCollectionElementType(collection);
+            ITypeSymbol elementTypeSymbol = GetEnumerableElementType(target);
+            GTypeReference elementType = elementTypeSymbol != null
+                ? this.typeMapper.Map(elementTypeSymbol, this.context, collection.GetLocation())
+                : this.GetCollectionElementType(collection);
 
             // A `List<T>`/`HashSet<T>`/... collection-expression target maps to
             // the canonical G# collection-initializer form (`List[int32]{...}`,
@@ -1983,7 +2004,10 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         var expressionElement = (ExpressionElementSyntax)element;
                         initElements.Add(new CollectionInitializerElement(
-                            this.CoerceCollectionElement(expressionElement.Expression, elementType)));
+                            this.CoerceCollectionElement(
+                                expressionElement.Expression,
+                                elementType,
+                                elementTypeSymbol)));
                     }
                 }
 
@@ -2006,14 +2030,20 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
-                    elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
+                    elements.Add(this.CoerceCollectionElement(
+                        expressionElement.Expression,
+                        elementType,
+                        elementTypeSymbol));
                 }
             }
 
             return new ArrayLiteralExpression(elementType, elements);
         }
 
-        private GExpression CoerceCollectionElement(ExpressionSyntax element, GTypeReference elementType)
+        private GExpression CoerceCollectionElement(
+            ExpressionSyntax element,
+            GTypeReference elementType,
+            ITypeSymbol targetElementSymbol)
         {
             // A bare integer literal in a typed-narrower array (`[0, 0]` into a
             // `byte[]`) needs an explicit G# conversion, since untyped numeric
@@ -2021,6 +2051,15 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated = this.TranslateExpression(element);
             ITypeSymbol elementSymbol = this.context.GetTypeInfo(element).Type;
             ITypeSymbol convertedSymbol = this.context.GetTypeInfo(element).ConvertedType;
+            translated = this.ForgiveNullableReferenceValue(
+                element,
+                translated,
+                targetElementSymbol ?? convertedSymbol,
+                targetSymbol: null);
+            translated = this.AssertFlowNarrowedNullableReference(
+                element,
+                translated,
+                elementType);
             if (elementSymbol != null && convertedSymbol != null &&
                 !SymbolEqualityComparer.Default.Equals(elementSymbol, convertedSymbol) &&
                 IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(convertedSymbol))

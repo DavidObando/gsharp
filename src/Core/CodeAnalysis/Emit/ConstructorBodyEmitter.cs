@@ -15,6 +15,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -97,7 +98,7 @@ internal sealed class ConstructorBodyEmitter
             statements.AddRange(typeSym.StaticInitializerStatements);
         }
 
-        var body = new BoundBlockStatement(null, statements.ToImmutable());
+        var body = Lowerer.Lower(new BoundBlockStatement(null, statements.ToImmutable()), typeSym);
         var previousOwner = this.emitCtx.CurrentStaticConstructorOwner;
         this.emitCtx.CurrentStaticConstructorOwner = typeSym;
         try
@@ -163,7 +164,7 @@ internal sealed class ConstructorBodyEmitter
             }
         }
 
-        var body = new BoundBlockStatement(null, statements.ToImmutable());
+        var body = Lowerer.Lower(new BoundBlockStatement(null, statements.ToImmutable()));
         var previousOwner = this.emitCtx.CurrentStaticConstructorOwner;
         this.emitCtx.CurrentStaticConstructorOwner = ifaceSym;
         try
@@ -216,9 +217,14 @@ internal sealed class ConstructorBodyEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", classSym);
 
-        // Synthesize field-initializer assignment statements.
-        var statements = BuildInstanceFieldInitializerStatements(classSym, thisParam);
-        var body = new BoundBlockStatement(null, statements);
+        // A primary-constructor class also carries a metadata-only default
+        // constructor. Its source initializers may read primary parameters,
+        // which do not exist in that hidden constructor; the callable primary
+        // constructor runs those initializers after assigning its parameters.
+        var statements = classSym.HasPrimaryConstructor
+            ? ImmutableArray<BoundStatement>.Empty
+            : BuildInstanceFieldInitializerStatements(classSym, thisParam);
+        var body = Lowerer.Lower(new BoundBlockStatement(null, statements), classSym);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         var session = new ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il);
@@ -266,7 +272,7 @@ internal sealed class ConstructorBodyEmitter
 
         // Synthesize field-initializer assignment statements.
         var statements = BuildInstanceFieldInitializerStatements(classSym, thisParam);
-        var body = new BoundBlockStatement(null, statements);
+        var body = Lowerer.Lower(new BoundBlockStatement(null, statements), classSym);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
         var session = new ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il);

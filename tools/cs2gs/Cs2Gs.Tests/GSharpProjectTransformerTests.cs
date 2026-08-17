@@ -161,6 +161,41 @@ public sealed class GSharpProjectTransformerTests
         Assert.Equal("3.11.13-beta", packageReference.Attribute("Version")?.Value);
     }
 
+    [Theory]
+    [InlineData("Microsoft.NET.Sdk.Worker", false)]
+    [InlineData("Microsoft.NET.Sdk.Web", true)]
+    public void Transform_PreservesExecutableSdkDefaults(string sourceSdk, bool expectsAspNetCore)
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "App.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "App");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            $"""
+            <Project Sdk="{sourceSdk}">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>());
+
+        Assert.Equal("Exe", SingleElement(transformed, "OutputType").Value);
+        XElement frameworkReference = ElementsNamed(transformed, "FrameworkReference").SingleOrDefault();
+        Assert.Equal(expectsAspNetCore, frameworkReference != null);
+        if (expectsAspNetCore)
+        {
+            Assert.Equal("Microsoft.AspNetCore.App", frameworkReference?.Attribute("Include")?.Value);
+        }
+    }
+
     [Fact]
     public void Transform_PropagatesMalformedXmlException()
     {

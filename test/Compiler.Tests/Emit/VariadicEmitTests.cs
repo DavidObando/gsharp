@@ -90,6 +90,48 @@ public class VariadicEmitTests
         Assert.Equal($"106{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void VariadicWithOptionalFixedPrefix_AllowsOmission()
+    {
+        var source = """
+            package P
+            import System
+
+            func describe(count int32 = 0, names ...string) string {
+                return "$count:${names.Length}"
+            }
+
+            Console.WriteLine(describe())
+            Console.WriteLine(describe(count: 3))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"0:0{Environment.NewLine}3:0{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void SharedVariadicWithOptionalFixedPrefix_AllowsOmission()
+    {
+        var source = """
+            package P
+            import System
+
+            class Formatter {
+                shared {
+                    public func Describe(count int32 = 0, names ...string) string {
+                        return "$count:${names.Length}"
+                    }
+                }
+            }
+
+            Console.WriteLine(Formatter.Describe())
+            Console.WriteLine(Formatter.Describe(count: 3))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"0:0{Environment.NewLine}3:0{Environment.NewLine}", output);
+    }
+
     // ADR-0101 / issue #799: generic variadic — mirrors `Sequences.Of`.
 
     [Fact]

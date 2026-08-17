@@ -66,6 +66,36 @@ public class Issue1071AsyncOverrideEmitTests
         Assert.Equal($"override-ran{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void AsyncOverrideOfImportedTaskMethod_MatchesAwaitedReturnType()
+    {
+        var source = """
+            package p
+
+            import System
+            import System.Net
+            import System.Net.Http
+            import System.Threading
+            import System.Threading.Tasks
+
+            open class Handler : HttpMessageHandler {
+                protected override async func SendAsync(
+                    request HttpRequestMessage,
+                    cancellationToken CancellationToken) HttpResponseMessage {
+                    await Task.CompletedTask
+                    return HttpResponseMessage(HttpStatusCode.OK)
+                }
+            }
+
+            let client = HttpClient(Handler())
+            let response = client.GetAsync("https://example.invalid").GetAwaiter().GetResult()
+            Console.WriteLine(response.StatusCode)
+            """;
+
+        var output = CompileAndRunThroughMetadataLoadContext(source);
+        Assert.Equal($"OK{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRunThroughMetadataLoadContext(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1071_").FullName;

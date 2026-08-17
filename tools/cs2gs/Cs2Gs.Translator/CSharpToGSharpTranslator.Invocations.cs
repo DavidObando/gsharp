@@ -1260,6 +1260,15 @@ public sealed partial class CSharpToGSharpTranslator
             if (expression is LiteralExpressionSyntax literal &&
                 literal.IsKind(SyntaxKind.NumericLiteralExpression))
             {
+                TypeInfo literalInfo = this.context.GetTypeInfo(expression);
+                if (TryGetNumericKind(literalInfo.Type, out SpecialType literalSource)
+                    && TryGetNumericKind(literalInfo.ConvertedType, out SpecialType literalTarget)
+                    && literalSource != literalTarget
+                    && !this.TargetsConcreteNumericParameter(argument))
+                {
+                    return this.CoerceOperandTo(translated, literalInfo.ConvertedType);
+                }
+
                 return this.CoerceConstantToUnsigned(expression, translated);
             }
 
@@ -1836,7 +1845,7 @@ public sealed partial class CSharpToGSharpTranslator
         private static string ConstructionCalleeName(string typeName) => typeName switch
         {
             "object" => "System.Object",
-            "string" => "System.String",
+            "string" => "String",
             "bool" => "System.Boolean",
             "char" => "System.Char",
             "decimal" => "System.Decimal",
@@ -2491,36 +2500,17 @@ public sealed partial class CSharpToGSharpTranslator
             // `(int)Math.Floor(d + 0.5)` is behavior-faithful.
             ITypeSymbol targetSymbol = this.context.GetTypeInfo(cast.Type).Type;
 
-            // Issue #1923: `(object)x` / `(object?)x` over a REFERENCE-typed
-            // `x` (a class, not a value type) is a pure upcast on the CLR — no
-            // boxing IL is produced, unlike the value-type case the `T(expr)`
-            // form exists for. Translating it as a real conversion-call would
-            // need a `T?(expr)`-shaped cast for a nullable source/target,
-            // which has no canonical G# parse form; more importantly it is
-            // unnecessary, since the underlying pattern/member tests below a
-            // reference upcast behave identically whether performed through
-            // the boxed `object` reference or directly on the original
-            // reference (e.g. a subsequent `is RpPerson` downcast test). Drop
-            // the cast and translate the operand alone, letting the
-            // surrounding context (a spill's inferred type, a switch/`is`
-            // subject) drive typing, mirroring gsc's own no-op upcast lowering
-            // for class → object (see `Conversion.Classify`, issue #1229).
             ITypeSymbol sourceSymbol = this.context.GetTypeInfo(cast.Expression).Type;
-            if (targetSymbol is { SpecialType: SpecialType.System_Object }
-                && sourceSymbol is { IsReferenceType: true })
-            {
-                return this.TranslateExpression(cast.Expression);
-            }
 
             GTypeReference targetType = targetSymbol != null
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
 
-            if (targetSymbol is { IsReferenceType: true }
-                && cast.Expression.IsKind(SyntaxKind.NullLiteralExpression))
+            if (cast.Expression.IsKind(SyntaxKind.NullLiteralExpression)
+                && (targetSymbol is { IsReferenceType: true } || targetType.IsNullable))
             {
                 // Typed null keeps overload selection without an unparseable
-                // array conversion such as `[]char(nil)`.
+                // conversion such as `[]char(nil)` or `Guid?(nil)`.
                 GTypeReference defaultType = cast.Type is NullableTypeSyntax && !targetType.IsNullable
                     ? MakeNullable(targetType)
                     : targetType;
@@ -2557,6 +2547,11 @@ public sealed partial class CSharpToGSharpTranslator
                     : this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol);
             if (conversion.IsBoxing)
             {
+                if (targetSymbol is { SpecialType: SpecialType.System_Object })
+                {
+                    return new ConversionExpression(targetType, operand);
+                }
+
                 string localName = $"__cast{this.state.SpillCounter++}";
                 return new BlockExpression(
                     new GStatement[]
@@ -2568,6 +2563,22 @@ public sealed partial class CSharpToGSharpTranslator
                             operand),
                     },
                     new IdentifierExpression(localName));
+            }
+
+            // Preserve explicit class/interface-to-object casts when they
+            // supply a surrounding expression's common type, such as
+            // `(object?)text ?? DBNull.Value`. Dropping the upcast leaves
+            // incompatible operands in G# even though the C# expression is
+            // object-typed. G# accepts the canonical `object(expr)` /
+            // `object?(expr)` conversion form for these upcasts.
+            if (targetSymbol is { SpecialType: SpecialType.System_Object }
+                && sourceSymbol is { IsReferenceType: true })
+            {
+                GTypeReference objectTargetType = cast.Type is NullableTypeSyntax
+                    && !targetType.IsNullable
+                        ? MakeNullable(targetType)
+                        : targetType;
+                return new ConversionExpression(objectTargetType, operand);
             }
 
             // Issue #914: a CLR REFERENCE conversion `(T)expr` (a downcast such as
