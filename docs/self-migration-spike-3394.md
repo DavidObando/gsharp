@@ -518,3 +518,34 @@ downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
 (#3422), `__castN` / `__deconN` / `__using` (#3423), property patterns on
 property receivers (#3424), and the fallback hoist ordering / unbound-write
 defects (#3419).
+
+## Self-host and toolchain completion through cycle 300
+
+Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
+remaining #3394 sequence:
+
+| Cycle | Target | Result |
+|---:|---|---|
+| 278 | Core ordinary migration | translate, compile, ILVerify, parity PASS |
+| 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
+| 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
+| 287 | gsc | translate, compile, ILVerify, parity PASS |
+| 293 | gsi | translate, compile, ILVerify, parity PASS |
+| 296 | gsgen | translate, compile, ILVerify, parity PASS |
+| 300 | cs2gs | translate, compile, ILVerify, parity PASS |
+
+The real self-hosted Core test frontier moved from 7,572 passed / 89 failed in
+cycle 271 to 7,661 / 0. High-fanout repairs included nullable hierarchy walks,
+targetless lambda return classification, constructed-symbol cache identity,
+stable CLR adapters for extension-based test APIs, and nullable generic
+constraint traversal.
+
+Downstream migration exposed and repaired SDK-harness fidelity gaps:
+MSBuild-evaluated project references, source assembly identity, package
+reconstruction, MSBuild runtime-asset policy, and interface default-method
+body rendering. Small source reshapes removed entry-class nested declarations,
+unsupported array P/Invoke marshalling, and inherited-interface projection
+ambiguity.
+
+Generated `.gs` sources, compiler payloads, logs, packages, and migration
+artifacts remain uncommitted.
