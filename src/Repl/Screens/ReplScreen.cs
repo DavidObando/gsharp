@@ -99,6 +99,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
         {
             var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
             var diag = 0;
+            // Oats #3414: keep explicit loops until migrated delegate-return inference preserves this LINQ chain.
             foreach (var cell in engine.Cells)
             {
                 foreach (var diagnostic in cell.Diagnostics)

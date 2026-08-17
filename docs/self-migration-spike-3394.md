@@ -19,11 +19,12 @@ The spike proves that cs2gs can translate the complete Core source tree:
 - zero unsupported translation diagnostics;
 - every emitted file round-trip parses.
 
-Continuation through cycle 111 proves complete Core translation and semantic
-compilation. The semantic frontier moved from 1,126 diagnostics in cycle 14 to
-zero. Core IL verification now fails with 163 diagnostics, so test parity,
-self-hosted recompilation, and migration of gsc, gsi, gsgen, or cs2gs remain
-blocked behind the emitted generic-ABI defect tracked by #3407.
+Cycle 111 proved complete Core translation and semantic compilation, reducing
+the semantic frontier from 1,126 diagnostics in cycle 14 to zero. Later cycles
+resolved the 163 emitted generic-ABI verification failures tracked by #3407.
+Cycle 278 completed Core self-hosting with ILVerify 0 and Core.Tests at
+7,661 passed / 0 failed; cycles 305-308 completed target-assembly translation,
+compilation, and IL verification for gsc, gsgen, cs2gs, and gsi.
 
 The independent Oahu gate reached full parity: all 15 projects pass
 translation, compilation, IL verification, and test parity.
@@ -519,7 +520,7 @@ downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
 property receivers (#3424), and the fallback hoist ordering / unbound-write
 defects (#3419).
 
-## Self-host and toolchain completion through cycle 307
+## Self-host and toolchain completion through cycle 308
 
 Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
 remaining #3394 sequence:
@@ -547,7 +548,7 @@ body rendering. Small source reshapes removed entry-class nested declarations,
 unsupported array P/Invoke marshalling, and inherited-interface projection
 ambiguity.
 
-Cycles 304-307 also hardened output discovery to require the source assembly
+Cycles 305-308 also hardened output discovery to require the source assembly
 name (`gsc.dll`, `gsi.dll`, `gsgen.dll`, or `cs2gs.dll`) instead of accepting
 an arbitrary dependency DLL from the output directory. Re-running each target
 with that guard verified the intended migrated assembly.
