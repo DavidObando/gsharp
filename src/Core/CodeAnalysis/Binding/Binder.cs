@@ -5659,7 +5659,10 @@ public sealed class Binder
         {
             return StructSymbol.SubstituteConstructionArguments(
                 ss,
-                arg => SubstituteType(arg, substitution, mapClrType),
+                arg =>
+                {
+                    return SubstituteType(arg, substitution, mapClrType);
+                },
                 mapClrType);
         }
 
@@ -5671,7 +5674,10 @@ public sealed class Binder
         // so the emitter parents its use-site references/slots at
         // `Box`1+Tag`1<int32>` rather than the open `Box`1+Tag`1<!0>`.
         Func<TypeSymbol, TypeSymbol> substituteEnclosingType =
-            nestedType => SubstituteType(nestedType, substitution, mapClrType);
+            nestedType =>
+            {
+                return SubstituteType(nestedType, substitution, mapClrType);
+            };
         if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
         {
             var newEnclosing = StructSymbol.SubstituteEnclosingArguments(
