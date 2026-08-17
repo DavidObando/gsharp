@@ -1081,12 +1081,16 @@ public static class ClrTypeUtilities
     internal static void ClearCache()
     {
         interfacesCache = new ConditionalWeakTable<Type, Type[]>();
-        MemberCache<MethodInfo>.Cache.Clear();
-        MemberCache<PropertyInfo>.Cache.Clear();
-        MemberCache<FieldInfo>.Cache.Clear();
-        MemberCache<EventInfo>.Cache.Clear();
-        MemberCache<ConstructorInfo>.Cache.Clear();
+        ClearMemberCache<MethodInfo>();
+        ClearMemberCache<PropertyInfo>();
+        ClearMemberCache<FieldInfo>();
+        ClearMemberCache<EventInfo>();
+        ClearMemberCache<ConstructorInfo>();
     }
+
+    private static void ClearMemberCache<TMember>()
+        where TMember : MemberInfo
+        => MemberCache<TMember>.Cache.Clear();
 
     /// <summary>
     /// Issue #2863: decides whether <paramref name="accessor"/> overrides an
