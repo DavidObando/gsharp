@@ -1939,6 +1939,15 @@ internal sealed class MemberLookup
             return true;
         }
 
+        if (t == TypeSymbol.Null)
+        {
+            // A nil literal nested inside a symbolic tuple/array has no CLR
+            // type of its own. Erase it to object for overload gating; the
+            // symbolic target conversion still decides whether nil is legal.
+            erased = typeof(object);
+            return true;
+        }
+
         switch (t)
         {
             case TypeParameterSymbol:
@@ -5843,6 +5852,14 @@ internal sealed class MemberLookup
         6 => typeof(Action<,,,,,>).MakeGenericType(paramClr),
         7 => typeof(Action<,,,,,,>).MakeGenericType(paramClr),
         8 => typeof(Action<,,,,,,,>).MakeGenericType(paramClr),
+        9 => typeof(Action<,,,,,,,,>).MakeGenericType(paramClr),
+        10 => typeof(Action<,,,,,,,,,>).MakeGenericType(paramClr),
+        11 => typeof(Action<,,,,,,,,,,>).MakeGenericType(paramClr),
+        12 => typeof(Action<,,,,,,,,,,,>).MakeGenericType(paramClr),
+        13 => typeof(Action<,,,,,,,,,,,,>).MakeGenericType(paramClr),
+        14 => typeof(Action<,,,,,,,,,,,,,>).MakeGenericType(paramClr),
+        15 => typeof(Action<,,,,,,,,,,,,,,>).MakeGenericType(paramClr),
+        16 => typeof(Action<,,,,,,,,,,,,,,,>).MakeGenericType(paramClr),
         _ => null,
     };
 
@@ -5867,6 +5884,14 @@ internal sealed class MemberLookup
             6 => typeof(Func<,,,,,,>).MakeGenericType(args),
             7 => typeof(Func<,,,,,,,>).MakeGenericType(args),
             8 => typeof(Func<,,,,,,,,>).MakeGenericType(args),
+            9 => typeof(Func<,,,,,,,,,>).MakeGenericType(args),
+            10 => typeof(Func<,,,,,,,,,,>).MakeGenericType(args),
+            11 => typeof(Func<,,,,,,,,,,,>).MakeGenericType(args),
+            12 => typeof(Func<,,,,,,,,,,,,>).MakeGenericType(args),
+            13 => typeof(Func<,,,,,,,,,,,,,>).MakeGenericType(args),
+            14 => typeof(Func<,,,,,,,,,,,,,,>).MakeGenericType(args),
+            15 => typeof(Func<,,,,,,,,,,,,,,,>).MakeGenericType(args),
+            16 => typeof(Func<,,,,,,,,,,,,,,,,>).MakeGenericType(args),
             _ => null,
         };
     }

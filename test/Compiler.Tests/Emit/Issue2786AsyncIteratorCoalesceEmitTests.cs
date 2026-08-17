@@ -73,6 +73,16 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
                     async func Work() {
                         await Task.CompletedTask
                     }
+                    private var fallbackCalls int32
+                    async func Coalesce(value int32?) int32 {
+                        return value ?? await Fallback()
+                    }
+                    private async func Fallback() int32 {
+                        fallbackCalls += 1
+                        await Task.CompletedTask
+                        return 9
+                    }
+                    func FallbackCalls() int32 -> fallbackCalls
                 }
 
                 func LeftCall() IAsyncEnumerable[int32] -> Streams.Empty() ?? Streams.One()
@@ -114,6 +124,10 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
             Console.WriteLine("value=" + Streams.Value().GetAwaiter().GetResult().ToString())
             Streams.Work().GetAwaiter().GetResult()
             Console.WriteLine("work=done")
+            Console.WriteLine("coalesce-present=" + Streams.Coalesce(7).GetAwaiter().GetResult().ToString())
+            Console.WriteLine("fallback-calls=" + Streams.FallbackCalls().ToString())
+            Console.WriteLine("coalesce-nil=" + Streams.Coalesce(nil).GetAwaiter().GetResult().ToString())
+            Console.WriteLine("fallback-calls=" + Streams.FallbackCalls().ToString())
             """;
 
         using var result = Compile(source);
@@ -137,6 +151,10 @@ public sealed class Issue2786AsyncIteratorCoalesceEmitTests
             sync=1
             value=42
             work=done
+            coalesce-present=7
+            fallback-calls=0
+            coalesce-nil=9
+            fallback-calls=1
 
             """,
             Run(result.OutputPath));

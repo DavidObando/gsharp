@@ -216,8 +216,13 @@ internal sealed class ConstructorBodyEmitter
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", classSym);
 
-        // Synthesize field-initializer assignment statements.
-        var statements = BuildInstanceFieldInitializerStatements(classSym, thisParam);
+        // A primary-constructor class also carries a metadata-only default
+        // constructor. Its source initializers may read primary parameters,
+        // which do not exist in that hidden constructor; the callable primary
+        // constructor runs those initializers after assigning its parameters.
+        var statements = classSym.HasPrimaryConstructor
+            ? ImmutableArray<BoundStatement>.Empty
+            : BuildInstanceFieldInitializerStatements(classSym, thisParam);
         var body = new BoundBlockStatement(null, statements);
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());

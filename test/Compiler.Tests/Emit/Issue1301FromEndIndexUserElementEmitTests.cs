@@ -133,6 +133,42 @@ public class Issue1301FromEndIndexUserElementEmitTests
         Assert.Equal($"30{Environment.NewLine}20{Environment.NewLine}10{Environment.NewLine}", CompileAndRun(source));
     }
 
+    [Fact]
+    public void IReadOnlyListTypeParameter_FromEndIndex_InfersElementTypeAndUsesInheritedCount()
+    {
+        // `items[^n]` on an imported generic interface receiver uses BOTH the
+        // inherited `Count` candidate (`IReadOnlyCollection[T]`) and the
+        // `this[int]` candidate (`IReadOnlyList[T]`). Keep `T` inferred from the
+        // G# argument so the result element must round-trip as the user type,
+        // not `object`.
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            class ChapterRef { prop EndOffset int32 { get; init; } }
+
+            func Tail[T any](items IReadOnlyList[T]) T {
+                return items[^1]
+            }
+
+            func BeforeTail[T any](items IReadOnlyList[T]) T {
+                return items[^2]
+            }
+
+            var chapters = List[ChapterRef]()
+            chapters.Add(ChapterRef{EndOffset: 4})
+            chapters.Add(ChapterRef{EndOffset: 9})
+            chapters.Add(ChapterRef{EndOffset: 15})
+
+            let items IReadOnlyList[ChapterRef] = chapters
+            Console.WriteLine(BeforeTail(items).EndOffset)
+            Console.WriteLine(Tail(items).EndOffset)
+            """;
+
+        Assert.Equal($"9{Environment.NewLine}15{Environment.NewLine}", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1301_").FullName;

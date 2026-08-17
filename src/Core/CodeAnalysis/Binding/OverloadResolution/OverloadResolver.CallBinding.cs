@@ -1265,6 +1265,19 @@ internal sealed partial class OverloadResolver
 
         var isVariadic = function.Parameters.Length > 0 && function.Parameters[function.Parameters.Length - 1].IsVariadic;
         var fixedParamCount = isVariadic ? function.Parameters.Length - 1 : function.Parameters.Length;
+        var requiredFixedParamCount = fixedParamCount;
+        for (var i = fixedParamCount - 1; i >= 0; i--)
+        {
+            if (function.Parameters[i].HasExplicitDefaultValue)
+            {
+                requiredFixedParamCount = i;
+            }
+            else
+            {
+                break;
+            }
+        }
+
         Func<int, string> functionParameterNameAt =
             parameterIndex => function.Parameters[parameterIndex].Name;
         Func<int, bool> functionParameterIsOptional =
@@ -1298,9 +1311,13 @@ internal sealed partial class OverloadResolver
 
         if (isVariadic)
         {
-            if (syntax.Arguments.Count < fixedParamCount)
+            if (syntax.Arguments.Count < requiredFixedParamCount)
             {
-                Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, function.Name, fixedParamCount, syntax.Arguments.Count);
+                Diagnostics.ReportTooFewArgumentsForVariadic(
+                    syntax.Identifier.Location,
+                    function.Name,
+                    requiredFixedParamCount,
+                    syntax.Arguments.Count);
                 return new BoundErrorExpression(null);
             }
         }
@@ -1385,6 +1402,17 @@ internal sealed partial class OverloadResolver
             for (var i = 0; i < syntax.Arguments.Count; i++)
             {
                 parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
+        if (isVariadic && boundArguments.Count < fixedParamCount)
+        {
+            var paddedSyntax = new ExpressionSyntax?[fixedParamCount];
+            Array.Copy(parameterSyntax, paddedSyntax, parameterSyntax.Length);
+            parameterSyntax = paddedSyntax;
+            for (var i = boundArguments.Count; i < fixedParamCount; i++)
+            {
+                boundArguments.Add(CreateOptionalUserDefaultArgument(function.Parameters[i]));
             }
         }
 

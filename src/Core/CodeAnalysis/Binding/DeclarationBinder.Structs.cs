@@ -1141,6 +1141,8 @@ internal sealed partial class DeclarationBinder
                                 methodReturnRefKind,
                                 methodTypeParameters,
                                 methodAccessibility,
+                                methodIsAsync,
+                                returnTypeIsValueTask,
                                 binderCtx.References);
                             if (externalMatch.Member != null)
                             {
@@ -3593,71 +3595,68 @@ internal sealed partial class DeclarationBinder
             }
         }
 
-        // Bind instance field initializers. These run before the constructor
-        // body, so they cannot reference `this`, other instance members, or
-        // constructor parameters (matching C#); a genuine instance-member
-        // reference is reported precisely rather than as a bare GS0125.
+        // Bind instance field initializers. Primary-constructor parameters are
+        // available because their same-named fields are assigned first.
         if (instanceInitializers.Count > 0 || zeroValueInstanceFields.Count > 0)
         {
             var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
+            var primaryCtorParameterNames = new HashSet<string>(
+                primaryCtorParameters.Select(parameter => parameter.Name),
+                System.StringComparer.Ordinal);
             foreach (var f in fields)
             {
-                instanceMemberNames.Add(f.Name);
-            }
-
-            foreach (var p in primaryCtorParameters)
-            {
-                instanceMemberNames.Add(p.Name);
-            }
-
-            var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
-            foreach (var (fieldSym, initSyntax, fieldType) in instanceInitializers)
-            {
-                if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
+                if (!primaryCtorParameterNames.Contains(f.Name))
                 {
-                    if (offendingName is { } memberName)
+                    instanceMemberNames.Add(f.Name);
+                }
+            }
+
+            var savedInstanceInitializerScope = scope;
+            scope = new BoundScope(scope);
+            foreach (var primaryCtorParameter in primaryCtorParameters)
+            {
+                scope.TryDeclareVariable(primaryCtorParameter);
+            }
+
+            try
+            {
+                var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+                foreach (var (fieldSym, initSyntax, fieldType) in instanceInitializers)
+                {
+                    if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
                     {
-                        Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, memberName);
+                        if (offendingName is { } memberName)
+                        {
+                            Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, memberName);
+                        }
+
+                        continue;
                     }
 
-                    continue;
+                    var boundInit = initSyntax is BlockExpressionSyntax
+                        ? conversions.BindConversion(initSyntax, fieldType)
+                        : bindExpression(initSyntax);
+                    var convertedInit = initSyntax is BlockExpressionSyntax
+                        ? boundInit
+                        : conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                    instanceInitBuilder[fieldSym] = convertedInit;
                 }
 
-                var boundInit = initSyntax is BlockExpressionSyntax
-                    ? conversions.BindConversion(initSyntax, fieldType)
-                    : bindExpression(initSyntax);
-                var convertedInit = initSyntax is BlockExpressionSyntax
-                    ? boundInit
-                    : conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
-                instanceInitBuilder[fieldSym] = convertedInit;
-            }
-
-            // Issue #3310 / ADR-0159 (extended by #3319): synthesized
-            // empty-instance zero values for initializer-less instance
-            // collection fields (map/slice/array/sequence), and — per #3319
-            // — struct-typed fields whose own fields (recursively) need one.
-            // Injected through the same mechanism as explicit initializers,
-            // so every constructor body (default, base-chained, user-written)
-            // runs them; a value-struct's `default`-instance hole (initobj
-            // bypasses constructors) is the documented ADR-0159 limitation,
-            // mirroring C#'s `default(T)`. This pass runs after every struct
-            // in the compilation has its fields bound (see
-            // BindPendingFieldInitializers), so the recursion into a
-            // struct-typed field's own fields is safe here; a candidate that
-            // turns out to need nothing (null result) is simply skipped,
-            // leaving InstanceFieldInitializers exactly as before #3319 for
-            // every struct unaffected by it (preserving #3219's
-            // byte-identical emission for such structs).
-            foreach (var (fieldSym, fieldSyntaxNode) in zeroValueInstanceFields)
-            {
-                var zeroValue = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
-                if (zeroValue != null)
+                foreach (var (fieldSym, fieldSyntaxNode) in zeroValueInstanceFields)
                 {
-                    instanceInitBuilder[fieldSym] = zeroValue;
+                    var zeroValue = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
+                    if (zeroValue != null)
+                    {
+                        instanceInitBuilder[fieldSym] = zeroValue;
+                    }
                 }
-            }
 
-            structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+                structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+            }
+            finally
+            {
+                scope = savedInstanceInitializerScope;
+            }
         }
     }
 }

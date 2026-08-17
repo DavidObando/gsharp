@@ -142,6 +142,22 @@ public class Issue1022FromEndIndexEmitTests
     }
 
     [Fact]
+    public void IReadOnlyList_InheritedCountSupportsFromEndIndex()
+    {
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            let values IReadOnlyList[int32] = List[int32]{10, 20, 30}
+            Console.WriteLine(values[^1])
+            Console.WriteLine(values[^3])
+            """;
+
+        Assert.Equal($"30{Environment.NewLine}10{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
     public void OnesComplementAndXor_Unchanged()
     {
         // Regression: prefix `^` (one's-complement) and infix `^` (XOR) keep

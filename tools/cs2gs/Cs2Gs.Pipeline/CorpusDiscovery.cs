@@ -129,6 +129,42 @@ public static class CorpusDiscovery
             .ToList();
     }
 
+    /// <summary>
+    /// Reads the effective <c>&lt;OutputType&gt;</c> or executable SDK default
+    /// from an SDK-style project.
+    /// </summary>
+    /// <param name="projectPath">The project file path.</param>
+    /// <returns>The effective target kind.</returns>
+    internal static TargetKind ReadTargetKind(string projectPath)
+    {
+        try
+        {
+            XDocument doc = XDocument.Load(projectPath);
+            string outputType = doc.Descendants()
+                .Where(e => string.Equals(e.Name.LocalName, "OutputType", StringComparison.OrdinalIgnoreCase))
+                .Select(e => e.Value?.Trim())
+                .LastOrDefault(v => !string.IsNullOrEmpty(v));
+
+            string sdk = doc.Root?.Attribute("Sdk")?.Value;
+            bool executableSdk = sdk?.Split(';').Any(value =>
+                value.Equals("Microsoft.NET.Sdk.Worker", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase)) == true;
+            return string.Equals(outputType, "Exe", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(outputType, "WinExe", StringComparison.OrdinalIgnoreCase)
+                || (string.IsNullOrEmpty(outputType) && executableSdk)
+                ? TargetKind.Exe
+                : TargetKind.Library;
+        }
+        catch (IOException)
+        {
+            return TargetKind.Library;
+        }
+        catch (XmlException)
+        {
+            return TargetKind.Library;
+        }
+    }
+
     private static bool IsUnderBinOrObj(string path)
     {
         string normalized = path.Replace('\\', '/');
@@ -158,47 +194,5 @@ public static class CorpusDiscovery
         return (
             testsProject,
             File.Exists(baseline) ? baseline : null);
-    }
-
-    /// <summary>
-    /// Reads the effective <c>&lt;OutputType&gt;</c> from an SDK-style csproj by
-    /// parsing it as XML (issue #1749 mode 3): a substring match on the literal
-    /// text <c>&lt;OutputType&gt;Exe&lt;/OutputType&gt;</c> silently
-    /// misclassifies any benign reformat (added whitespace/attributes,
-    /// <c>WinExe</c>) as <c>Library</c>, which flips <c>gsc</c> to
-    /// <c>/target:library</c> and drops stdout-parity verification entirely. A
-    /// project can declare <c>&lt;OutputType&gt;</c> in more than one (possibly
-    /// conditioned) <c>PropertyGroup</c>; the last element in document order
-    /// wins, approximating MSBuild's last-one-wins evaluation.
-    /// </summary>
-    /// <param name="projectPath">The <c>.csproj</c> path.</param>
-    /// <returns>
-    /// <see cref="TargetKind.Exe"/> for <c>Exe</c>/<c>WinExe</c> (both produce a
-    /// runnable executable); <see cref="TargetKind.Library"/> for
-    /// <c>Library</c> or a missing/unrecognized value.
-    /// </returns>
-    private static TargetKind ReadTargetKind(string projectPath)
-    {
-        try
-        {
-            XDocument doc = XDocument.Load(projectPath);
-            string outputType = doc.Descendants()
-                .Where(e => string.Equals(e.Name.LocalName, "OutputType", StringComparison.OrdinalIgnoreCase))
-                .Select(e => e.Value?.Trim())
-                .LastOrDefault(v => !string.IsNullOrEmpty(v));
-
-            return string.Equals(outputType, "Exe", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outputType, "WinExe", StringComparison.OrdinalIgnoreCase)
-                ? TargetKind.Exe
-                : TargetKind.Library;
-        }
-        catch (IOException)
-        {
-            return TargetKind.Library;
-        }
-        catch (XmlException)
-        {
-            return TargetKind.Library;
-        }
     }
 }

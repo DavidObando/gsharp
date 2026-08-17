@@ -1341,6 +1341,13 @@ internal sealed partial class OverloadResolver
         var isVariadic = method.Parameters.Length > 0
             && method.Parameters[method.Parameters.Length - 1].IsVariadic;
         var fixedCallableParamCount = isVariadic ? callableParameterCount - 1 : callableParameterCount;
+        var requiredFixedCallableParamCount = fixedCallableParamCount;
+        while (requiredFixedCallableParamCount > 0 &&
+               method.Parameters[requiredFixedCallableParamCount - 1 + parameterOffset].HasExplicitDefaultValue)
+        {
+            requiredFixedCallableParamCount--;
+        }
+
         Func<int, string> callableParameterNameAt =
             parameterIndex => method.Parameters[parameterIndex + parameterOffset].Name;
         Func<int, bool> callableParameterIsOptional =
@@ -1378,9 +1385,9 @@ internal sealed partial class OverloadResolver
 
         if (isVariadic)
         {
-            if (arguments.Length < fixedCallableParamCount)
+            if (arguments.Length < requiredFixedCallableParamCount)
             {
-                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Identifier.Location, method.Name, fixedCallableParamCount, arguments.Length);
+                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Identifier.Location, method.Name, requiredFixedCallableParamCount, arguments.Length);
                 return new BoundErrorExpression(null);
             }
         }
@@ -1561,6 +1568,19 @@ internal sealed partial class OverloadResolver
         // into a fresh `BoundArrayCreationExpression`.
         if (isVariadic)
         {
+            if (permutedArguments.Length < fixedCallableParamCount)
+            {
+                var padded = ImmutableArray.CreateBuilder<BoundExpression>(fixedCallableParamCount);
+                padded.AddRange(permutedArguments);
+                for (var i = permutedArguments.Length; i < fixedCallableParamCount; i++)
+                {
+                    padded.Add(CreateOptionalUserDefaultArgument(method.Parameters[i + parameterOffset]));
+                }
+
+                permutedArguments = padded.MoveToImmutable();
+                Array.Resize(ref permutedSyntax, fixedCallableParamCount);
+            }
+
             var variadicParam = method.Parameters[method.Parameters.Length - 1];
             var paramSliceType = (SliceTypeSymbol)variadicParam.Type;
             var sliceType = substitution != null

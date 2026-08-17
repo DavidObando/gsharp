@@ -3389,25 +3389,40 @@ internal sealed partial class ExpressionBinder
         lengthMember = null;
         intIndexer = null;
 
-        var lengthProp = clrType.GetProperty("Length", BindingFlags.Public | BindingFlags.Instance);
-        if (lengthProp == null || !lengthProp.PropertyType.IsSameAs(typeof(int)))
+        PropertyInfo? lengthProp = null;
+        foreach (var candidateType in MemberLookup.EnumerateSelfAndInterfaces(clrType))
         {
-            lengthProp = clrType.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+            lengthProp = candidateType.GetProperty("Length", BindingFlags.Public | BindingFlags.Instance);
+            if (lengthProp != null && lengthProp.PropertyType.IsSameAs(typeof(int)))
+            {
+                break;
+            }
+
+            lengthProp = candidateType.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+            if (lengthProp != null && lengthProp.PropertyType.IsSameAs(typeof(int)))
+            {
+                break;
+            }
+
+            lengthProp = null;
         }
 
-        if (lengthProp == null || !lengthProp.PropertyType.IsSameAs(typeof(int)))
+        if (lengthProp == null)
         {
             return false;
         }
 
-        foreach (var property in clrType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        foreach (var candidateType in MemberLookup.EnumerateSelfAndInterfaces(clrType))
         {
-            var indexParams = property.GetIndexParameters();
-            if (indexParams.Length == 1 && indexParams[0].ParameterType.IsSameAs(typeof(int)))
+            foreach (var property in candidateType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                lengthMember = lengthProp;
-                intIndexer = property;
-                return true;
+                var indexParams = property.GetIndexParameters();
+                if (indexParams.Length == 1 && indexParams[0].ParameterType.IsSameAs(typeof(int)))
+                {
+                    lengthMember = lengthProp;
+                    intIndexer = property;
+                    return true;
+                }
             }
         }
 

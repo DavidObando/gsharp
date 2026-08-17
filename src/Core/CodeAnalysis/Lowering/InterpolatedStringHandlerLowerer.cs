@@ -97,6 +97,20 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         foreach (var structSym in program.Structs)
         {
             changed |= lowerer.RewriteBaseInitializers(structSym);
+            changed |= lowerer.RewriteFieldInitializers(structSym);
+        }
+
+        foreach (var interfaceSym in program.Interfaces)
+        {
+            var initializers = interfaceSym.StaticFieldInitializers.ToBuilder();
+            foreach (var pair in interfaceSym.StaticFieldInitializers)
+            {
+                var rewritten = lowerer.RewriteExpression(pair.Value);
+                initializers[pair.Key] = rewritten;
+                changed |= rewritten != pair.Value;
+            }
+
+            interfaceSym.SetStaticFieldInitializers(initializers.ToImmutable());
         }
 
         var diagnostics = program.Diagnostics.AddRange(lowerer.diagnostics.ToImmutableArray());
@@ -635,6 +649,31 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         block.Add(inner);
         block.Add(endLabelStatement);
         return new BoundBlockStatement(syntax, block.ToImmutable());
+    }
+
+    private bool RewriteFieldInitializers(StructSymbol structSym)
+    {
+        var changed = false;
+        var staticInitializers = structSym.StaticFieldInitializers.ToBuilder();
+        foreach (var pair in structSym.StaticFieldInitializers)
+        {
+            var rewritten = this.RewriteExpression(pair.Value);
+            staticInitializers[pair.Key] = rewritten;
+            changed |= rewritten != pair.Value;
+        }
+
+        structSym.SetStaticFieldInitializers(staticInitializers.ToImmutable());
+
+        var instanceInitializers = structSym.InstanceFieldInitializers.ToBuilder();
+        foreach (var pair in structSym.InstanceFieldInitializers)
+        {
+            var rewritten = this.RewriteExpression(pair.Value);
+            instanceInitializers[pair.Key] = rewritten;
+            changed |= rewritten != pair.Value;
+        }
+
+        structSym.SetInstanceFieldInitializers(instanceInitializers.ToImmutable());
+        return changed;
     }
 
     private static MethodInfo FindAppendLiteral(System.Type handlerType)

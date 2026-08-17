@@ -314,6 +314,15 @@ public class SdkCompileRunnerTests
         }));
     }
 
+    [Theory]
+    [InlineData("/usr/share/dotnet/sdk/10.0/Sdks/Microsoft.NET.Sdk.Razor/source-generators/Razor.dll", false)]
+    [InlineData("C:\\dotnet\\sdk\\10.0\\Sdks\\Microsoft.NET.Sdk.Razor\\source-generators\\Razor.dll", false)]
+    [InlineData("/packages/example/analyzers/dotnet/cs/Generator.dll", true)]
+    public void ShouldForwardAnalyzer_SkipsRazorSdkGenerators(string path, bool expected)
+    {
+        Assert.Equal(expected, TranslateStage.ShouldForwardAnalyzer(path));
+    }
+
     [Fact]
     public void BuildProjectXml_PreservesRootNamespaceAndAvaloniaXamlItems()
     {

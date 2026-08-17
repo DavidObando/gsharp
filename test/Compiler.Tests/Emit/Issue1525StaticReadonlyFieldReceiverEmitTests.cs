@@ -115,6 +115,24 @@ public class Issue1525StaticReadonlyFieldReceiverEmitTests
     }
 
     [Fact]
+    public void EndToEnd_ClrOperator_AppliesImplicitOperandConversion()
+    {
+        const string source = """
+            package i1525clroperatorconversion
+            import System
+
+            func Main() {
+                let cutoff = DateTimeOffset.UtcNow
+                let older = DateTime.UtcNow.AddDays(-1.0)
+                Console.WriteLine(older < cutoff)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void EndToEnd_Enum_StaticReadonly_InstanceMethod_VerifiesAndRuns()
     {
         const string source = """

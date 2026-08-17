@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Xml.Linq;
 
 namespace Cs2Gs.Pipeline;
 
@@ -33,7 +32,7 @@ public static class RepositoryDiscovery
                 return new CorpusApp(
                     path.Replace('\\', '/'),
                     projectPath,
-                    ReadTargetKind(projectPath),
+                    CorpusDiscovery.ReadTargetKind(projectPath),
                     stdoutGolden: File.Exists(stdoutGoldenPath) ? stdoutGoldenPath : null,
                     allowUnsafeIl: File.Exists(unsafeMarker),
                     allowUnsafeIlTypes: allowUnsafeIlTypes,
@@ -41,18 +40,5 @@ public static class RepositoryDiscovery
             })
             .OrderBy(app => app.Id, StringComparer.Ordinal)
             .ToList();
-    }
-
-    private static TargetKind ReadTargetKind(string projectPath)
-    {
-        XDocument document = XDocument.Load(projectPath);
-        string outputType = document
-            .Descendants()
-            .LastOrDefault(element => element.Name.LocalName == "OutputType")
-            ?.Value;
-        return string.Equals(outputType, "Exe", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(outputType, "WinExe", StringComparison.OrdinalIgnoreCase)
-            ? TargetKind.Exe
-            : TargetKind.Library;
     }
 }

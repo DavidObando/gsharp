@@ -58,7 +58,9 @@ internal static class GSharpProjectTransformer
         }
 
         XDocument document = XDocument.Parse(projectXml, LoadOptions.PreserveWhitespace);
+        string sourceSdk = document.Root.Attribute("Sdk")?.Value;
         document.Root.SetAttributeValue("Sdk", gsharpSdk);
+        AddSourceSdkDefaults(document, sourceSdk);
 
         string sourceProjectDirectory = Path.GetDirectoryName(Path.GetFullPath(sourceProjectPath));
         string fullDestinationDirectory = Path.GetFullPath(destinationProjectDirectory);
@@ -74,6 +76,42 @@ internal static class GSharpProjectTransformer
 
         return document;
     }
+
+    private static void AddSourceSdkDefaults(XDocument document, string sourceSdk)
+    {
+        bool isWeb = HasSdk(sourceSdk, "Microsoft.NET.Sdk.Web");
+        bool isWorker = HasSdk(sourceSdk, "Microsoft.NET.Sdk.Worker");
+        if ((isWeb || isWorker) && !ElementsNamed(document, "OutputType").Any())
+        {
+            XElement propertyGroup = ElementsNamed(document, "PropertyGroup").FirstOrDefault();
+            if (propertyGroup == null)
+            {
+                propertyGroup = new XElement("PropertyGroup");
+                document.Root.Add(propertyGroup);
+            }
+
+            propertyGroup.Add(new XElement("OutputType", "Exe"));
+        }
+
+        if (isWeb
+            && !ElementsNamed(document, "FrameworkReference").Any(reference =>
+                string.Equals(
+                    AttributeNamed(reference, "Include")?.Value,
+                    "Microsoft.AspNetCore.App",
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            document.Root.Add(
+                new XElement(
+                    "ItemGroup",
+                    new XElement(
+                        "FrameworkReference",
+                        new XAttribute("Include", "Microsoft.AspNetCore.App"))));
+        }
+    }
+
+    private static bool HasSdk(string sdkList, string sdk) =>
+        sdkList?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(candidate => string.Equals(candidate, sdk, StringComparison.OrdinalIgnoreCase)) == true;
 
     private static void RewriteProjectReferences(
         XDocument document,

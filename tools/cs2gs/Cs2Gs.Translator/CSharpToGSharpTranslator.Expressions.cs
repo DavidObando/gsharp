@@ -118,6 +118,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return new TypeExpression(this.typeMapper.Map(type, this.context, identifier.GetLocation()));
             }
 
+            if (identifier.Identifier.ValueText == "_" &&
+                this.context.GetSymbolInfo(identifier).Symbol is IParameterSymbol)
+            {
+                return new IdentifierExpression("__underscore");
+            }
+
             return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
         }
 
@@ -346,7 +352,23 @@ public sealed partial class CSharpToGSharpTranslator
             // cannot diverge across files or projects.
             var arguments = shape.Properties.Count == anonymous.Initializers.Count
                 ? shape.Properties
-                    .Select((_, index) => this.TranslateExpression(anonymous.Initializers[index].Expression))
+                    .Select((property, index) =>
+                    {
+                        ExpressionSyntax value = anonymous.Initializers[index].Expression;
+                        GExpression translated = this.ForgiveNullableReferenceValue(
+                            value,
+                            this.TranslateExpression(value),
+                            property.Type,
+                            targetSymbol: null);
+                        GTypeReference propertyType = this.typeMapper.Map(
+                            property.Type,
+                            this.context,
+                            value.GetLocation());
+                        return this.AssertFlowNarrowedNullableReference(
+                            value,
+                            translated,
+                            propertyType);
+                    })
                     .ToList()
                 : anonymous.Initializers
                     .Select(initializer => this.TranslateExpression(initializer.Expression))
@@ -921,10 +943,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             TypeInfo valueTypeInfo = this.context.GetTypeInfo(value);
+            ITypeSymbol declaredValueType = this.GetDeclaredValueType(value);
             bool flowNarrowedAnnotatedValue =
                 valueTypeInfo.Nullability.FlowState == NullableFlowState.NotNull
                 && (valueTypeInfo.Nullability.Annotation == NullableAnnotation.Annotated
-                    || valueTypeInfo.Type?.NullableAnnotation == NullableAnnotation.Annotated);
+                    || valueTypeInfo.Type?.NullableAnnotation == NullableAnnotation.Annotated
+                    || declaredValueType?.NullableAnnotation == NullableAnnotation.Annotated);
             bool flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(value)
                 || flowNarrowedAnnotatedValue;
             if (!flowRequiresAssertion
@@ -944,6 +968,33 @@ public sealed partial class CSharpToGSharpTranslator
                     : translated;
             return new NonNullAssertionExpression(operand);
         }
+
+        private GExpression AssertFlowNarrowedNullableReference(
+            ExpressionSyntax value,
+            GExpression translated,
+            GTypeReference targetType)
+        {
+            ITypeSymbol declaredValueType = this.GetDeclaredValueType(value);
+            if (translated is not NonNullAssertionExpression
+                && targetType is { IsNullable: false }
+                && declaredValueType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull)
+            {
+                return new NonNullAssertionExpression(translated);
+            }
+
+            return translated;
+        }
+
+        private ITypeSymbol GetDeclaredValueType(ExpressionSyntax value) =>
+            this.context.GetSymbolInfo(value).Symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
 
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {

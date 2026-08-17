@@ -1422,8 +1422,11 @@ internal sealed class TypeDefEmitter
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => r.Void(), _ => { });
 
+        var visibility = classSym.HasPrimaryConstructor && !classSym.IsData
+            ? MethodAttributes.Assembly
+            : MethodAttributes.Public;
         return this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+            attributes: visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
