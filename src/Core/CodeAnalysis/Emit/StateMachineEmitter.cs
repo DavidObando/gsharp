@@ -609,6 +609,7 @@ internal sealed class StateMachineEmitter
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
                 TypeSymbol.RequiresSymbolicProjection(plan.ElementType)
+                || plan.ElementType.ClrType == null
                 || plan.ElementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
             var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
@@ -967,6 +968,7 @@ internal sealed class StateMachineEmitter
                 // strongly-typed `IAsyncEnumerator<Shape>` GENERICINST blob
                 // referencing the user TypeDef.
                 TypeSymbol enumeratorType = TypeSymbol.RequiresSymbolicProjection(elementType)
+                    || elementType.ClrType == null
                     || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
                     ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
                         typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(typeof(object)),
