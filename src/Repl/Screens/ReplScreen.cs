@@ -98,7 +98,18 @@ public sealed class ReplScreen : ITabScreen, IDisposable
         get
         {
             var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
-            var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
+            var diag = 0;
+            foreach (var cell in engine.Cells)
+            {
+                foreach (var diagnostic in cell.Diagnostics)
+                {
+                    if (diagnostic.IsError)
+                    {
+                        diag++;
+                    }
+                }
+            }
+
             return diag == 0
                 ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
                 : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";

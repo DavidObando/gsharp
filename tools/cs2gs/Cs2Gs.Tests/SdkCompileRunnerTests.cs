@@ -271,6 +271,50 @@ public class SdkCompileRunnerTests
     }
 
     [Fact]
+    public void FindEmittedAssembly_UsesSourceAssemblyNameAndNeverFallsBackToDependency()
+    {
+        string directory = Path.Combine(
+            Environment.CurrentDirectory,
+            "artifacts",
+            "sdk-assembly-probe-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string bin = Path.Combine(directory, "bin", "Release", "net10.0");
+            Directory.CreateDirectory(bin);
+            File.WriteAllText(Path.Combine(bin, "Dependency.dll"), string.Empty);
+            string expected = Path.Combine(bin, "gsi.dll");
+            File.WriteAllText(expected, string.Empty);
+
+            Assert.Equal(
+                expected,
+                SdkCompileRunner.FindEmittedAssembly(directory, "Repl", "Release", "gsi"));
+
+            File.Delete(expected);
+            Assert.Null(SdkCompileRunner.FindEmittedAssembly(directory, "Repl", "Release", "gsi"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void HasDeclaredPackageReferences_EmptyListKeepsReconstructedPackages()
+    {
+        Assert.False(SdkCompileRunner.HasDeclaredPackageReferences(null));
+        Assert.False(SdkCompileRunner.HasDeclaredPackageReferences(Array.Empty<DeclaredProjectItem>()));
+        Assert.True(SdkCompileRunner.HasDeclaredPackageReferences(new[]
+        {
+            new DeclaredProjectItem(
+                null,
+                System.Xml.Linq.XElement.Parse("<PackageReference Include=\"Example\" />")),
+        }));
+    }
+
+    [Fact]
     public void BuildProjectXml_PreservesRootNamespaceAndAvaloniaXamlItems()
     {
         string xml = SdkCompileRunner.BuildProjectXml(

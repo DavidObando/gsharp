@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -236,7 +237,7 @@ public sealed class SdkCompileRunner
 
         (List<(string Id, string Version)> packages, List<string> references) =
             PartitionReferences(referencePaths ?? Array.Empty<string>(), nugetPackagesRoot, runtimeDir);
-        bool hasDeclaredPackageReferences = (packageReferences?.Count ?? 0) > 0;
+        bool hasDeclaredPackageReferences = HasDeclaredPackageReferences(packageReferences);
         if (hasDeclaredPackageReferences)
         {
             packages.Clear();
@@ -361,7 +362,19 @@ public sealed class SdkCompileRunner
             }
         }
 
-        string assemblyPath = FindEmittedAssembly(appRunDir, projectName, config);
+        string assemblyPath = FindEmittedAssembly(appRunDir, projectName, config, assemblyName);
+        if (result.ExitCode == 0 && string.IsNullOrEmpty(assemblyPath))
+        {
+            string expectedName = string.IsNullOrEmpty(assemblyName) ? projectName : assemblyName;
+            diagnostics = diagnostics.Append(new GscDiagnostic(
+                "GS9999",
+                $"Expected output assembly '{expectedName}.dll' was not found after a successful SDK build.",
+                "error",
+                gsFilePaths is { Count: > 0 } ? Path.GetFileName(gsFilePaths[0]) : "unknown",
+                1,
+                1)).ToList();
+        }
+
         return SdkCompileResult.Completed(result.ExitCode, result.Output, diagnostics, assemblyPath);
     }
 
@@ -903,6 +916,27 @@ public sealed class SdkCompileRunner
         }
     }
 
+    internal static string FindEmittedAssembly(
+        string appRunDir,
+        string projectName,
+        string config,
+        string assemblyName = null)
+    {
+        string binDir = Path.Combine(appRunDir, "bin", config ?? "Release", "net10.0");
+        if (!Directory.Exists(binDir))
+        {
+            return null;
+        }
+
+        string expectedName = string.IsNullOrEmpty(assemblyName) ? projectName : assemblyName;
+        string expected = Path.Combine(binDir, expectedName + ".dll");
+        return File.Exists(expected) ? expected : null;
+    }
+
+    internal static bool HasDeclaredPackageReferences(
+        IReadOnlyList<DeclaredProjectItem> packageReferences) =>
+        (packageReferences?.Count ?? 0) > 0;
+
     private static string FindInheritedBuildProps(string projectDirectory)
     {
         DirectoryInfo directory = Directory.GetParent(projectDirectory);
@@ -1000,6 +1034,31 @@ public sealed class SdkCompileRunner
         string fullReferencePath = Path.GetFullPath(referencePath);
         foreach (DeclaredProjectItem projectReference in projectReferences ?? Array.Empty<DeclaredProjectItem>())
         {
+            if (!string.IsNullOrEmpty(projectReference.SourceAssemblyName))
+            {
+                string referenceAssemblyName;
+                try
+                {
+                    referenceAssemblyName = AssemblyName.GetAssemblyName(fullReferencePath).Name;
+                }
+                catch (BadImageFormatException)
+                {
+                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                }
+                catch (FileLoadException)
+                {
+                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                }
+
+                if (string.Equals(
+                    referenceAssemblyName,
+                    projectReference.SourceAssemblyName,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
             if (string.IsNullOrEmpty(projectReference.SourceInclude))
             {
                 continue;
@@ -1118,18 +1177,6 @@ public sealed class SdkCompileRunner
 
         string fallbackMessage = "dotnet build exited with code " + result.ExitCode + " and no parseable diagnostic.";
         return new GscDiagnostic("GS9999", fallbackMessage, "error", relativeFile, 1, 1);
-    }
-
-    private static string FindEmittedAssembly(string appRunDir, string projectName, string config)
-    {
-        string binDir = Path.Combine(appRunDir, "bin", config ?? "Release", "net10.0");
-        if (!Directory.Exists(binDir))
-        {
-            return null;
-        }
-
-        string expected = Path.Combine(binDir, projectName + ".dll");
-        return File.Exists(expected) ? expected : Directory.EnumerateFiles(binDir, "*.dll").FirstOrDefault();
     }
 }
 

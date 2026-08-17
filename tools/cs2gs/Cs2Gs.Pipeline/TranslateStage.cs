@@ -176,12 +176,16 @@ public sealed class TranslateStage : IMigrationStage
             // evaluated item lists such as @(GsharpCore). Those expressions
             // are unavailable in the isolated generated project, so recover
             // the concrete paths from MSBuildWorkspace's evaluated graph.
-            var knownProjectReferences = new HashSet<string>(
-                context.ProjectReferences
-                    .Select(item => item.SourceInclude)
-                    .Where(path => !string.IsNullOrEmpty(path))
-                    .Select(Path.GetFullPath),
-                StringComparer.OrdinalIgnoreCase);
+            var knownProjectReferences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < context.ProjectReferences.Count; i++)
+            {
+                string sourceInclude = context.ProjectReferences[i].SourceInclude;
+                if (!string.IsNullOrEmpty(sourceInclude))
+                {
+                    knownProjectReferences[Path.GetFullPath(sourceInclude)] = i;
+                }
+            }
+
             foreach (LoadedCSharpProject referencedProject in taintOnlyProjects.Skip(1))
             {
                 if (string.IsNullOrEmpty(referencedProject.ProjectPath))
@@ -190,15 +194,24 @@ public sealed class TranslateStage : IMigrationStage
                 }
 
                 string referencedPath = Path.GetFullPath(referencedProject.ProjectPath);
-                if (!knownProjectReferences.Add(referencedPath))
+                string referencedAssemblyName = referencedProject.Compilation.AssemblyName;
+                if (knownProjectReferences.TryGetValue(referencedPath, out int existingIndex))
                 {
+                    DeclaredProjectItem existing = context.ProjectReferences[existingIndex];
+                    context.ProjectReferences[existingIndex] = new DeclaredProjectItem(
+                        existing.ItemGroupCondition,
+                        new XElement(existing.Element),
+                        referencedPath,
+                        referencedAssemblyName);
                     continue;
                 }
 
+                knownProjectReferences[referencedPath] = context.ProjectReferences.Count;
                 context.ProjectReferences.Add(new DeclaredProjectItem(
                     itemGroupCondition: null,
                     element: new XElement("ProjectReference", new XAttribute("Include", referencedPath)),
-                    sourceInclude: referencedPath));
+                    sourceInclude: referencedPath,
+                    sourceAssemblyName: referencedAssemblyName));
             }
         }
         else
