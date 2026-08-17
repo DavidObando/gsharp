@@ -253,12 +253,13 @@ public class Program
 
     internal static int ReportUnhandledException(Exception ex)
     {
+        DiagnosticWriter.WriteDiagnostics(Console.Out, new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
+
         if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
         {
             Console.Out.WriteLine(ex.ToString());
         }
 
-        DiagnosticWriter.WriteDiagnostics(Console.Out, new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
         return CompilerExitCodes.Error;
     }
 
