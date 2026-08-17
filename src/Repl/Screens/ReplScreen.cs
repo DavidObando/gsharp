@@ -99,7 +99,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
         {
             var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
             var diag = 0;
-            // Oats #3414: keep explicit loops until migrated delegate-return inference preserves this LINQ chain.
+            // Oats #3414: migrated gsi emits invalid IL for this LINQ chain's value-type delegate return.
             foreach (var cell in engine.Cells)
             {
                 foreach (var diagnostic in cell.Diagnostics)

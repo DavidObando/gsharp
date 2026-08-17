@@ -19,7 +19,7 @@ The spike proves that cs2gs can translate the complete Core source tree:
 - zero unsupported translation diagnostics;
 - every emitted file round-trip parses.
 
-Cycle 111 proved complete Core translation and semantic compilation, reducing
+As a historical milestone, cycle 111 proved complete Core translation and semantic compilation, reducing
 the semantic frontier from 1,126 diagnostics in cycle 14 to zero. Later cycles
 resolved the 163 emitted generic-ABI verification failures tracked by #3407.
 Cycle 278 completed Core self-hosting with ILVerify 0 and Core.Tests at

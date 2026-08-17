@@ -947,6 +947,11 @@ public sealed class SdkCompileRunner
         return hasDeclaredPackageReferences;
     }
 
+    internal static bool IsRepresentedByProjectReferenceForTest(
+        string referencePath,
+        IReadOnlyList<DeclaredProjectItem> projectReferences) =>
+        IsRepresentedByProjectReference(referencePath, projectReferences);
+
     private static string FindInheritedBuildProps(string projectDirectory)
     {
         DirectoryInfo directory = Directory.GetParent(projectDirectory);
@@ -1056,6 +1061,10 @@ public sealed class SdkCompileRunner
                     referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
                 }
                 catch (FileLoadException)
+                {
+                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                }
+                catch (FileNotFoundException)
                 {
                     referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
                 }

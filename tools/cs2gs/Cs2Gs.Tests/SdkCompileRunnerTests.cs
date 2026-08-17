@@ -350,6 +350,26 @@ public class SdkCompileRunnerTests
         Assert.Contains("<AssemblyName>gsi</AssemblyName>", xml);
     }
 
+    [Fact]
+    public void IsRepresentedByProjectReference_MissingAssemblyFallsBackToFileName()
+    {
+        string missingAssembly = Path.Combine(
+            Environment.CurrentDirectory,
+            "artifacts",
+            "Missing.Project.dll");
+        var projectReferences = new[]
+        {
+            new DeclaredProjectItem(
+                null,
+                System.Xml.Linq.XElement.Parse("<ProjectReference Include=\"Missing.Project.csproj\" />"),
+                sourceAssemblyName: "Missing.Project"),
+        };
+
+        Assert.True(SdkCompileRunner.IsRepresentedByProjectReferenceForTest(
+            missingAssembly,
+            projectReferences));
+    }
+
     [Theory]
     [InlineData("/usr/share/dotnet/sdk/10.0/Sdks/Microsoft.NET.Sdk.Razor/source-generators/Razor.dll", false)]
     [InlineData("C:\\dotnet\\sdk\\10.0\\Sdks\\Microsoft.NET.Sdk.Razor\\source-generators\\Razor.dll", false)]
