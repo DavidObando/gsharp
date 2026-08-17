@@ -298,9 +298,16 @@ this one):
   `markMergedTypePartial` flag, set only when the project has analyzer
   references, so every other translation is byte-for-byte unchanged.
 
-Both are opt-in (null/`false` by default) and exercised only when a project
-actually has analyzer references, so the ADR-0143 cs2gs-migration default
-behavior for the overwhelmingly common no-generator project is untouched.
+At issue #2215's delivery, both were opt-in (null/`false` by default) and
+exercised only when a project had analyzer references, so the ADR-0143
+cs2gs-migration default behavior for no-generator projects was untouched.
+
+Issue #3410 later made `preservePartialParts` the cs2gs default for all
+projects: each retained source file now emits its own G# `partial` declaration,
+and the compiler merges those declarations. `retainedFilePaths` still excludes
+generator-produced declarations from source-part ownership decisions;
+`markMergedTypePartial` remains available only to callers that explicitly
+select the legacy `preservePartialParts: false` merge mode.
 
 ## Implementation status
 

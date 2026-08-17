@@ -1359,14 +1359,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool isUnsafe = node.Modifiers.Any(SyntaxKind.UnsafeKeyword) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.UnsafeKeyword)));
 
-            // ADR-0145 (§C/§D): only in preserve mode does a C# `partial` modifier
-            // survive onto the G# type — each part is emitted as a standalone
-            // `partial` part that augments the user's type (ADR-0144). Default
-            // cs2gs-migration mode always merges parts into ONE non-partial type,
-            // so `isPartial` stays false there (unchanged issue #1910 output) —
-            // UNLESS the project has analyzer references (issue #2215:
-            // `markMergedTypePartial`), in which case the merged type still
-            // keeps `partial` so gsc's own gsgen-produced part can merge into it.
+            // ADR-0145 (§C/§D) / issue #3410: default preserve mode carries the
+            // C# `partial` modifier onto each standalone G# part. Legacy merge
+            // mode drops it from the single merged type (issue #1910), unless
+            // `markMergedTypePartial` keeps it so gsc's own gsgen-produced part
+            // can merge into that result (issue #2215).
             bool sourceWasPartial = node.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)) ||
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword))));
             bool isPartial = sourceWasPartial && (this.preservePartialParts || this.markMergedTypePartial);

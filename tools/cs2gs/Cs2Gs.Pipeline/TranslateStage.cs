@@ -313,22 +313,16 @@ public sealed class TranslateStage : IMigrationStage
                 }
             }
 
-            // Issue #2215: a project with analyzer references may have had a
-            // generator-produced partial part excluded from `Documents` (it is
-            // recognized as generated, per `CSharpProjectLoader.
-            // IsGeneratedSource`, so BuildDocuments never translates it on its
-            // own) — so the translator must (a) keep the merged type `partial`
-            // (gsc's own gsgen run adds the missing part back) and (b) NOT
-            // merge that excluded part's members in here too (that would just
-            // duplicate what gsgen produces, causing a GS0102 collision). Every
-            // project with no analyzer references gets the exact prior
-            // (unfiltered, non-partial-marking) translator behavior.
+            // Issue #2215: exclude generator-produced parts from source-part
+            // ownership decisions. They are absent from `Documents` and gsc's
+            // own gsgen run adds them back later; retained source parts remain
+            // standalone partial declarations (issue #3410).
             bool hasAnalyzerReferences = currentProject.AnalyzerReferencePaths.Count > 0;
             List<string> retainedFilePaths = hasAnalyzerReferences
                 ? currentProject.Documents.Select(d => d.FilePath).ToList()
                 : null;
             var translator = new CSharpToGSharpTranslator(
-                markMergedTypePartial: hasAnalyzerReferences,
+                preservePartialParts: true,
                 retainedFilePaths: retainedFilePaths);
 
             PreserveGeneratedFriendAssemblyAnnotations(
@@ -365,7 +359,7 @@ public sealed class TranslateStage : IMigrationStage
                     CSharpToGSharpTranslator unitTranslator = package is null
                         ? translator
                         : new CSharpToGSharpTranslator(
-                            markMergedTypePartial: hasAnalyzerReferences,
+                            preservePartialParts: true,
                             retainedFilePaths: retainedFilePaths,
                             packageFilter: package,
                             includeFileAttributes: unitIndex == 0);

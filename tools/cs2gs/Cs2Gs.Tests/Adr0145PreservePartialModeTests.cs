@@ -16,14 +16,12 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// ADR-0145 (§C/§D): the source-generator host back-translates
 /// generator-produced C# (e.g. <c>partial class Foo { ...generated members... }</c>)
-/// into G# <c>partial</c> parts that augment the user's own type. This requires
-/// the OPPOSITE of the default cs2gs-migration behavior (issue #1910), which
-/// merges every C# <c>partial</c> part into ONE non-partial G# type emitted
-/// once. In the opt-in "preserve partial parts" mode
-/// (<c>new CSharpToGSharpTranslator(preservePartialParts: true)</c>), each
-/// <c>partial</c> declaration translates standalone — no cross-part merge — and
-/// carries the <c>partial</c> modifier onto the emitted G# type (ADR-0144). The
-/// default mode must remain byte-for-byte identical to today.
+/// into G# <c>partial</c> parts that augment the user's own type. In preserve
+/// mode, now also the cs2gs default (issue #3410), each <c>partial</c>
+/// declaration translates standalone — no cross-part merge — and carries the
+/// <c>partial</c> modifier onto the emitted G# type (ADR-0144). The legacy
+/// issue #1910 merge mode remains available through
+/// <c>preservePartialParts: false</c>.
 /// </summary>
 public class Adr0145PreservePartialModeTests
 {
@@ -96,9 +94,9 @@ namespace Demo
     }
 
     [Fact]
-    public void DefaultMode_SameTwoDocuments_StillMergeIntoOneNonPartialType()
+    public void LegacyMergeMode_SameTwoDocuments_MergesIntoOneNonPartialType()
     {
-        // Control: the SAME two documents in DEFAULT mode must still merge into
+        // Control: the SAME two documents in legacy merge mode still merge into
         // ONE non-partial `class Foo` containing BOTH members (issue #1910
         // behavior, unchanged).
         IReadOnlyList<string> printed = TranslateFiles(
@@ -149,6 +147,28 @@ namespace Demo
 
         Assert.Contains("class Bar", printed);
         Assert.DoesNotContain("partial", printed);
+    }
+
+    [Fact]
+    public void PreserveMode_ObliviousSourceField_RemainsNonNullable()
+    {
+        string printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Bar.cs", """
+                #nullable disable
+
+                namespace Demo;
+
+                public partial class Bar
+                {
+                    private readonly string name = "x";
+
+                    public string Read() => name;
+                }
+                """)).Single();
+
+        Assert.Contains("let name string = \"x\"", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("name string?", printed, StringComparison.Ordinal);
     }
 
     private static (string Generated, string User) TranslateBothInPreserveMode(

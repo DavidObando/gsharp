@@ -1063,7 +1063,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // context (Avalonia x:Name fields are the common case) retain
                 // C#'s ability to hold/test null when translated as a standalone
                 // generated partial part.
-                if (this.preservePartialParts &&
+                if (this.widenObliviousReferenceFields &&
                     symbol?.Type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.None })
                 {
                     type = MakeNullable(type);

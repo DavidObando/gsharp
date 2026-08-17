@@ -19,7 +19,8 @@ namespace Cs2Gs.Tests;
 /// translated each part independently, emitting one complete, duplicate G#
 /// type declaration per part (<c>GS0102 'Ledger' is already declared</c>,
 /// then <c>GS0159</c> for members landing on the wrong declaration). Partial
-/// merging must happen at translation time: every part shares one
+/// The legacy merge mode performs that translation-time merge: every part
+/// shares one
 /// <see cref="Microsoft.CodeAnalysis.INamedTypeSymbol"/> (with multiple
 /// <c>DeclaringSyntaxReferences</c>), so the translator now groups all parts
 /// by symbol and merges their members into ONE G# type declaration, emitted
@@ -257,7 +258,8 @@ namespace Demo
         foreach (LoadedDocument document in project.Documents)
         {
             var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+            CompilationUnit unit = new CSharpToGSharpTranslator(
+                preservePartialParts: false).TranslateDocument(document, context);
 
             string printed = GSharpPrinter.Print(unit);
             RoundTripResult result = TranslationTestValidation.AssertBinds(printed);

@@ -80,7 +80,9 @@ public static class GeneratedDocTranslator
             SemanticModel model = compilation.GetSemanticModel(tree);
             var loaded = new LoadedDocument(doc.HintName, tree, model);
 
-            CompilationUnit unit = new CSharpToGSharpTranslator(preservePartialParts: true)
+            CompilationUnit unit = new CSharpToGSharpTranslator(
+                preservePartialParts: true,
+                widenObliviousReferenceFields: true)
                 .TranslateDocument(loaded);
 
             // Skip a generated document that carried no translatable content.
