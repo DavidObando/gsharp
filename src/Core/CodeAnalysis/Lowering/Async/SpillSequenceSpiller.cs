@@ -902,15 +902,18 @@ public static class SpillSequenceSpiller
                     // A static member write has no receiver to spill, but its
                     // value still can be an await.
                     Func<BoundExpression, BoundExpression> rebuildClrStaticPropertyAssignment =
-                        value => new BoundClrPropertyAssignmentExpression(
-                            null,
-                            null,
-                            staticPropAssign.Member,
-                            value,
-                            staticPropAssign.Type,
-                            staticPropAssign.StaticContainerType,
-                            staticPropAssign.ConstrainedReceiverTypeParameter,
-                            staticPropAssign.ConstrainedInterfaceType);
+                        value =>
+                        {
+                            return new BoundClrPropertyAssignmentExpression(
+                                null,
+                                null,
+                                staticPropAssign.Member,
+                                value,
+                                staticPropAssign.Type,
+                                staticPropAssign.StaticContainerType,
+                                staticPropAssign.ConstrainedReceiverTypeParameter,
+                                staticPropAssign.ConstrainedInterfaceType);
+                        };
                     return SpillOneOperand(
                         staticPropAssign,
                         staticPropAssign.Value,
@@ -920,15 +923,18 @@ public static class SpillSequenceSpiller
                         clrPropAssign,
                         clrPropAssign.Receiver,
                         clrPropAssign.Value,
-                        (recv, val) => new BoundClrPropertyAssignmentExpression(
-                            null,
-                            recv,
-                            clrPropAssign.Member,
-                            val,
-                            clrPropAssign.Type,
-                            clrPropAssign.StaticContainerType,
-                            clrPropAssign.ConstrainedReceiverTypeParameter,
-                            clrPropAssign.ConstrainedInterfaceType));
+                        (recv, val) =>
+                        {
+                            return new BoundClrPropertyAssignmentExpression(
+                                null,
+                                recv,
+                                clrPropAssign.Member,
+                                val,
+                                clrPropAssign.Type,
+                                clrPropAssign.StaticContainerType,
+                                clrPropAssign.ConstrainedReceiverTypeParameter,
+                                clrPropAssign.ConstrainedInterfaceType);
+                        });
                 case BoundClrBinaryOperatorExpression clrBinary:
                     // Issue #2388: preserve whichever of Method (imported CLR
                     // type) / Function (nullable-lifted same-compilation
@@ -999,13 +1005,16 @@ public static class SpillSequenceSpiller
                     if (eventSub.Receiver == null)
                     {
                         Func<BoundExpression, BoundExpression> rebuildStaticEventSubscription =
-                            handler => new BoundEventSubscriptionExpression(
-                                null,
-                                receiver: null,
-                                eventSub.StructType,
-                                eventSub.Event,
-                                handler,
-                                eventSub.IsAdd);
+                            handler =>
+                            {
+                                return new BoundEventSubscriptionExpression(
+                                    null,
+                                    receiver: null,
+                                    eventSub.StructType,
+                                    eventSub.Event,
+                                    handler,
+                                    eventSub.IsAdd);
+                            };
                         return SpillOneOperand(
                             eventSub,
                             eventSub.Handler,
@@ -1016,7 +1025,10 @@ public static class SpillSequenceSpiller
                         eventSub,
                         eventSub.Receiver,
                         eventSub.Handler,
-                        (recv, handler) => new BoundEventSubscriptionExpression(null, recv, eventSub.StructType, eventSub.Event, handler, eventSub.IsAdd));
+                        (recv, handler) =>
+                        {
+                            return new BoundEventSubscriptionExpression(null, recv, eventSub.StructType, eventSub.Event, handler, eventSub.IsAdd);
+                        });
 
                 case BoundFieldAccessExpression fieldAccess:
                     return SpillFieldAccess(fieldAccess);
@@ -1027,12 +1039,15 @@ public static class SpillSequenceSpiller
                     }
 
                     Func<BoundExpression, BoundExpression> rebuildPropertyAccess =
-                        receiver => new BoundPropertyAccessExpression(
-                            null,
-                            receiver,
-                            propAccess.StructType,
-                            propAccess.Property,
-                            propAccess.NarrowedType);
+                        receiver =>
+                        {
+                            return new BoundPropertyAccessExpression(
+                                null,
+                                receiver,
+                                propAccess.StructType,
+                                propAccess.Property,
+                                propAccess.NarrowedType);
+                        };
                     return SpillOneOperand(
                         propAccess,
                         propAccess.Receiver,
@@ -1041,12 +1056,15 @@ public static class SpillSequenceSpiller
                     if (propAssign.Receiver == null)
                     {
                         Func<BoundExpression, BoundExpression> rebuildUserStaticPropertyAssignment =
-                            value => new BoundPropertyAssignmentExpression(
-                                null,
-                                receiver: null,
-                                propAssign.StructType,
-                                propAssign.Property,
-                                value);
+                            value =>
+                            {
+                                return new BoundPropertyAssignmentExpression(
+                                    null,
+                                    receiver: null,
+                                    propAssign.StructType,
+                                    propAssign.Property,
+                                    value);
+                            };
                         return SpillOneOperand(
                             propAssign,
                             propAssign.Value,
@@ -1140,17 +1158,26 @@ public static class SpillSequenceSpiller
                         mapDelete,
                         mapDelete.Map,
                         mapDelete.Key,
-                        (map, key) => new BoundMapDeleteExpression(null, map, key));
+                        (map, key) =>
+                        {
+                            return new BoundMapDeleteExpression(null, map, key);
+                        });
                 case BoundIsExpression isExpr:
                     Func<BoundExpression, BoundExpression> rebuildIsExpression =
-                        operand => new BoundIsExpression(null, operand, isExpr.Pattern);
+                        operand =>
+                        {
+                            return new BoundIsExpression(null, operand, isExpr.Pattern);
+                        };
                     return SpillOneOperand(
                         isExpr,
                         isExpr.Expression,
                         rebuildIsExpression);
                 case BoundAsExpression asExpr:
                     Func<BoundExpression, BoundExpression> rebuildAsExpression =
-                        operand => new BoundAsExpression(null, operand, asExpr.TargetType);
+                        operand =>
+                        {
+                            return new BoundAsExpression(null, operand, asExpr.TargetType);
+                        };
                     return SpillOneOperand(asExpr, asExpr.Expression, rebuildAsExpression);
                 case BoundThrowExpression throwExpr:
                     return SpillOneOperand(
@@ -1181,7 +1208,10 @@ public static class SpillSequenceSpiller
                         indirectAssign,
                         indirectAssign.Pointer,
                         indirectAssign.Value,
-                        (ptr, val) => new BoundIndirectAssignmentExpression(null, ptr, val));
+                        (ptr, val) =>
+                        {
+                            return new BoundIndirectAssignmentExpression(null, ptr, val);
+                        });
 
                 // Switch expression — issue #1619 completion. The governing
                 // (discriminant) expression and each arm's result are spilled
@@ -2420,12 +2450,15 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillIndirectCall(BoundIndirectCallExpression call)
         {
             Func<BoundExpression, ImmutableArray<BoundExpression>, BoundExpression> rebuild =
-                (target, arguments) => new BoundIndirectCallExpression(
-                    null,
-                    target,
-                    call.FunctionType,
-                    arguments,
-                    call.ArgumentRefKinds);
+                (target, arguments) =>
+                {
+                    return new BoundIndirectCallExpression(
+                        null,
+                        target,
+                        call.FunctionType,
+                        arguments,
+                        call.ArgumentRefKinds);
+                };
             return SpillTargetAndArguments(
                 call,
                 call.Target,
@@ -2436,11 +2469,14 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillFunctionPointerInvocation(BoundFunctionPointerInvocationExpression call)
         {
             Func<BoundExpression, ImmutableArray<BoundExpression>, BoundExpression> rebuild =
-                (pointer, arguments) => new BoundFunctionPointerInvocationExpression(
-                    null,
-                    pointer,
-                    arguments,
-                    call.FunctionPointerType);
+                (pointer, arguments) =>
+                {
+                    return new BoundFunctionPointerInvocationExpression(
+                        null,
+                        pointer,
+                        arguments,
+                        call.FunctionPointerType);
+                };
             return SpillTargetAndArguments(
                 call,
                 call.Pointer,
@@ -2451,12 +2487,15 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillClrIndex(BoundClrIndexExpression index)
         {
             Func<BoundExpression, ImmutableArray<BoundExpression>, BoundExpression> rebuild =
-                (target, arguments) => new BoundClrIndexExpression(
-                    null,
-                    target,
-                    index.Indexer,
-                    arguments,
-                    index.Type);
+                (target, arguments) =>
+                {
+                    return new BoundClrIndexExpression(
+                        null,
+                        target,
+                        index.Indexer,
+                        arguments,
+                        index.Type);
+                };
             return SpillTargetAndArguments(
                 index,
                 index.Target,
@@ -2518,7 +2557,10 @@ public static class SpillSequenceSpiller
             return SpillOneOperand(
                 access,
                 access.Receiver,
-                recv => new BoundClrPropertyAccessExpression(null, recv, access.Member, access.Type, access.StaticContainerType));
+                recv =>
+                {
+                    return new BoundClrPropertyAccessExpression(null, recv, access.Member, access.Type, access.StaticContainerType);
+                });
         }
 
         private BoundSpillSequenceExpression SpillFieldAccess(BoundFieldAccessExpression fieldAccess)
