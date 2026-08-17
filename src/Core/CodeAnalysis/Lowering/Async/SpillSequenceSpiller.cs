@@ -898,30 +898,32 @@ public static class SpillSequenceSpiller
                     return SpillClrIndexAssignment(clrIndexAssign);
                 case BoundClrPropertyAccessExpression clrPropAccess:
                     return SpillClrPropertyAccess(clrPropAccess);
-                case BoundClrPropertyAssignmentExpression { Receiver: null } staticPropAssign:
-                    // A static member write has no receiver to spill, but its
-                    // value still can be an await.
-                    Func<BoundExpression, BoundExpression> rebuildClrStaticPropertyAssignment =
-                        value =>
-                        {
-                            return new BoundClrPropertyAssignmentExpression(
-                                null,
-                                null,
-                                staticPropAssign.Member,
-                                value,
-                                staticPropAssign.Type,
-                                staticPropAssign.StaticContainerType,
-                                staticPropAssign.ConstrainedReceiverTypeParameter,
-                                staticPropAssign.ConstrainedInterfaceType);
-                        };
-                    return SpillOneOperand(
-                        staticPropAssign,
-                        staticPropAssign.Value,
-                        rebuildClrStaticPropertyAssignment);
                 case BoundClrPropertyAssignmentExpression clrPropAssign:
+                    var propertyReceiver = clrPropAssign.Receiver;
+                    if (propertyReceiver == null)
+                    {
+                        Func<BoundExpression, BoundExpression> rebuildClrStaticPropertyAssignment =
+                            value =>
+                            {
+                                return new BoundClrPropertyAssignmentExpression(
+                                    null,
+                                    null,
+                                    clrPropAssign.Member,
+                                    value,
+                                    clrPropAssign.Type,
+                                    clrPropAssign.StaticContainerType,
+                                    clrPropAssign.ConstrainedReceiverTypeParameter,
+                                    clrPropAssign.ConstrainedInterfaceType);
+                            };
+                        return SpillOneOperand(
+                            clrPropAssign,
+                            clrPropAssign.Value,
+                            rebuildClrStaticPropertyAssignment);
+                    }
+
                     return SpillTwoOperand(
                         clrPropAssign,
-                        clrPropAssign.Receiver,
+                        propertyReceiver,
                         clrPropAssign.Value,
                         (recv, val) =>
                         {

@@ -6249,7 +6249,8 @@ public sealed class Binder
         // for every interface encountered, its transitive base-interface closure.
         if (typeArgument is StructSymbol s)
         {
-            for (var current = s; current != null; current = current.BaseClass)
+            StructSymbol? current = s;
+            while (current != null)
             {
                 foreach (var implemented in current.Interfaces)
                 {
@@ -6266,6 +6267,8 @@ public sealed class Binder
                         }
                     }
                 }
+
+                current = current.BaseClass;
             }
         }
 

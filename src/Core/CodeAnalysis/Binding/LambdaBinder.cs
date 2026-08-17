@@ -1866,6 +1866,14 @@ internal sealed class LambdaBinder
             : boundBody;
         var trailingIsAssignment = IsAssignmentExpression(trailingExpression);
 
+        // Preserve the direct expression-body type before common-type
+        // aggregation. This path has one candidate by construction and also
+        // remains stable when Core itself is compiled from migrated G#.
+        if (targetFunctionType == null && !hasExplicitReturn && !trailingIsAssignment)
+        {
+            return trailingType;
+        }
+
         // Issue #891: a block-body arrow lambda whose body never completes
         // normally — every path throws (or otherwise terminates) without a
         // value-producing `return` — has no natural return value. C# treats

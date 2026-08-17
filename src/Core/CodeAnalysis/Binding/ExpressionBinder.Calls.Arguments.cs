@@ -2407,7 +2407,8 @@ internal sealed partial class ExpressionBinder
     private static bool EnclosingTypeImplements(StructSymbol enclosingType, InterfaceSymbol ifaceSym)
     {
         var ifaceDef = ifaceSym.Definition ?? ifaceSym;
-        for (var t = enclosingType; t != null; t = t.BaseClass)
+        StructSymbol? t = enclosingType;
+        while (t != null)
         {
             foreach (var iface in t.Interfaces)
             {
@@ -2417,6 +2418,8 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
             }
+
+            t = t.BaseClass;
         }
 
         return false;

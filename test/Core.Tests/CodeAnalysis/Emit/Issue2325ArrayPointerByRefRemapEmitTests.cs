@@ -4,9 +4,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -57,6 +59,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// </summary>
 public class Issue2325ArrayPointerByRefRemapEmitTests
 {
+    private static readonly PackageSymbol Package = new PackageSymbol("main", declaration: null);
+
     [Fact]
     public void SzArray_RemapsElementAndPreservesVectorShape()
     {
@@ -218,15 +222,22 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
     /// MetadataLoadContext-backed mode cs2gs drives gsc with), via reflection
     /// over the private constructor (the only entry point is the static
     /// <c>Emit</c> method, which does not return the instance). The
-    /// constructor only stores its arguments on <c>EmitContext</c> — it never
-    /// dereferences <paramref name="references"/>'s <c>BoundProgram</c>
-    /// argument — so passing <see langword="null"/> for it is safe for this
-    /// narrowly-scoped unit test of <c>MapToReferenceClrType</c>, which only
-    /// consults <c>emitCtx.References</c>.
+    /// constructor only stores its arguments on <c>EmitContext</c>. This test
+    /// supplies an empty program because migrated G# preserves the constructor's
+    /// non-null contract at runtime.
     /// </summary>
     private static ReflectionMetadataEmitter CreateEmitter(out ReferenceResolver references)
     {
         references = ReferenceResolver.WithReferences(RefPackReferences());
+        var program = new BoundProgram(
+            Package,
+            ImmutableArray.Create(Package),
+            ImmutableArray<Diagnostic>.Empty,
+            ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Empty,
+            entryPoint: null,
+            statement: new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty),
+            structs: ImmutableArray<StructSymbol>.Empty,
+            interfaces: ImmutableArray<InterfaceSymbol>.Empty);
 
         var ctor = typeof(ReflectionMetadataEmitter).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
@@ -243,7 +254,7 @@ public class Issue2325ArrayPointerByRefRemapEmitTests
             ?? throw new InvalidOperationException(
                 "ReflectionMetadataEmitter's private constructor signature changed; update this test's reflection probe.");
 
-        return (ReflectionMetadataEmitter)ctor.Invoke(new object[] { null, references, null, false, null });
+        return (ReflectionMetadataEmitter)ctor.Invoke(new object[] { program, references, null, false, null });
     }
 
     /// <summary>

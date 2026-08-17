@@ -936,7 +936,8 @@ internal sealed partial class DeclarationBinder
             }
 
             EventSymbol? implementation = null;
-            for (var type = structSymbol; type != null && implementation == null; type = type.BaseClass)
+            StructSymbol? type = structSymbol;
+            while (type != null && implementation == null)
             {
                 foreach (var candidate in type.Events)
                 {
@@ -951,6 +952,8 @@ internal sealed partial class DeclarationBinder
                     implementation = candidate;
                     break;
                 }
+
+                type = type.BaseClass;
             }
 
             if (implementation == null)
@@ -1837,10 +1840,12 @@ internal sealed partial class DeclarationBinder
         // type), which would hide the non-generic covariant bridge method that
         // shares the generic method's name and (empty) parameter list. Walk the
         // class and its base chain directly so both overloads are visible.
-        for (var c = structSymbol; c != null; c = c.BaseClass)
+        StructSymbol? c = structSymbol;
+        while (c != null)
         {
             if (c.Methods.IsDefaultOrEmpty)
             {
+                c = c.BaseClass;
                 continue;
             }
 
@@ -1852,6 +1857,8 @@ internal sealed partial class DeclarationBinder
                     return true;
                 }
             }
+
+            c = c.BaseClass;
         }
 
         return false;

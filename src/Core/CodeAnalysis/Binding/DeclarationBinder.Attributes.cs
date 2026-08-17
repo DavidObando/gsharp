@@ -601,12 +601,15 @@ internal sealed partial class DeclarationBinder
         }
 
         var attributeFullName = typeof(System.Attribute).FullName;
-        for (var t = clr; t != null; t = t.BaseType)
+        Type? t = clr;
+        while (t != null)
         {
             if (t.FullName == attributeFullName)
             {
                 return true;
             }
+
+            t = t.BaseType;
         }
 
         return false;
