@@ -360,12 +360,21 @@ public sealed class Binder
             conversions,
             bindExpression: BindExpressionForDeclarations,
             bindTypeClause: BindTypeClause,
-            bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
+            bindReturnTypeClause: (syntax, isAsync) =>
+            {
+                return BindReturnTypeClause(syntax, isAsync);
+            },
             bindTypeOfExpression: BindTypeOfExpressionForDeclarations,
-            bindArrayCreationExpression: syntax => Expressions.BindArrayCreationExpression(syntax),
+            bindArrayCreationExpression: syntax =>
+            {
+                return Expressions.BindArrayCreationExpression(syntax);
+            },
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
-            getEffectiveArgumentClrType: t => Expressions.GetEffectiveArgumentClrType(t),
+            getEffectiveArgumentClrType: t =>
+            {
+                return Expressions.GetEffectiveArgumentClrType(t);
+            },
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             isAsyncSequenceReturnType: IsAsyncSequenceReturnType,
             isPrimitiveTypeName: IsPrimitiveTypeName,
