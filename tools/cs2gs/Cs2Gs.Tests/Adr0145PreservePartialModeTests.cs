@@ -149,6 +149,28 @@ namespace Demo
         Assert.DoesNotContain("partial", printed);
     }
 
+    [Fact]
+    public void PreserveMode_ObliviousSourceField_RemainsNonNullable()
+    {
+        string printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Bar.cs", """
+                #nullable disable
+
+                namespace Demo;
+
+                public partial class Bar
+                {
+                    private readonly string name = "x";
+
+                    public string Read() => name;
+                }
+                """)).Single();
+
+        Assert.Contains("let name string = \"x\"", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("name string?", printed, StringComparison.Ordinal);
+    }
+
     private static (string Generated, string User) TranslateBothInPreserveMode(
         (string FileName, string Source) generated,
         (string FileName, string Source) user)

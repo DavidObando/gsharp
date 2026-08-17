@@ -86,6 +86,12 @@ public sealed partial class CSharpToGSharpTranslator
     // analyzer references; every other translation is byte-for-byte unchanged.
     private readonly bool markMergedTypePartial;
 
+    // Issue #2610: generator-produced nullable-oblivious reference fields
+    // (Avalonia x:Name fields are the common case) must remain nullable when
+    // back-translated. This is generator-host behavior, not a consequence of
+    // preserving ordinary source partial declarations (issue #3410).
+    private readonly bool widenObliviousReferenceFields;
+
     // Issue #2215: when set, restricts the "other partial parts to merge in"
     // set (`CollectPartialTypeParts`, built from `INamedTypeSymbol.
     // DeclaringSyntaxReferences` across the WHOLE compilation) to only the
@@ -141,15 +147,23 @@ public sealed partial class CSharpToGSharpTranslator
     /// attributes. Used for secondary package-split outputs so file-level
     /// metadata is emitted once.
     /// </param>
+    /// <param name="widenObliviousReferenceFields">
+    /// When <see langword="true"/>, nullable-oblivious reference fields are
+    /// emitted as nullable. Used by the source-generator host for generated
+    /// partial parts (issue #2610); ordinary source translation leaves this
+    /// <see langword="false"/>.
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = true,
         bool markMergedTypePartial = false,
         IReadOnlyCollection<string> retainedFilePaths = null,
         string packageFilter = null,
-        bool includeFileAttributes = true)
+        bool includeFileAttributes = true,
+        bool widenObliviousReferenceFields = false)
     {
         this.preservePartialParts = preservePartialParts;
         this.markMergedTypePartial = markMergedTypePartial;
+        this.widenObliviousReferenceFields = widenObliviousReferenceFields;
         this.retainedFilePaths = retainedFilePaths is null
             ? null
             : new HashSet<string>(retainedFilePaths, StringComparer.Ordinal);
@@ -257,7 +271,8 @@ public sealed partial class CSharpToGSharpTranslator
             partialTypeParts,
             ownedExtensions,
             this.preservePartialParts,
-            this.markMergedTypePartial);
+            this.markMergedTypePartial,
+            this.widenObliviousReferenceFields);
 
         IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
             ? visitor.MapFileAttributes(
@@ -1068,6 +1083,10 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #2215: see `CSharpToGSharpTranslator.markMergedTypePartial`.
         private readonly bool markMergedTypePartial;
 
+        // Issue #2610: see
+        // `CSharpToGSharpTranslator.widenObliviousReferenceFields`.
+        private readonly bool widenObliviousReferenceFields;
+
         // Issue #1201 / ADR-0134: the types targeted by `using static X` in this
         // document. A bare reference to one of their static members is left
         // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
@@ -1135,7 +1154,8 @@ public sealed partial class CSharpToGSharpTranslator
             Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
             OwnedExtensionRegistry ownedExtensions,
             bool preservePartialParts = false,
-            bool markMergedTypePartial = false)
+            bool markMergedTypePartial = false,
+            bool widenObliviousReferenceFields = false)
         {
             this.context = context;
             this.typeMapper = typeMapper;
@@ -1145,6 +1165,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.ownedExtensions = ownedExtensions ?? new OwnedExtensionRegistry(context.Compilation.Assembly);
             this.preservePartialParts = preservePartialParts;
             this.markMergedTypePartial = markMergedTypePartial;
+            this.widenObliviousReferenceFields = widenObliviousReferenceFields;
             this.efEntityTypes = ObliviousNullabilityAnalyzer.CollectEfEntityTypes(context.Compilation);
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
