@@ -2081,7 +2081,7 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var matches = new List<((Type[] Parameters, Type Return) Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
+        var matches = new List<(FunctionSymbol Method, (Type[] Parameters, Type Return) Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
         foreach (var candidate in userGroup.Candidates)
         {
             var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
@@ -2133,12 +2133,14 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            matches.Add(((parameterTypes, returnType), conversions));
+            matches.Add((candidate, (parameterTypes, returnType), conversions));
         }
 
+        // Exclude the same source candidate by symbol identity; projected
+        // parameter arrays are implementation details, not candidate identity.
         var best = matches.Where(candidate =>
             !matches.Any(other =>
-                !ReferenceEquals(candidate.Signature.Parameters, other.Signature.Parameters)
+                !ReferenceEquals(candidate.Method, other.Method)
                 && IsBetterMethodGroupConversion(other.Conversions, candidate.Conversions))).ToList();
         return best.Count == 1 ? best[0].Signature : null;
     }
