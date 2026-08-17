@@ -22,7 +22,9 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
-        private GExpression TranslateLambda(AnonymousFunctionExpressionSyntax lambda)
+        private GExpression TranslateLambda(
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol exactTargetInvoke = null)
         {
             var parameters = new List<Parameter>();
             ParameterListSyntax parameterList = lambda switch
@@ -78,6 +80,12 @@ public sealed partial class CSharpToGSharpTranslator
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
             IMethodSymbol lambdaSymbol = this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol
                 ?? (this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol)?.DelegateInvokeMethod;
+            GTypeReference exactReturnType = exactTargetInvoke != null
+                ? this.MapDelegateLikeReturnType(
+                    exactTargetInvoke,
+                    isAsync,
+                    lambda.GetLocation())
+                : null;
             bool hasUnderscoreParameter = (lambda is SimpleLambdaExpressionSyntax simpleLambda
                 && simpleLambda.Parameter.Identifier.ValueText == "_")
                 || parameterList?.Parameters.Any(parameter => parameter.Identifier.ValueText == "_") == true;
@@ -151,14 +159,16 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (lambda.Body is BlockSyntax block)
                 {
-                    // ADR-0128 / issue #1172: a block-bodied C# lambda renders as the
-                    // idiomatic G# arrow form `(params) -> { … }`. The arrow lambda's
-                    // statement-block body now reaches parity with func literals and
-                    // infers its return type, so no explicit return type is emitted.
+                    // ADR-0128 / issue #1172: block-bodied lambdas normally use the
+                    // idiomatic inferred arrow form. Issue #3414: when a direct
+                    // argument's return expressions need conversion to the target
+                    // delegate result, preserve that exact result on a func literal.
                     return new LambdaExpression(
                         parameters,
                         blockBody: this.WithParameterShadows(lambda, this.TranslateBlock(block)),
-                        isAsync: isAsync);
+                        isAsync: isAsync,
+                        returnType: exactReturnType,
+                        isFunctionLiteral: exactTargetInvoke != null);
                 }
 
                 // A void static-helper `?.` call needs a guarded statement, not
@@ -232,11 +242,27 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (spillPrologue.Count == 0)
                 {
+                    if (exactTargetInvoke != null)
+                    {
+                        return new LambdaExpression(
+                            parameters,
+                            blockBody: new BlockStatement(
+                                new GStatement[] { new ReturnStatement(expressionBody) }),
+                            isAsync: isAsync,
+                            returnType: exactReturnType,
+                            isFunctionLiteral: true);
+                    }
+
                     return new LambdaExpression(parameters, expressionBody: expressionBody, isAsync: isAsync);
                 }
 
                 var bodyStatements = new List<GStatement>(spillPrologue) { new ReturnStatement(expressionBody) };
-                return new LambdaExpression(parameters, blockBody: new BlockStatement(bodyStatements), isAsync: isAsync);
+                return new LambdaExpression(
+                    parameters,
+                    blockBody: new BlockStatement(bodyStatements),
+                    isAsync: isAsync,
+                    returnType: exactReturnType,
+                    isFunctionLiteral: exactTargetInvoke != null);
             }
             finally
             {

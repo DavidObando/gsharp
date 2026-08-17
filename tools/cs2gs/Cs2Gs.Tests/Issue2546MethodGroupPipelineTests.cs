@@ -43,7 +43,8 @@ public sealed class Issue2546MethodGroupPipelineTests
         string emitted = ReadAppOutput(outputRoot, result.RunId, app.AppId);
 
         Assert.Contains("records.Select(ToDictionary)", emitted, StringComparison.Ordinal);
-        Assert.Contains("selected.Where(byAsin", emitted, StringComparison.Ordinal);
+        Assert.Contains("selected.Where(func (__arg0 string) bool", emitted, StringComparison.Ordinal);
+        Assert.Contains("return byAsin.ContainsKey(__arg0)", emitted, StringComparison.Ordinal);
         Assert.Contains("sessions", emitted, StringComparison.Ordinal);
         Assert.Contains(".Count)", emitted, StringComparison.Ordinal);
         Assert.True(

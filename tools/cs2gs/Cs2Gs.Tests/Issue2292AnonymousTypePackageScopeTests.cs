@@ -146,6 +146,7 @@ namespace Demo
     /// resolve end-to-end through the real <c>gsc</c> (not just round-trip
     /// parse). cs2gs sidesteps the generic-inference question entirely by
     /// annotating the lambda parameter with the CONCRETE synthesized type
+    /// and preserving the converted delegate's exact <c>object</c> return
     /// (resolved from the bound C# semantic model, not re-inferred by gsc),
     /// so gsc's binder never needs to flow a generic return type through
     /// <c>Func/Action</c> type arguments itself.
@@ -200,7 +201,9 @@ namespace Demo
         string name = AnonymousTypeNames(printed).Single();
         Assert.Contains($"data class {name}(Id int32, Title string)", printed);
         Assert.Contains($"CreateTableBuilder[{name}]", printed);
-        Assert.Contains($"(x {name}) -> x.Id", printed);
+        Assert.Matches(
+            $$"""table\.PrimaryKey\("PK_Books", func \(x {{Regex.Escape(name)}}\) object \{\s*return x\.Id\s*\}\)""",
+            printed);
 
         // The real proof (not just round-trip parse): gsc must actually BIND
         // the generic CreateTable/PrimaryKey calls and the x.Id member access
