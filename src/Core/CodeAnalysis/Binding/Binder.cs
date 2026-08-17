@@ -314,7 +314,10 @@ public sealed class Binder
             binderCtx,
             conversions,
             patterns,
-            bindExpression: (syntax, canBeVoid) => Expressions.BindExpression(syntax, canBeVoid),
+            bindExpression: (syntax, canBeVoid) =>
+            {
+                return Expressions.BindExpression(syntax, canBeVoid);
+            },
             bindExpressionWithTargetType: BindExpressionWithTargetTypeForStatements,
             bindTypeClause: BindTypeClause,
             bindLocalVariable: (identifier, isReadOnly, type) =>
