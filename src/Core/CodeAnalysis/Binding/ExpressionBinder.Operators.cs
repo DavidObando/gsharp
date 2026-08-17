@@ -877,13 +877,25 @@ internal sealed partial class ExpressionBinder
         // definitely assigns on that arm.
         var (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition);
         Func<BoundExpression> bindWhenTrue =
-            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
+            () =>
+            {
+                return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
+            };
         Func<BoundExpression> bindWhenFalse =
-            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
+            () =>
+            {
+                return BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
+            };
         Func<BoundExpression> bindWhenTrueNarrowed =
-            () => BindWithNarrowing(whenTrueNarrowing, bindWhenTrue);
+            () =>
+            {
+                return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue);
+            };
         Func<BoundExpression> bindWhenFalseNarrowed =
-            () => BindWithNarrowing(whenFalseNarrowing, bindWhenFalse);
+            () =>
+            {
+                return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse);
+            };
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed);
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed);
 
