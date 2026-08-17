@@ -2200,7 +2200,10 @@ internal sealed partial class MethodBodyEmitter
             return null;
         }
 
-        return receiver.FindConstructedGenericBase(def => DefDeclaresProperty(def, property));
+        return receiver.FindConstructedGenericBase(def =>
+        {
+            return DefDeclaresProperty(def, property);
+        });
     }
 
     private static bool DefDeclaresProperty(StructSymbol def, PropertySymbol property)
@@ -2230,7 +2233,10 @@ internal sealed partial class MethodBodyEmitter
             return null;
         }
 
-        return receiver.FindConstructedGenericBase(def => DefDeclaresField(def, field));
+        return receiver.FindConstructedGenericBase(def =>
+        {
+            return DefDeclaresField(def, field);
+        });
     }
 
     private static bool DefDeclaresField(StructSymbol def, FieldSymbol field)

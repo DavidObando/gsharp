@@ -1476,18 +1476,24 @@ public sealed class Lowerer : BoundTreeRewriter
                 currentType ??= GetClrMemberType(currentMember);
 
                 Func<BoundExpression, BoundExpression> createMoveNextCall =
-                    receiver => new BoundImportedInstanceCallExpression(
+                    receiver =>
+                    {
+                        return new BoundImportedInstanceCallExpression(
+                            null,
+                            receiver,
+                            moveNext,
+                            TypeSymbol.Bool,
+                            ImmutableArray<BoundExpression>.Empty);
+                    };
+                moveNextCallFactory = createMoveNextCall;
+                currentAccessFactory = receiver =>
+                {
+                    return new BoundClrPropertyAccessExpression(
                         null,
                         receiver,
-                        moveNext,
-                        TypeSymbol.Bool,
-                        ImmutableArray<BoundExpression>.Empty);
-                moveNextCallFactory = createMoveNextCall;
-                currentAccessFactory = receiver => new BoundClrPropertyAccessExpression(
-                    null,
-                    receiver,
-                    currentMember,
-                    currentType);
+                        currentMember,
+                        currentType);
+                };
                 return true;
             }
         }
@@ -1498,12 +1504,18 @@ public sealed class Lowerer : BoundTreeRewriter
             userMoveNext.Type == TypeSymbol.Bool &&
             userEnumerator.TryGetField("Current", out var currentField))
         {
-            moveNextCallFactory = receiver => new BoundUserInstanceCallExpression(
-                null,
-                receiver,
-                userMoveNext,
-                ImmutableArray<BoundExpression>.Empty);
-            currentAccessFactory = receiver => new BoundFieldAccessExpression(null, receiver, userEnumerator, currentField);
+            moveNextCallFactory = receiver =>
+            {
+                return new BoundUserInstanceCallExpression(
+                    null,
+                    receiver,
+                    userMoveNext,
+                    ImmutableArray<BoundExpression>.Empty);
+            };
+            currentAccessFactory = receiver =>
+            {
+                return new BoundFieldAccessExpression(null, receiver, userEnumerator, currentField);
+            };
             return true;
         }
 

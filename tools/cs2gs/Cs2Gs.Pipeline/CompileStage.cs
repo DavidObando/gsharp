@@ -71,7 +71,8 @@ public sealed class CompileStage : IMigrationStage
                         context.PackageReferences,
                         context.ProjectReferences,
                         context.Options.GeneratedProjectPaths,
-                        context.UsesCentralPackageManagement);
+                        context.UsesCentralPackageManagement,
+                        assemblyName: context.AssemblyName);
 
             if (sdkResult.IsAvailable)
             {

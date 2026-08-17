@@ -136,10 +136,19 @@ internal static class ImportedAssemblySemantics
         // throws `ArgumentException` rather than simply reporting no match.
         // Enumerating and matching by simple name/FullName instead works
         // uniformly for both the live-reflection and MLC-backed resolvers.
-        var hasPrintMembers = ClrTypeUtilities.SafeGetMethods(type, InstanceAny).Any(m =>
-            string.Equals(m.Name, "PrintMembers", StringComparison.Ordinal)
-            && m.ReturnType.FullName == "System.Boolean"
-            && m.GetParameters() is [{ ParameterType.FullName: "System.Text.StringBuilder" }]);
+        var hasPrintMembers = false;
+        foreach (var method in ClrTypeUtilities.SafeGetMethods(type, InstanceAny))
+        {
+            var parameters = method.GetParameters();
+            if (string.Equals(method.Name, "PrintMembers", StringComparison.Ordinal)
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 1
+                && parameters[0].ParameterType.FullName == "System.Text.StringBuilder")
+            {
+                hasPrintMembers = true;
+                break;
+            }
+        }
 
         var hasReferenceAssemblyShape = !hasPrintMembers && HasCSharpRecordReferenceShape(type);
         if (!hasPrintMembers && !hasReferenceAssemblyShape)
@@ -161,12 +170,30 @@ internal static class ImportedAssemblySemantics
         // signature for the value-type case.
         if (!type.IsValueType && !hasReferenceAssemblyShape)
         {
-            var hasCopyConstructor = ClrTypeUtilities.SafeGetConstructors(type, InstanceAny).Any(c =>
-                c.GetParameters() is [{ } onlyParameter] && ClrTypeUtilities.AreSame(onlyParameter.ParameterType, type));
-            var hasClone = ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Public | BindingFlags.Instance).Any(m =>
-                string.Equals(m.Name, "<Clone>$", StringComparison.Ordinal)
-                && m.GetParameters().Length == 0
-                && type.IsAssignableFrom(m.ReturnType));
+            var hasCopyConstructor = false;
+            foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(type, InstanceAny))
+            {
+                var parameters = constructor.GetParameters();
+                if (parameters.Length == 1
+                    && ClrTypeUtilities.AreSame(parameters[0].ParameterType, type))
+                {
+                    hasCopyConstructor = true;
+                    break;
+                }
+            }
+
+            var hasClone = false;
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (string.Equals(method.Name, "<Clone>$", StringComparison.Ordinal)
+                    && method.GetParameters().Length == 0
+                    && type.IsAssignableFrom(method.ReturnType))
+                {
+                    hasClone = true;
+                    break;
+                }
+            }
+
             var hasEqualityContract = type.GetProperty("EqualityContract", BindingFlags.NonPublic | BindingFlags.Instance) is { } equalityContractProperty
                 && equalityContractProperty.PropertyType.FullName == "System.Type";
             if (!hasCopyConstructor || !hasClone || !hasEqualityContract)
@@ -234,55 +261,81 @@ internal static class ImportedAssemblySemantics
             return false;
         }
 
-        bool IsCompilerGenerated(MemberInfo member) => member.GetCustomAttributesData().Any(attribute =>
-            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.CompilerGeneratedAttribute");
+        bool IsCompilerGenerated(MemberInfo member)
+        {
+            foreach (var attribute in member.GetCustomAttributesData())
+            {
+                if (attribute.AttributeType.FullName == "System.Runtime.CompilerServices.CompilerGeneratedAttribute")
+                {
+                    return true;
+                }
+            }
 
-        var implementsSelfEquatable = type.GetInterfaces().Any(iface =>
-            iface.IsGenericType
-            && iface.GetGenericTypeDefinition().FullName == "System.IEquatable`1"
-            && iface.GetGenericArguments() is [{ } argument]
-            && argument.FullName == type.FullName);
+            return false;
+        }
+
+        var implementsSelfEquatable = false;
+        foreach (var interfaceType in type.GetInterfaces())
+        {
+            var arguments = interfaceType.IsGenericType
+                ? interfaceType.GetGenericArguments()
+                : Type.EmptyTypes;
+            if (interfaceType.IsGenericType
+                && interfaceType.GetGenericTypeDefinition().FullName == "System.IEquatable`1"
+                && arguments.Length == 1
+                && arguments[0].FullName == type.FullName)
+            {
+                implementsSelfEquatable = true;
+                break;
+            }
+        }
+
         if (!implementsSelfEquatable)
         {
             return false;
         }
 
         var methods = ClrTypeUtilities.SafeGetMethods(type, PublicInstance | PublicStatic);
-        var hasTypedEquals = methods.Any(method =>
-            method.Name == "Equals"
-            && !method.IsStatic
-            && method.ReturnType.FullName == "System.Boolean"
-            && method.GetParameters() is [{ } parameter]
-            && parameter.ParameterType.FullName == type.FullName
-            && IsCompilerGenerated(method));
-        var hasEquality = methods.Any(method =>
-            method.Name == "op_Equality"
-            && method.IsStatic
-            && method.ReturnType.FullName == "System.Boolean"
-            && method.GetParameters() is [{ } left, { } right]
-            && left.ParameterType.FullName == type.FullName
-            && right.ParameterType.FullName == type.FullName
-            && IsCompilerGenerated(method));
-        var hasInequality = methods.Any(method =>
-            method.Name == "op_Inequality"
-            && method.IsStatic
-            && method.ReturnType.FullName == "System.Boolean"
-            && method.GetParameters() is [{ } left, { } right]
-            && left.ParameterType.FullName == type.FullName
-            && right.ParameterType.FullName == type.FullName
-            && IsCompilerGenerated(method));
-        var hasToString = methods.Any(method =>
-            method.Name == "ToString"
-            && !method.IsStatic
-            && method.ReturnType.FullName == "System.String"
-            && method.GetParameters().Length == 0
-            && IsCompilerGenerated(method));
-        var hasGetHashCode = methods.Any(method =>
-            method.Name == "GetHashCode"
-            && !method.IsStatic
-            && method.ReturnType.FullName == "System.Int32"
-            && method.GetParameters().Length == 0
-            && IsCompilerGenerated(method));
+        var hasTypedEquals = false;
+        var hasEquality = false;
+        var hasInequality = false;
+        var hasToString = false;
+        var hasGetHashCode = false;
+        foreach (var method in methods)
+        {
+            if (!IsCompilerGenerated(method))
+            {
+                continue;
+            }
+
+            var parameters = method.GetParameters();
+            hasTypedEquals |= method.Name == "Equals"
+                && !method.IsStatic
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 1
+                && parameters[0].ParameterType.FullName == type.FullName;
+            hasEquality |= method.Name == "op_Equality"
+                && method.IsStatic
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 2
+                && parameters[0].ParameterType.FullName == type.FullName
+                && parameters[1].ParameterType.FullName == type.FullName;
+            hasInequality |= method.Name == "op_Inequality"
+                && method.IsStatic
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 2
+                && parameters[0].ParameterType.FullName == type.FullName
+                && parameters[1].ParameterType.FullName == type.FullName;
+            hasToString |= method.Name == "ToString"
+                && !method.IsStatic
+                && method.ReturnType.FullName == "System.String"
+                && parameters.Length == 0;
+            hasGetHashCode |= method.Name == "GetHashCode"
+                && !method.IsStatic
+                && method.ReturnType.FullName == "System.Int32"
+                && parameters.Length == 0;
+        }
+
         return hasTypedEquals && hasEquality && hasInequality && hasToString && hasGetHashCode;
     }
 
@@ -296,10 +349,16 @@ internal static class ImportedAssemblySemantics
     // (an empty `{ }`  member list).
     private static (ImmutableArray<string> Names, ImmutableArray<int> FieldTokens) BuildRecordPrimaryConstructorShape(Type type)
     {
-        var autoProperties = type
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.GetMethod != null && p.SetMethod != null && p.GetIndexParameters().Length == 0)
-            .ToDictionary(p => p.Name, StringComparer.Ordinal);
+        var autoProperties = new Dictionary<string, PropertyInfo>(StringComparer.Ordinal);
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.GetMethod != null
+                && property.SetMethod != null
+                && property.GetIndexParameters().Length == 0)
+            {
+                autoProperties.Add(property.Name, property);
+            }
+        }
 
         if (autoProperties.Count == 0)
         {
@@ -324,7 +383,17 @@ internal static class ImportedAssemblySemantics
                 continue;
             }
 
-            if (parameters.All(p => autoProperties.ContainsKey(p.Name ?? string.Empty)))
+            var allParametersMatch = true;
+            foreach (var parameter in parameters)
+            {
+                if (!autoProperties.ContainsKey(parameter.Name ?? string.Empty))
+                {
+                    allParametersMatch = false;
+                    break;
+                }
+            }
+
+            if (allParametersMatch)
             {
                 bestMatch = ctor;
                 bestParameters = parameters;

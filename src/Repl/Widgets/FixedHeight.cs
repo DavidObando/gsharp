@@ -16,7 +16,7 @@ namespace GSharp.Repl.Widgets;
 /// breaks only <em>between</em> lines (no trailing break) so it composes into deterministic
 /// fixed-height layouts.
 /// </summary>
-public sealed class FixedHeight : Renderable
+public sealed class FixedHeight : Renderable, IRenderable
 {
     private readonly IRenderable child;
     private readonly int height;

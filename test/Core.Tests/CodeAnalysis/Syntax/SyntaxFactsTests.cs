@@ -54,7 +54,7 @@ public class SyntaxFactsTests
     {
         var ops = SyntaxFacts.GetBinaryOperatorKinds().ToArray();
         Assert.NotEmpty(ops);
-        Assert.All(ops, k => Assert.True(k.GetBinaryOperatorPrecedence() > 0));
+        Assert.All(ops, k => Assert.True(SyntaxOperatorFacts.GetBinaryOperatorPrecedence(k) > 0));
     }
 
     [Fact]
@@ -62,6 +62,6 @@ public class SyntaxFactsTests
     {
         var ops = SyntaxFacts.GetUnaryOperatorKinds().ToArray();
         Assert.NotEmpty(ops);
-        Assert.All(ops, k => Assert.True(k.GetUnaryOperatorPrecedence() > 0));
+        Assert.All(ops, k => Assert.True(SyntaxOperatorFacts.GetUnaryOperatorPrecedence(k) > 0));
     }
 }

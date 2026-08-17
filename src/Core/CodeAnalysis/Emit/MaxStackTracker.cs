@@ -95,7 +95,8 @@ internal static class MaxStackTracker
             byte b0 = code[pos];
             if (b0 == 0xFE && pos + 1 < code.Length)
             {
-                key = unchecked((short)(0xFE00 | code[pos + 1]));
+                var encodedKey = 0xFE00 | code[pos + 1];
+                key = unchecked((short)encodedKey);
                 pos += 2;
             }
             else

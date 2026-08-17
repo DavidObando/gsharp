@@ -699,6 +699,11 @@ internal static class ClrOverloadResolution
 
         foreach (var rawCandidate in candidateList)
         {
+            if (ReferenceEquals(rawCandidate, null))
+            {
+                continue;
+            }
+
             // Issue #321: an overload's signature may reference types that cannot
             // be loaded or projected under the MetadataLoadContext used for
             // reference assemblies (e.g. the ref-struct Utf8JsonWriter, or types
@@ -728,6 +733,11 @@ internal static class ClrOverloadResolution
         {
             foreach (var rawCandidate in candidateList)
             {
+                if (ReferenceEquals(rawCandidate, null))
+                {
+                    continue;
+                }
+
                 try
                 {
                     EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck);
@@ -1587,10 +1597,17 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        return type.GetGenericParameterConstraints().Any(static constraint =>
-            !constraint.IsInterface
-            && !constraint.IsValueType
-            && !string.Equals(constraint.FullName, "System.Object", StringComparison.Ordinal));
+        foreach (var constraint in type.GetGenericParameterConstraints())
+        {
+            if (!constraint.IsInterface
+                && !constraint.IsValueType
+                && !string.Equals(constraint.FullName, "System.Object", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -3246,11 +3263,18 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        return parameter.GetCustomAttributesData().Any(static attribute =>
-            attribute.AttributeType.FullName is
+        foreach (var attribute in parameter.GetCustomAttributesData())
+        {
+            if (attribute.AttributeType.FullName is
                 "System.Runtime.CompilerServices.DecimalConstantAttribute" or
                 "System.Runtime.CompilerServices.DateTimeConstantAttribute" or
-                "System.Runtime.InteropServices.OptionalAttribute");
+                "System.Runtime.InteropServices.OptionalAttribute")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -3324,10 +3348,21 @@ internal static class ClrOverloadResolution
         // defaulted parameters.
         if (pool.Count > 1)
         {
-            var minParamCount = pool.Min(w => w.Method.GetParameters().Length);
-            var fewestParams = pool
-                .Where(w => w.Method.GetParameters().Length == minParamCount)
-                .ToList();
+            var minParamCount = int.MaxValue;
+            foreach (var candidate in pool)
+            {
+                minParamCount = Math.Min(minParamCount, candidate.Method.GetParameters().Length);
+            }
+
+            var fewestParams = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
+            foreach (var candidate in pool)
+            {
+                if (candidate.Method.GetParameters().Length == minParamCount)
+                {
+                    fewestParams.Add(candidate);
+                }
+            }
+
             if (fewestParams.Count >= 1 && fewestParams.Count < pool.Count)
             {
                 pool = fewestParams;
@@ -3344,9 +3379,26 @@ internal static class ClrOverloadResolution
         // derived type is implicitly assignable from a more derived one).
         if (pool.Count > 1 && argTypes.Count > 0)
         {
-            var mostSpecific = pool
-                .Where(w => pool.All(o => ReferenceEquals(w.Method, o.Method) || IsAtLeastAsSpecific(w.Method, o.Method)))
-                .ToList();
+            var mostSpecific = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
+            foreach (var candidate in pool)
+            {
+                var atLeastAsSpecific = true;
+                foreach (var other in pool)
+                {
+                    if (!ReferenceEquals(candidate.Method, other.Method)
+                        && !IsAtLeastAsSpecific(candidate.Method, other.Method))
+                    {
+                        atLeastAsSpecific = false;
+                        break;
+                    }
+                }
+
+                if (atLeastAsSpecific)
+                {
+                    mostSpecific.Add(candidate);
+                }
+            }
+
             if (mostSpecific.Count >= 1 && mostSpecific.Count < pool.Count)
             {
                 pool = mostSpecific;
@@ -3366,7 +3418,15 @@ internal static class ClrOverloadResolution
         // `Assert.Equal(string, string)` overload for two string arguments.
         if (pool.Count > 1)
         {
-            var nonGeneric = pool.Where(w => !IsGenericMethod(w.Method)).ToList();
+            var nonGeneric = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
+            foreach (var candidate in pool)
+            {
+                if (!IsGenericMethod(candidate.Method))
+                {
+                    nonGeneric.Add(candidate);
+                }
+            }
+
             if (nonGeneric.Count >= 1 && nonGeneric.Count < pool.Count)
             {
                 pool = nonGeneric;
@@ -4499,7 +4559,7 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        var current = symbol;
+        TypeSymbol? current = symbol;
         while (current != null)
         {
             switch (current)
@@ -4645,11 +4705,17 @@ internal static class ClrOverloadResolution
 
         try
         {
-            return importedBase.Assembly.GetTypes().FirstOrDefault(type =>
-                !type.IsAbstract
-                && importedBase.IsAssignableFrom(type)
-                && type.GetConstructor(Type.EmptyTypes) is { IsPublic: true })
-                ?? importedBase;
+            foreach (var type in importedBase.Assembly.GetTypes())
+            {
+                if (!type.IsAbstract
+                    && importedBase.IsAssignableFrom(type)
+                    && type.GetConstructor(Type.EmptyTypes) is { IsPublic: true })
+                {
+                    return type;
+                }
+            }
+
+            return importedBase;
         }
         catch (Exception ex) when (IsMetadataLoadFailure(ex) || ex is ReflectionTypeLoadException)
         {

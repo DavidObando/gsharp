@@ -1243,20 +1243,29 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitTypeParameterConstruction(BoundTypeParameterConstructionExpression node)
     {
-        var openCreateInstance = typeof(System.Activator)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .First(m => m.Name == "CreateInstance"
-                && m.IsGenericMethodDefinition
-                && m.GetGenericArguments().Length == 1
-                && m.GetParameters().Length == 0);
+        MethodInfo? openCreateInstance = null;
+        foreach (var method in typeof(System.Activator).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (method.Name == "CreateInstance"
+                && method.IsGenericMethodDefinition
+                && method.GetGenericArguments().Length == 1
+                && method.GetParameters().Length == 0)
+            {
+                openCreateInstance = method;
+                break;
+            }
+        }
+
+        openCreateInstance = Invariant.Required(openCreateInstance, "Activator.CreateInstance<T>() is available");
 
         // Close the open definition with a placeholder; GetMethodEntityHandle
         // re-encodes the real type argument (the in-scope type parameter, a
         // VAR/MVAR) into the MethodSpec via the symbolic-argument path.
         var closed = openCreateInstance.MakeGenericMethod(typeof(object));
+        var symbolicTypeArguments = ImmutableArray.Create<TypeSymbol?>(node.TypeParameter);
         var handle = this.outer.memberRefs.GetMethodEntityHandle(
             closed,
-            ImmutableArray.Create<TypeSymbol?>(node.TypeParameter));
+            typeArgSymbols: symbolicTypeArguments);
 
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(handle);

@@ -720,8 +720,14 @@ internal sealed partial class ExpressionBinder
         BoundExpression whenFalse;
         if (targetType != null)
         {
-            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue, targetType));
-            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse, targetType));
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () =>
+            {
+                return BindExpression(syntax.WhenTrue, targetType);
+            });
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () =>
+            {
+                return BindExpression(syntax.WhenFalse, targetType);
+            });
         }
         else if (trueIsBareDefault && falseIsBareDefault)
         {
@@ -730,7 +736,10 @@ internal sealed partial class ExpressionBinder
         }
         else if (trueIsBareDefault)
         {
-            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse));
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () =>
+            {
+                return BindExpression(syntax.WhenFalse);
+            });
             if (whenFalse is BoundErrorExpression)
             {
                 return new BoundErrorExpression(null);
@@ -740,7 +749,10 @@ internal sealed partial class ExpressionBinder
         }
         else if (falseIsBareDefault)
         {
-            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue));
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () =>
+            {
+                return BindExpression(syntax.WhenTrue);
+            });
             if (whenTrue is BoundErrorExpression)
             {
                 return new BoundErrorExpression(null);
@@ -750,8 +762,14 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            whenTrue = BindWithPatternVariables(patternWhenTrue, () => BindExpression(syntax.WhenTrue));
-            whenFalse = BindWithPatternVariables(patternWhenFalse, () => BindExpression(syntax.WhenFalse));
+            whenTrue = BindWithPatternVariables(patternWhenTrue, () =>
+            {
+                return BindExpression(syntax.WhenTrue);
+            });
+            whenFalse = BindWithPatternVariables(patternWhenFalse, () =>
+            {
+                return BindExpression(syntax.WhenFalse);
+            });
         }
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
@@ -859,13 +877,25 @@ internal sealed partial class ExpressionBinder
         // definitely assigns on that arm.
         var (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition);
         Func<BoundExpression> bindWhenTrue =
-            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
+            () =>
+            {
+                return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
+            };
         Func<BoundExpression> bindWhenFalse =
-            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
+            () =>
+            {
+                return BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType);
+            };
         Func<BoundExpression> bindWhenTrueNarrowed =
-            () => BindWithNarrowing(whenTrueNarrowing, bindWhenTrue);
+            () =>
+            {
+                return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue);
+            };
         Func<BoundExpression> bindWhenFalseNarrowed =
-            () => BindWithNarrowing(whenFalseNarrowing, bindWhenFalse);
+            () =>
+            {
+                return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse);
+            };
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed);
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed);
 
@@ -1061,11 +1091,14 @@ internal sealed partial class ExpressionBinder
         bool canBeVoid = false,
         TypeSymbol? targetType = null,
         bool preserveEmptyBlock = false)
-        => BindInBlockExpressionScope<BoundExpression>(() => BindBlockExpressionValueCore(
-            syntax,
-            canBeVoid,
-            targetType,
-            preserveEmptyBlock));
+        => BindInBlockExpressionScope(() =>
+        {
+            return BindBlockExpressionValueCore(
+                syntax,
+                canBeVoid,
+                targetType,
+                preserveEmptyBlock);
+        });
 
     private BoundExpression BindBlockExpressionValueCore(
         BlockExpressionSyntax syntax,
@@ -1110,7 +1143,7 @@ internal sealed partial class ExpressionBinder
         return new BoundBlockExpression(syntax, boundStatements, boundExpression);
     }
 
-    private T BindInBlockExpressionScope<T>(Func<T> bind)
+    private BoundExpression BindInBlockExpressionScope(Func<BoundExpression> bind)
     {
         scope = new BoundScope(scope);
         try
@@ -1141,7 +1174,10 @@ internal sealed partial class ExpressionBinder
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
-            return BindInBlockExpressionScope<BoundExpression>(() => BindLambdaBlockBodyExpression(block));
+            return BindInBlockExpressionScope(() =>
+            {
+                return BindLambdaBlockBodyExpression(block);
+            });
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);
@@ -1592,7 +1628,10 @@ internal sealed partial class ExpressionBinder
             var (leftWhenTrue, _) = PatternVariables.Classify(boundLeft);
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
-                () => BindExpressionWithNarrowing(syntax.Right, rightFrame));
+                () =>
+                {
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame);
+                });
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue);
         }
         else if (syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken)
@@ -1601,7 +1640,10 @@ internal sealed partial class ExpressionBinder
             var (_, leftWhenFalse) = PatternVariables.Classify(boundLeft);
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
-                () => BindExpressionWithNarrowing(syntax.Right, rightFrame));
+                () =>
+                {
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame);
+                });
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse);
         }
         else

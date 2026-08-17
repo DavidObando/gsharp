@@ -98,7 +98,19 @@ public sealed class ReplScreen : ITabScreen, IDisposable
         get
         {
             var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
-            var diag = engine.Cells.SelectMany(c => c.Diagnostics).Count(d => d.IsError);
+            var diag = 0;
+            // Oats #3414: keep explicit loops until migrated delegate-return inference preserves this LINQ chain.
+            foreach (var cell in engine.Cells)
+            {
+                foreach (var diagnostic in cell.Diagnostics)
+                {
+                    if (diagnostic.IsError)
+                    {
+                        diag++;
+                    }
+                }
+            }
+
             return diag == 0
                 ? $"[{Tokens.Tokens.StatusSuccess.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· ready[/]"
                 : $"[{Tokens.Tokens.StatusError.Value.ToMarkup()}]●[/] gsharp [{tertiary}]· {diag} error(s)[/]";
@@ -604,7 +616,7 @@ internal static class Palette
     {
         ("reset", "clear session state"),
         ("clear", "clear the editor"),
-        ("theme", $"switch theme: {string.Join("|", Theme.AvailableNames())}"),
+        ("theme", "switch theme: " + string.Join("|", Theme.AvailableNames())),
         ("load", "run a .gs file into session"),
         ("exit", "quit the REPL"),
     };

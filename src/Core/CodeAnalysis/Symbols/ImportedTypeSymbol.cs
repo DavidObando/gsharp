@@ -302,9 +302,12 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             ? references.GetOrAddSemanticAggregate(
                 type,
                 consumerAssemblyName,
-                static (t, consumer) => Invariant.Required(
-                    BuildSemanticAggregate(t, consumer),
-                    "a marked imported type has a semantic aggregate"))
+                static (t, consumer) =>
+                {
+                    return Invariant.Required<StructSymbol>(
+                        BuildSemanticAggregate(t, consumer),
+                        "a marked imported type has a semantic aggregate");
+                })
             : BuildSemanticAggregate(type, consumerAssemblyName);
         return aggregate != null;
     }
@@ -572,9 +575,15 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
     private static void ApplyPrimaryConstructorDefaults(Type type, ImmutableArray<ParameterSymbol> parameters)
     {
+        var parameterNames = ImmutableArray.CreateBuilder<string>(parameters.Length);
+        foreach (var parameter in parameters)
+        {
+            parameterNames.Add(parameter.Name);
+        }
+
         var clrParameters = FindPrimaryConstructorParameters(
             type,
-            parameters.Select(static parameter => parameter.Name).ToImmutableArray());
+            parameterNames.MoveToImmutable());
         for (var i = 0; i < parameters.Length && i < clrParameters.Length; i++)
         {
             if (TryGetOptionalDefault(clrParameters[i], out var defaultValue))
@@ -589,8 +598,22 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(type, BindingFlags.Public | BindingFlags.Instance))
         {
             var parameters = constructor.GetParameters();
-            if (parameters.Length == names.Length
-                && parameters.Select(static p => p.Name).SequenceEqual(names, StringComparer.Ordinal))
+            if (parameters.Length != names.Length)
+            {
+                continue;
+            }
+
+            var namesMatch = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (!string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal))
+                {
+                    namesMatch = false;
+                    break;
+                }
+            }
+
+            if (namesMatch)
             {
                 return parameters;
             }
@@ -657,12 +680,17 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
     private static FunctionSymbol BuildMethodSymbol(MethodInfo method, StructSymbol aggregate, bool isStatic)
     {
-        var parameters = method.GetParameters()
-            .Select(parameter => new ParameterSymbol(
+        var reflectedParameters = method.GetParameters();
+        var parameterBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(reflectedParameters.Length);
+        foreach (var parameter in reflectedParameters)
+        {
+            parameterBuilder.Add(new ParameterSymbol(
                 parameter.Name ?? "arg",
                 ClrNullability.GetParameterTypeSymbol(parameter),
-                refKind: GetRefKind(parameter)))
-            .ToImmutableArray();
+                refKind: GetRefKind(parameter)));
+        }
+
+        var parameters = parameterBuilder.MoveToImmutable();
         return new FunctionSymbol(
             method.Name,
             parameters,
@@ -741,9 +769,18 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         try
         {
-            return parameter.GetRequiredCustomModifiers()
-                .Any(m => string.Equals(m.FullName, "System.Runtime.InteropServices.InAttribute", StringComparison.Ordinal))
-                || parameter.IsIn;
+            foreach (var modifier in parameter.GetRequiredCustomModifiers())
+            {
+                if (string.Equals(
+                    modifier.FullName,
+                    "System.Runtime.InteropServices.InAttribute",
+                    StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return parameter.IsIn;
         }
         catch
         {

@@ -1385,8 +1385,14 @@ internal sealed class ConversionClassifier
             && method.IsGenericMethod
             && !method.ContainsGenericParameters)
         {
-            effectiveMethodTypeArgs = ImmutableArray.CreateRange<TypeSymbol?>(
-                method.GetGenericArguments().Select(static argument => TypeSymbol.FromClrType(argument)));
+            var closedArguments = method.GetGenericArguments();
+            var mappedArguments = ImmutableArray.CreateBuilder<TypeSymbol?>(closedArguments.Length);
+            foreach (var argument in closedArguments)
+            {
+                mappedArguments.Add(TypeSymbol.FromClrType(argument));
+            }
+
+            effectiveMethodTypeArgs = mappedArguments.MoveToImmutable();
         }
 
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
@@ -2741,14 +2747,19 @@ internal sealed class ConversionClassifier
         }
 
         returnRefKind = invoke.ReturnType.IsByRef ? RefKind.Ref : RefKind.None;
-        return invoke.GetParameters().Select(parameter =>
-            !parameter.ParameterType.IsByRef
+        var refKinds = ImmutableArray.CreateBuilder<RefKind>();
+        foreach (var parameter in invoke.GetParameters())
+        {
+            refKinds.Add(!parameter.ParameterType.IsByRef
                 ? RefKind.None
                 : parameter.IsOut
                     ? RefKind.Out
                     : parameter.IsIn
                         ? RefKind.In
-                        : RefKind.Ref).ToImmutableArray();
+                        : RefKind.Ref);
+        }
+
+        return refKinds.ToImmutable();
     }
 
     // ADR-0062: an inner ref-kind modifier on a conditional ref-argument branch
@@ -2835,8 +2846,16 @@ internal sealed class ConversionClassifier
                 }
             }
 
-            var attribute = parameter.GetCustomAttributesData().FirstOrDefault(static candidate =>
-                candidate.AttributeType.FullName == "System.Runtime.CompilerServices.DateTimeConstantAttribute");
+            CustomAttributeData? attribute = null;
+            foreach (var candidate in parameter.GetCustomAttributesData())
+            {
+                if (candidate.AttributeType.FullName == "System.Runtime.CompilerServices.DateTimeConstantAttribute")
+                {
+                    attribute = candidate;
+                    break;
+                }
+            }
+
             if (attribute != null
                 && attribute.ConstructorArguments.Count == 1)
             {

@@ -24,7 +24,7 @@ public class TextWriterExtensionsTests
 
         using var writer = new StringWriter();
 
-        var exception = Record.Exception(() => writer.WriteDiagnostics(new[] { diagnostic }));
+        var exception = Record.Exception(() => DiagnosticWriter.WriteDiagnostics(writer, new[] { diagnostic }));
 
         Assert.Null(exception);
         Assert.Contains("error GS0159: Cannot find function Run.", writer.ToString());
@@ -39,7 +39,7 @@ public class TextWriterExtensionsTests
         var diagnostic = new Diagnostic(location, "GS0001", DiagnosticSeverity.Error, "bad value");
 
         using var writer = new StringWriter();
-        writer.WriteDiagnostics(new[] { diagnostic });
+        DiagnosticWriter.WriteDiagnostics(writer, new[] { diagnostic });
 
         var output = writer.ToString();
         Assert.Contains("let x = ", output);
@@ -71,7 +71,7 @@ public class TextWriterExtensionsTests
 
         using var writer = new StringWriter();
 
-        var exception = Record.Exception(() => writer.WriteDiagnostics(new[] { diagnostic }));
+        var exception = Record.Exception(() => DiagnosticWriter.WriteDiagnostics(writer, new[] { diagnostic }));
 
         Assert.Null(exception);
         Assert.Contains("unexpected end of file", writer.ToString());
@@ -94,7 +94,7 @@ public class TextWriterExtensionsTests
 
         using var writer = new StringWriter();
 
-        var exception = Record.Exception(() => writer.WriteDiagnostics(new[] { located, locationLess }));
+        var exception = Record.Exception(() => DiagnosticWriter.WriteDiagnostics(writer, new[] { located, locationLess }));
 
         Assert.Null(exception);
         var output = writer.ToString();

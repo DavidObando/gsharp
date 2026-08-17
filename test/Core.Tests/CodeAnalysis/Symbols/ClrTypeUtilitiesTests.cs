@@ -167,7 +167,8 @@ public class ClrTypeUtilitiesTests
             nameof(TypeBuilderMethodFixture<object>.Accept),
             [argument]));
 
-        var method = constructed.GetMethodSafe(
+        var method = ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderMethodFixture<object>.Accept),
             [argument]);
 
@@ -195,7 +196,7 @@ public class ClrTypeUtilitiesTests
         foreach (var (name, parameterType) in cases)
         {
             Assert.Throws<NotSupportedException>(() => constructed.GetMethod(name, [parameterType]));
-            Assert.NotNull(constructed.GetMethodSafe(name, [parameterType]));
+            Assert.NotNull(ClrTypeInspector.GetMethodSafe(constructed, name, [parameterType]));
         }
     }
 
@@ -216,7 +217,8 @@ public class ClrTypeUtilitiesTests
         Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
             nameof(TypeBuilderPointerMethodFixture<int>.AcceptPointer),
             [parameterType]));
-        Assert.NotNull(constructed.GetMethodSafe(
+        Assert.NotNull(ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderPointerMethodFixture<int>.AcceptPointer),
             [parameterType]));
     }
@@ -238,13 +240,16 @@ public class ClrTypeUtilitiesTests
             nameof(TypeBuilderPairMethodFixture<object, object>.Both),
             [argument, argument]));
 
-        var first = constructed.GetMethodSafe(
+        var first = ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderPairMethodFixture<object, object>.First),
             [argument]);
-        var second = constructed.GetMethodSafe(
+        var second = ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderPairMethodFixture<object, object>.Second),
             [argument]);
-        var both = constructed.GetMethodSafe(
+        var both = ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderPairMethodFixture<object, object>.Both),
             [argument, argument]);
 
@@ -261,7 +266,8 @@ public class ClrTypeUtilitiesTests
 
         var ambiguous = typeof(TypeBuilderAmbiguousMethodFixture<,>)
             .MakeGenericType(argument, argument);
-        Assert.Throws<AmbiguousMatchException>(() => ambiguous.GetMethodSafe(
+        Assert.Throws<AmbiguousMatchException>(() => ClrTypeInspector.GetMethodSafe(
+            ambiguous,
             nameof(TypeBuilderAmbiguousMethodFixture<object, string>.Accept),
             [argument]));
     }
@@ -279,9 +285,11 @@ public class ClrTypeUtilitiesTests
         Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
             nameof(TypeBuilderBaseMethodFixture<object>.Accept),
             [argument]));
-        Assert.NotNull(constructed.GetMethodSafe(
+        Assert.NotNull(ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderBaseMethodFixture<object>.Accept)));
-        Assert.NotNull(constructed.GetMethodSafe(
+        Assert.NotNull(ClrTypeInspector.GetMethodSafe(
+            constructed,
             nameof(TypeBuilderBaseMethodFixture<object>.Accept),
             [argument]));
     }

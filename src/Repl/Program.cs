@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -62,6 +61,11 @@ public static class Program
             var arg = args[i];
             if (TryParseReferenceSwitch(arg, out var referencePath))
             {
+                if (referencePath is null)
+                {
+                    throw new InvalidOperationException("A matched reference switch must have a value.");
+                }
+
                 references.Add(referencePath);
                 continue;
             }
@@ -206,7 +210,7 @@ public static class Program
     /// Parses gsc-style reference switches: <c>/r:&lt;file&gt;</c> or
     /// <c>/reference:&lt;file&gt;</c> (also accepted with a leading dash).
     /// </summary>
-    private static bool TryParseReferenceSwitch(string arg, [NotNullWhen(true)] out string? referencePath)
+    private static bool TryParseReferenceSwitch(string arg, out string? referencePath)
     {
         referencePath = null;
         if (arg.Length < 2 || (arg[0] != '/' && arg[0] != '-'))

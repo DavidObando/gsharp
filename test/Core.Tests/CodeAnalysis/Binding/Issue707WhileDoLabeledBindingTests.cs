@@ -191,7 +191,7 @@ public class Issue707WhileDoLabeledBindingTests
         Assert.Empty(program.Diagnostics);
 
         var sb = new System.IO.StringWriter();
-        program.Statement.WriteTo(sb);
+        BoundNodeWriter.WriteTo(program.Statement, sb);
         var text = sb.ToString();
 
         // Outer loop's BindLoopBody runs first → break1 / continue1.

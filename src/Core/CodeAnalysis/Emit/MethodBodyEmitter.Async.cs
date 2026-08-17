@@ -65,9 +65,20 @@ internal sealed partial class MethodBodyEmitter
 
         // call instance void AsyncIteratorMethodBuilder::MoveNext<SM>(ref SM)
         var builderClrType = typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder);
-        var openMoveNext = builderClrType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .First(m => m.Name == "MoveNext" && m.IsGenericMethodDefinition && m.GetParameters().Length == 1);
-        var openRef = this.outer.memberRefs.GetMethodReference(openMoveNext.GetGenericMethodDefinition());
+        MethodInfo? openMoveNext = null;
+        foreach (var method in builderClrType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (method.Name == "MoveNext"
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 1)
+            {
+                openMoveNext = method;
+                break;
+            }
+        }
+
+        openMoveNext = Invariant.Required(openMoveNext, "AsyncIteratorMethodBuilder.MoveNext<TStateMachine> is available");
+        var openRef = this.outer.memberRefs.GetMethodReference(openMoveNext);
 
         var sigBlob = new BlobBuilder();
         var argsEncoder = new BlobEncoder(sigBlob).MethodSpecificationSignature(1);

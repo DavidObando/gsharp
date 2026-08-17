@@ -282,7 +282,16 @@ internal static class ExternalClrOverrideResolver
             }
         }
 
-        return slots.Where(method => method.IsAbstract).ToImmutableArray();
+        var abstractSlots = ImmutableArray.CreateBuilder<MethodInfo>();
+        foreach (var method in slots)
+        {
+            if (method.IsAbstract)
+            {
+                abstractSlots.Add(method);
+            }
+        }
+
+        return abstractSlots.ToImmutable();
     }
 
     private static bool SlotSignaturesMatch(

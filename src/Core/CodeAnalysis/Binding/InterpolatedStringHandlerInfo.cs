@@ -256,7 +256,16 @@ public sealed class InterpolatedStringHandlerInfo
                 continue;
             }
 
-            var index = System.Array.FindIndex(parameters, p => string.Equals(p.Name, name, System.StringComparison.Ordinal));
+            var index = -1;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (string.Equals(parameters[i].Name, name, StringComparison.Ordinal))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
             if (index < 0 || index >= arguments.Length)
             {
                 failure = $"the handler argument references parameter '{name}', which is not a preceding argument of this call";
@@ -407,8 +416,17 @@ public sealed class InterpolatedStringHandlerInfo
         }
         else
         {
-            method = candidates.FirstOrDefault(candidate => candidate.IsGenericMethodDefinition)
-                ?? candidates[0];
+            method = null;
+            foreach (var candidate in candidates)
+            {
+                if (candidate.IsGenericMethodDefinition)
+                {
+                    method = candidate;
+                    break;
+                }
+            }
+
+            method ??= candidates[0];
         }
 
         if (!method.IsGenericMethodDefinition)

@@ -843,7 +843,10 @@ public sealed class InterfaceSymbol : TypeSymbol
         {
             var enclosingArgs = EnumSymbol.SubstituteEnclosingArguments(
                 enumType,
-                argument => SubstituteType(argument, subst, mapClrType));
+                argument =>
+                {
+                    return SubstituteType(argument, subst, mapClrType);
+                });
             return enclosingArgs.IsDefaultOrEmpty
                 ? enumType
                 : EnumSymbol.ConstructNested(enumType.Definition ?? enumType, enclosingArgs);
@@ -865,7 +868,10 @@ public sealed class InterfaceSymbol : TypeSymbol
         {
             return StructSymbol.SubstituteConstructionArguments(
                 structType,
-                argument => SubstituteType(argument, subst, mapClrType),
+                argument =>
+                {
+                    return SubstituteType(argument, subst, mapClrType);
+                },
                 mapClrType);
         }
 
@@ -948,7 +954,7 @@ public sealed class InterfaceSymbol : TypeSymbol
                 // a bug. Log for diagnosability and fall back to the erased
                 // constructed form so both debug and release builds degrade
                 // gracefully rather than crash.
-                var assertMessage = $"InterfaceSymbol.SubstituteType: MakeGenericType failed for '{imported.OpenDefinition}' with args [{string.Join(", ", resolvedClrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                var assertMessage = $"InterfaceSymbol.SubstituteType: MakeGenericType failed for '{imported.OpenDefinition}' with args [{FormatClrTypes(resolvedClrArgs)}] even after mapClrType projection.";
                 System.Diagnostics.Debug.WriteLine(assertMessage);
                 return imported;
             }
@@ -985,5 +991,16 @@ public sealed class InterfaceSymbol : TypeSymbol
         }
 
         return type;
+    }
+
+    private static string FormatClrTypes(Type[] types)
+    {
+        var text = new string[types.Length];
+        for (var i = 0; i < types.Length; i++)
+        {
+            text[i] = types[i].ToString();
+        }
+
+        return string.Join(", ", text);
     }
 }

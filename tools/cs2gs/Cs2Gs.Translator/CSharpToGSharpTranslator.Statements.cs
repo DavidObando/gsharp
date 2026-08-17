@@ -380,13 +380,21 @@ public sealed partial class CSharpToGSharpTranslator
             bool leftIsIntegral = IsIntegralNumericKind(leftUnderlying);
             bool rightIsIntegral = IsIntegralNumericKind(rightUnderlying);
 
-            if (rightConst && !leftConst && leftIsIntegral && rightIsIntegral)
+            if (rightConst
+                && !leftConst
+                && leftIsIntegral
+                && rightIsIntegral
+                && this.IntegralConstantFits(binary.Right, leftUnderlying))
             {
                 right = this.CoerceOperandTo(right, leftType);
                 return new BinaryExpression(left, op, right);
             }
 
-            if (leftConst && !rightConst && leftIsIntegral && rightIsIntegral)
+            if (leftConst
+                && !rightConst
+                && leftIsIntegral
+                && rightIsIntegral
+                && this.IntegralConstantFits(binary.Left, rightUnderlying))
             {
                 left = this.CoerceOperandTo(left, rightType);
                 return new BinaryExpression(left, op, right);
@@ -1266,6 +1274,41 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return true;
             }
+        }
+
+        private bool IntegralConstantFits(ExpressionSyntax expression, SpecialType targetType)
+        {
+            Optional<object> constant = this.context.SemanticModel.GetConstantValue(expression);
+            if (!constant.HasValue || constant.Value == null)
+            {
+                return false;
+            }
+
+            decimal value;
+            try
+            {
+                value = constant.Value is char character
+                    ? character
+                    : Convert.ToDecimal(constant.Value, CultureInfo.InvariantCulture);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            return targetType switch
+            {
+                SpecialType.System_SByte => value >= sbyte.MinValue && value <= sbyte.MaxValue,
+                SpecialType.System_Byte => value >= byte.MinValue && value <= byte.MaxValue,
+                SpecialType.System_Int16 => value >= short.MinValue && value <= short.MaxValue,
+                SpecialType.System_UInt16 => value >= ushort.MinValue && value <= ushort.MaxValue,
+                SpecialType.System_Char => value >= char.MinValue && value <= char.MaxValue,
+                SpecialType.System_Int32 => value >= int.MinValue && value <= int.MaxValue,
+                SpecialType.System_UInt32 => value >= uint.MinValue && value <= uint.MaxValue,
+                SpecialType.System_Int64 => value >= long.MinValue && value <= long.MaxValue,
+                SpecialType.System_UInt64 => value >= ulong.MinValue && value <= ulong.MaxValue,
+                _ => false,
+            };
         }
 
         private IEnumerable<GStatement> TranslateLabeledStatement(LabeledStatementSyntax labeledStatement)

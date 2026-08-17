@@ -91,17 +91,34 @@ public sealed class ImportedClassSymbol : Symbol
     {
         _ = ne;
         var level = FindNearestNamedMemberLevel(text);
-        var property = level.Properties.FirstOrDefault(p =>
-            p.GetIndexParameters().Length == 0
-            && IsStatic(p)
-            && IsVisibleToCurrentCompilation(p));
+        PropertyInfo? property = null;
+        foreach (var candidate in level.Properties)
+        {
+            if (candidate.GetIndexParameters().Length == 0
+                && IsStatic(candidate)
+                && IsVisibleToCurrentCompilation(candidate))
+            {
+                property = candidate;
+                break;
+            }
+        }
+
         if (property != null)
         {
             member = property;
             return true;
         }
 
-        var field = level.Fields.FirstOrDefault(f => f.IsStatic && IsVisibleToCurrentCompilation(f));
+        FieldInfo? field = null;
+        foreach (var candidate in level.Fields)
+        {
+            if (candidate.IsStatic && IsVisibleToCurrentCompilation(candidate))
+            {
+                field = candidate;
+                break;
+            }
+        }
+
         if (field != null)
         {
             member = field;
@@ -195,9 +212,15 @@ public sealed class ImportedClassSymbol : Symbol
         isAmbiguous = false;
         ambiguousMethods = ImmutableArray<MethodInfo>.Empty;
         isExpanded = false;
-        var nameMatches = FindNearestNamedMemberLevel(text).Methods
-            .Where(m => m.IsStatic && IsVisibleToCurrentCompilation(m))
-            .ToList();
+        var nameMatches = new List<MethodInfo>();
+        foreach (var method in FindNearestNamedMemberLevel(text).Methods)
+        {
+            if (method.IsStatic && IsVisibleToCurrentCompilation(method))
+            {
+                nameMatches.Add(method);
+            }
+        }
+
         if (nameMatches.Count == 0)
         {
             return false;
@@ -343,29 +366,40 @@ public sealed class ImportedClassSymbol : Symbol
         var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
             receiverType: null,
             ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
-        nameMatches = MemberLookup.ExcludeErasureOnlyEnumCandidates(
-            nameMatches,
-            symbolicArgVector,
-            argumentNames,
-            SymbolicReceiver).ToList();
-        var result = ClrOverloadResolution.Resolve(
-            nameMatches,
+        var filteredNameMatches = new List<MethodInfo>();
+        foreach (var method in MemberLookup.ExcludeErasureOnlyEnumCandidates(
+                     nameMatches,
+                     symbolicArgVector,
+                     argumentNames,
+                     SymbolicReceiver))
+        {
+            filteredNameMatches.Add(method);
+        }
+
+        var result = ClrOverloadResolution.Resolve<MethodInfo>(
+            filteredNameMatches,
             argTypes,
             explicitTypeArgs,
             projectTypeArgument,
             ComputeInterpolatedStringArgFlags(callExpression, arguments.Length),
             argumentNames,
-            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                typeArgSymbols,
-                symbolicArgVector,
-                isExpanded),
+            (closed, isExpanded) =>
+            {
+                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    closed,
+                    typeArgSymbols,
+                    symbolicArgVector,
+                    isExpanded);
+            },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
             delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
                 arguments,
-                type => Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable")));
+                type =>
+                {
+                    return Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable");
+                }));
 
         switch (result.Outcome)
         {
@@ -449,13 +483,21 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="text">The method-group name.</param>
     /// <returns>The visible, non-special static methods at the winning level.</returns>
     internal ImmutableArray<MethodInfo> GetStaticMethodGroup(string text)
-        => FindNearestNamedMemberLevel(text).Methods
-            .Where(m =>
-                m.IsStatic
-                && !m.IsGenericMethodDefinition
-                && !m.IsSpecialName
-                && IsVisibleToCurrentCompilation(m))
-            .ToImmutableArray();
+    {
+        var methods = ImmutableArray.CreateBuilder<MethodInfo>();
+        foreach (var method in FindNearestNamedMemberLevel(text).Methods)
+        {
+            if (method.IsStatic
+                && !method.IsGenericMethodDefinition
+                && !method.IsSpecialName
+                && IsVisibleToCurrentCompilation(method))
+            {
+                methods.Add(method);
+            }
+        }
+
+        return methods.ToImmutable();
+    }
 
     private static Type? ProjectMethodGroupType(TypeSymbol type)
     {
@@ -522,27 +564,51 @@ public sealed class ImportedClassSymbol : Symbol
 
         for (Type? current = ClassType; current != null; current = GetBaseTypeSafe(current))
         {
-            var methods = ClrTypeUtilities.SafeGetMethods(current, Flags)
-                .Where(m =>
-                    string.Equals(m.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(m))
-                .ToImmutableArray();
-            var properties = ClrTypeUtilities.SafeGetProperties(current, Flags)
-                .Where(p =>
-                    string.Equals(p.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(p))
-                .ToImmutableArray();
-            var fields = ClrTypeUtilities.SafeGetFields(current, Flags)
-                .Where(f =>
-                    string.Equals(f.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(f))
-                .ToImmutableArray();
-            var events = ClrTypeUtilities.SafeGetEvents(current, Flags)
-                .Any(e =>
-                    string.Equals(e.Name, name, StringComparison.Ordinal)
-                    && IsVisibleToCurrentCompilation(e));
+            var methodBuilder = ImmutableArray.CreateBuilder<MethodInfo>();
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(current, Flags))
+            {
+                if (string.Equals(method.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(method))
+                {
+                    methodBuilder.Add(method);
+                }
+            }
 
-            if (!methods.IsEmpty || !properties.IsEmpty || !fields.IsEmpty || events || DeclaresVisibleNestedType(current, name))
+            var methods = methodBuilder.ToImmutable();
+            var propertyBuilder = ImmutableArray.CreateBuilder<PropertyInfo>();
+            foreach (var property in ClrTypeUtilities.SafeGetProperties(current, Flags))
+            {
+                if (string.Equals(property.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(property))
+                {
+                    propertyBuilder.Add(property);
+                }
+            }
+
+            var properties = propertyBuilder.ToImmutable();
+            var fieldBuilder = ImmutableArray.CreateBuilder<FieldInfo>();
+            foreach (var field in ClrTypeUtilities.SafeGetFields(current, Flags))
+            {
+                if (string.Equals(field.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(field))
+                {
+                    fieldBuilder.Add(field);
+                }
+            }
+
+            var fields = fieldBuilder.ToImmutable();
+            var declaresEvent = false;
+            foreach (var eventInfo in ClrTypeUtilities.SafeGetEvents(current, Flags))
+            {
+                if (string.Equals(eventInfo.Name, name, StringComparison.Ordinal)
+                    && IsVisibleToCurrentCompilation(eventInfo))
+                {
+                    declaresEvent = true;
+                    break;
+                }
+            }
+
+            if (!methods.IsEmpty || !properties.IsEmpty || !fields.IsEmpty || declaresEvent || DeclaresVisibleNestedType(current, name))
             {
                 return new NamedMemberLevel(methods, properties, fields);
             }

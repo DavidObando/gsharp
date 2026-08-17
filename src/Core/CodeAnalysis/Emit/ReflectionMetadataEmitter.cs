@@ -1970,9 +1970,11 @@ internal sealed class ReflectionMetadataEmitter
             .Concat(nestedOrdered.OfType<StructSymbol>().Where(type => type.IsClass))
             .Where(type => type.IsData))
         {
-            for (var current = dataClass; current != null; current = current.BaseClass)
+            StructSymbol? current = dataClass;
+            while (current != null)
             {
                 dataCopyConstructorClasses.Add(current.Definition ?? current);
+                current = current.BaseClass;
             }
         }
 
@@ -4369,7 +4371,7 @@ internal sealed class ReflectionMetadataEmitter
         private static bool TryGetFixedReturnType(BoundStatement statement, [NotNullWhen(true)] out TypeSymbol? returnType)
         {
             TypeSymbol? foundType = null;
-            var found = Find(statement, insideFixed: false);
+            var found = Find(statement, false);
             returnType = foundType;
             return found;
 
@@ -4389,7 +4391,7 @@ internal sealed class ReflectionMetadataEmitter
 
                         return found;
                     case BoundFixedStatement fixedStatement:
-                        return Find(fixedStatement.Body, insideFixed: true);
+                        return Find(fixedStatement.Body, true);
                     case BoundSelectStatement selectStatement:
                         var selectFound = false;
                         foreach (var arm in selectStatement.Cases)

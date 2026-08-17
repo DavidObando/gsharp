@@ -18,6 +18,30 @@ namespace Cs2Gs.Tests;
 public class Issue3394BoxingCastTranslationTests
 {
     [Fact]
+    public void OpcodePrefixCombination_WidensBeforeBitwiseOr()
+    {
+        const string source = @"
+namespace Demo
+{
+    public static class C
+    {
+        public static short Decode(byte next)
+        {
+            int encodedKey = 0xFE00 | next;
+            return unchecked((short)encodedKey);
+        }
+    }
+}
+";
+
+        string rendered = Translate(source);
+
+        Assert.Contains("let encodedKey = 0xFE00 | int32(next)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("uint8(0xFE00)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public void SameCompilationReferenceDowncast_UsesAsAssertion()
     {
         const string source = @"

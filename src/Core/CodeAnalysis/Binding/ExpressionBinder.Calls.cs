@@ -869,9 +869,20 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        return type.ClrType is { } clrType &&
-            MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add")
-                .Any(method => method.GetParameters().Length == 1);
+        if (type.ClrType is not { } clrType)
+        {
+            return false;
+        }
+
+        foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add"))
+        {
+            if (method.GetParameters().Length == 1)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

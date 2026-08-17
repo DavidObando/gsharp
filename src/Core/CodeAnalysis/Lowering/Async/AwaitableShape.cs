@@ -120,17 +120,19 @@ public sealed class AwaitableShape
             return null;
         }
 
-        var implementsNotify = awaiterType.GetInterfaces()
-            .Any(i => i.FullName == "System.Runtime.CompilerServices.INotifyCompletion");
+        var implementsNotify = false;
+        var implementsCritical = false;
+        foreach (var interfaceType in awaiterType.GetInterfaces())
+        {
+            implementsNotify |= interfaceType.FullName == "System.Runtime.CompilerServices.INotifyCompletion";
+            implementsCritical |= interfaceType.FullName == "System.Runtime.CompilerServices.ICriticalNotifyCompletion";
+        }
 
         if (!implementsNotify)
         {
             // Not awaitable — must at minimum implement INotifyCompletion.
             return null;
         }
-
-        var implementsCritical = awaiterType.GetInterfaces()
-            .Any(i => i.FullName == "System.Runtime.CompilerServices.ICriticalNotifyCompletion");
 
         return new AwaitableShape(
             awaitableType,

@@ -96,13 +96,13 @@ public static class Highlight
     /// </summary>
     private static IEnumerable<(int Start, string Text, SemanticColor Color)> ExpandToken(SyntaxToken token)
     {
-        if (token.Kind == SyntaxKind.InterpolatedStringToken && token.Value is InterpolationFragments fragments)
+        if (token.Kind == SyntaxKind.InterpolatedStringToken && token.Value is InterpolationFragments frags)
         {
             var cursor = token.Position;
             var tokenEnd = token.Position + token.Text.Length;
             var stringColor = Tokens.Tokens.StringLit;
 
-            foreach (var frag in fragments.Items)
+            foreach (var frag in frags.Items)
             {
                 if (!frag.IsExpression)
                 {

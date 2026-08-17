@@ -440,7 +440,9 @@ public class OverloadResolutionTests
         // is Task<object>, NOT Task<Task<object>>.
         var closedReturn = forward.Best.ReturnType;
         Assert.True(closedReturn.IsGenericType);
-        Assert.True(closedReturn.GetGenericTypeDefinition().IsSameAs(typeof(System.Threading.Tasks.Task<>)));
+        Assert.True(ClrTypeInspector.IsSameAs(
+            closedReturn.GetGenericTypeDefinition(),
+            typeof(System.Threading.Tasks.Task<>)));
         Assert.Equal(typeof(object), closedReturn.GetGenericArguments()[0]);
     }
 

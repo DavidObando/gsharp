@@ -23,11 +23,17 @@ public sealed class DeclaredProjectItem
     /// <param name="itemGroupCondition">The containing ItemGroup condition.</param>
     /// <param name="element">The namespace-free item XML.</param>
     /// <param name="sourceInclude">The absolute source ProjectReference target.</param>
-    public DeclaredProjectItem(string itemGroupCondition, XElement element, string sourceInclude = null)
+    /// <param name="sourceAssemblyName">The evaluated referenced project's assembly name.</param>
+    public DeclaredProjectItem(
+        string itemGroupCondition,
+        XElement element,
+        string sourceInclude = null,
+        string sourceAssemblyName = null)
     {
         this.ItemGroupCondition = itemGroupCondition;
         this.Element = element ?? throw new ArgumentNullException(nameof(element));
         this.SourceInclude = sourceInclude;
+        this.SourceAssemblyName = sourceAssemblyName;
     }
 
     /// <summary>Gets the containing ItemGroup condition, or <see langword="null"/>.</summary>
@@ -38,6 +44,9 @@ public sealed class DeclaredProjectItem
 
     /// <summary>Gets the absolute source ProjectReference target, when applicable.</summary>
     public string SourceInclude { get; }
+
+    /// <summary>Gets the evaluated referenced project's assembly name, when known.</summary>
+    public string SourceAssemblyName { get; }
 }
 
 /// <summary>Reads and rewrites declared project dependency items.</summary>
@@ -65,9 +74,14 @@ internal static class DeclaredProjectItems
                 if (itemName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase))
                 {
                     string include = item.Attribute("Include")?.Value;
-                    if (!string.IsNullOrEmpty(include) && !include.Contains("$(", StringComparison.Ordinal))
+                    if (!string.IsNullOrEmpty(include)
+                        && !include.Contains("$(", StringComparison.Ordinal)
+                        && !include.Contains("@(", StringComparison.Ordinal))
                     {
-                        sourceInclude = Path.GetFullPath(Path.Combine(projectDirectory, include));
+                        string normalizedInclude = include
+                            .Replace('\\', Path.DirectorySeparatorChar)
+                            .Replace('/', Path.DirectorySeparatorChar);
+                        sourceInclude = Path.GetFullPath(Path.Combine(projectDirectory, normalizedInclude));
                     }
                 }
 
@@ -136,7 +150,11 @@ internal static class DeclaredProjectItems
             rewritten ??= new List<DeclaredProjectItem>(items.Take(i));
             var element = new XElement(item.Element);
             element.SetAttributeValue("Version", bumped);
-            rewritten.Add(new DeclaredProjectItem(item.ItemGroupCondition, element, item.SourceInclude));
+            rewritten.Add(new DeclaredProjectItem(
+                item.ItemGroupCondition,
+                element,
+                item.SourceInclude,
+                item.SourceAssemblyName));
         }
 
         return rewritten ?? items;
@@ -152,6 +170,13 @@ internal static class DeclaredProjectItems
         {
             XElement element = new XElement(item.Element);
             string targetPath = item.SourceInclude;
+            string include = element.Attribute("Include")?.Value;
+            if (string.IsNullOrEmpty(targetPath)
+                && IsMsbuildExpression(include))
+            {
+                continue;
+            }
+
             if (!string.IsNullOrEmpty(targetPath) &&
                 generatedProjectPaths is not null &&
                 generatedProjectPaths.TryGetValue(Path.GetFullPath(targetPath), out string generatedPath))
@@ -164,11 +189,24 @@ internal static class DeclaredProjectItems
                 element.SetAttributeValue("Include", Path.GetRelativePath(generatedProjectDirectory, targetPath));
             }
 
-            rewritten.Add(new DeclaredProjectItem(item.ItemGroupCondition, element, item.SourceInclude));
+            rewritten.Add(new DeclaredProjectItem(
+                item.ItemGroupCondition,
+                element,
+                item.SourceInclude,
+                item.SourceAssemblyName));
         }
 
         return rewritten;
     }
+
+    internal static bool HasMsbuildExpressionInclude(DeclaredProjectItem item) =>
+        item is not null
+        && IsMsbuildExpression(item.Element.Attribute("Include")?.Value);
+
+    private static bool IsMsbuildExpression(string value) =>
+        !string.IsNullOrEmpty(value)
+        && (value.Contains("$(", StringComparison.Ordinal)
+            || value.Contains("@(", StringComparison.Ordinal));
 
     private static XElement StripNamespaces(XElement element) =>
         new XElement(

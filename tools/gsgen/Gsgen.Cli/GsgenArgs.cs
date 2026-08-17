@@ -87,23 +87,23 @@ public sealed class GsgenArgs
 
             if (TryMatch(arg, "/gs:", out var gs))
             {
-                parsed.GsFiles.Add(gs);
+                parsed.GsFiles.Add(gs!);
             }
             else if (TryMatch(arg, "/r:", out var r))
             {
-                parsed.References.Add(r);
+                parsed.References.Add(r!);
             }
             else if (TryMatch(arg, "/analyzer:", out var analyzer))
             {
-                parsed.AnalyzerPaths.Add(analyzer);
+                parsed.AnalyzerPaths.Add(analyzer!);
             }
             else if (TryMatch(arg, "/csfile:", out var csFile))
             {
-                parsed.CsFiles.Add(csFile);
+                parsed.CsFiles.Add(csFile!);
             }
             else if (TryMatch(arg, "/additionalfile:", out var additionalFile))
             {
-                var spec = AdditionalFileSpec.Parse(additionalFile);
+                var spec = AdditionalFileSpec.Parse(additionalFile!);
                 if (spec is not null)
                 {
                     parsed.AdditionalFiles.Add(spec);
@@ -111,7 +111,7 @@ public sealed class GsgenArgs
             }
             else if (TryMatch(arg, "/globaloption:", out var globalOption))
             {
-                int eq = globalOption.IndexOf('=');
+                int eq = globalOption!.IndexOf('=');
                 if (eq > 0)
                 {
                     var key = globalOption.Substring(0, eq).Trim();
@@ -131,15 +131,15 @@ public sealed class GsgenArgs
             }
             else if (TryMatch(arg, "/out:", out var outDir))
             {
-                parsed.OutDir = outDir;
+                parsed.OutDir = outDir!;
             }
             else if (TryMatch(arg, "/rootnamespace:", out var ns))
             {
-                parsed.RootNamespace = ns;
+                parsed.RootNamespace = ns!;
             }
             else if (TryMatch(arg, "/manifest:", out var manifest))
             {
-                parsed.ManifestPath = manifest;
+                parsed.ManifestPath = manifest!;
             }
             else
             {

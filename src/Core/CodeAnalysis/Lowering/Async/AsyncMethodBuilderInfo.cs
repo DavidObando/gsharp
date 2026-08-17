@@ -419,20 +419,9 @@ public sealed class AsyncMethodBuilderInfo
             // (todo: iterator-rewriter); here we resolve only the members
             // that are common with the Task path, so the kind+builder type
             // are already discoverable by callers.
-            var moveNext = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "MoveNext")
-                .FirstOrDefault(m =>
-                    m.IsGenericMethodDefinition
-                    && m.GetParameters().Length == 1);
-            var awaitOnCompletedIter = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitOnCompleted")
-                .FirstOrDefault(m =>
-                    m.IsGenericMethodDefinition
-                    && m.GetGenericArguments().Length == 2
-                    && m.GetParameters().Length == 2);
-            var awaitUnsafeOnCompletedIter = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitUnsafeOnCompleted")
-                .FirstOrDefault(m =>
-                    m.IsGenericMethodDefinition
-                    && m.GetGenericArguments().Length == 2
-                    && m.GetParameters().Length == 2);
+            var moveNext = FindGenericBuilderMethod(builderType, "MoveNext", genericArgumentCount: null, parameterCount: 1);
+            var awaitOnCompletedIter = FindGenericBuilderMethod(builderType, "AwaitOnCompleted", genericArgumentCount: 2, parameterCount: 2);
+            var awaitUnsafeOnCompletedIter = FindGenericBuilderMethod(builderType, "AwaitUnsafeOnCompleted", genericArgumentCount: 2, parameterCount: 2);
 
             return new AsyncMethodBuilderInfo(
                 kind,
@@ -470,32 +459,11 @@ public sealed class AsyncMethodBuilderInfo
                 "an async method builder has a parameterless SetResult method");
         }
 
-        var setException = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "SetException")
-            .FirstOrDefault(m =>
-                m.GetParameters().Length == 1
-                && m.GetParameters()[0].ParameterType.FullName == "System.Exception");
-
-        var setStateMachine = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "SetStateMachine")
-            .FirstOrDefault(m =>
-                m.GetParameters().Length == 1
-                && m.GetParameters()[0].ParameterType.FullName == "System.Runtime.CompilerServices.IAsyncStateMachine");
-
-        var start = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "Start")
-            .FirstOrDefault(m =>
-                m.IsGenericMethodDefinition
-                && m.GetParameters().Length == 1);
-
-        var awaitOnCompleted = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitOnCompleted")
-            .FirstOrDefault(m =>
-                m.IsGenericMethodDefinition
-                && m.GetGenericArguments().Length == 2
-                && m.GetParameters().Length == 2);
-
-        var awaitUnsafeOnCompleted = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "AwaitUnsafeOnCompleted")
-            .FirstOrDefault(m =>
-                m.IsGenericMethodDefinition
-                && m.GetGenericArguments().Length == 2
-                && m.GetParameters().Length == 2);
+        var setException = FindSingleParameterBuilderMethod(builderType, "SetException", "System.Exception");
+        var setStateMachine = FindSingleParameterBuilderMethod(builderType, "SetStateMachine", "System.Runtime.CompilerServices.IAsyncStateMachine");
+        var start = FindGenericBuilderMethod(builderType, "Start", genericArgumentCount: null, parameterCount: 1);
+        var awaitOnCompleted = FindGenericBuilderMethod(builderType, "AwaitOnCompleted", genericArgumentCount: 2, parameterCount: 2);
+        var awaitUnsafeOnCompleted = FindGenericBuilderMethod(builderType, "AwaitUnsafeOnCompleted", genericArgumentCount: 2, parameterCount: 2);
 
         return new AsyncMethodBuilderInfo(
             kind,
@@ -509,5 +477,42 @@ public sealed class AsyncMethodBuilderInfo
             setException,
             awaitOnCompleted,
             awaitUnsafeOnCompleted);
+    }
+
+    private static MethodInfo? FindGenericBuilderMethod(
+        Type builderType,
+        string name,
+        int? genericArgumentCount,
+        int parameterCount)
+    {
+        foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, name))
+        {
+            if (method.IsGenericMethodDefinition
+                && (genericArgumentCount == null || method.GetGenericArguments().Length == genericArgumentCount)
+                && method.GetParameters().Length == parameterCount)
+            {
+                return method;
+            }
+        }
+
+        return null;
+    }
+
+    private static MethodInfo? FindSingleParameterBuilderMethod(
+        Type builderType,
+        string name,
+        string parameterTypeName)
+    {
+        foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, name))
+        {
+            var parameters = method.GetParameters();
+            if (parameters.Length == 1
+                && parameters[0].ParameterType.FullName == parameterTypeName)
+            {
+                return method;
+            }
+        }
+
+        return null;
     }
 }

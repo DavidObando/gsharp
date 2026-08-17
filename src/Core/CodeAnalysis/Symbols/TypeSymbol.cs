@@ -480,7 +480,10 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <param name="type">The type to inspect.</param>
     /// <returns><c>true</c> if the type references an in-scope type parameter.</returns>
-    public static bool ContainsTypeParameter(TypeSymbol type) => AnyTypeParameter(type, static _ => true);
+    public static bool ContainsTypeParameter(TypeSymbol type) => AnyTypeParameter(type, static _ =>
+    {
+        return true;
+    });
 
     /// <summary>
     /// Issue #810 / #1481: returns <see langword="true"/> when
@@ -503,7 +506,10 @@ public class TypeSymbol : Symbol
             return false;
         }
 
-        return AnyTypeParameter(type, parameter => outerMethodTypeParameters.Contains(parameter));
+        return AnyTypeParameter(type, parameter =>
+        {
+            return outerMethodTypeParameters.Contains(parameter);
+        });
     }
 
     /// <summary>

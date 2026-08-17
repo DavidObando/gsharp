@@ -655,7 +655,7 @@ public class IncrementalGlobalScopeReuseTests
     private static string Print(BoundNode node)
     {
         var writer = new StringWriter();
-        node.WriteTo(writer);
+        BoundNodeWriter.WriteTo(node, writer);
         return writer.ToString();
     }
 

@@ -583,16 +583,30 @@ internal sealed partial class StatementBinder
         }
 
         var descendants = DescendantsAndSelf(function.Declaration.Body).ToArray();
-        if (descendants.Any(node =>
-                node is VariableDeclarationSyntax variable
-                && string.Equals(variable.Identifier.Text, function.Type.Name, StringComparison.Ordinal)))
+        foreach (var node in descendants)
+        {
+            if (node is VariableDeclarationSyntax variable
+                && string.Equals(variable.Identifier.Text, function.Type.Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        var returns = descendants.OfType<ReturnStatementSyntax>().ToArray();
+        if (returns.Length == 0)
         {
             return false;
         }
 
-        var returns = descendants.OfType<ReturnStatementSyntax>().ToArray();
-        return returns.Length > 0
-            && returns.All(statement => IsDefinitelyNonNullSyntax(statement.Expression, function.Type));
+        foreach (var statement in returns)
+        {
+            if (!IsDefinitelyNonNullSyntax(statement.Expression, function.Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool IsDefinitelyNonNullSyntax(ExpressionSyntax? expression, TypeSymbol expectedType)

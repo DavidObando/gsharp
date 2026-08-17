@@ -1705,9 +1705,21 @@ public sealed class StructSymbol : TypeSymbol
             return default;
         }
 
-        var current = nested.IsConstructedNestedType
-            ? nested.EnclosingTypeArguments
-            : ImmutableArray.CreateRange(enclosingParams, static p => (TypeSymbol)p);
+        ImmutableArray<TypeSymbol> current;
+        if (nested.IsConstructedNestedType)
+        {
+            current = nested.EnclosingTypeArguments;
+        }
+        else
+        {
+            var currentBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(enclosingParams.Length);
+            foreach (var parameter in enclosingParams)
+            {
+                currentBuilder.Add(parameter);
+            }
+
+            current = currentBuilder.MoveToImmutable();
+        }
 
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(current.Length);
         var changed = false;
@@ -1718,7 +1730,7 @@ public sealed class StructSymbol : TypeSymbol
             builder.Add(substituted);
         }
 
-        return changed ? builder.MoveToImmutable() : default;
+        return changed ? builder.ToImmutable() : default;
     }
 
     internal static StructSymbol SubstituteConstructionArguments(

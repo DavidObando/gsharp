@@ -91,6 +91,34 @@ public class ProgramSilentFailureTests
         }
     }
 
+    [Fact]
+    public void ReportUnhandledException_DebugStackFollowsDiagnostic()
+    {
+        const string EnvironmentVariable = "GS_DEBUG_STACK";
+        var previousValue = Environment.GetEnvironmentVariable(EnvironmentVariable);
+        var previousOut = Console.Out;
+        using var stdout = new StringWriter();
+        try
+        {
+            Environment.SetEnvironmentVariable(EnvironmentVariable, "1");
+            Console.SetOut(stdout);
+
+            Assert.Equal(1, Program.ReportUnhandledException(
+                new InvalidOperationException("ordering-probe")));
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Environment.SetEnvironmentVariable(EnvironmentVariable, previousValue);
+        }
+
+        var lines = stdout.ToString().Split(
+            Environment.NewLine,
+            StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("error GS9998: InvalidOperationException: ordering-probe", lines[0]);
+        Assert.StartsWith("System.InvalidOperationException: ordering-probe", lines[1]);
+    }
+
     private static (int ExitCode, string Stdout, string Stderr) RunCompiler(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_silent_failure_test_").FullName;

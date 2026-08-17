@@ -1429,7 +1429,12 @@ public sealed partial class CSharpToGSharpTranslator
             // single foldable statement (it always needs the nested
             // async-literal binding plus the `ContinueWith` call), so it
             // never takes the arrow form.
-            GStatement arrowBody = !isAsyncVoidHandler && node.ExpressionBody != null ? TryFoldArrowBody(body) : null;
+            GStatement arrowBody =
+                !isAsyncVoidHandler
+                && ownerKind != TypeDeclarationKind.Interface
+                && node.ExpressionBody != null
+                    ? TryFoldArrowBody(body)
+                    : null;
             if (arrowBody != null)
             {
                 body = null;

@@ -1866,6 +1866,14 @@ internal sealed class LambdaBinder
             : boundBody;
         var trailingIsAssignment = IsAssignmentExpression(trailingExpression);
 
+        // Preserve the direct expression-body type before common-type
+        // aggregation. This path has one candidate by construction and also
+        // remains stable when Core itself is compiled from migrated G#.
+        if (targetFunctionType == null && !hasExplicitReturn && !trailingIsAssignment)
+        {
+            return trailingType;
+        }
+
         // Issue #891: a block-body arrow lambda whose body never completes
         // normally — every path throws (or otherwise terminates) without a
         // value-producing `return` — has no natural return value. C# treats
@@ -1968,13 +1976,16 @@ internal sealed class LambdaBinder
     // trailing assignment as contributing `void` (G#'s Kotlin-like Unit
     // semantics) on the target-less inference path.
     private static bool IsAssignmentExpression(BoundExpression expression)
-        => expression?.Kind is BoundNodeKind.AssignmentExpression
-            or BoundNodeKind.FieldAssignmentExpression
-            or BoundNodeKind.PropertyAssignmentExpression
-            or BoundNodeKind.IndexAssignmentExpression
-            or BoundNodeKind.ClrPropertyAssignmentExpression
-            or BoundNodeKind.ClrIndexAssignmentExpression
-            or BoundNodeKind.IndirectAssignmentExpression;
+    {
+        var kind = expression.Kind;
+        return kind == BoundNodeKind.AssignmentExpression
+            || kind == BoundNodeKind.FieldAssignmentExpression
+            || kind == BoundNodeKind.PropertyAssignmentExpression
+            || kind == BoundNodeKind.IndexAssignmentExpression
+            || kind == BoundNodeKind.ClrPropertyAssignmentExpression
+            || kind == BoundNodeKind.ClrIndexAssignmentExpression
+            || kind == BoundNodeKind.IndirectAssignmentExpression;
+    }
 
     // ADR-0076 / issue #716: a trimmed copy of ExpressionBinder's common-
     // type rule (ADR-0062). Kept here to avoid widening the binder API

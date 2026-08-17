@@ -631,7 +631,10 @@ public static class TypeMemberModel
         if (!declaredDefinition.TypeParameters.IsDefaultOrEmpty)
         {
             return lookupType.FindConstructedGenericBase(
-                candidate => ReferenceEquals(candidate, declaredDefinition)) ?? declaredOwner;
+                candidate =>
+                {
+                    return ReferenceEquals(candidate, declaredDefinition);
+                }) ?? declaredOwner;
         }
 
         foreach (var c in GetHierarchy(lookupType))

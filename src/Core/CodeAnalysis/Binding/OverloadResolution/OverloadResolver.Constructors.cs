@@ -422,7 +422,10 @@ internal sealed partial class OverloadResolver
                 fixedPrimaryCount,
                 variadicSliceType,
                 variadicParam.Name,
-                i => parameterSyntaxV[i].Location,
+                i =>
+                {
+                    return parameterSyntaxV[i].Location;
+                },
                 ref hasErrorsV);
 
             if (hasErrorsV)
@@ -571,7 +574,10 @@ internal sealed partial class OverloadResolver
                     syntax.Arguments,
                     boundArguments.ToImmutable(),
                     parameters.Length,
-                    p => parameters[p].Name,
+                    p =>
+                    {
+                        return parameters[p].Name;
+                    },
                     classType.Name,
                     out parameterSyntax,
                     out var permutedBound))
@@ -998,7 +1004,10 @@ internal sealed partial class OverloadResolver
                     fixedCtorParamCount,
                     sliceType,
                     variadicParam.Name,
-                    i => Invariant.Required(parameterSyntax[i], "a variadic constructor argument has source syntax").Location,
+                    i =>
+                    {
+                        return Invariant.Required(parameterSyntax[i], "a variadic constructor argument has source syntax").Location;
+                    },
                     ref hasVariadicErrors);
 
                 if (hasVariadicErrors)

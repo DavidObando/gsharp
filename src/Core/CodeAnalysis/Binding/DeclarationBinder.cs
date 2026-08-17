@@ -75,7 +75,7 @@ internal sealed partial class DeclarationBinder
     private readonly ConversionClassifier conversions;
     private readonly BindExpressionDelegate bindExpression;
     private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
-    private readonly BindReturnTypeClauseDelegate bindReturnTypeClause;
+    private readonly Func<TypeClauseSyntax?, bool, TypeSymbol?> bindReturnTypeClause;
     private readonly BindTypeOfExpressionDelegate bindTypeOfExpression;
     private readonly BindArrayCreationExpressionDelegate bindArrayCreationExpression;
     private readonly BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable;
@@ -135,7 +135,7 @@ internal sealed partial class DeclarationBinder
         ConversionClassifier conversions,
         BindExpressionDelegate bindExpression,
         Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
-        BindReturnTypeClauseDelegate bindReturnTypeClause,
+        Func<TypeClauseSyntax?, bool, TypeSymbol?> bindReturnTypeClause,
         BindTypeOfExpressionDelegate bindTypeOfExpression,
         BindArrayCreationExpressionDelegate bindArrayCreationExpression,
         Func<SyntaxToken?, Accessibility> resolveAccessibility,

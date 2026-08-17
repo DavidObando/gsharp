@@ -160,15 +160,23 @@ internal sealed class MemberLookup
     /// <returns>The selected method, or <see langword="null"/>.</returns>
     public static MethodInfo? ResolveGetEnumerator(Type clrType, out bool isAmbiguous)
     {
-        static List<MethodInfo> GetDeclaredCandidates(Type type) =>
-            ClrTypeUtilities.SafeGetMethods(
-                    type,
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Where(method =>
-                    string.Equals(method.Name, "GetEnumerator", StringComparison.Ordinal) &&
-                    !method.IsGenericMethod &&
-                    method.GetParameters().Length == 0)
-                .ToList();
+        static List<MethodInfo> GetDeclaredCandidates(Type type)
+        {
+            var candidates = new List<MethodInfo>();
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         type,
+                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                if (string.Equals(method.Name, "GetEnumerator", StringComparison.Ordinal)
+                    && !method.IsGenericMethod
+                    && method.GetParameters().Length == 0)
+                {
+                    candidates.Add(method);
+                }
+            }
+
+            return candidates;
+        }
 
         static Type? GetBaseTypeSafe(Type type)
         {
@@ -1461,12 +1469,24 @@ internal sealed class MemberLookup
             return default;
         }
 
-        var inferred = !symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0
-            ? InferSymbolicMethodTypeArguments(
+        TypeSymbol?[] inferred;
+        if (!symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0)
+        {
+            var nullableSymbolicArgTypes = ImmutableArray.CreateBuilder<TypeSymbol?>(symbolicArgTypes.Length);
+            foreach (var symbolicArgType in symbolicArgTypes)
+            {
+                nullableSymbolicArgTypes.Add(symbolicArgType);
+            }
+
+            inferred = InferSymbolicMethodTypeArguments(
                 openMethod,
-                ImmutableArray.CreateRange<TypeSymbol, TypeSymbol?>(symbolicArgTypes, static t => t),
-                isExpanded)
-            : new TypeSymbol?[arity];
+                nullableSymbolicArgTypes.MoveToImmutable(),
+                isExpanded);
+        }
+        else
+        {
+            inferred = new TypeSymbol?[arity];
+        }
 
         // Explicit list takes precedence at each slot when present.
         if (!explicitTypeArgSymbols.IsDefaultOrEmpty)
@@ -1562,11 +1582,20 @@ internal sealed class MemberLookup
             return candidates ?? Enumerable.Empty<MethodInfo>();
         }
 
-        return candidates.Where(candidate => !HasErasureOnlyEnumParameterMatch(
-            candidate,
-            symbolicArgTypes,
-            argumentNames,
-            symbolicReceiverType));
+        var filtered = new List<MethodInfo>();
+        foreach (var candidate in candidates)
+        {
+            if (!HasErasureOnlyEnumParameterMatch(
+                    candidate,
+                    symbolicArgTypes,
+                    argumentNames,
+                    symbolicReceiverType))
+            {
+                filtered.Add(candidate);
+            }
+        }
+
+        return filtered;
 
         static bool HasErasureOnlyEnumParameterMatch(
             MethodInfo candidate,
@@ -2591,8 +2620,7 @@ internal sealed class MemberLookup
             // parameter carries [ParamArrayAttribute] is variadic from the
             // G# perspective too — the call-site pack / pass-through rules
             // mirror what direct method calls already do for params methods.
-            var paramArray = parameter.GetCustomAttributesData()
-                .Any(a => string.Equals(a.AttributeType.FullName, "System.ParamArrayAttribute", StringComparison.Ordinal));
+            var paramArray = HasParamArrayAttribute(parameter);
             variadicBuilder.Add(paramArray);
             anyVariadic |= paramArray;
         }
@@ -3764,10 +3792,18 @@ internal sealed class MemberLookup
                 out var declaringTypeArguments)
             && openDefinition != null)
         {
-            var openEvent = ClrTypeUtilities.SafeGetEvents(
-                    openDefinition,
-                    BindingFlags.Public | BindingFlags.Instance)
-                .FirstOrDefault(candidate => candidate.Name == closedEvent.Name);
+            EventInfo? openEvent = null;
+            foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
+                         openDefinition,
+                         BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (candidate.Name == closedEvent.Name)
+                {
+                    openEvent = candidate;
+                    break;
+                }
+            }
+
             if (openEvent?.EventHandlerType != null)
             {
                 var mapped = MapOpenClrTypeToSymbolic(
@@ -4184,13 +4220,22 @@ internal sealed class MemberLookup
                 declaringType,
                 BindingFlags.Public | BindingFlags.Instance))
             {
+                var alreadyCollected = false;
+                foreach (var existing in collected)
+                {
+                    if (ReferenceEquals(existing.Module, property.Module)
+                        && existing.MetadataToken == property.MetadataToken
+                        && ClrTypeUtilities.AreSame(existing.DeclaringType, property.DeclaringType))
+                    {
+                        alreadyCollected = true;
+                        break;
+                    }
+                }
+
                 if (property.GetIndexParameters().Length == 0
                     || (property.GetGetMethod(nonPublic: false) == null
                         && property.GetSetMethod(nonPublic: false) == null)
-                    || collected.Any(existing =>
-                        ReferenceEquals(existing.Module, property.Module)
-                        && existing.MetadataToken == property.MetadataToken
-                        && ClrTypeUtilities.AreSame(existing.DeclaringType, property.DeclaringType)))
+                    || alreadyCollected)
                 {
                     continue;
                 }
@@ -4201,14 +4246,30 @@ internal sealed class MemberLookup
 
         // Issue #2525: hide only along an actual declaration ancestry edge.
         // Same-signature slots from unrelated bases must remain ambiguous.
-        return collected
-            .Where(candidate => !collected.Any(other =>
-                !ReferenceEquals(candidate, other)
-                && other.DeclaringType is Type otherDeclaringType
-                && candidate.DeclaringType is Type candidateDeclaringType
-                && IsMoreDerivedClrType(otherDeclaringType, candidateDeclaringType)
-                && HaveSameIndexerSignature(targetType, other, candidate)))
-            .ToArray();
+        var visible = new List<PropertyInfo>();
+        foreach (var candidate in collected)
+        {
+            var hidden = false;
+            foreach (var other in collected)
+            {
+                if (!ReferenceEquals(candidate, other)
+                    && other.DeclaringType is Type otherDeclaringType
+                    && candidate.DeclaringType is Type candidateDeclaringType
+                    && IsMoreDerivedClrType(otherDeclaringType, candidateDeclaringType)
+                    && HaveSameIndexerSignature(targetType, other, candidate))
+                {
+                    hidden = true;
+                    break;
+                }
+            }
+
+            if (!hidden)
+            {
+                visible.Add(candidate);
+            }
+        }
+
+        return visible.ToArray();
     }
 
     private static bool IsMoreDerivedClrType(Type derived, Type baseType)
@@ -4220,8 +4281,15 @@ internal sealed class MemberLookup
 
         if (baseType.IsInterface)
         {
-            return ClrTypeUtilities.SafeGetInterfaces(derived)
-                .Any(candidate => ClrTypeUtilities.AreSame(candidate, baseType));
+            foreach (var candidate in ClrTypeUtilities.SafeGetInterfaces(derived))
+            {
+                if (ClrTypeUtilities.AreSame(candidate, baseType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         for (Type? current = derived.BaseType; current != null; current = current.BaseType)
@@ -4455,8 +4523,7 @@ internal sealed class MemberLookup
             // ADR-0102 follow-up / issue #818: mirror TryGetDelegateFunctionType's
             // variadic-flag handling so a params-shaped named delegate keeps
             // its call-site pack/pass-through behavior through this path too.
-            var paramArray = parameter.GetCustomAttributesData()
-                .Any(a => string.Equals(a.AttributeType.FullName, "System.ParamArrayAttribute", StringComparison.Ordinal));
+            var paramArray = HasParamArrayAttribute(parameter);
             variadicBuilder.Add(paramArray);
             anyVariadic |= paramArray;
         }
@@ -4483,6 +4550,22 @@ internal sealed class MemberLookup
         var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
         functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), variadicFlags, returnType);
         return true;
+    }
+
+    private static bool HasParamArrayAttribute(ParameterInfo parameter)
+    {
+        foreach (var attribute in parameter.GetCustomAttributesData())
+        {
+            if (string.Equals(
+                attribute.AttributeType.FullName,
+                "System.ParamArrayAttribute",
+                StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool IsVisibleImportedMethod(MethodBase method)

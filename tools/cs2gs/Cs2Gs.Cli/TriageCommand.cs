@@ -98,8 +98,9 @@ internal static class TriageCommand
             return 2;
         }
 
+        GapLedger resolvedLedger = ledger!;
         IReadOnlyList<TriageArtifact> artifacts = GapLedger.LoadRunArtifacts(runDir);
-        BaselineClassification classification = ledger.Classify(artifacts, fullCorpus: true);
+        BaselineClassification classification = resolvedLedger.Classify(artifacts, fullCorpus: true);
 
         Console.WriteLine($"run: {runDir}");
         Console.WriteLine(
@@ -117,7 +118,7 @@ internal static class TriageCommand
 
         foreach (TriageArtifact artifact in classification.Known)
         {
-            GapLedgerEntry entry = ledger.Entries.First(e => e.Fingerprint == artifact.Fingerprint);
+            GapLedgerEntry entry = resolvedLedger.Entries.First(e => e.Fingerprint == artifact.Fingerprint);
             Console.WriteLine($"  KNOWN #{entry.Issue,-5} {Describe(artifact)}");
         }
 
@@ -173,8 +174,9 @@ internal static class TriageCommand
             return 2;
         }
 
+        GapLedger resolvedLedger = ledger!;
         IReadOnlyList<TriageArtifact> artifacts = GapLedger.LoadRunArtifacts(runDir);
-        BaselineClassification classification = ledger.Classify(artifacts, fullCorpus: false);
+        BaselineClassification classification = resolvedLedger.Classify(artifacts, fullCorpus: false);
         if (classification.New.Count == 0)
         {
             Console.WriteLine("cs2gs triage: no new fingerprints; nothing to file.");
@@ -187,7 +189,10 @@ internal static class TriageCommand
         // handful of causes). The primary fingerprint carries the issue; the
         // rest are ledgered as superseded-by so the gate treats them as KNOWN.
         List<List<TriageArtifact>> clusters = classification.New
-            .GroupBy(a => (a.Diagnostic?.Id, a.OffendingCSharpConstruct?.Kind, a.Stage))
+            .GroupBy(a => (
+                a.Diagnostic?.Id ?? string.Empty,
+                a.OffendingCSharpConstruct?.Kind ?? string.Empty,
+                a.Stage))
             .Select(g => g.ToList())
             .OrderBy(c => c[0].Fingerprint, StringComparer.Ordinal)
             .ToList();
@@ -257,7 +262,7 @@ internal static class TriageCommand
                 };
                 if (file)
                 {
-                    ledger.Entries.Add(entry);
+                    resolvedLedger.Entries.Add(entry);
                 }
                 else
                 {
@@ -268,7 +273,7 @@ internal static class TriageCommand
 
         if (file)
         {
-            ledger.Save(gapsPath);
+            resolvedLedger.Save(gapsPath);
             Console.WriteLine($"cs2gs triage: ledger updated at {gapsPath}.");
         }
 
@@ -572,11 +577,31 @@ internal static class TriageCommand
         }
 
         string needle = "Issue" + issue.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return new[] { Path.Combine(dir.FullName, "tools", "cs2gs", "Cs2Gs.Tests"), Path.Combine(dir.FullName, "test") }
-            .Where(Directory.Exists)
-            .SelectMany(root => Directory.EnumerateFiles(root, "Issue*.cs", SearchOption.AllDirectories))
-            .Any(f => Path.GetFileName(f).StartsWith(needle, StringComparison.Ordinal)
-                && !char.IsDigit(Path.GetFileName(f)[needle.Length]));
+        string rootDirectory = dir.FullName;
+        foreach (string root in new[]
+        {
+            Path.Combine(rootDirectory, "tools", "cs2gs", "Cs2Gs.Tests"),
+            Path.Combine(rootDirectory, "test"),
+        })
+        {
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (string file in Directory.EnumerateFiles(root, "Issue*.cs", SearchOption.AllDirectories))
+            {
+                string fileName = Path.GetFileName(file);
+                if (fileName.StartsWith(needle, StringComparison.Ordinal)
+                    && fileName.Length > needle.Length
+                    && !char.IsDigit(fileName[needle.Length]))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

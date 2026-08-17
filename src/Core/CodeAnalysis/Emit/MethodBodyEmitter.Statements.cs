@@ -219,15 +219,24 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitManagedPointerAsUnmanagedPointer(TypeSymbol pointeeType)
     {
-        var openAsPointer = typeof(System.Runtime.CompilerServices.Unsafe)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(method => method.Name == "AsPointer"
+        MethodInfo? openAsPointer = null;
+        foreach (var method in typeof(System.Runtime.CompilerServices.Unsafe).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (method.Name == "AsPointer"
                 && method.IsGenericMethodDefinition
-                && method.GetParameters().Length == 1);
+                && method.GetParameters().Length == 1)
+            {
+                openAsPointer = method;
+                break;
+            }
+        }
+
+        openAsPointer = Invariant.Required(openAsPointer, "Unsafe.AsPointer<T>(ref T) is available");
         var closedAsPointer = openAsPointer.MakeGenericMethod(pointeeType.ClrType ?? typeof(object));
+        var symbolicTypeArguments = ImmutableArray.Create<TypeSymbol?>(pointeeType);
         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
             closedAsPointer,
-            ImmutableArray.Create<TypeSymbol?>(pointeeType)));
+            typeArgSymbols: symbolicTypeArguments));
     }
 
     private void EmitTryStatement(BoundTryStatement node)

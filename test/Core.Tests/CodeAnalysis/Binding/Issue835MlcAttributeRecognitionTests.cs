@@ -172,6 +172,6 @@ public class Issue835MlcAttributeRecognitionTests
 
         // FullName-based compare — must be true. This is what
         // ClrTypeUtilities.IsSameAs implements.
-        Assert.True(ClrTypeUtilities.IsSameAs(clr, typeof(System.ObsoleteAttribute)));
+        Assert.True(ClrTypeInspector.IsSameAs(clr, typeof(System.ObsoleteAttribute)));
     }
 }

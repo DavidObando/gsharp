@@ -19,11 +19,12 @@ The spike proves that cs2gs can translate the complete Core source tree:
 - zero unsupported translation diagnostics;
 - every emitted file round-trip parses.
 
-Continuation through cycle 111 proves complete Core translation and semantic
-compilation. The semantic frontier moved from 1,126 diagnostics in cycle 14 to
-zero. Core IL verification now fails with 163 diagnostics, so test parity,
-self-hosted recompilation, and migration of gsc, gsi, gsgen, or cs2gs remain
-blocked behind the emitted generic-ABI defect tracked by #3407.
+Cycle 111 proved complete Core translation and semantic compilation, reducing
+the semantic frontier from 1,126 diagnostics in cycle 14 to zero. Later cycles
+resolved the 163 emitted generic-ABI verification failures tracked by #3407.
+Cycle 278 completed Core self-hosting with ILVerify 0 and Core.Tests at
+7,661 passed / 0 failed; cycles 305-308 completed target-assembly translation,
+compilation, and IL verification for gsc, gsgen, cs2gs, and gsi.
 
 The independent Oahu gate reached full parity: all 15 projects pass
 translation, compilation, IL verification, and test parity.
@@ -518,3 +519,40 @@ downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
 (#3422), `__castN` / `__deconN` / `__using` (#3423), property patterns on
 property receivers (#3424), and the fallback hoist ordering / unbound-write
 defects (#3419).
+
+## Self-host and toolchain completion through cycle 309
+
+Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
+remaining #3394 sequence:
+
+| Cycle | Target | Result |
+|---:|---|---|
+| 278 | Core ordinary migration | translate, compile, ILVerify PASS; no pipeline parity oracle |
+| 309 | Core ordinary checkpoint | translate, compile, ILVerify PASS after final review fixes |
+| 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
+| 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
+| 305 | gsc | translate, compile, target-assembly ILVerify PASS; no parity oracle |
+| 308 | gsi | translate, compile, target-assembly ILVerify PASS; no parity oracle |
+| 306 | gsgen | translate, compile, target-assembly ILVerify PASS; no parity oracle |
+| 307 | cs2gs | translate, compile, target-assembly ILVerify PASS; no parity oracle |
+
+The real self-hosted Core test frontier moved from 7,572 passed / 89 failed in
+cycle 271 to 7,661 / 0. High-fanout repairs included nullable hierarchy walks,
+targetless lambda return classification, constructed-symbol cache identity,
+stable CLR adapters for extension-based test APIs, and nullable generic
+constraint traversal.
+
+Downstream migration exposed and repaired SDK-harness fidelity gaps:
+MSBuild-evaluated project references, source assembly identity, package
+reconstruction, MSBuild runtime-asset policy, and interface default-method
+body rendering. Small source reshapes removed entry-class nested declarations,
+unsupported array P/Invoke marshalling, and inherited-interface projection
+ambiguity.
+
+Cycles 305-308 also hardened output discovery to require the source assembly
+name (`gsc.dll`, `gsi.dll`, `gsgen.dll`, or `cs2gs.dll`) instead of accepting
+an arbitrary dependency DLL from the output directory. Re-running each target
+with that guard verified the intended migrated assembly.
+
+Generated `.gs` sources, compiler payloads, logs, packages, and migration
+artifacts remain uncommitted.

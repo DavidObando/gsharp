@@ -848,11 +848,19 @@ internal sealed class TypeDefEmitter
         // is the enum's own typedef (the standard CLR convention for enum
         // literals). The Constant row is added below after all field rows
         // have been emitted so they remain in increasing parent-token order.
-        var memberType = enumSym.TypeParameters.IsDefaultOrEmpty
-            ? enumSym
-            : EnumSymbol.ConstructNested(
-                enumSym,
-                ImmutableArray.CreateRange(enumSym.TypeParameters, static parameter => (TypeSymbol)parameter));
+        TypeSymbol memberType = enumSym;
+        if (!enumSym.TypeParameters.IsDefaultOrEmpty)
+        {
+            var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(enumSym.TypeParameters.Length);
+            foreach (var parameter in enumSym.TypeParameters)
+            {
+                typeArguments.Add(parameter);
+            }
+
+            memberType = Invariant.Required(
+                EnumSymbol.ConstructNested(enumSym, typeArguments.MoveToImmutable()),
+                "a nested generic enum can be constructed over its own type parameters");
+        }
 
         var memberFieldHandles = new List<FieldDefinitionHandle>(enumSym.Members.Length);
         foreach (var member in enumSym.Members)

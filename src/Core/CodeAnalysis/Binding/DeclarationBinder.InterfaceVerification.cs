@@ -936,7 +936,8 @@ internal sealed partial class DeclarationBinder
             }
 
             EventSymbol? implementation = null;
-            for (var type = structSymbol; type != null && implementation == null; type = type.BaseClass)
+            StructSymbol? type = structSymbol;
+            while (type != null && implementation == null)
             {
                 foreach (var candidate in type.Events)
                 {
@@ -951,6 +952,8 @@ internal sealed partial class DeclarationBinder
                     implementation = candidate;
                     break;
                 }
+
+                type = type.BaseClass;
             }
 
             if (implementation == null)
@@ -1837,10 +1840,12 @@ internal sealed partial class DeclarationBinder
         // type), which would hide the non-generic covariant bridge method that
         // shares the generic method's name and (empty) parameter list. Walk the
         // class and its base chain directly so both overloads are visible.
-        for (var c = structSymbol; c != null; c = c.BaseClass)
+        StructSymbol? c = structSymbol;
+        while (c != null)
         {
             if (c.Methods.IsDefaultOrEmpty)
             {
+                c = c.BaseClass;
                 continue;
             }
 
@@ -1852,6 +1857,8 @@ internal sealed partial class DeclarationBinder
                     return true;
                 }
             }
+
+            c = c.BaseClass;
         }
 
         return false;
@@ -2038,12 +2045,24 @@ internal sealed partial class DeclarationBinder
             // which can never resolve to an instance member, and type clauses
             // carry no expressions either.
             case LambdaExpressionSyntax lambda:
+                var lambdaParameterNames = new string[lambda.Parameters.Count];
+                for (var i = 0; i < lambda.Parameters.Count; i++)
+                {
+                    lambdaParameterNames[i] = lambda.Parameters[i].Identifier.Text;
+                }
+
                 return TryFindInstanceMemberReference(
-                    lambda.Body, forbiddenNames, WithShadowed(shadowedNames, lambda.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
+                    lambda.Body, forbiddenNames, WithShadowed(shadowedNames, lambdaParameterNames), out offendingName, out offendingLocation);
 
             case FunctionLiteralExpressionSyntax func:
+                var functionParameterNames = new string[func.Parameters.Count];
+                for (var i = 0; i < func.Parameters.Count; i++)
+                {
+                    functionParameterNames[i] = func.Parameters[i].Identifier.Text;
+                }
+
                 return TryFindInstanceMemberReference(
-                    func.Body, forbiddenNames, WithShadowed(shadowedNames, func.Parameters.Select(p => p.Identifier.Text)), out offendingName, out offendingLocation);
+                    func.Body, forbiddenNames, WithShadowed(shadowedNames, functionParameterNames), out offendingName, out offendingLocation);
 
             // Catch and loop variables shadow only within their body; the
             // scrutinee/collection/bounds are evaluated in the outer scope.
@@ -2068,7 +2087,12 @@ internal sealed partial class DeclarationBinder
                     return true;
                 }
 
-                var forTupleRangeNames = forTupleRange.Identifiers.Select(t => t.Text);
+                var forTupleRangeNames = new string[forTupleRange.Identifiers.Count];
+                for (var i = 0; i < forTupleRange.Identifiers.Count; i++)
+                {
+                    forTupleRangeNames[i] = forTupleRange.Identifiers[i].Text;
+                }
+
                 return TryFindInstanceMemberReference(forTupleRange.Body, forbiddenNames, WithShadowed(shadowedNames, forTupleRangeNames), out offendingName, out offendingLocation);
 
             case ForEllipsisStatementSyntax forEllipsis:
@@ -2200,13 +2224,31 @@ internal sealed partial class DeclarationBinder
                 return new[] { variableDeclaration.Identifier.Text };
 
             case TupleDeconstructionStatementSyntax tupleDeconstruction:
-                return tupleDeconstruction.Identifiers.Select(t => t.Text).ToArray();
+                var tupleNames = new string[tupleDeconstruction.Identifiers.Count];
+                for (var i = 0; i < tupleDeconstruction.Identifiers.Count; i++)
+                {
+                    tupleNames[i] = tupleDeconstruction.Identifiers[i].Text;
+                }
+
+                return tupleNames;
 
             case NamedDeconstructionStatementSyntax namedDeconstruction:
-                return namedDeconstruction.Fields.Select(f => f.LocalIdentifier.Text).ToArray();
+                var fieldNames = new string[namedDeconstruction.Fields.Count];
+                for (var i = 0; i < namedDeconstruction.Fields.Count; i++)
+                {
+                    fieldNames[i] = namedDeconstruction.Fields[i].LocalIdentifier.Text;
+                }
+
+                return fieldNames;
 
             case GuardLetStatementSyntax guardLet:
-                return guardLet.Bindings.Select(b => b.Identifier.Text).ToArray();
+                var names = new string[guardLet.Bindings.Count];
+                for (var i = 0; i < guardLet.Bindings.Count; i++)
+                {
+                    names[i] = guardLet.Bindings[i].Identifier.Text;
+                }
+
+                return names;
 
             case PatternSyntax pattern:
                 var captures = new List<string>();

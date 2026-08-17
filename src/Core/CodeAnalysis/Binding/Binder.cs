@@ -186,7 +186,9 @@ public sealed class Binder
         // built-in conversions don't apply. Implicit-only here — explicit
         // conversions never participate in overload tie-breaking.
         ClrOverloadResolution.UserDefinedImplicitConversionLookup ??= (source, target) =>
-            ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _);
+        {
+            return ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _);
+        };
     }
 
     /// <summary>
@@ -204,7 +206,10 @@ public sealed class Binder
             bindExpression: syntax => Expressions.BindExpression(syntax),
             bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            },
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType, exactTargetReturnType) =>
                 Lambdas.CreateErasedFunctionLiteralAdapter(
                     literal,
@@ -231,11 +236,23 @@ public sealed class Binder
             lookupType: LookupType,
             lookupTypeWithArity: LookupType,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
-            tryBindClrConstructorCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindClrConstructorCall(syntax, out result),
-            tryBindIntrinsicCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindIntrinsicCall(syntax, out result),
-            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type? importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result, Type[]? explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) => Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited),
+            tryBindClrConstructorCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) =>
+            {
+                return Expressions.TryBindClrConstructorCall(syntax, out result);
+            },
+            tryBindIntrinsicCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) =>
+            {
+                return Expressions.TryBindIntrinsicCall(syntax, out result);
+            },
+            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type? importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result, Type[]? explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) =>
+            {
+                return Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited);
+            },
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            },
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString,
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
@@ -247,9 +264,18 @@ public sealed class Binder
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
             getCurrentFunction: () => this.function,
-            bindLambdaWithTarget: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
-            bindUserTypeStaticCall: (structSym, ce) => Expressions.BindUserTypeStaticCall(structSym, ce),
-            bindImportedClrStaticCall: (clrType, ce) => Expressions.BindAccessorCall(receiver: null, new ImportedClassSymbol(clrType, ce, references: scope.References), ce));
+            bindLambdaWithTarget: (syntax, targetType) =>
+            {
+                return Lambdas.BindLambdaExpression(syntax, targetType);
+            },
+            bindUserTypeStaticCall: (structSym, ce) =>
+            {
+                return Expressions.BindUserTypeStaticCall(structSym, ce);
+            },
+            bindImportedClrStaticCall: (clrType, ce) =>
+            {
+                return Expressions.BindAccessorCall(receiver: null, new ImportedClassSymbol(clrType, ce, references: scope.References), ce);
+            });
         patterns = new PatternBinder(
             binderCtx,
             conversions,
@@ -274,7 +300,10 @@ public sealed class Binder
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
             bindLambdaBodyExpression: BindLambdaBodyExpressionForLambdas,
-            bindTypeParameterList: syntax => Declarations.BindTypeParameterList(syntax));
+            bindTypeParameterList: syntax =>
+            {
+                return Declarations.BindTypeParameterList(syntax);
+            });
         BoundExpression BindExpressionWithTargetTypeForStatements(
             ExpressionSyntax syntax,
             TypeSymbol targetType) =>
@@ -285,21 +314,45 @@ public sealed class Binder
             binderCtx,
             conversions,
             patterns,
-            bindExpression: (syntax, canBeVoid) => Expressions.BindExpression(syntax, canBeVoid),
+            bindExpression: (syntax, canBeVoid) =>
+            {
+                return Expressions.BindExpression(syntax, canBeVoid);
+            },
             bindExpressionWithTargetType: BindExpressionWithTargetTypeForStatements,
             bindTypeClause: BindTypeClause,
-            bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
-            bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility),
-            bindVariableReference: (name, location) => Expressions.BindVariableReference(name, location),
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindLocalVariable: (identifier, isReadOnly, type) =>
+            {
+                return Declarations.BindVariableDeclaration(identifier, isReadOnly, type);
+            },
+            bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) =>
+            {
+                return Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility);
+            },
+            bindVariableReference: (name, location) =>
+            {
+                return Expressions.BindVariableReference(name, location);
+            },
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            },
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             isLvalue: ExpressionBinder.IsLvalue,
             isIteratorReturnType: IsIteratorReturnType,
             resolveAccessibility: ResolveAccessibility,
-            bindVariableDeclarationAttributes: (annotations, positionDescription) => Declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
+            bindVariableDeclarationAttributes: (annotations, positionDescription) =>
+            {
+                return Declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field);
+            },
             getCurrentFunction: () => this.function,
-            bindLambdaWithTargetType: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
-            bindGenericLocalFunctionDeclaration: syntax => Lambdas.BindGenericLocalFunctionDeclaration(syntax),
+            bindLambdaWithTargetType: (syntax, targetType) =>
+            {
+                return Lambdas.BindLambdaExpression(syntax, targetType);
+            },
+            bindGenericLocalFunctionDeclaration: syntax =>
+            {
+                return Lambdas.BindGenericLocalFunctionDeclaration(syntax);
+            },
             checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
         BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
             Expressions.BindTypeOfExpression(syntax);
@@ -310,19 +363,31 @@ public sealed class Binder
             conversions,
             bindExpression: BindExpressionForDeclarations,
             bindTypeClause: BindTypeClause,
-            bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
+            bindReturnTypeClause: (syntax, isAsync) =>
+            {
+                return BindReturnTypeClause(syntax, isAsync);
+            },
             bindTypeOfExpression: BindTypeOfExpressionForDeclarations,
-            bindArrayCreationExpression: syntax => Expressions.BindArrayCreationExpression(syntax),
+            bindArrayCreationExpression: syntax =>
+            {
+                return Expressions.BindArrayCreationExpression(syntax);
+            },
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
-            getEffectiveArgumentClrType: t => Expressions.GetEffectiveArgumentClrType(t),
+            getEffectiveArgumentClrType: t =>
+            {
+                return Expressions.GetEffectiveArgumentClrType(t);
+            },
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             isAsyncSequenceReturnType: IsAsyncSequenceReturnType,
             isPrimitiveTypeName: IsPrimitiveTypeName,
             refKindToString: RefKindToString,
             getCurrentFunction: () => this.function,
             setCurrentFunction: fn => this.function = fn,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType));
+            bindInterpolatedStringAsFormattable: (syntax, targetType) =>
+            {
+                return Expressions.BindInterpolatedStringAsFormattable(syntax, targetType);
+            });
         expressions = new ExpressionBinder(
             binderCtx,
             memberLookup,
@@ -1006,10 +1071,19 @@ public sealed class Binder
         // validation also needs the base type's members. Bind same-compilation
         // base classes before their derived classes, independent of tree/source
         // order.
-        var declarationsByName = declaredStructs
-            .Select((declaration, index) => (declaration.Symbol.Name, Index: index))
-            .GroupBy(entry => entry.Name, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Select(entry => entry.Index).ToList(), StringComparer.Ordinal);
+        var declarationsByName = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < declaredStructs.Count; i++)
+        {
+            var name = declaredStructs[i].Symbol.Name;
+            if (!declarationsByName.TryGetValue(name, out var indices))
+            {
+                indices = new List<int>();
+                declarationsByName.Add(name, indices);
+            }
+
+            indices.Add(i);
+        }
+
         var bindingState = new byte[declaredStructs.Count];
         var bindingOrder = new List<int>(declaredStructs.Count);
 
@@ -1233,8 +1307,14 @@ public sealed class Binder
             var contextSet = false;
             try
             {
+                var topLevelStatements = ImmutableArray.CreateBuilder<StatementSyntax>(globalStatements.Length);
+                foreach (var globalStatement in globalStatements)
+                {
+                    topLevelStatements.Add(globalStatement.Statement);
+                }
+
                 statements.AddRange(tlsBinder.statements.BindStatementList(
-                    globalStatements.Select(s => s.Statement).ToImmutableArray(),
+                    topLevelStatements.MoveToImmutable(),
                     statement =>
                     {
                         var tree = statement.SyntaxTree;
@@ -1449,9 +1529,26 @@ public sealed class Binder
         // was already snapshotted into `diagnostics`, so append here too.
         var friendDiagnostics = new DiagnosticBag();
         var friendAssemblies = FriendAssemblyDeclarations.Collect(syntaxTrees, friendDiagnostics);
-        result.FriendAssemblies = previous == null
-            ? friendAssemblies
-            : previous.FriendAssemblies.AddRange(friendAssemblies.Where(f => !previous.FriendAssemblies.Contains(f)));
+        if (previous == null)
+        {
+            result.FriendAssemblies = friendAssemblies;
+        }
+        else
+        {
+            var combinedFriends = ImmutableArray.CreateBuilder<string>(
+                previous.FriendAssemblies.Length + friendAssemblies.Length);
+            combinedFriends.AddRange(previous.FriendAssemblies);
+            foreach (var friendAssembly in friendAssemblies)
+            {
+                if (!previous.FriendAssemblies.Contains(friendAssembly))
+                {
+                    combinedFriends.Add(friendAssembly);
+                }
+            }
+
+            result.FriendAssemblies = combinedFriends.ToImmutable();
+        }
+
         if (friendDiagnostics.Any())
         {
             result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics.AddRange(friendDiagnostics), imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable())
@@ -1714,22 +1811,29 @@ public sealed class Binder
                 }
 
                 var (functionDeclaration, functionBody) = RequireDeclaredBody(function);
-                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, functionBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
-                {
-                    var binder = new Binder(parentScope, function);
-                    var body = binder.statements.BindBlockStatement(functionBody);
-                    binder.statements.FinalizeUserLabels();
-                    var lowered = Lowerer.Lower(body);
-
-                    if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                var loweredBody = BindBodyWithPackage(
+                    parentScope,
+                    function.Package?.Name,
+                    functionBody.SyntaxTree,
+                    () =>
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
-                    }
+                        return BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
+                        {
+                            var binder = new Binder(parentScope, function);
+                            var body = binder.statements.BindBlockStatement(functionBody);
+                            binder.statements.FinalizeUserLabels();
+                            var lowered = Lowerer.Lower(body);
 
-                    AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
+                            if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                            {
+                                binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
+                            }
 
-                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                }));
+                            AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
+
+                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                        });
+                    });
 
                 functionBodies.Add(function, loweredBody);
             }
@@ -1763,22 +1867,29 @@ public sealed class Binder
                 }
 
                 var (methodDeclaration, methodBody) = RequireDeclaredBody(method);
-                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, methodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
-                {
-                    var binder = new Binder(parentScope, method);
-                    var body = binder.statements.BindBlockStatement(methodBody);
-                    binder.statements.FinalizeUserLabels();
-                    var lowered = Lowerer.Lower(body, structSym);
-
-                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                var loweredBody = BindBodyWithPackage(
+                    parentScope,
+                    structSym.PackageName,
+                    methodBody.SyntaxTree,
+                    () =>
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
-                    }
+                        return BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
+                        {
+                            var binder = new Binder(parentScope, method);
+                            var body = binder.statements.BindBlockStatement(methodBody);
+                            binder.statements.FinalizeUserLabels();
+                            var lowered = Lowerer.Lower(body, structSym);
 
-                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                            {
+                                binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
+                            }
 
-                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                }));
+                            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+
+                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                        });
+                    });
 
                 functionBodies.Add(method, loweredBody);
             }
@@ -1916,23 +2027,30 @@ public sealed class Binder
                     continue;
                 }
 
-                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, ctorDeclaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctorDeclaration.Body, diagnostics, () =>
-                {
-                    var ctorBinder = new Binder(parentScope, ctor.Function);
-                    var ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body);
-                    ctorBinder.statements.FinalizeUserLabels();
-
-                    // ADR-0065 §2 Rule 3: a `convenience init` body must begin
-                    // with a `init(args)` self-delegation expression-statement.
-                    if (ctor.IsConvenience)
+                var ctorLoweredBody = BindBodyWithPackage(
+                    parentScope,
+                    structSym.PackageName,
+                    ctorDeclaration.Body.SyntaxTree,
+                    () =>
                     {
-                        VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
-                    }
+                        return BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctorDeclaration.Body, diagnostics, () =>
+                        {
+                            var ctorBinder = new Binder(parentScope, ctor.Function);
+                            var ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body);
+                            ctorBinder.statements.FinalizeUserLabels();
 
-                    var lowered = Lowerer.Lower(ctorBody, structSym);
-                    AnalyzeFunctionBody(lowered, ctor.Function, ctorBinder.Diagnostics);
-                    return new BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray());
-                }));
+                            // ADR-0065 §2 Rule 3: a `convenience init` body must begin
+                            // with a `init(args)` self-delegation expression-statement.
+                            if (ctor.IsConvenience)
+                            {
+                                VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics);
+                            }
+
+                            var lowered = Lowerer.Lower(ctorBody, structSym);
+                            AnalyzeFunctionBody(lowered, ctor.Function, ctorBinder.Diagnostics);
+                            return new BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray());
+                        });
+                    });
                 functionBodies.Add(ctor.Function, ctorLoweredBody);
             }
         }
@@ -2306,22 +2424,29 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
         var (interfaceMethodDeclaration, interfaceMethodBody) = RequireDeclaredBody(method);
-        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, interfaceMethodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, method);
-            var body = binder.statements.BindBlockStatement(interfaceMethodBody);
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body);
-
-            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            method.Package?.Name,
+            interfaceMethodBody.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindBlockStatement(interfaceMethodBody);
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body);
 
-            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
+                    }
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(method, loweredBody);
     }
@@ -2352,24 +2477,31 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         bool requireAllPathsReturn)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, accessor.Package?.Name, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, accessor);
-            var body = binder.statements.BindBlockStatement(bodySyntax);
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body);
-
-            if (requireAllPathsReturn
-                && !IsIteratorReturnType(accessor.Type)
-                && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            accessor.Package?.Name,
+            bodySyntax.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, accessor);
+                    var body = binder.statements.BindBlockStatement(bodySyntax);
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body);
 
-            AnalyzeFunctionBody(lowered, accessor, binder.Diagnostics);
+                    if (requireAllPathsReturn
+                        && !IsIteratorReturnType(accessor.Type)
+                        && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location);
+                    }
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    AnalyzeFunctionBody(lowered, accessor, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(accessor, loweredBody);
     }
@@ -2401,27 +2533,34 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics,
         TextLocation? allPathsReturnLocation = null)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, member);
-
-            // BindStatement returns null only for a SyntaxKind.CommentToken
-            // node; a member body is never a bare comment.
-            var body = Invariant.Required(binder.statements.BindStatement(bodySyntax), "a member body statement is never a bare comment token");
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body, structSym);
-
-            if (allPathsReturnLocation != null
-                && !IsIteratorReturnType(member.Type)
-                && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            structSym.PackageName,
+            bodySyntax.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, member);
 
-            AnalyzeFunctionBody(lowered, member, binder.Diagnostics);
+                    // BindStatement returns null only for a SyntaxKind.CommentToken
+                    // node; a member body is never a bare comment.
+                    var body = Invariant.Required(binder.statements.BindStatement(bodySyntax), "a member body statement is never a bare comment token");
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body, structSym);
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    if (allPathsReturnLocation != null
+                        && !IsIteratorReturnType(member.Type)
+                        && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
+                    }
+
+                    AnalyzeFunctionBody(lowered, member, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(member, loweredBody);
     }
@@ -2450,22 +2589,29 @@ public sealed class Binder
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
         var (structMethodDeclaration, structMethodBody) = RequireDeclaredBody(method);
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, structMethodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, structMethodBody, diagnostics, () =>
-        {
-            var binder = new Binder(parentScope, method);
-            var body = binder.statements.BindBlockStatement(structMethodBody);
-            binder.statements.FinalizeUserLabels();
-            var lowered = Lowerer.Lower(body, structSym);
-
-            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+        var loweredBody = BindBodyWithPackage(
+            parentScope,
+            structSym.PackageName,
+            structMethodBody.SyntaxTree,
+            () =>
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location);
-            }
+                return BindBodyWithCache(cache, dirtyTrees, method, structMethodBody, diagnostics, () =>
+                {
+                    var binder = new Binder(parentScope, method);
+                    var body = binder.statements.BindBlockStatement(structMethodBody);
+                    binder.statements.FinalizeUserLabels();
+                    var lowered = Lowerer.Lower(body, structSym);
 
-            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    {
+                        binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location);
+                    }
 
-            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-        }));
+                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+
+                    return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
+                });
+            });
 
         functionBodies.Add(method, loweredBody);
     }
@@ -5534,7 +5680,10 @@ public sealed class Binder
         {
             return StructSymbol.SubstituteConstructionArguments(
                 ss,
-                arg => SubstituteType(arg, substitution, mapClrType),
+                arg =>
+                {
+                    return SubstituteType(arg, substitution, mapClrType);
+                },
                 mapClrType);
         }
 
@@ -5546,7 +5695,10 @@ public sealed class Binder
         // so the emitter parents its use-site references/slots at
         // `Box`1+Tag`1<int32>` rather than the open `Box`1+Tag`1<!0>`.
         Func<TypeSymbol, TypeSymbol> substituteEnclosingType =
-            nestedType => SubstituteType(nestedType, substitution, mapClrType);
+            nestedType =>
+            {
+                return SubstituteType(nestedType, substitution, mapClrType);
+            };
         if (type is StructSymbol nestedRef && nestedRef.TypeArguments.IsDefaultOrEmpty)
         {
             var newEnclosing = StructSymbol.SubstituteEnclosingArguments(
@@ -5690,7 +5842,7 @@ public sealed class Binder
                         // a bug. Log for diagnosability and fall through to the erased
                         // constructed form so both debug and release builds degrade gracefully
                         // rather than crash.
-                        var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", clrArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        var assertMessage = $"Binder.SubstituteType: MakeGenericType failed for '{it.OpenDefinition}' with args [{FormatClrTypes(clrArgs)}] even after mapClrType projection.";
                         System.Diagnostics.Debug.WriteLine(assertMessage);
                     }
                 }
@@ -5721,7 +5873,7 @@ public sealed class Binder
                     }
                     catch (System.ArgumentException)
                     {
-                        var assertMessage = $"Binder.SubstituteType: erased MakeGenericType failed for '{it.OpenDefinition}' with args [{string.Join(", ", erasedArgs.Select(t => t.ToString()))}] even after mapClrType projection.";
+                        var assertMessage = $"Binder.SubstituteType: erased MakeGenericType failed for '{it.OpenDefinition}' with args [{FormatClrTypes(erasedArgs)}] even after mapClrType projection.";
                         System.Diagnostics.Debug.WriteLine(assertMessage);
                     }
                 }
@@ -5731,6 +5883,17 @@ public sealed class Binder
         }
 
         return type;
+    }
+
+    private static string FormatClrTypes(Type[] types)
+    {
+        var text = new string[types.Length];
+        for (var i = 0; i < types.Length; i++)
+        {
+            text[i] = types[i].ToString();
+        }
+
+        return string.Join(", ", text);
     }
 
     // Phase 4.2 / ADR-0020: returns true if `typeArgument` satisfies the constraint of a
@@ -6086,7 +6249,8 @@ public sealed class Binder
         // for every interface encountered, its transitive base-interface closure.
         if (typeArgument is StructSymbol s)
         {
-            for (var current = s; current != null; current = current.BaseClass)
+            StructSymbol? current = s;
+            while (current != null)
             {
                 foreach (var implemented in current.Interfaces)
                 {
@@ -6103,6 +6267,8 @@ public sealed class Binder
                         }
                     }
                 }
+
+                current = current.BaseClass;
             }
         }
 
@@ -6220,9 +6386,20 @@ public sealed class Binder
         if (!constraintClr.IsGenericType)
         {
             // Non-generic interface constraint (e.g. `[T IDisposable]`).
-            return string.Equals(typeArgClr.FullName, constraintClr.FullName, StringComparison.Ordinal)
-                || typeArgClr.GetInterfaces().Any(i =>
-                    string.Equals(i.FullName, constraintClr.FullName, StringComparison.Ordinal));
+            if (string.Equals(typeArgClr.FullName, constraintClr.FullName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            foreach (var interfaceType in typeArgClr.GetInterfaces())
+            {
+                if (string.Equals(interfaceType.FullName, constraintClr.FullName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         var openDefName = constraintClr.GetGenericTypeDefinition().FullName;
