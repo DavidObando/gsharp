@@ -880,7 +880,9 @@ internal sealed partial class ExpressionBinder
         {
             if (binderCtx.NarrowedVariables[i].TryGetValue(variable, out var narrowed))
             {
-                return narrowed;
+                return Invariant.Required(
+                    narrowed,
+                    "a variable narrowing map entry has a type");
             }
         }
 
@@ -898,10 +900,11 @@ internal sealed partial class ExpressionBinder
     {
         for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
-            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed)
-                && narrowed != null)
+            if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed))
             {
-                return narrowed;
+                return Invariant.Required(
+                    narrowed,
+                    "a member-path narrowing map entry has a type");
             }
         }
 
@@ -929,13 +932,15 @@ internal sealed partial class ExpressionBinder
         var fieldAccess = node as BoundFieldAccessExpression;
         if (fieldAccess != null && fieldAccess.NarrowedType == null)
         {
-                if (!SmartCastStability.TryGetStableMemberPath(fieldAccess, out var path, out _)
-                    || path == null)
+                if (!SmartCastStability.TryGetStableMemberPath(fieldAccess, out var path, out _))
                 {
                     return node;
                 }
 
-                var narrowed = TryGetNarrowedType(path);
+                var stablePath = Invariant.Required(
+                    path,
+                    "a successful stable field-path lookup has a path");
+                var narrowed = TryGetNarrowedType(stablePath);
                 if (narrowed == null)
                 {
                     return node;
@@ -963,13 +968,15 @@ internal sealed partial class ExpressionBinder
         var propertyAccess = node as BoundPropertyAccessExpression;
         if (propertyAccess != null && propertyAccess.NarrowedType == null)
         {
-                if (!SmartCastStability.TryGetStableMemberPath(propertyAccess, out var path, out _)
-                    || path == null)
+                if (!SmartCastStability.TryGetStableMemberPath(propertyAccess, out var path, out _))
                 {
                     return node;
                 }
 
-                var narrowed = TryGetNarrowedType(path);
+                var stablePath = Invariant.Required(
+                    path,
+                    "a successful stable property-path lookup has a path");
+                var narrowed = TryGetNarrowedType(stablePath);
                 if (narrowed == null)
                 {
                     return node;
@@ -1000,13 +1007,15 @@ internal sealed partial class ExpressionBinder
                 return node;
         }
 
-        if (!SmartCastStability.TryGetStableMemberPath(clrAccess, out var clrPath, out _)
-                || clrPath == null)
+        if (!SmartCastStability.TryGetStableMemberPath(clrAccess, out var clrPath, out _))
         {
                 return node;
         }
 
-        var clrNarrowed = TryGetNarrowedType(clrPath);
+        var stableClrPath = Invariant.Required(
+                clrPath,
+                "a successful stable CLR member-path lookup has a path");
+        var clrNarrowed = TryGetNarrowedType(stableClrPath);
         if (clrNarrowed == null)
         {
                 return node;

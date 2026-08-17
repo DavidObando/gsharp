@@ -520,7 +520,7 @@ downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
 property receivers (#3424), and the fallback hoist ordering / unbound-write
 defects (#3419).
 
-## Self-host and toolchain completion through cycle 309
+## Self-host and toolchain completion through cycle 310
 
 Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
 remaining #3394 sequence:
@@ -529,6 +529,7 @@ remaining #3394 sequence:
 |---:|---|---|
 | 278 | Core ordinary migration | translate, compile, ILVerify PASS; no pipeline parity oracle |
 | 309 | Core ordinary checkpoint | translate, compile, ILVerify PASS after final review fixes |
+| 310 | Core review follow-up | accessor/property-pattern regressions and invariant hardening; gate PASS |
 | 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
 | 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
 | 305 | gsc | translate, compile, target-assembly ILVerify PASS; no parity oracle |

@@ -183,6 +183,20 @@ public class ClrInteropEmitTests
         Assert.Equal($"0{Environment.NewLine}2147483647{Environment.NewLine}2147483647{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void ConstructedGenericStaticPropertyResult_AllowsChainedMemberAccess()
+    {
+        var source = """
+            package P
+            import System
+
+            Console.WriteLine(ArraySegment[int32].Empty.Count)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"0{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_clr_emit_").FullName;
