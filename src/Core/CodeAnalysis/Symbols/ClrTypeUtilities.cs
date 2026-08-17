@@ -24,12 +24,6 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public static class ClrTypeUtilities
 {
-    private static readonly ConcurrentDictionary<(Type Type, BindingFlags Flags), MethodInfo[]> MethodCache = new();
-    private static readonly ConcurrentDictionary<(Type Type, BindingFlags Flags), PropertyInfo[]> PropertyCache = new();
-    private static readonly ConcurrentDictionary<(Type Type, BindingFlags Flags), FieldInfo[]> FieldCache = new();
-    private static readonly ConcurrentDictionary<(Type Type, BindingFlags Flags), EventInfo[]> EventCache = new();
-    private static readonly ConcurrentDictionary<(Type Type, BindingFlags Flags), ConstructorInfo[]> ConstructorCache = new();
-
     /// <summary>
     /// Issue #1678: process-wide memoization of <see cref="SafeGetInterfaces"/>,
     /// keyed by the CLR <see cref="Type"/>. Every binder call site that walks a
@@ -551,7 +545,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The properties whose signatures load cleanly.</returns>
     public static PropertyInfo[] SafeGetProperties(Type type, BindingFlags flags)
-        => SafeEnumerate<PropertyInfo>(type, flags, t => t.GetProperties(flags), PropertyCache);
+        => SafeEnumerate<PropertyInfo>(type, flags, t => t.GetProperties(flags));
 
     /// <summary>
     /// Enumerates a type's fields tolerantly (issue #338): fields whose type
@@ -561,7 +555,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The fields whose signatures load cleanly.</returns>
     public static FieldInfo[] SafeGetFields(Type type, BindingFlags flags)
-        => SafeEnumerate<FieldInfo>(type, flags, t => t.GetFields(flags), FieldCache);
+        => SafeEnumerate<FieldInfo>(type, flags, t => t.GetFields(flags));
 
     /// <summary>
     /// Enumerates a type's events tolerantly (issue #338): events whose handler
@@ -571,7 +565,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The events whose signatures load cleanly.</returns>
     public static EventInfo[] SafeGetEvents(Type type, BindingFlags flags)
-        => SafeEnumerate<EventInfo>(type, flags, t => t.GetEvents(flags), EventCache);
+        => SafeEnumerate<EventInfo>(type, flags, t => t.GetEvents(flags));
 
     /// <summary>
     /// Enumerates a type's constructors tolerantly (issue #338): constructors
@@ -582,7 +576,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The constructors whose signatures load cleanly.</returns>
     public static ConstructorInfo[] SafeGetConstructors(Type type, BindingFlags flags)
-        => SafeEnumerate<ConstructorInfo>(type, flags, t => t.GetConstructors(flags), ConstructorCache);
+        => SafeEnumerate<ConstructorInfo>(type, flags, t => t.GetConstructors(flags));
 
     /// <summary>
     /// Enumerates a type's methods tolerantly (issue #338): methods whose
@@ -593,7 +587,7 @@ public static class ClrTypeUtilities
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The methods whose signatures load cleanly.</returns>
     public static MethodInfo[] SafeGetMethods(Type type, BindingFlags flags)
-        => SafeEnumerate<MethodInfo>(type, flags, t => t.GetMethods(flags), MethodCache);
+        => SafeEnumerate<MethodInfo>(type, flags, t => t.GetMethods(flags));
 
     /// <summary>
     /// Looks up a single property by name tolerantly (issue #338). When the
@@ -1087,11 +1081,11 @@ public static class ClrTypeUtilities
     internal static void ClearCache()
     {
         interfacesCache = new ConditionalWeakTable<Type, Type[]>();
-        MethodCache.Clear();
-        PropertyCache.Clear();
-        FieldCache.Clear();
-        EventCache.Clear();
-        ConstructorCache.Clear();
+        MemberCache<MethodInfo>.Cache.Clear();
+        MemberCache<PropertyInfo>.Cache.Clear();
+        MemberCache<FieldInfo>.Cache.Clear();
+        MemberCache<EventInfo>.Cache.Clear();
+        MemberCache<ConstructorInfo>.Cache.Clear();
     }
 
     /// <summary>
@@ -1467,11 +1461,7 @@ public static class ClrTypeUtilities
         return true;
     }
 
-    private static TMember[] SafeEnumerate<TMember>(
-        Type type,
-        BindingFlags flags,
-        Func<Type, TMember[]> getAll,
-        ConcurrentDictionary<(Type Type, BindingFlags Flags), TMember[]> cache)
+    private static TMember[] SafeEnumerate<TMember>(Type type, BindingFlags flags, Func<Type, TMember[]> getAll)
         where TMember : MemberInfo
     {
         if (type is null)
@@ -1483,32 +1473,29 @@ public static class ClrTypeUtilities
         // re-validate every member on every call (expensive under a
         // MetadataLoadContext); memoize per (Type, Flags, member kind) so a
         // type used at N call sites pays this once instead of N times.
-        var key = (type, flags);
-        if (cache.TryGetValue(key, out var cached))
+        return MemberCache<TMember>.Cache.GetOrAdd((type, flags), key =>
         {
-            return cached;
-        }
-
-        TMember[] all;
-        try
-        {
-            all = getAll(type);
-        }
-        catch (Exception ex) when (IsMetadataLoadFailure(ex))
-        {
-            return cache.GetOrAdd(key, Array.Empty<TMember>());
-        }
-
-        var usable = new List<TMember>(all.Length);
-        foreach (var member in all)
-        {
-            if (CanLoadSignature(member))
+            TMember[] all;
+            try
             {
-                usable.Add(member);
+                all = getAll(key.Type);
             }
-        }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                return Array.Empty<TMember>();
+            }
 
-        return cache.GetOrAdd(key, usable.ToArray());
+            var usable = new List<TMember>(all.Length);
+            foreach (var member in all)
+            {
+                if (CanLoadSignature(member))
+                {
+                    usable.Add(member);
+                }
+            }
+
+            return usable.ToArray();
+        });
     }
 
     private static TMember? SafeGetMember<TMember>(
@@ -1617,5 +1604,19 @@ public static class ClrTypeUtilities
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Per-member-kind cache backing <see cref="SafeEnumerate{TMember}"/>. A
+    /// distinct closed generic (<c>MemberCache&lt;MethodInfo&gt;</c> vs.
+    /// <c>MemberCache&lt;PropertyInfo&gt;</c>, etc.) gets its own static
+    /// dictionary, so a single <c>(Type, BindingFlags)</c> key cannot collide
+    /// across member kinds.
+    /// </summary>
+    /// <typeparam name="TMember">The <see cref="MemberInfo"/>-derived member kind cached.</typeparam>
+    private static class MemberCache<TMember>
+        where TMember : MemberInfo
+    {
+        internal static readonly ConcurrentDictionary<(Type Type, BindingFlags Flags), TMember[]> Cache = new();
     }
 }

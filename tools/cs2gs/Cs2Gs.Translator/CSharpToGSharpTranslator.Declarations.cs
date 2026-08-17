@@ -124,7 +124,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new EnumDeclaration(
                 SanitizeIdentifier(node.Identifier.Text),
                 cases,
-                MapVisibility(symbol, this.context, node),
+                MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
                 attributes: this.MapAttributes(node.AttributeLists));
         }
 
@@ -1377,7 +1377,7 @@ public sealed partial class CSharpToGSharpTranslator
                 baseConstructorArguments: baseConstructorArguments,
                 interfaces: interfaces,
                 members: members,
-                visibility: MapVisibility(symbol, this.context, node),
+                visibility: MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
                 isOpen: isOpen || wasAbstract,
                 isAbstract: false,
                 attributes: this.MapAttributes(mergedAttributeLists),

@@ -269,7 +269,7 @@ with a triage note.
 | other `static` method of the entry class | **top-level `func`** (siblings call each other unqualified at top level, which resolves) |
 | the entry `static class` itself / a `shared { }` wrapper | **dropped** — neither is emitted |
 
-The mapping is recorded as an Info diagnostic. Only the type that *contains the entry point* is hoisted; other `static` utility classes still map to a class whose members sit in a `shared { }` block (§B.11, ADR-0053). This applies to executable compilations (a library compilation has no entry point, so its static classes keep the `shared { }` mapping).
+The mapping is recorded as an Info diagnostic. An entry class that declares a nested aggregate type is preserved instead, with `Main` and its sibling static methods in the class's `shared { }` block. G# supports a class-scoped static `Main`; retaining that form preserves the nested type's declaring owner and accessibility, while ordinary nested translation preserves its generic context. Only the type that *contains the entry point* is otherwise hoisted; other `static` utility classes still map to a class whose members sit in a `shared { }` block (§B.11, ADR-0053). This applies to executable compilations (a library compilation has no entry point, so its static classes keep the `shared { }` mapping).
 
 #### B.12 Numeric type names and identifiers — ADR-0049, ADR-0098
 

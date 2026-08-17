@@ -650,4 +650,17 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Exit code is non-zero if any app fails a stage (so CI can gate).");
     }
+
+    /// <summary>
+    /// Sentinel exception thrown by <see cref="NextValue"/> when an option's
+    /// value is missing, so verb loops can catch exactly this case as a usage
+    /// error without also catching unrelated <see cref="ArgumentException"/>s.
+    /// </summary>
+    private sealed class MissingOptionValueException : ArgumentException
+    {
+        public MissingOptionValueException(string message)
+            : base(message)
+        {
+        }
+    }
 }

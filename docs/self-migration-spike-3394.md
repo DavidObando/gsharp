@@ -552,7 +552,7 @@ constraint traversal.
 Downstream migration exposed and repaired SDK-harness fidelity gaps:
 MSBuild-evaluated project references, source assembly identity, package
 reconstruction, MSBuild runtime-asset policy, and interface default-method
-body rendering. Small source reshapes removed entry-class nested declarations,
+body rendering. Small temporary source reshapes removed entry-class nested declarations,
 unsupported array P/Invoke marshalling, and inherited-interface projection
 ambiguity.
 
@@ -578,6 +578,21 @@ The restored Core source translates, compiles, IL-verifies, and passes pipeline
 parity. Replacing the SDK compiler payload's Core implementation with that
 migrated assembly then recompiles Core successfully, and the second-generation
 assembly IL-verifies with zero errors.
+
+## Nested private class source-shape restoration (#3413)
+
+Issue #3413 preserves nested private classes as structural members of their
+translated owners. Entry classes that contain nested types now remain classes
+with a class-scoped static `Main`; nested declarations also keep `private`
+inside extension-bearing static owners. gsc orders top-level source bases used
+by nested declarations before recursively binding those declarations, so
+protected override chains bind independently of file order.
+
+This restores Core's nested async-iterator `BuildContext`/`InnerRewriter`,
+`ClrTypeUtilities.MemberCache<TMember>`, Compiler's nested command-line
+helpers, and cs2gs's nested option-value exception. Focused Core, Compiler,
+and cs2gs migrations each pass translation, compilation, ILVerify, and
+pipeline parity with those source shapes restored.
 
 ## Pinned code-exploder continuation (#3395)
 

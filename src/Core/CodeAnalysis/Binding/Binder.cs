@@ -1087,6 +1087,90 @@ public sealed class Binder
         var bindingState = new byte[declaredStructs.Count];
         var bindingOrder = new List<int>(declaredStructs.Count);
 
+        int FindTopLevelBaseIndex(
+            StructDeclarationSyntax syntax,
+            string packageName,
+            HashSet<string>? visibleNestedTypeNames = null)
+        {
+            if (!syntax.IsClass)
+            {
+                return -1;
+            }
+
+            TypeClauseSyntax? baseType = syntax.BaseTypeClauses.Count > 0
+                ? syntax.BaseTypeClauses[0]
+                : syntax.BaseTypeIdentifier == null
+                    ? null
+                    : new TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier);
+            var baseName = baseType?.QualifierIdentifierTokens.LastOrDefault()?.Text
+                ?? baseType?.Identifier?.Text;
+            if (baseName == null
+                || (baseType is { HasQualifier: false }
+                    && visibleNestedTypeNames?.Contains(baseName) == true)
+                || !declarationsByName.TryGetValue(baseName, out var candidates))
+            {
+                return -1;
+            }
+
+            var nonNullBaseType = Invariant.Required(
+                baseType,
+                "baseName is non-null only when baseType is non-null");
+            var requestedPackage = nonNullBaseType.HasQualifier
+                ? nonNullBaseType.DottedName[..^(baseName.Length + 1)]
+                : packageName;
+            var matchingPackage = new List<int>();
+            var classCandidateCount = 0;
+            var soleClassCandidate = -1;
+            foreach (var candidate in candidates)
+            {
+                if (!declaredStructs[candidate].Symbol.IsClass)
+                {
+                    continue;
+                }
+
+                classCandidateCount++;
+                soleClassCandidate = candidate;
+                if (declaredStructs[candidate].Symbol.PackageName == requestedPackage)
+                {
+                    matchingPackage.Add(candidate);
+                }
+            }
+
+            return matchingPackage.Count == 1
+                ? matchingPackage[0]
+                : classCandidateCount == 1
+                    ? soleClassCandidate
+                    : -1;
+        }
+
+        void AddNestedBaseDependencies(
+            StructDeclarationSyntax container,
+            string packageName,
+            HashSet<string> inheritedNestedTypeNames)
+        {
+            var visibleNestedTypeNames = new HashSet<string>(
+                inheritedNestedTypeNames,
+                StringComparer.Ordinal);
+            foreach (var nested in container.NestedTypes.OfType<StructDeclarationSyntax>())
+            {
+                visibleNestedTypeNames.Add(nested.Identifier.Text);
+            }
+
+            foreach (var nested in container.NestedTypes.OfType<StructDeclarationSyntax>())
+            {
+                var baseIndex = FindTopLevelBaseIndex(
+                    nested,
+                    packageName,
+                    visibleNestedTypeNames);
+                if (baseIndex >= 0)
+                {
+                    AddBaseFirst(baseIndex);
+                }
+
+                AddNestedBaseDependencies(nested, packageName, visibleNestedTypeNames);
+            }
+        }
+
         void AddBaseFirst(int index)
         {
             if (bindingState[index] == 2)
@@ -1101,49 +1185,20 @@ public sealed class Binder
 
             bindingState[index] = 1;
             var (syntax, symbol) = declaredStructs[index];
-            TypeClauseSyntax? baseType = syntax.BaseTypeClauses.Count > 0
-                ? syntax.BaseTypeClauses[0]
-                : syntax.BaseTypeIdentifier == null
-                    ? null
-                    : new TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier);
-            var baseName = baseType?.QualifierIdentifierTokens.LastOrDefault()?.Text
-                ?? baseType?.Identifier?.Text;
-            if (symbol.IsClass && baseName != null && declarationsByName.TryGetValue(baseName, out var candidates))
+            var baseIndex = FindTopLevelBaseIndex(syntax, symbol.PackageName);
+            if (baseIndex >= 0)
             {
-                // baseName is derived from baseType via `?.`, so a non-null
-                // baseName implies baseType is non-null.
-                var nonNullBaseType = Invariant.Required(baseType, "baseName is non-null only when baseType is non-null");
-                var requestedPackage = nonNullBaseType.HasQualifier
-                    ? nonNullBaseType.DottedName[..^(baseName.Length + 1)]
-                    : symbol.PackageName;
-                var matchingPackage = new List<int>();
-                var classCandidateCount = 0;
-                var soleClassCandidate = -1;
-                foreach (var candidate in candidates)
-                {
-                    if (!declaredStructs[candidate].Symbol.IsClass)
-                    {
-                        continue;
-                    }
-
-                    classCandidateCount++;
-                    soleClassCandidate = candidate;
-                    if (declaredStructs[candidate].Symbol.PackageName == requestedPackage)
-                    {
-                        matchingPackage.Add(candidate);
-                    }
-                }
-
-                var baseIndex = matchingPackage.Count == 1
-                    ? matchingPackage[0]
-                    : classCandidateCount == 1
-                        ? soleClassCandidate
-                        : -1;
-                if (baseIndex >= 0)
-                {
-                    AddBaseFirst(baseIndex);
-                }
+                AddBaseFirst(baseIndex);
             }
+
+            // Issue #3413: nested type bodies are bound recursively while their
+            // owning top-level type is bound. Order any top-level source bases
+            // used by those nested declarations first too, so override
+            // validation sees the base members regardless of file order.
+            AddNestedBaseDependencies(
+                syntax,
+                symbol.PackageName,
+                new HashSet<string>(StringComparer.Ordinal));
 
             bindingState[index] = 2;
             bindingOrder.Add(index);

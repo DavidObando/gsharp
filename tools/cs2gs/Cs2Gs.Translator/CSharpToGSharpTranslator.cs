@@ -234,15 +234,17 @@ public sealed partial class CSharpToGSharpTranslator
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
 
         // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
-        // static class become top-level G#. The entry `Main` body translates to
-        // top-level statements (the program entry in G# is top-level statements,
-        // not a `Main` method) and the sibling static methods become top-level
-        // `func`s — never a `shared { }` block.
+        // static class normally become top-level G#. When the entry class owns a
+        // nested aggregate type, keep the class intact instead: G# supports class-scoped
+        // static Main, and flattening would discard the nested type's owner and
+        // private accessibility.
         //
         // Computed once here and threaded through so the visitor does not
         // recompute it (`Compilation.GetEntryPoint` re-walks the compilation).
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
+        bool preserveEntryType = entryType?.GetTypeMembers()
+            .Any(type => type.TypeKind != TypeKind.Delegate) == true;
 
         // Share the anonymous-type registry with every other
         // document already translated (by this same translator instance)
@@ -267,7 +269,7 @@ public sealed partial class CSharpToGSharpTranslator
             typeMapper,
             openBases,
             staticUsingTargets,
-            entryPoint,
+            preserveEntryType ? null : entryPoint,
             partialTypeParts,
             ownedExtensions,
             this.preservePartialParts,
@@ -319,7 +321,8 @@ public sealed partial class CSharpToGSharpTranslator
                 continue;
             }
 
-            if (entryType != null
+            if (!preserveEntryType
+                && entryType != null
                 && member is TypeDeclarationSyntax typeDecl
                 && context.GetDeclaredSymbol(member) is INamedTypeSymbol declaredType
                 && SymbolEqualityComparer.Default.Equals(declaredType.OriginalDefinition, entryType.OriginalDefinition))
