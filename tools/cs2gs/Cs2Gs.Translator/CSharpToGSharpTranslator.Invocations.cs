@@ -1838,9 +1838,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// A G# primitive type keyword (<c>object</c>, <c>string</c>, <c>decimal</c>,
         /// …) is a language keyword, not a function, so constructing one
         /// (<c>new object()</c>, <c>new string(' ', n)</c>, target-typed <c>new()</c>)
-        /// must spell the qualified CLR type name instead (e.g. <c>System.Object</c>,
-        /// <c>System.String</c>) — otherwise gsc reports GS0130 ("Function 'string'
-        /// doesn't exist"). Non-keyword type names are returned unchanged.
+        /// must spell a callable CLR type name instead — otherwise gsc reports
+        /// GS0130 ("Function 'string' doesn't exist"). Most aliases use a
+        /// qualified name; <c>string</c> uses imported <c>String</c> because
+        /// namespace-qualified constructor expressions are not bindable.
+        /// Non-keyword type names are returned unchanged.
         /// </summary>
         private static string ConstructionCalleeName(string typeName) => typeName switch
         {
