@@ -104,8 +104,8 @@ code-behind. These reproduce through the same gsgen path once gsgen forwards
 keeps the trigger intact by (a) discovering the project's `@(AdditionalFiles)` +
 `.axaml` (`CSharpProjectLoader`), (b) forwarding them — tagged
 `SourceItemGroup=AvaloniaXaml` — plus `RootNamespace`/`ProjectDir` options to the
-Compile stage's gsc invocation, and (c) marking the code-behind `partial` (the
-project's analyzer references already trigger `markMergedTypePartial`). The
+Compile stage's gsc invocation, and (c) preserving the code-behind as its own
+partial declaration (the default since issue #3410). The
 runtime side (Avalonia's `CompileAvaloniaXaml` IL-rewrite) is a language-agnostic
 post-compile MSBuild task that hooks the standard `AfterCompile` chain and needs
 no G# changes.

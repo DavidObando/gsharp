@@ -702,6 +702,57 @@ Console.WriteLine(Config.A + Config.B)
     }
 
     [Fact]
+    public void CrossFileSharedBlocks_MergeDeterministicallyAndResolveSiblingMethods()
+    {
+        var blocksPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            partial class StatementBinder {
+                shared {
+                    var Order string = ""
+
+                    init {
+                        Order = Order + "B"
+                    }
+
+                    func BindBlock() bool -> true
+                }
+            }
+            """,
+            "StatementBinder.Blocks.gs"));
+        var jumpsPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import System
+
+            partial class StatementBinder {
+                shared {
+                    init {
+                        Order = Order + "J"
+                    }
+
+                    func HasFunctionLocalRefScope() bool -> BindBlock()
+                }
+            }
+
+            Console.WriteLine(StatementBinder.Order)
+            Console.WriteLine(StatementBinder.HasFunctionLocalRefScope())
+            """,
+            "StatementBinder.Jumps.gs"));
+
+        // Reverse compiler input order. Partial merging still follows file-name
+        // order, and each shared block contributes its own members.
+        var output = CompileLoadInvokeCaptureStdout(
+            new[] { jumpsPart, blocksPart },
+            "Issue3410-CrossFileShared");
+
+        Assert.Contains("BJ", output);
+        Assert.Contains("True", output);
+    }
+
+    [Fact]
     public void LonePartialClass_CompilesFine()
     {
         var source = @"package App

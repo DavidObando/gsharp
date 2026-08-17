@@ -363,7 +363,7 @@ public sealed class TestParityStage : IMigrationStage
         // anonymousTypeRegistriesByPackage`) is shared too — otherwise two
         // files in the same package could each mint a colliding
         // `AnonymousTypeN` name for two DIFFERENT anonymous shapes (GS0102).
-        var translator = new CSharpToGSharpTranslator();
+        var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         foreach (LoadedDocument document in project.Documents)
         {
             cancellationToken.ThrowIfCancellationRequested();

@@ -78,12 +78,16 @@ public static class MeterExtensions
 }"));
 
         string combined = string.Join(Environment.NewLine, printed.Values);
-        string target = Assert.Single(printed.Values, text => text.Contains("class Meter", StringComparison.Ordinal));
+        string target = Assert.Single(
+            printed.Values,
+            text => text.Contains("func Adjust(", StringComparison.Ordinal));
 
+        Assert.Equal(2, CountOccurrences(combined, "class Meter"));
         Assert.Equal(1, CountOccurrences(combined, "func Adjust("));
         Assert.Contains("import System", target);
         Assert.Contains("    func Adjust()", target);
         Assert.Contains("var meter = this", target);
+        Assert.DoesNotContain("func Double(", target);
         Assert.DoesNotContain("func (meter Meter) Adjust", combined);
         Assert.DoesNotContain("class MeterExtensions", combined);
     }
