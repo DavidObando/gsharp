@@ -1784,7 +1784,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (!TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
+            if (!TryGetWritableClrMember(member, tempVar.Type, out _, out var targetSymbol, out _))
             {
                 Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName);
                 _ = BindExpression(initSyntax.Value);

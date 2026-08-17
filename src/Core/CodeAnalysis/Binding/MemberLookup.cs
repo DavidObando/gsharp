@@ -3769,10 +3769,20 @@ internal sealed class MemberLookup
             var openProperty = FindOpenIndexerDefinition(openDefinition, closedProperty);
             if (openProperty != null)
             {
-                return MapOpenClrTypeToSymbolic(
+                var mapped = MapOpenClrTypeToSymbolic(
                     openProperty.PropertyType,
                     openDefinition,
                     declaringTypeArguments);
+
+                // Issue #3415: reflection erases reference nullability from a
+                // constructed receiver such as AsyncLocal<string?>. Keep the
+                // receiver-projected property type when CLR metadata cannot
+                // represent its symbolic shape.
+                if (TypeSymbol.RequiresSymbolicProjection(mapped)
+                    || openProperty.PropertyType.IsGenericParameter)
+                {
+                    return mapped;
+                }
             }
         }
 

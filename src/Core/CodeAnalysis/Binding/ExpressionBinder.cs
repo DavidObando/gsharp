@@ -1214,12 +1214,22 @@ internal sealed partial class ExpressionBinder
     }
 
     private static bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable)
+        => TryGetWritableClrMember(member, receiverType: null, out targetType, out targetTypeSymbol, out writable);
+
+    private static bool TryGetWritableClrMember(
+        MemberInfo? member,
+        TypeSymbol? receiverType,
+        [NotNullWhen(true)] out Type? targetType,
+        [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol,
+        out bool writable)
     {
         switch (member)
         {
             case PropertyInfo p:
                 targetType = p.PropertyType;
-                targetTypeSymbol = ClrNullability.GetPropertyTypeSymbol(p);
+                targetTypeSymbol = receiverType == null
+                    ? ClrNullability.GetPropertyTypeSymbol(p)
+                    : MemberLookup.GetClrPropertyTypeSymbol(receiverType, p);
                 writable = p.CanWrite && p.GetSetMethod(nonPublic: false) != null;
                 return writable;
             case FieldInfo f:
