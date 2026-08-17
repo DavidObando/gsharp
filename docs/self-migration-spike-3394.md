@@ -23,8 +23,9 @@ As a historical milestone, cycle 111 proved complete Core translation and semant
 the semantic frontier from 1,126 diagnostics in cycle 14 to zero. Later cycles
 resolved the 163 emitted generic-ABI verification failures tracked by #3407.
 Cycle 278 completed Core self-hosting with ILVerify 0 and Core.Tests at
-7,661 passed / 0 failed; cycles 305-308 completed target-assembly translation,
-compilation, and IL verification for gsc, gsgen, cs2gs, and gsi.
+7,661 passed / 0 failed; target-assembly translation, compilation, and IL
+verification completed for gsc in cycle 305, gsgen in 306, cs2gs in 307, and
+gsi in 308.
 
 The independent Oahu gate reached full parity: all 15 projects pass
 translation, compilation, IL verification, and test parity.
