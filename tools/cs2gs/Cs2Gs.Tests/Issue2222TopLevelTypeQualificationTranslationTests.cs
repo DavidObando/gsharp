@@ -254,6 +254,72 @@ namespace Oahu.Core
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
     }
 
+    [Fact]
+    public void MetadataHomonym_WithSameNamespaceSourceDeclaration_UsesSimpleName()
+    {
+        MetadataReference libRef = CompileLibrary(
+            """
+            namespace Microsoft.AspNetCore.OpenApi.Generated
+            {
+                public class XmlParameterComment
+                {
+                }
+            }
+            """,
+            "Issue3395GeneratedTypes");
+
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(
+            """
+            using System.Collections.Generic;
+
+            namespace System.Runtime.CompilerServices
+            {
+                internal sealed class InterceptsLocationAttribute
+                {
+                }
+            }
+
+            namespace Microsoft.AspNetCore.OpenApi.Generated
+            {
+                internal sealed class XmlParameterComment
+                {
+                }
+
+                internal sealed class XmlComment
+                {
+                    public List<XmlParameterComment> Parameters { get; set; }
+                }
+            }
+            """,
+            new CSharpParseOptions(LanguageVersion.Latest),
+            path: "OpenApiXmlCommentSupport.generated.cs");
+        var compilation = CSharpCompilation.Create(
+            "Cs2Gs.Issue3395.GeneratedSourceMetadataHomonym",
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences().Append(libRef).ToImmutableArray(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        var document = new LoadedDocument(tree.FilePath, tree, model);
+        var context = new TranslationContext(compilation, model, document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("List[XmlParameterComment]", printed);
+        Assert.DoesNotContain(
+            "List[Microsoft.AspNetCore.OpenApi.Generated.XmlParameterComment]",
+            printed);
+
+        RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Generated source intentionally contains multiple C# namespaces.");
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+    }
+
     /// <summary>
     /// Issue #2222 ordering blindspot: namespace <c>First</c> is reached via
     /// an explicit <c>using</c>, but the colliding namespace <c>Second</c> is

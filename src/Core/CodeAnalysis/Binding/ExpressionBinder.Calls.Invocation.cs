@@ -3157,8 +3157,7 @@ internal sealed partial class ExpressionBinder
             for (var i = 0; i < arguments.Length; i++)
             {
                 if (argumentNames.IsDefault
-                    && arguments[i].Type is TupleTypeSymbol tupleArgument
-                    && tupleArgument.ElementTypes.Any(element => element == TypeSymbol.Null)
+                    && ContainsNestedNullType(arguments[i].Type)
                     && TryProjectArgumentClrTypeFromSymbolicReceiver(
                         candidates,
                         i,
@@ -3440,6 +3439,24 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    private static bool ContainsNestedNullType(TypeSymbol type)
+    {
+        if (type == TypeSymbol.Null)
+        {
+            return true;
+        }
+
+        foreach (var inner in TypeSymbol.GetWrappedTypes(type))
+        {
+            if (ContainsNestedNullType(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool TryProjectArgumentClrTypeFromSymbolicReceiver(

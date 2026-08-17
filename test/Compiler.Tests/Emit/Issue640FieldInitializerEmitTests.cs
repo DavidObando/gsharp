@@ -159,6 +159,33 @@ public class Issue640FieldInitializerEmitTests
     }
 
     [Fact]
+    public void InterpolatedString_StaticAndInterfaceFieldInitializers()
+    {
+        var source = """
+            package P
+            import System
+
+            class Holder {
+                shared {
+                    let WorkerId string = "class:${Environment.ProcessId}"
+                }
+            }
+
+            interface IHolder {
+                shared {
+                    let WorkerId string = "interface:${Environment.ProcessId}"
+                }
+            }
+
+            Console.WriteLine(Holder.WorkerId.StartsWith("class:"))
+            Console.WriteLine(IHolder.WorkerId.StartsWith("interface:"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void PrimaryConstructor_HasSinglePublicConstructor()
     {
         var source = """

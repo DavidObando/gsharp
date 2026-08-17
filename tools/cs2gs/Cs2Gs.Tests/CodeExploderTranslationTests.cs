@@ -174,6 +174,23 @@ public class CodeExploderTranslationTests
     }
 
     [Fact]
+    public void ExplicitGenericNumericArgument_CoercesLiteral()
+    {
+        string printed = TranslateUnit("""
+            namespace Demo;
+
+            public static class Values
+            {
+                private static T Identity<T>(T value) => value;
+
+                public static long Build() => Identity<long>(1);
+            }
+            """);
+
+        Assert.Contains("Identity[int64](int64(1))", printed);
+    }
+
+    [Fact]
     public void StringConstruction_UsesImportedClrTypeName()
     {
         string printed = TranslateUnit("""
@@ -235,6 +252,28 @@ public class CodeExploderTranslationTests
         Assert.Contains("__underscore object", printed);
         Assert.Contains("RelayAsync()", printed);
         Assert.DoesNotContain("_ = RelayAsync()", printed);
+    }
+
+    [Fact]
+    public void ReassignedLambdaParameter_GetsMutableShadow()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo;
+
+            public static class Values
+            {
+                public static Func<int, int> Build() =>
+                    value =>
+                    {
+                        value += 1;
+                        return value;
+                    };
+            }
+            """);
+
+        Assert.Contains("var value = value", printed);
     }
 
     private static string TranslateUnit(string source)
