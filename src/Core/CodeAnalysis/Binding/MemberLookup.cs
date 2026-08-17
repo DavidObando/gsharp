@@ -4203,13 +4203,22 @@ internal sealed class MemberLookup
                 declaringType,
                 BindingFlags.Public | BindingFlags.Instance))
             {
+                var alreadyCollected = false;
+                foreach (var existing in collected)
+                {
+                    if (ReferenceEquals(existing.Module, property.Module)
+                        && existing.MetadataToken == property.MetadataToken
+                        && ClrTypeUtilities.AreSame(existing.DeclaringType, property.DeclaringType))
+                    {
+                        alreadyCollected = true;
+                        break;
+                    }
+                }
+
                 if (property.GetIndexParameters().Length == 0
                     || (property.GetGetMethod(nonPublic: false) == null
                         && property.GetSetMethod(nonPublic: false) == null)
-                    || collected.Any(existing =>
-                        ReferenceEquals(existing.Module, property.Module)
-                        && existing.MetadataToken == property.MetadataToken
-                        && ClrTypeUtilities.AreSame(existing.DeclaringType, property.DeclaringType)))
+                    || alreadyCollected)
                 {
                     continue;
                 }

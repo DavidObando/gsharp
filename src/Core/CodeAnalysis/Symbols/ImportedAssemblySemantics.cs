@@ -136,10 +136,19 @@ internal static class ImportedAssemblySemantics
         // throws `ArgumentException` rather than simply reporting no match.
         // Enumerating and matching by simple name/FullName instead works
         // uniformly for both the live-reflection and MLC-backed resolvers.
-        var hasPrintMembers = ClrTypeUtilities.SafeGetMethods(type, InstanceAny).Any(m =>
-            string.Equals(m.Name, "PrintMembers", StringComparison.Ordinal)
-            && m.ReturnType.FullName == "System.Boolean"
-            && m.GetParameters() is [{ ParameterType.FullName: "System.Text.StringBuilder" }]);
+        var hasPrintMembers = false;
+        foreach (var method in ClrTypeUtilities.SafeGetMethods(type, InstanceAny))
+        {
+            var parameters = method.GetParameters();
+            if (string.Equals(method.Name, "PrintMembers", StringComparison.Ordinal)
+                && method.ReturnType.FullName == "System.Boolean"
+                && parameters.Length == 1
+                && parameters[0].ParameterType.FullName == "System.Text.StringBuilder")
+            {
+                hasPrintMembers = true;
+                break;
+            }
+        }
 
         var hasReferenceAssemblyShape = !hasPrintMembers && HasCSharpRecordReferenceShape(type);
         if (!hasPrintMembers && !hasReferenceAssemblyShape)
