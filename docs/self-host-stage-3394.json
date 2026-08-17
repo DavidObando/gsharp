@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "issue": 3394,
+  "stage": "self-host",
+  "cycle": 278,
+  "semanticDiagnostics": 0,
+  "ilVerifyErrors": 0,
+  "coreTests": {
+    "passed": 7661,
+    "failed": 0,
+    "skipped": 0
+  },
+  "downstreamTargets": {
+    "gsc": "pass",
+    "gsi": "pass",
+    "gsgen": "pass",
+    "cs2gs": "pass"
+  },
+  "evidence": {
+    "pullRequest": 3426,
+    "mergeCommit": "954581c8",
+    "narrative": "docs/self-migration-spike-3394.md"
+  }
+}

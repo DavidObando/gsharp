@@ -1002,11 +1002,9 @@ public class TypeSymbol : Symbol
         switch (type)
         {
             case NullableTypeSymbol n:
-                if (n.UnderlyingType != null)
-                {
-                    wrapped.Add(n.UnderlyingType);
-                }
-
+                wrapped.Add(Invariant.Required(
+                    n.UnderlyingType,
+                    "a nullable type has an underlying type"));
                 break;
             case SliceTypeSymbol s:
                 wrapped.Add(s.ElementType);
@@ -1045,50 +1043,44 @@ public class TypeSymbol : Symbol
             case FunctionTypeSymbol fn:
                 foreach (var param in fn.ParameterTypes)
                 {
-                    if (param != null)
-                    {
-                        wrapped.Add(param);
-                    }
+                    wrapped.Add(Invariant.Required(
+                        param,
+                        "a function parameter has a type"));
                 }
 
-                if (fn.ReturnType != null)
-                {
-                    wrapped.Add(fn.ReturnType);
-                }
+                wrapped.Add(Invariant.Required(
+                    fn.ReturnType,
+                    "a function has a return type"));
 
                 break;
             case FunctionPointerTypeSymbol fp:
                 foreach (var param in fp.ParameterTypes)
                 {
-                    if (param != null)
-                    {
-                        wrapped.Add(param);
-                    }
+                    wrapped.Add(Invariant.Required(
+                        param,
+                        "a function-pointer parameter has a type"));
                 }
 
-                if (fp.ReturnType != null)
-                {
-                    wrapped.Add(fp.ReturnType);
-                }
+                wrapped.Add(Invariant.Required(
+                    fp.ReturnType,
+                    "a function pointer has a return type"));
 
                 break;
             case TupleTypeSymbol tup:
                 foreach (var elem in tup.ElementTypes)
                 {
-                    if (elem != null)
-                    {
-                        wrapped.Add(elem);
-                    }
+                    wrapped.Add(Invariant.Required(
+                        elem,
+                        "a tuple element has a type"));
                 }
 
                 break;
             case ImportedTypeSymbol it when !it.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in it.TypeArguments)
                 {
-                    if (arg != null)
-                    {
-                        wrapped.Add(arg);
-                    }
+                    wrapped.Add(Invariant.Required(
+                        arg,
+                        "an imported generic type argument has a type"));
                 }
 
                 break;

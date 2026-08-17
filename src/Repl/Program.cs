@@ -61,11 +61,6 @@ public static class Program
             var arg = args[i];
             if (TryParseReferenceSwitch(arg, out var referencePath))
             {
-                if (referencePath is null)
-                {
-                    throw new InvalidOperationException("A matched reference switch must have a value.");
-                }
-
                 references.Add(referencePath);
                 continue;
             }
@@ -210,9 +205,10 @@ public static class Program
     /// Parses gsc-style reference switches: <c>/r:&lt;file&gt;</c> or
     /// <c>/reference:&lt;file&gt;</c> (also accepted with a leading dash).
     /// </summary>
-    private static bool TryParseReferenceSwitch(string arg, out string? referencePath)
+    // Oats #3445: keep the out slot non-null until cs2gs preserves NotNullWhen's namespace import.
+    private static bool TryParseReferenceSwitch(string arg, out string referencePath)
     {
-        referencePath = null;
+        referencePath = string.Empty;
         if (arg.Length < 2 || (arg[0] != '/' && arg[0] != '-'))
         {
             return false;

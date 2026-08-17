@@ -102,6 +102,8 @@ public sealed partial class CSharpToGSharpTranslator
                     if (prefix.IsKind(SyntaxKind.PreIncrementExpression)
                         || prefix.IsKind(SyntaxKind.PreDecrementExpression))
                     {
+                        // ADR-0126 defines compound assignments as value-producing,
+                        // so this preserves both the mutation and prefix result.
                         return new AssignmentExpression(
                             this.TranslateExpression(prefix.Operand),
                             LiteralExpression.Int("1"),

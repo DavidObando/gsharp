@@ -125,6 +125,49 @@ public sealed class Issue3091PropertyPatternPropertiesTests
         Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}0{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
     }
 
+    [Fact]
+    public void ImportedClrTypePropertyPattern_FallbackResolvesReadableProperty()
+    {
+        const string Source = """
+            package Issue3091.ClrPropertyFallback
+            import System
+
+            func Classify(value Version) int32 {
+                return switch value {
+                    case { Major: 7 }: 1
+                    default: 0
+                }
+            }
+
+            Console.WriteLine(Classify(Version(7, 0)))
+            Console.WriteLine(Classify(Version(8, 0)))
+            """;
+
+        Assert.Equal($"1{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
+    }
+
+    [Fact]
+    public void ImportedClrTypePropertyPattern_NullableReceiver_FallbackMatchesAndMissesExactly()
+    {
+        const string Source = """
+            package Issue3091.ClrPropertyFallbackNullable
+            import System
+
+            func Classify(value Version?) int32 {
+                return switch value {
+                    case { Major: 7, Minor: 2 }: 1
+                    default: 0
+                }
+            }
+
+            Console.WriteLine(Classify(Version(7, 2)))
+            Console.WriteLine(Classify(Version(7, 0)))
+            Console.WriteLine(Classify(nil))
+            """;
+
+        Assert.Equal($"1{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var directory = Path.Combine(

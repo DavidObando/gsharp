@@ -19,12 +19,13 @@ The spike proves that cs2gs can translate the complete Core source tree:
 - zero unsupported translation diagnostics;
 - every emitted file round-trip parses.
 
-Cycle 111 proved complete Core translation and semantic compilation, reducing
+As a historical milestone, cycle 111 proved complete Core translation and semantic compilation, reducing
 the semantic frontier from 1,126 diagnostics in cycle 14 to zero. Later cycles
 resolved the 163 emitted generic-ABI verification failures tracked by #3407.
 Cycle 278 completed Core self-hosting with ILVerify 0 and Core.Tests at
-7,661 passed / 0 failed; cycles 305-308 completed target-assembly translation,
-compilation, and IL verification for gsc, gsgen, cs2gs, and gsi.
+7,661 passed / 0 failed; target-assembly translation, compilation, and IL
+verification completed for gsc in cycle 305, gsgen in 306, cs2gs in 307, and
+gsi in 308.
 
 The independent Oahu gate reached full parity: all 15 projects pass
 translation, compilation, IL verification, and test parity.
@@ -520,15 +521,21 @@ downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
 property receivers (#3424), and the fallback hoist ordering / unbound-write
 defects (#3419).
 
-## Self-host and toolchain completion through cycle 309
+## Self-host and toolchain completion through cycle 312
 
 Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
 remaining #3394 sequence:
+
+The independently machine-readable self-host checkpoint is
+[`self-host-stage-3394.json`](self-host-stage-3394.json).
 
 | Cycle | Target | Result |
 |---:|---|---|
 | 278 | Core ordinary migration | translate, compile, ILVerify PASS; no pipeline parity oracle |
 | 309 | Core ordinary checkpoint | translate, compile, ILVerify PASS after final review fixes |
+| 310 | Core review follow-up | accessor/property-pattern regressions and invariant hardening; gate PASS |
+| 311 | Core/compiler follow-through | high-arity delegates, symbolic imported bases, conversion and named-extension ABI fixes; gate PASS |
+| 312 | CI hardening follow-up | nullable-tuple projection narrowed to its literal shape; translate, compile, ILVerify, parity PASS |
 | 278 | Core compiled by migrated Core | compile PASS; ILVerify 0 |
 | 278 | Core.Tests against self-hosted Core | **7,661 passed, 0 failed** |
 | 305 | gsc | translate, compile, target-assembly ILVerify PASS; no parity oracle |
@@ -556,3 +563,16 @@ with that guard verified the intended migrated assembly.
 
 Generated `.gs` sources, compiler payloads, logs, packages, and migration
 artifacts remain uncommitted.
+
+## Pinned code-exploder continuation (#3395)
+
+The downstream pinned corpus at
+`4edc419ada45049297096ae367b6d23915e235b4` now has two clean proofs:
+
+- diagnostic cycle 9: **12/12** applications passed translation, compilation,
+  ILVerify, and test parity;
+- full repository cycle 2: **17/17** source and test projects passed all four
+  stages.
+
+The durable gate is `build/run-cs2gs-code-exploder.sh`, backed by
+`tools/cs2gs/external/code-exploder.json` and the `cs2gs-code-exploder` CI job.

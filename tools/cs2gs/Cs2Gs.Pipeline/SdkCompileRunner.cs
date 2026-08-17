@@ -237,11 +237,8 @@ public sealed class SdkCompileRunner
 
         (List<(string Id, string Version)> packages, List<string> references) =
             PartitionReferences(referencePaths ?? Array.Empty<string>(), nugetPackagesRoot, runtimeDir);
-        bool hasDeclaredPackageReferences = HasDeclaredPackageReferences(packageReferences);
-        if (hasDeclaredPackageReferences)
-        {
-            packages.Clear();
-        }
+        bool hasDeclaredPackageReferences =
+            ApplyDeclaredPackageReferencePolicy(packages, packageReferences);
 
         if (projectReferences?.Any(item => !string.IsNullOrEmpty(item.SourceInclude)) == true)
         {
@@ -937,6 +934,24 @@ public sealed class SdkCompileRunner
         IReadOnlyList<DeclaredProjectItem> packageReferences) =>
         (packageReferences?.Count ?? 0) > 0;
 
+    internal static bool ApplyDeclaredPackageReferencePolicy(
+        List<(string Id, string Version)> packages,
+        IReadOnlyList<DeclaredProjectItem> packageReferences)
+    {
+        bool hasDeclaredPackageReferences = HasDeclaredPackageReferences(packageReferences);
+        if (hasDeclaredPackageReferences)
+        {
+            packages.Clear();
+        }
+
+        return hasDeclaredPackageReferences;
+    }
+
+    internal static bool IsRepresentedByProjectReferenceForTest(
+        string referencePath,
+        IReadOnlyList<DeclaredProjectItem> projectReferences) =>
+        IsRepresentedByProjectReference(referencePath, projectReferences);
+
     private static string FindInheritedBuildProps(string projectDirectory)
     {
         DirectoryInfo directory = Directory.GetParent(projectDirectory);
@@ -1036,18 +1051,30 @@ public sealed class SdkCompileRunner
         {
             if (!string.IsNullOrEmpty(projectReference.SourceAssemblyName))
             {
-                string referenceAssemblyName;
-                try
+                string referenceAssemblyName =
+                    Path.GetFileNameWithoutExtension(fullReferencePath);
+                if (File.Exists(fullReferencePath))
                 {
-                    referenceAssemblyName = AssemblyName.GetAssemblyName(fullReferencePath).Name;
-                }
-                catch (BadImageFormatException)
-                {
-                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
-                }
-                catch (FileLoadException)
-                {
-                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    try
+                    {
+                        referenceAssemblyName = AssemblyName.GetAssemblyName(fullReferencePath).Name;
+                    }
+                    catch (BadImageFormatException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
+                    catch (FileLoadException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
+                    catch (DirectoryNotFoundException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
                 }
 
                 if (string.Equals(

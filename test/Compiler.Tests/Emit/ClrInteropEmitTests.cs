@@ -186,6 +186,20 @@ public class ClrInteropEmitTests
     }
 
     [Fact]
+    public void ConstructedGenericStaticPropertyResult_AllowsChainedMemberAccess()
+    {
+        var source = """
+            package P
+            import System
+
+            Console.WriteLine(ArraySegment[int32].Empty.Count)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"0{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void ConstructedGenericListAdd_PreservesNullableTupleSlots()
     {
         var source = """
