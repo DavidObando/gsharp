@@ -1328,9 +1328,8 @@ public sealed class ReferenceResolver : IDisposable
     // the eager BuildTypeNameIndex and the cache-export ExportMetadataIndex
     // consume it so the warm and cold name sets (and their first-writer-wins
     // precedence) are guaranteed to match.
-    private static List<Type> EnumerateDefinedAndForwardedTypes(Assembly asm)
+    private static IEnumerable<Type> EnumerateDefinedAndForwardedTypes(Assembly asm)
     {
-        var result = new List<Type>();
         Type?[] definedTypes;
         try
         {
@@ -1356,7 +1355,7 @@ public sealed class ReferenceResolver : IDisposable
         {
             if (t != null)
             {
-                result.Add(t);
+                yield return t;
             }
         }
 
@@ -1379,11 +1378,9 @@ public sealed class ReferenceResolver : IDisposable
         {
             if (t != null)
             {
-                result.Add(t);
+                yield return t;
             }
         }
-
-        return result;
     }
 
     private static void RegisterAssemblyOriginalPath(Assembly assembly, string path)

@@ -74,6 +74,23 @@ namespace Demo
         Assert.Contains("typeof(Dictionary[_, _])", printed);
     }
 
+    [Fact]
+    public void QualifiedUnboundGenericType_PreservesQualifierAndRoundTrips()
+    {
+        string printed = TranslateUnit(@"
+using System;
+
+namespace Demo
+{
+    public class C
+    {
+        public Type Describe() => typeof(System.Threading.Tasks.ValueTask<>);
+    }
+}");
+
+        Assert.Contains("typeof(System.Threading.Tasks.ValueTask[_])", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

@@ -608,7 +608,7 @@ internal sealed class StateMachineEmitter
             // symbolic encoder so the GetEnumerator signature stays
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
-                TypeSymbol.ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
+                TypeSymbol.RequiresSymbolicProjection(plan.ElementType)
                 || plan.ElementType.ClrType == null
                 || plan.ElementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
             var getEnumeratorType = elementNeedsSymbolicEnumerator
@@ -956,10 +956,10 @@ internal sealed class StateMachineEmitter
             FunctionSymbol? getAsyncEnumerator = null;
             if (plan.IsEnumerable)
             {
-                // Issue #1002 (parallel to #990 sync iterators): a user-declared
-                // element type (`class` / `data struct`) has no ClrType, so the
-                // `MakeGenericType(elementType.ClrType ?? object)` path below
-                // would erase to `IAsyncEnumerator<object>`. That makes
+                // Issue #1002/#3412 (parallel to #990 sync iterators): an
+                // element containing a same-compilation user type can have no
+                // ClrType or an object-erased constructed ClrType, so the CLR
+                // path below can erase its nested user type. That makes
                 // `shapes()` (signature `IAsyncEnumerable<Shape>`) return an SM
                 // whose `GetAsyncEnumerator` advertises `IAsyncEnumerator<object>`
                 // — invalid under generic invariance (ilverify StackUnexpected).
@@ -967,13 +967,14 @@ internal sealed class StateMachineEmitter
                 // `ImportedTypeSymbol.GetConstructed` so the encoder emits a
                 // strongly-typed `IAsyncEnumerator<Shape>` GENERICINST blob
                 // referencing the user TypeDef.
-                TypeSymbol enumeratorType = elementType.ClrType == null
+                TypeSymbol enumeratorType = TypeSymbol.RequiresSymbolicProjection(elementType)
+                    || elementType.ClrType == null
                     || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
                     ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
                         typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(typeof(object)),
                         typeof(System.Collections.Generic.IAsyncEnumerator<>),
                         ImmutableArray.Create<TypeSymbol>(elementType))
-                    : TypeSymbol.FromClrType(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType));
+                    : TypeSymbol.FromClrType(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType ?? typeof(object)));
                 var ctParam = new ParameterSymbol("cancellationToken", TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken)));
                 getAsyncEnumerator = new FunctionSymbol("GetAsyncEnumerator", ImmutableArray.Create(ctParam), enumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
                 methods.Add(getAsyncEnumerator);

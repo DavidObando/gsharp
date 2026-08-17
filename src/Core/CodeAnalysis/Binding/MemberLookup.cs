@@ -78,15 +78,13 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="t">The starting CLR type.</param>
     /// <returns>The type and its interfaces in walk order.</returns>
-    public static List<Type> EnumerateSelfAndInterfaces(Type t)
+    public static IEnumerable<Type> EnumerateSelfAndInterfaces(Type t)
     {
-        var result = new List<Type> { t };
-        foreach (var i in t.GetInterfaces())
+        yield return t;
+        foreach (var interfaceType in t.GetInterfaces())
         {
-            result.Add(i);
+            yield return interfaceType;
         }
-
-        return result;
     }
 
     /// <summary>
@@ -2955,9 +2953,8 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
     /// <returns>The slots, or an empty sequence when the symbol is not a CLR interface.</returns>
-    public static List<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
+    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
     {
-        var result = new List<ClrInterfaceSlot>();
         Type? declared = null;
         var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
         if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
@@ -2972,7 +2969,7 @@ internal sealed class MemberLookup
             var clr = ifaceSym?.ClrType;
             if (clr == null || !clr.IsInterface)
             {
-                return result;
+                yield break;
             }
 
             declared = clr;
@@ -2980,22 +2977,19 @@ internal sealed class MemberLookup
 
         foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))
         {
-            result.Add(slot);
+            yield return slot;
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
             foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true))
             {
-                result.Add(slot);
+                yield return slot;
             }
         }
 
-        return result;
-
-        static List<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        static IEnumerable<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
         {
-            var slots = new List<ClrInterfaceSlot>();
             foreach (var method in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (method.IsSpecialName || !method.IsAbstract)
@@ -3003,10 +2997,8 @@ internal sealed class MemberLookup
                     continue;
                 }
 
-                slots.Add(new ClrInterfaceSlot(method, symbolicArgs, isInherited));
+                yield return new ClrInterfaceSlot(method, symbolicArgs, isInherited);
             }
-
-            return slots;
         }
     }
 
@@ -5734,22 +5726,20 @@ internal sealed class MemberLookup
         return false;
     }
 
-    private static List<Type> EnumerateOpenInterfacesAndBases(Type openDef)
+    private static IEnumerable<Type> EnumerateOpenInterfacesAndBases(Type openDef)
     {
-        var result = new List<Type> { openDef };
+        yield return openDef;
         foreach (var iface in openDef.GetInterfaces())
         {
-            result.Add(iface);
+            yield return iface;
         }
 
-        var baseType = openDef.BaseType;
-        while (baseType != null && !baseType.IsSameAs(typeof(object)))
+        for (Type? baseType = openDef.BaseType;
+            baseType != null && !baseType.IsSameAs(typeof(object));
+            baseType = baseType.BaseType)
         {
-            result.Add(baseType);
-            baseType = baseType.BaseType;
+            yield return baseType;
         }
-
-        return result;
     }
 
     /// <summary>

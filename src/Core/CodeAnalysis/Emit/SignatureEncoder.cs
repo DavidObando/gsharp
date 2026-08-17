@@ -365,14 +365,12 @@ internal sealed class SignatureEncoder
         {
             EncodeTypeSymbol(encoder.SZArray(), slice.ElementType);
         }
-        else if (type is SequenceTypeSymbol openSeq && openSeq.ClrType == null)
+        else if (type is SequenceTypeSymbol openSeq)
         {
-            // Issue #773: an open `sequence[T]` (where T is an in-scope
-            // type parameter) has no closed CLR type yet. Encode it as
+            // Issue #773/#3412: encode every `sequence[T]` symbolically as
             // `GENERICINST<IEnumerable`1><T>` so the resulting method
-            // signature carries an honest `IEnumerable<MVar/Var>` slot
-            // — same pattern as ADR-0087 §3 R2 for `ImportedTypeSymbol`
-            // with `HasTypeParameterArgument`.
+            // signature never inherits an object-erased CLR projection for
+            // nested same-compilation element types.
             var enumerableOpen = typeof(System.Collections.Generic.IEnumerable<>);
             var giSeq = encoder.GenericInstantiation(
                 this.outer.memberRefs.GetTypeReference(enumerableOpen),
@@ -380,10 +378,9 @@ internal sealed class SignatureEncoder
                 isValueType: false);
             this.EncodeTypeSymbol(giSeq.AddArgument(), openSeq.ElementType);
         }
-        else if (type is AsyncSequenceTypeSymbol openAseq && openAseq.ClrType == null)
+        else if (type is AsyncSequenceTypeSymbol openAseq)
         {
-            // Mirror of the synchronous-sequence open-T encoding for
-            // `async sequence[T]` (== IAsyncEnumerable<T>).
+            // Mirror the synchronous symbolic encoding.
             var asyncEnumerableOpen = typeof(System.Collections.Generic.IAsyncEnumerable<>);
             var giAseq = encoder.GenericInstantiation(
                 this.outer.memberRefs.GetTypeReference(asyncEnumerableOpen),

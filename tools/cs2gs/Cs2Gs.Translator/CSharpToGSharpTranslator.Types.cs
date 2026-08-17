@@ -352,20 +352,28 @@ public sealed partial class CSharpToGSharpTranslator
         {
             name = null;
             arity = 0;
-            GenericNameSyntax generic = type switch
+            GenericNameSyntax generic;
+            switch (type)
             {
-                GenericNameSyntax g => g,
-                QualifiedNameSyntax { Right: GenericNameSyntax g } => g,
-                _ => null,
-            };
+                case GenericNameSyntax simple:
+                    generic = simple;
+                    name = simple.Identifier.Text;
+                    break;
+                case QualifiedNameSyntax { Right: GenericNameSyntax right } qualified:
+                    generic = right;
+                    name = qualified.Left.ToString().Replace("global::", string.Empty, StringComparison.Ordinal)
+                        + "."
+                        + right.Identifier.Text;
+                    break;
+                default:
+                    return false;
+            }
 
-            if (generic is null ||
-                !generic.TypeArgumentList.Arguments.Any(a => a is OmittedTypeArgumentSyntax))
+            if (!generic.TypeArgumentList.Arguments.Any(a => a is OmittedTypeArgumentSyntax))
             {
                 return false;
             }
 
-            name = generic.Identifier.Text;
             arity = generic.TypeArgumentList.Arguments.Count;
             return true;
         }

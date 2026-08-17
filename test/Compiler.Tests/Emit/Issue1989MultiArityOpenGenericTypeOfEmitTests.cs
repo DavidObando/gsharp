@@ -86,6 +86,22 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
     }
 
     [Fact]
+    public void EndToEnd_QualifiedValueTaskArity1_TypeOf_ResolvesGenericDefinition()
+    {
+        const string source = """
+            package i3412valuetask
+            import System
+
+            func Main() {
+                Console.WriteLine(typeof(System.Threading.Tasks.ValueTask[_]).Name)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"ValueTask`1{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void EndToEnd_BareAction_TypeOf_StillResolvesNonGenericAction()
     {
         const string source = """

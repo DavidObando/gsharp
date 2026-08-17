@@ -209,12 +209,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B: an unbound-generic `typeof(IEnumerable&lt;&gt;)` has no
-    /// bound type argument; it maps to the bare generic-definition name
-    /// `typeof(IEnumerable)` (the only parseable G# form).
+    /// A qualified unbound-generic <c>typeof(IEnumerable&lt;&gt;)</c> retains
+    /// its qualifier and uses explicit arity placeholders.
     /// </summary>
     [Fact]
-    public void UnboundGenericTypeof_MapsToUnderscorePlaceholder()
+    public void QualifiedUnboundGenericTypeof_PreservesQualifierAndPlaceholder()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -228,7 +227,7 @@ namespace Demo
 
         // Issue #2012 (S1): cs2gs now emits the explicit-arity `_` placeholder
         // form (#1989/#2011) rather than the bare generic-definition name.
-        Assert.Contains("typeof(IEnumerable[_])", printed);
+        Assert.Contains("typeof(System.Collections.Generic.IEnumerable[_])", printed);
     }
 
     /// <summary>

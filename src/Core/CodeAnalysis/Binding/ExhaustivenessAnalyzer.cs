@@ -254,27 +254,24 @@ public static class ExhaustivenessAnalyzer
     /// (<c>A or B or C</c>, <c>(A or B) or C</c>) is handled. An `and` conjunction narrows
     /// rather than covers, so it is never flattened and is returned as a single opaque leaf.
     /// </summary>
-    private static List<BoundPattern> FlattenDisjunction(BoundPattern pattern)
+    private static IEnumerable<BoundPattern> FlattenDisjunction(BoundPattern pattern)
     {
-        var result = new List<BoundPattern>();
         if (pattern is BoundBinaryPattern { IsConjunction: false } disjunction)
         {
             foreach (var leaf in FlattenDisjunction(disjunction.Left))
             {
-                result.Add(leaf);
+                yield return leaf;
             }
 
             foreach (var leaf in FlattenDisjunction(disjunction.Right))
             {
-                result.Add(leaf);
+                yield return leaf;
             }
         }
         else
         {
-            result.Add(pattern);
+            yield return pattern;
         }
-
-        return result;
     }
 
     private static bool IsSubclassOf(StructSymbol candidate, StructSymbol baseClass)

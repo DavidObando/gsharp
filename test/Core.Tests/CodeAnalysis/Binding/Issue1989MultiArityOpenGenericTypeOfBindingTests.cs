@@ -91,6 +91,20 @@ class C {
     }
 
     [Fact]
+    public void QualifiedExplicitArityValueTask_TypeOf_BindsWithoutNamespaceImport()
+    {
+        var source = @"
+class C {
+    func run() {
+        let t = typeof(System.Threading.Tasks.ValueTask[_])
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void BareAction_TypeOf_StillResolvesNonGenericAction()
     {
         var source = @"

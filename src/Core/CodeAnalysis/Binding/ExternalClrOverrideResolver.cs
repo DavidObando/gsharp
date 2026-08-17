@@ -730,10 +730,9 @@ internal static class ExternalClrOverrideResolver
         return typeArguments.MoveToImmutable();
     }
 
-    private static List<MethodInfo> EnumerateMethods(Type? baseType, string name)
+    private static IEnumerable<MethodInfo> EnumerateMethods(Type? baseType, string name)
     {
-        var result = new List<MethodInfo>();
-        foreach (var current in GetTypeHierarchy(baseType))
+        for (Type? current = baseType; current != null; current = current.BaseType)
         {
             MethodInfo[] methods;
             try
@@ -749,18 +748,15 @@ internal static class ExternalClrOverrideResolver
             {
                 if (string.Equals(method.Name, name, StringComparison.Ordinal))
                 {
-                    result.Add(method);
+                    yield return method;
                 }
             }
         }
-
-        return result;
     }
 
-    private static List<PropertyInfo> EnumerateProperties(Type? baseType, string name)
+    private static IEnumerable<PropertyInfo> EnumerateProperties(Type? baseType, string name)
     {
-        var result = new List<PropertyInfo>();
-        foreach (var current in GetTypeHierarchy(baseType))
+        for (Type? current = baseType; current != null; current = current.BaseType)
         {
             PropertyInfo[] properties;
             try
@@ -776,18 +772,15 @@ internal static class ExternalClrOverrideResolver
             {
                 if (string.Equals(property.Name, name, StringComparison.Ordinal))
                 {
-                    result.Add(property);
+                    yield return property;
                 }
             }
         }
-
-        return result;
     }
 
-    private static List<EventInfo> EnumerateEvents(Type? baseType, string name)
+    private static IEnumerable<EventInfo> EnumerateEvents(Type? baseType, string name)
     {
-        var result = new List<EventInfo>();
-        foreach (var current in GetTypeHierarchy(baseType))
+        for (Type? current = baseType; current != null; current = current.BaseType)
         {
             EventInfo[] events;
             try
@@ -803,12 +796,10 @@ internal static class ExternalClrOverrideResolver
             {
                 if (string.Equals(eventInfo.Name, name, StringComparison.Ordinal))
                 {
-                    result.Add(eventInfo);
+                    yield return eventInfo;
                 }
             }
         }
-
-        return result;
     }
 
     private static bool ParametersMatch(

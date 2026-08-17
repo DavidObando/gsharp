@@ -908,8 +908,6 @@ internal sealed class MethodBodyPlanner
         // loop in RME — outer-method TPs translate to Var(idx)). For closed
         // element types we keep the original CLR-erased path so existing
         // closed-iterator behaviour is unchanged.
-        var elementContainsTp = TypeSymbol.ContainsTypeParameter(elementType);
-
         // Issue #990: a user-declared element type (a `class` or `data
         // struct` emitted in this same assembly) has no ClrType, so the
         // CLR-erased `MakeGenericType(elementType.ClrType ?? object)` path
@@ -924,7 +922,7 @@ internal sealed class MethodBodyPlanner
         // Hold the reified CLR element type rather than a bare
         // `needs symbolic` flag: the reified branch below needs the value, and
         // a separate bool cannot carry the fact that it is present.
-        var elementClr = elementContainsTp
+        var elementClr = TypeSymbol.RequiresSymbolicProjection(elementType)
             || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
             ? null
             : elementType.ClrType;
@@ -972,9 +970,9 @@ internal sealed class MethodBodyPlanner
         var elementType = plan.ElementType;
         var typeDef = this.cache.StructTypeDefs[smClass];
 
-        // Issue #1002 (parallel to #990): a user-declared element type
-        // (`class` / `data struct` emitted in this same assembly) has no
-        // ClrType, so the CLR-erased
+        // Issue #1002/#3412 (parallel to #990): an element containing a
+        // same-compilation user type can have no ClrType or an object-erased
+        // constructed ClrType, so the CLR-projected
         // `MakeGenericType(elementType.ClrType ?? object)` path below would
         // record `IAsyncEnumerable<object>` / `IAsyncEnumerator<object>` on
         // the SM class. That makes `shapes()` (signature
@@ -986,7 +984,8 @@ internal sealed class MethodBodyPlanner
         // `IAsyncEnumerator<Shape>`.
         // See AddIteratorInterfaceImplementations: hold the reified CLR element
         // type rather than a `needs symbolic` flag.
-        var elementClr = elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
+        var elementClr = TypeSymbol.RequiresSymbolicProjection(elementType)
+            || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
             ? null
             : elementType.ClrType;
         EntityHandle asyncEnumeratorHandle;

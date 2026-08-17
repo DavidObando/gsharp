@@ -1192,11 +1192,11 @@ internal sealed class ImportedMemberRefFactory
                 openDefinition = imp.OpenDefinition;
                 typeArguments = imp.TypeArguments;
                 return true;
-            case SequenceTypeSymbol seq when seq.ClrType == null:
+            case SequenceTypeSymbol seq:
                 openDefinition = typeof(System.Collections.Generic.IEnumerable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(seq.ElementType);
                 return true;
-            case AsyncSequenceTypeSymbol aseq when aseq.ClrType == null:
+            case AsyncSequenceTypeSymbol aseq:
                 openDefinition = typeof(System.Collections.Generic.IAsyncEnumerable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(aseq.ElementType);
                 return true;
