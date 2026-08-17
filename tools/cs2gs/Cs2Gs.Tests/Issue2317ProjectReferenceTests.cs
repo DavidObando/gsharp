@@ -58,6 +58,45 @@ public class Issue2317ProjectReferenceTests
     }
 
     [Fact]
+    public void RewriteProjectReferences_OmitsUnresolvedItemExpression()
+    {
+        using var directory = new ScratchDirectory();
+        string sourceApp = Path.Combine(directory.Path, "src", "App");
+        string targetApp = Path.Combine(directory.Path, "out", "App");
+        Directory.CreateDirectory(sourceApp);
+        Directory.CreateDirectory(targetApp);
+        string projectPath = Path.Combine(sourceApp, "App.csproj");
+        File.WriteAllText(
+            projectPath,
+            "<Project><ItemGroup><ProjectReference Include=\"@(SharedProjects)\" /></ItemGroup></Project>");
+
+        IReadOnlyList<DeclaredProjectItem> items =
+            DeclaredProjectItems.Read(projectPath, "ProjectReference");
+        IReadOnlyList<DeclaredProjectItem> rewritten =
+            DeclaredProjectItems.RewriteProjectReferences(
+                items,
+                targetApp,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.Empty(rewritten);
+    }
+
+    [Fact]
+    public void DeclaredPackageReference_IdentifiesUnresolvedItemExpression()
+    {
+        using var directory = new ScratchDirectory();
+        string projectPath = Path.Combine(directory.Path, "App.csproj");
+        File.WriteAllText(
+            projectPath,
+            "<Project><ItemGroup><PackageReference Include=\"@(SharedPackages)\" /></ItemGroup></Project>");
+
+        DeclaredProjectItem item = Assert.Single(
+            DeclaredProjectItems.Read(projectPath, "PackageReference"));
+
+        Assert.True(DeclaredProjectItems.HasMsbuildExpressionInclude(item));
+    }
+
+    [Fact]
     public void GenerateSolutions_WritesSlnxAndRewritesOnlyMigratedProjects()
     {
         using var directory = new ScratchDirectory();

@@ -254,6 +254,23 @@ public class SdkCompileRunnerTests
     }
 
     [Fact]
+    public void BuildProjectXml_ExcludesRuntimeAssetsForReconstructedMicrosoftBuildFramework()
+    {
+        string xml = SdkCompileRunner.BuildProjectXml(
+            sdkVersion: "1.0.0",
+            target: TargetKind.Exe,
+            rootNamespace: null,
+            gsFilePaths: new[] { "/app/Program.gs" },
+            packages: new List<(string Id, string Version)> { ("microsoft.build.framework", "17.11.48") },
+            references: Array.Empty<string>(),
+            analyzerReferences: Array.Empty<string>());
+
+        Assert.Contains(
+            "<PackageReference Include=\"microsoft.build.framework\" Version=\"17.11.48\" ExcludeAssets=\"runtime\" />",
+            xml);
+    }
+
+    [Fact]
     public void BuildProjectXml_PreservesRootNamespaceAndAvaloniaXamlItems()
     {
         string xml = SdkCompileRunner.BuildProjectXml(

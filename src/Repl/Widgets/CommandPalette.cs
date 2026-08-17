@@ -68,7 +68,7 @@ public sealed class CommandPalette : IModal
             default:
                 if (key.KeyChar >= ' ' && !char.IsControl(key.KeyChar))
                 {
-                    query += key.KeyChar;
+                    query += key.KeyChar.ToString();
                     cursor = 0;
                 }
 

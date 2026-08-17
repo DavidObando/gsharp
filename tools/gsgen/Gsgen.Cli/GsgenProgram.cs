@@ -30,9 +30,6 @@ namespace GSharp.Gsgen.Cli;
 /// </remarks>
 public static class GsgenProgram
 {
-    /// <summary>The synthetic anchor used for diagnostics that have no source location.</summary>
-    private const string SyntheticAnchor = "gsgen(1,1)";
-
     /// <summary>
     /// Process entry point: a thin wrapper over <see cref="Run"/> so the tool's
     /// logic stays testable in-process without spawning a child process.
@@ -65,7 +62,7 @@ public static class GsgenProgram
 
             foreach (var note in notes)
             {
-                stdout.WriteLine($"{SyntheticAnchor}: info GS9207: {note}");
+                stdout.WriteLine($"{GsgenDiagnostics.SyntheticAnchor}: info GS9207: {note}");
             }
 
             // Fast path (ADR-0145 §F): with no generators AND no stray C# Compile
@@ -111,7 +108,7 @@ public static class GsgenProgram
         {
             // Never leak a raw stack trace to MSBuild: collapse any failure into a
             // single structured GS9200 line so the BuildTask regex can relay it.
-            stdout.WriteLine($"{SyntheticAnchor}: error GS9200: {Flatten(ex)}");
+            stdout.WriteLine($"{GsgenDiagnostics.SyntheticAnchor}: error GS9200: {Flatten(ex)}");
             return 1;
         }
     }
@@ -375,12 +372,12 @@ public static class GsgenProgram
         foreach (var failure in result.Failures)
         {
             stdout.WriteLine(
-                $"{SyntheticAnchor}: warning GS9203: generator '{failure.Source}' failed: {Flatten(failure.Exception)}");
+                $"{GsgenDiagnostics.SyntheticAnchor}: warning GS9203: generator '{failure.Source}' failed: {Flatten(failure.Exception)}");
         }
 
         foreach (var fallback in result.StubFallbacks)
         {
-            stdout.WriteLine($"{SyntheticAnchor}: info GS9204: {fallback}");
+            stdout.WriteLine($"{GsgenDiagnostics.SyntheticAnchor}: info GS9204: {fallback}");
         }
     }
 
@@ -403,7 +400,7 @@ public static class GsgenProgram
 
         if (diagnostic.Location.Kind == LocationKind.None)
         {
-            return $"{SyntheticAnchor}: {severity} {diagnostic.Id}: {message}";
+            return $"{GsgenDiagnostics.SyntheticAnchor}: {severity} {diagnostic.Id}: {message}";
         }
 
         var span = diagnostic.Location.GetLineSpan();

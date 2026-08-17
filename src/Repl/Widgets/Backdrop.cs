@@ -16,7 +16,7 @@ namespace GSharp.Repl.Widgets;
 /// rows. Emits line breaks <em>between</em> lines only (no trailing break) so callers can
 /// compose deterministic fixed-height layouts.
 /// </summary>
-public sealed class Backdrop : Renderable
+public sealed class Backdrop : Renderable, IRenderable
 {
     private const string AccentGlyph = "▏";
 

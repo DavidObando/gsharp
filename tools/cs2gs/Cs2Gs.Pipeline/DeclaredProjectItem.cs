@@ -65,9 +65,14 @@ internal static class DeclaredProjectItems
                 if (itemName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase))
                 {
                     string include = item.Attribute("Include")?.Value;
-                    if (!string.IsNullOrEmpty(include) && !include.Contains("$(", StringComparison.Ordinal))
+                    if (!string.IsNullOrEmpty(include)
+                        && !include.Contains("$(", StringComparison.Ordinal)
+                        && !include.Contains("@(", StringComparison.Ordinal))
                     {
-                        sourceInclude = Path.GetFullPath(Path.Combine(projectDirectory, include));
+                        string normalizedInclude = include
+                            .Replace('\\', Path.DirectorySeparatorChar)
+                            .Replace('/', Path.DirectorySeparatorChar);
+                        sourceInclude = Path.GetFullPath(Path.Combine(projectDirectory, normalizedInclude));
                     }
                 }
 
@@ -152,6 +157,13 @@ internal static class DeclaredProjectItems
         {
             XElement element = new XElement(item.Element);
             string targetPath = item.SourceInclude;
+            string include = element.Attribute("Include")?.Value;
+            if (string.IsNullOrEmpty(targetPath)
+                && IsMsbuildExpression(include))
+            {
+                continue;
+            }
+
             if (!string.IsNullOrEmpty(targetPath) &&
                 generatedProjectPaths is not null &&
                 generatedProjectPaths.TryGetValue(Path.GetFullPath(targetPath), out string generatedPath))
@@ -169,6 +181,15 @@ internal static class DeclaredProjectItems
 
         return rewritten;
     }
+
+    internal static bool HasMsbuildExpressionInclude(DeclaredProjectItem item) =>
+        item is not null
+        && IsMsbuildExpression(item.Element.Attribute("Include")?.Value);
+
+    private static bool IsMsbuildExpression(string value) =>
+        !string.IsNullOrEmpty(value)
+        && (value.Contains("$(", StringComparison.Ordinal)
+            || value.Contains("@(", StringComparison.Ordinal));
 
     private static XElement StripNamespaces(XElement element) =>
         new XElement(

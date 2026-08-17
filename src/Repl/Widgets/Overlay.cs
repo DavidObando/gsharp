@@ -14,7 +14,7 @@ namespace GSharp.Repl.Widgets;
 /// segment level, so the surrounding chrome (header, sidebar, input, footer) stays visible
 /// behind it. Used for the <c>/</c> command palette.
 /// </summary>
-public sealed class Overlay : Renderable
+public sealed class Overlay : Renderable, IRenderable
 {
     private readonly IRenderable baseFrame;
     private readonly IRenderable modal;

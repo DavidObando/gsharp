@@ -604,7 +604,7 @@ internal static class Palette
     {
         ("reset", "clear session state"),
         ("clear", "clear the editor"),
-        ("theme", $"switch theme: {string.Join("|", Theme.AvailableNames())}"),
+        ("theme", "switch theme: " + string.Join("|", Theme.AvailableNames())),
         ("load", "run a .gs file into session"),
         ("exit", "quit the REPL"),
     };

@@ -157,13 +157,11 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
     {
         while (true)
         {
-            var records = new NativeMethods.InputRecord[1];
-            if (!NativeMethods.ReadConsoleInput(this.stdInHandle, records, 1, out var read) || read == 0)
+            if (!NativeMethods.ReadConsoleInput(this.stdInHandle, out var record, 1, out var read) || read == 0)
             {
                 return ReadFallback();
             }
 
-            var record = records[0];
             if (record.EventType == NativeMethods.KEY_EVENT)
             {
                 var ke = record.Key;
@@ -202,14 +200,12 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
                 return null;
             }
 
-            var records = new NativeMethods.InputRecord[1];
-            if (!NativeMethods.ReadConsoleInput(this.stdInHandle, records, 1, out var read) || read == 0)
+            if (!NativeMethods.ReadConsoleInput(this.stdInHandle, out var record, 1, out var read) || read == 0)
             {
                 timedOut = false;
                 return ReadFallback();
             }
 
-            var record = records[0];
             if (record.EventType == NativeMethods.KEY_EVENT)
             {
                 var ke = record.Key;
@@ -283,7 +279,7 @@ internal sealed class ConsoleInputReader : IInputReader, IDisposable
         public static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "ReadConsoleInputW")]
-        public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] InputRecord[] lpBuffer, uint nLength, out uint lpNumberOfEventsRead);
+        public static extern bool ReadConsoleInput(IntPtr hConsoleInput, out InputRecord lpBuffer, uint nLength, out uint lpNumberOfEventsRead);
 
         [StructLayout(LayoutKind.Sequential)]
         public struct Coord

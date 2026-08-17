@@ -132,6 +132,24 @@ namespace Demo
     }
 
     [Fact]
+    public void DefaultInterfaceExpressionBody_UsesBlockBody()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public interface IFoo
+    {
+        bool Handle(int value) => false;
+    }
+}");
+
+        Assert.Contains(
+            $"func Handle(value int32) bool {{{Environment.NewLine}        return false{Environment.NewLine}    }}",
+            printed);
+        Assert.DoesNotContain("func Handle(value int32) bool -> false", printed);
+    }
+
+    [Fact]
     public void MultipleImplementations_OneTainted_PromotesInterfaceAndAllImplementations()
     {
         // The shared interface symbol is a single taint node: once ANY

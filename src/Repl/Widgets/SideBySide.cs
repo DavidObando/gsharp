@@ -15,7 +15,7 @@ namespace GSharp.Repl.Widgets;
 /// level. Unlike a Spectre <c>Grid</c>, it emits line breaks only <em>between</em> lines
 /// (no trailing break), so it can be nested inside deterministic fixed-height layouts.
 /// </summary>
-public sealed class SideBySide : Renderable
+public sealed class SideBySide : Renderable, IRenderable
 {
     private readonly IRenderable left;
     private readonly IRenderable right;

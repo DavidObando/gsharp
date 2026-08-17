@@ -185,6 +185,7 @@ public sealed class SdkCompileRunner
     /// <c>Version=</c> — CPM's own <c>PackageVersion</c> items supply it, and
     /// NuGet's restore fails (NU1008) if both are present.
     /// </param>
+    /// <param name="assemblyName">The source project's assembly name.</param>
     /// <returns>The compile result, or an unavailable result when no local SDK nupkg can be found.</returns>
     public SdkCompileResult Compile(
         string appRunDir,
@@ -200,7 +201,8 @@ public sealed class SdkCompileRunner
         IReadOnlyList<DeclaredProjectItem> packageReferences = null,
         IReadOnlyList<DeclaredProjectItem> projectReferences = null,
         IReadOnlyDictionary<string, string> generatedProjectPaths = null,
-        bool usesCentralPackageManagement = false)
+        bool usesCentralPackageManagement = false,
+        string assemblyName = null)
     {
         if (string.IsNullOrEmpty(appRunDir))
         {
@@ -234,10 +236,14 @@ public sealed class SdkCompileRunner
 
         (List<(string Id, string Version)> packages, List<string> references) =
             PartitionReferences(referencePaths ?? Array.Empty<string>(), nugetPackagesRoot, runtimeDir);
-        bool hasDeclaredDependencyItems = packageReferences is not null || projectReferences is not null;
-        if (hasDeclaredDependencyItems)
+        bool hasDeclaredPackageReferences = (packageReferences?.Count ?? 0) > 0;
+        if (hasDeclaredPackageReferences)
         {
             packages.Clear();
+        }
+
+        if (projectReferences?.Any(item => !string.IsNullOrEmpty(item.SourceInclude)) == true)
+        {
             references = references
                 .Where(path => !IsRepresentedByProjectReference(path, projectReferences))
                 .ToList();
@@ -262,7 +268,7 @@ public sealed class SdkCompileRunner
             {
                 // The PackageReference contributes its analyzer assets. Adding
                 // the same DLL explicitly would run generators twice.
-                if (!hasDeclaredDependencyItems)
+                if (!hasDeclaredPackageReferences)
                 {
                     AddOrUpgradePackage(packages, packageIndex, owningPackage.Value.Id, owningPackage.Value.Version);
                 }
@@ -321,7 +327,8 @@ public sealed class SdkCompileRunner
             explicitAdditionalFiles,
             packageReferences,
             rewrittenProjectReferences,
-            usesCentralPackageManagement);
+            usesCentralPackageManagement,
+            assemblyName);
         File.WriteAllText(projectPath, projectXml);
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
@@ -498,6 +505,7 @@ public sealed class SdkCompileRunner
     /// from a <c>PackageVersion</c> item and rejects a project-level
     /// <c>Version=</c> attribute outright (NU1008).
     /// </param>
+    /// <param name="assemblyName">The source project's assembly name.</param>
     /// <returns>The full <c>.gsproj</c> XML text.</returns>
     internal static string BuildProjectXml(
         string sdkVersion,
@@ -511,7 +519,8 @@ public sealed class SdkCompileRunner
         IReadOnlyList<string> additionalFiles = null,
         IReadOnlyList<DeclaredProjectItem> packageReferences = null,
         IReadOnlyList<DeclaredProjectItem> projectReferences = null,
-        bool usesCentralPackageManagement = false)
+        bool usesCentralPackageManagement = false,
+        string assemblyName = null)
     {
         declaredPackageReferences ??= Array.Empty<DeclaredPackageReference>();
         additionalFiles ??= Array.Empty<string>();
@@ -529,6 +538,11 @@ public sealed class SdkCompileRunner
         if (!string.IsNullOrEmpty(rootNamespace))
         {
             sb.Append("    <RootNamespace>").Append(rootNamespace).Append("</RootNamespace>\n");
+        }
+
+        if (!string.IsNullOrEmpty(assemblyName))
+        {
+            sb.Append("    <AssemblyName>").Append(assemblyName).Append("</AssemblyName>\n");
         }
 
         sb.Append("  </PropertyGroup>\n");
@@ -551,6 +565,11 @@ public sealed class SdkCompileRunner
                 if (!usesCentralPackageManagement)
                 {
                     sb.Append(" Version=\"").Append(version).Append('"');
+                }
+
+                if (id.Equals("microsoft.build.framework", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.Append(" ExcludeAssets=\"runtime\"");
                 }
 
                 sb.Append(" />\n");
