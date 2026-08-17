@@ -1976,13 +1976,16 @@ internal sealed class LambdaBinder
     // trailing assignment as contributing `void` (G#'s Kotlin-like Unit
     // semantics) on the target-less inference path.
     private static bool IsAssignmentExpression(BoundExpression expression)
-        => expression?.Kind is BoundNodeKind.AssignmentExpression
-            or BoundNodeKind.FieldAssignmentExpression
-            or BoundNodeKind.PropertyAssignmentExpression
-            or BoundNodeKind.IndexAssignmentExpression
-            or BoundNodeKind.ClrPropertyAssignmentExpression
-            or BoundNodeKind.ClrIndexAssignmentExpression
-            or BoundNodeKind.IndirectAssignmentExpression;
+    {
+        var kind = expression.Kind;
+        return kind == BoundNodeKind.AssignmentExpression
+            || kind == BoundNodeKind.FieldAssignmentExpression
+            || kind == BoundNodeKind.PropertyAssignmentExpression
+            || kind == BoundNodeKind.IndexAssignmentExpression
+            || kind == BoundNodeKind.ClrPropertyAssignmentExpression
+            || kind == BoundNodeKind.ClrIndexAssignmentExpression
+            || kind == BoundNodeKind.IndirectAssignmentExpression;
+    }
 
     // ADR-0076 / issue #716: a trimmed copy of ExpressionBinder's common-
     // type rule (ADR-0062). Kept here to avoid widening the binder API

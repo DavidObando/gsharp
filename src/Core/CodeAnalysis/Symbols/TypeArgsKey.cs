@@ -16,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// at most 31 bits and is not guaranteed unique). <see cref="Equals(TypeArgsKey)"/> performs the
 /// real, correct-by-construction comparison; <see cref="GetHashCode"/> is only a bucketing hint.
 /// </summary>
-internal readonly struct TypeArgsKey : System.IEquatable<TypeArgsKey>
+internal sealed class TypeArgsKey : System.IEquatable<TypeArgsKey>
 {
     private readonly ImmutableArray<TypeSymbol> args;
 
@@ -25,9 +25,9 @@ internal readonly struct TypeArgsKey : System.IEquatable<TypeArgsKey>
         this.args = args.IsDefault ? ImmutableArray<TypeSymbol>.Empty : args;
     }
 
-    public bool Equals(TypeArgsKey other)
+    public bool Equals(TypeArgsKey? other)
     {
-        if (this.args.Length != other.args.Length)
+        if (other == null || this.args.Length != other.args.Length)
         {
             return false;
         }

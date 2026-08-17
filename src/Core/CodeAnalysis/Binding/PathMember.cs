@@ -12,9 +12,9 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Identifies one source or imported CLR member in an <see cref="AccessPath"/>.
 /// </summary>
-public readonly struct PathMember : IEquatable<PathMember>
+public sealed class PathMember : IEquatable<PathMember>
 {
-    /// <summary>Initializes a new instance of the <see cref="PathMember"/> struct for a source symbol.</summary>
+    /// <summary>Initializes a new instance of the <see cref="PathMember"/> class for a source symbol.</summary>
     /// <param name="sourceSymbol">The source member symbol.</param>
     public PathMember(Symbol sourceSymbol)
     {
@@ -22,7 +22,7 @@ public readonly struct PathMember : IEquatable<PathMember>
         ClrMember = null;
     }
 
-    /// <summary>Initializes a new instance of the <see cref="PathMember"/> struct for an imported CLR member.</summary>
+    /// <summary>Initializes a new instance of the <see cref="PathMember"/> class for an imported CLR member.</summary>
     /// <param name="clrMember">The reflected CLR member.</param>
     public PathMember(MemberInfo clrMember)
     {
@@ -39,21 +39,14 @@ public readonly struct PathMember : IEquatable<PathMember>
     /// <summary>Gets the member name.</summary>
     public string? Name => SourceSymbol?.Name ?? ClrMember?.Name;
 
-    /// <summary>Determines whether two path members identify the same member.</summary>
-    /// <param name="left">The first path member.</param>
-    /// <param name="right">The second path member.</param>
-    /// <returns><see langword="true"/> when both values identify the same member.</returns>
-    public static bool operator ==(PathMember left, PathMember right) => left.Equals(right);
-
-    /// <summary>Determines whether two path members identify different members.</summary>
-    /// <param name="left">The first path member.</param>
-    /// <param name="right">The second path member.</param>
-    /// <returns><see langword="true"/> when the values identify different members.</returns>
-    public static bool operator !=(PathMember left, PathMember right) => !left.Equals(right);
-
     /// <inheritdoc/>
-    public bool Equals(PathMember other)
+    public bool Equals(PathMember? other)
     {
+        if (other is null)
+        {
+            return false;
+        }
+
         if (SourceSymbol != null || other.SourceSymbol != null)
         {
             return ReferenceEquals(SourceSymbol, other.SourceSymbol);

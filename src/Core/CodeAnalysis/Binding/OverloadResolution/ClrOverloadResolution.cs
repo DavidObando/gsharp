@@ -699,6 +699,11 @@ internal static class ClrOverloadResolution
 
         foreach (var rawCandidate in candidateList)
         {
+            if (rawCandidate == null)
+            {
+                continue;
+            }
+
             // Issue #321: an overload's signature may reference types that cannot
             // be loaded or projected under the MetadataLoadContext used for
             // reference assemblies (e.g. the ref-struct Utf8JsonWriter, or types
@@ -728,6 +733,11 @@ internal static class ClrOverloadResolution
         {
             foreach (var rawCandidate in candidateList)
             {
+                if (rawCandidate == null)
+                {
+                    continue;
+                }
+
                 try
                 {
                     EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck);
