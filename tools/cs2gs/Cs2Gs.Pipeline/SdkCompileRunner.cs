@@ -1051,22 +1051,30 @@ public sealed class SdkCompileRunner
         {
             if (!string.IsNullOrEmpty(projectReference.SourceAssemblyName))
             {
-                string referenceAssemblyName;
-                try
+                string referenceAssemblyName =
+                    Path.GetFileNameWithoutExtension(fullReferencePath);
+                if (File.Exists(fullReferencePath))
                 {
-                    referenceAssemblyName = AssemblyName.GetAssemblyName(fullReferencePath).Name;
-                }
-                catch (BadImageFormatException)
-                {
-                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
-                }
-                catch (FileLoadException)
-                {
-                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
-                }
-                catch (FileNotFoundException)
-                {
-                    referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    try
+                    {
+                        referenceAssemblyName = AssemblyName.GetAssemblyName(fullReferencePath).Name;
+                    }
+                    catch (BadImageFormatException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
+                    catch (FileLoadException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
+                    catch (DirectoryNotFoundException)
+                    {
+                        referenceAssemblyName = Path.GetFileNameWithoutExtension(fullReferencePath);
+                    }
                 }
 
                 if (string.Equals(
