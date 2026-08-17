@@ -99,7 +99,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
         {
             var tertiary = Tokens.Tokens.TextTertiary.Value.ToMarkup();
             var diag = 0;
-            // Oats #3414: migrated gsi emits invalid IL for this LINQ chain's value-type delegate return.
+            // Oats #3414: migrated gsi loses SelectMany/Count lambda result types (GS0158/GS0159).
             foreach (var cell in engine.Cells)
             {
                 foreach (var diagnostic in cell.Diagnostics)
@@ -616,7 +616,7 @@ internal static class Palette
     {
         ("reset", "clear session state"),
         ("clear", "clear the editor"),
-        ("theme", "switch theme: " + string.Join("|", Theme.AvailableNames())),
+        ("theme", $"switch theme: {string.Join("|", Theme.AvailableNames())}"),
         ("load", "run a .gs file into session"),
         ("exit", "quit the REPL"),
     };
