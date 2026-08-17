@@ -186,7 +186,9 @@ public sealed class Binder
         // built-in conversions don't apply. Implicit-only here — explicit
         // conversions never participate in overload tie-breaking.
         ClrOverloadResolution.UserDefinedImplicitConversionLookup ??= (source, target) =>
-            ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _);
+        {
+            return ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _);
+        };
     }
 
     /// <summary>
@@ -6354,9 +6356,20 @@ public sealed class Binder
         if (!constraintClr.IsGenericType)
         {
             // Non-generic interface constraint (e.g. `[T IDisposable]`).
-            return string.Equals(typeArgClr.FullName, constraintClr.FullName, StringComparison.Ordinal)
-                || typeArgClr.GetInterfaces().Any(i =>
-                    string.Equals(i.FullName, constraintClr.FullName, StringComparison.Ordinal));
+            if (string.Equals(typeArgClr.FullName, constraintClr.FullName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            foreach (var interfaceType in typeArgClr.GetInterfaces())
+            {
+                if (string.Equals(interfaceType.FullName, constraintClr.FullName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         var openDefName = constraintClr.GetGenericTypeDefinition().FullName;

@@ -1209,15 +1209,22 @@ public static class ClrTypeUtilities
                 : elementType.MakeArrayType(type.GetArrayRank());
         }
 
-        return type.IsGenericType
-            ? type.GetGenericTypeDefinition().MakeGenericType(
-                type.GetGenericArguments()
-                    .Select(argument => SubstituteGenericTypeArguments(
-                        argument,
-                        openTypeArguments,
-                        typeArguments))
-                    .ToArray())
-            : type;
+        if (!type.IsGenericType)
+        {
+            return type;
+        }
+
+        var genericArguments = type.GetGenericArguments();
+        var substitutedArguments = new Type[genericArguments.Length];
+        for (var i = 0; i < genericArguments.Length; i++)
+        {
+            substitutedArguments[i] = SubstituteGenericTypeArguments(
+                genericArguments[i],
+                openTypeArguments,
+                typeArguments);
+        }
+
+        return type.GetGenericTypeDefinition().MakeGenericType(substitutedArguments);
     }
 
     private static MethodInfo? FindOpenGenericMethod(

@@ -4264,8 +4264,15 @@ internal sealed class MemberLookup
 
         if (baseType.IsInterface)
         {
-            return ClrTypeUtilities.SafeGetInterfaces(derived)
-                .Any(candidate => ClrTypeUtilities.AreSame(candidate, baseType));
+            foreach (var candidate in ClrTypeUtilities.SafeGetInterfaces(derived))
+            {
+                if (ClrTypeUtilities.AreSame(candidate, baseType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         for (Type? current = derived.BaseType; current != null; current = current.BaseType)

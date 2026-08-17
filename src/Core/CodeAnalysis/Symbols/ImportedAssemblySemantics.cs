@@ -243,14 +243,35 @@ internal static class ImportedAssemblySemantics
             return false;
         }
 
-        bool IsCompilerGenerated(MemberInfo member) => member.GetCustomAttributesData().Any(attribute =>
-            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.CompilerGeneratedAttribute");
+        bool IsCompilerGenerated(MemberInfo member)
+        {
+            foreach (var attribute in member.GetCustomAttributesData())
+            {
+                if (attribute.AttributeType.FullName == "System.Runtime.CompilerServices.CompilerGeneratedAttribute")
+                {
+                    return true;
+                }
+            }
 
-        var implementsSelfEquatable = type.GetInterfaces().Any(iface =>
-            iface.IsGenericType
-            && iface.GetGenericTypeDefinition().FullName == "System.IEquatable`1"
-            && iface.GetGenericArguments() is [{ } argument]
-            && argument.FullName == type.FullName);
+            return false;
+        }
+
+        var implementsSelfEquatable = false;
+        foreach (var interfaceType in type.GetInterfaces())
+        {
+            var arguments = interfaceType.IsGenericType
+                ? interfaceType.GetGenericArguments()
+                : Type.EmptyTypes;
+            if (interfaceType.IsGenericType
+                && interfaceType.GetGenericTypeDefinition().FullName == "System.IEquatable`1"
+                && arguments.Length == 1
+                && arguments[0].FullName == type.FullName)
+            {
+                implementsSelfEquatable = true;
+                break;
+            }
+        }
+
         if (!implementsSelfEquatable)
         {
             return false;

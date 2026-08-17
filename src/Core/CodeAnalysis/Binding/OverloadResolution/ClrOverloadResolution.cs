@@ -1587,10 +1587,17 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        return type.GetGenericParameterConstraints().Any(static constraint =>
-            !constraint.IsInterface
-            && !constraint.IsValueType
-            && !string.Equals(constraint.FullName, "System.Object", StringComparison.Ordinal));
+        foreach (var constraint in type.GetGenericParameterConstraints())
+        {
+            if (!constraint.IsInterface
+                && !constraint.IsValueType
+                && !string.Equals(constraint.FullName, "System.Object", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
