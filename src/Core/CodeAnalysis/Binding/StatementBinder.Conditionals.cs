@@ -285,7 +285,10 @@ internal sealed partial class StatementBinder
             Diagnostics,
             conversions,
             bindTypeClause,
-            syntax => bindExpression(syntax),
+            syntax =>
+            {
+                return bindExpression(syntax);
+            },
             (identifier, isReadOnly, type) =>
             {
                 return bindLocalVariable(identifier, isReadOnly, type);
