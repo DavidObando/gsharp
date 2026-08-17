@@ -1164,11 +1164,25 @@ public static class ClrTypeUtilities
         }
 
         var declaringDefinition = declaringType.GetGenericTypeDefinition();
-        var methodDefinition = declaringType.IsGenericTypeDefinition
-            ? openMethod
-            : declaringDefinition.GetMethods()
-                .Single(method => method.Module == openMethod.Module
-                    && method.MetadataToken == openMethod.MetadataToken);
+        var methodDefinition = openMethod;
+        if (!declaringType.IsGenericTypeDefinition)
+        {
+            MethodInfo? matchingDefinition = null;
+            foreach (var method in declaringDefinition.GetMethods())
+            {
+                if (method.Module == openMethod.Module
+                    && method.MetadataToken == openMethod.MetadataToken)
+                {
+                    matchingDefinition = method;
+                    break;
+                }
+            }
+
+            methodDefinition = Invariant.Required(
+                matchingDefinition,
+                "a constructed generic method has a matching definition");
+        }
+
         var openType = type.GetGenericTypeDefinition();
         var constructedDeclaringType = SubstituteGenericTypeArguments(
             declaringType,

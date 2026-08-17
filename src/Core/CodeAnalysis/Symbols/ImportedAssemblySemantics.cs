@@ -170,12 +170,30 @@ internal static class ImportedAssemblySemantics
         // signature for the value-type case.
         if (!type.IsValueType && !hasReferenceAssemblyShape)
         {
-            var hasCopyConstructor = ClrTypeUtilities.SafeGetConstructors(type, InstanceAny).Any(c =>
-                c.GetParameters() is [{ } onlyParameter] && ClrTypeUtilities.AreSame(onlyParameter.ParameterType, type));
-            var hasClone = ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Public | BindingFlags.Instance).Any(m =>
-                string.Equals(m.Name, "<Clone>$", StringComparison.Ordinal)
-                && m.GetParameters().Length == 0
-                && type.IsAssignableFrom(m.ReturnType));
+            var hasCopyConstructor = false;
+            foreach (var constructor in ClrTypeUtilities.SafeGetConstructors(type, InstanceAny))
+            {
+                var parameters = constructor.GetParameters();
+                if (parameters.Length == 1
+                    && ClrTypeUtilities.AreSame(parameters[0].ParameterType, type))
+                {
+                    hasCopyConstructor = true;
+                    break;
+                }
+            }
+
+            var hasClone = false;
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(type, BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (string.Equals(method.Name, "<Clone>$", StringComparison.Ordinal)
+                    && method.GetParameters().Length == 0
+                    && type.IsAssignableFrom(method.ReturnType))
+                {
+                    hasClone = true;
+                    break;
+                }
+            }
+
             var hasEqualityContract = type.GetProperty("EqualityContract", BindingFlags.NonPublic | BindingFlags.Instance) is { } equalityContractProperty
                 && equalityContractProperty.PropertyType.FullName == "System.Type";
             if (!hasCopyConstructor || !hasClone || !hasEqualityContract)

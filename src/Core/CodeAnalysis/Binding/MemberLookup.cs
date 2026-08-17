@@ -160,15 +160,23 @@ internal sealed class MemberLookup
     /// <returns>The selected method, or <see langword="null"/>.</returns>
     public static MethodInfo? ResolveGetEnumerator(Type clrType, out bool isAmbiguous)
     {
-        static List<MethodInfo> GetDeclaredCandidates(Type type) =>
-            ClrTypeUtilities.SafeGetMethods(
-                    type,
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Where(method =>
-                    string.Equals(method.Name, "GetEnumerator", StringComparison.Ordinal) &&
-                    !method.IsGenericMethod &&
-                    method.GetParameters().Length == 0)
-                .ToList();
+        static List<MethodInfo> GetDeclaredCandidates(Type type)
+        {
+            var candidates = new List<MethodInfo>();
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(
+                         type,
+                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                if (string.Equals(method.Name, "GetEnumerator", StringComparison.Ordinal)
+                    && !method.IsGenericMethod
+                    && method.GetParameters().Length == 0)
+                {
+                    candidates.Add(method);
+                }
+            }
+
+            return candidates;
+        }
 
         static Type? GetBaseTypeSafe(Type type)
         {
@@ -1574,11 +1582,20 @@ internal sealed class MemberLookup
             return candidates ?? Enumerable.Empty<MethodInfo>();
         }
 
-        return candidates.Where(candidate => !HasErasureOnlyEnumParameterMatch(
-            candidate,
-            symbolicArgTypes,
-            argumentNames,
-            symbolicReceiverType));
+        var filtered = new List<MethodInfo>();
+        foreach (var candidate in candidates)
+        {
+            if (!HasErasureOnlyEnumParameterMatch(
+                    candidate,
+                    symbolicArgTypes,
+                    argumentNames,
+                    symbolicReceiverType))
+            {
+                filtered.Add(candidate);
+            }
+        }
+
+        return filtered;
 
         static bool HasErasureOnlyEnumParameterMatch(
             MethodInfo candidate,
