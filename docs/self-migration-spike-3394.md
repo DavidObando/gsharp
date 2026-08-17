@@ -521,7 +521,7 @@ downcasts (#3421), `{ P: var x }` designations (#3420), redundant `!!` chains
 property receivers (#3424), and the fallback hoist ordering / unbound-write
 defects (#3419).
 
-## Self-host and toolchain completion through cycle 310
+## Self-host and toolchain completion through cycle 312
 
 Branch `oats/3394-core-self-host-continuation` (PR #3426) completed the
 remaining #3394 sequence:
