@@ -53,6 +53,50 @@ public class Issue1002UserClassAsyncIteratorEmitTests
     }
 
     [Fact]
+    public void NestedSameCompilationElementAsyncIterator_Compiles_And_IlVerifies()
+    {
+        var source = """
+            package T
+            import System.Collections.Generic
+            import System.Threading.Tasks
+            open class Shape { }
+            async func pairs() IAsyncEnumerable[KeyValuePair[string, Shape]] {
+                yield KeyValuePair[string, Shape]("key", Shape())
+                await Task.Delay(1)
+            }
+            """;
+
+        var outPath = CompileToFile(source, target: "library");
+        var assembly = Assembly.LoadFile(outPath);
+        var shapeType = assembly.GetType("T.Shape", throwOnError: true)!;
+        var elementType = typeof(System.Collections.Generic.KeyValuePair<,>)
+            .MakeGenericType(typeof(string), shapeType);
+        var asyncEnumerableType = typeof(System.Collections.Generic.IAsyncEnumerable<>)
+            .MakeGenericType(elementType);
+        var asyncEnumeratorType = typeof(System.Collections.Generic.IAsyncEnumerator<>)
+            .MakeGenericType(elementType);
+        var programType = assembly.GetTypes().Single(type => type.Name == "<Program>");
+        var stateMachineType = assembly.GetTypes()
+            .Single(type => type.IsNested && type.Name.StartsWith("<pairs>d__", StringComparison.Ordinal));
+
+        Assert.Equal(
+            asyncEnumerableType,
+            programType.GetMethod("pairs", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!.ReturnType);
+        Assert.Contains(asyncEnumerableType, stateMachineType.GetInterfaces());
+        Assert.Contains(asyncEnumeratorType, stateMachineType.GetInterfaces());
+        Assert.Equal(
+            asyncEnumeratorType,
+            stateMachineType.GetMethod(
+                "GetAsyncEnumerator",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!.ReturnType);
+        Assert.Equal(
+            elementType,
+            stateMachineType.GetMethod(
+                "get_Current",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!.ReturnType);
+    }
+
+    [Fact]
     public void UserReferenceTypeAsyncIterator_EndToEnd_PrintsShapeTwice()
     {
         var source = """
