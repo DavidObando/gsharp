@@ -1091,11 +1091,14 @@ internal sealed partial class ExpressionBinder
         bool canBeVoid = false,
         TypeSymbol? targetType = null,
         bool preserveEmptyBlock = false)
-        => BindInBlockExpressionScope<BoundExpression>(() => BindBlockExpressionValueCore(
-            syntax,
-            canBeVoid,
-            targetType,
-            preserveEmptyBlock));
+        => BindInBlockExpressionScope(() =>
+        {
+            return BindBlockExpressionValueCore(
+                syntax,
+                canBeVoid,
+                targetType,
+                preserveEmptyBlock);
+        });
 
     private BoundExpression BindBlockExpressionValueCore(
         BlockExpressionSyntax syntax,
@@ -1140,7 +1143,7 @@ internal sealed partial class ExpressionBinder
         return new BoundBlockExpression(syntax, boundStatements, boundExpression);
     }
 
-    private T BindInBlockExpressionScope<T>(Func<T> bind)
+    private BoundExpression BindInBlockExpressionScope(Func<BoundExpression> bind)
     {
         scope = new BoundScope(scope);
         try
@@ -1171,7 +1174,10 @@ internal sealed partial class ExpressionBinder
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
-            return BindInBlockExpressionScope<BoundExpression>(() => BindLambdaBlockBodyExpression(block));
+            return BindInBlockExpressionScope(() =>
+            {
+                return BindLambdaBlockBodyExpression(block);
+            });
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);
