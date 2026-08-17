@@ -1353,6 +1353,11 @@ public static class SpillSequenceSpiller
                 return SpillLogicalOr(binary);
             }
 
+            if (binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce)
+            {
+                return SpillNullCoalesce(binary);
+            }
+
             var leftHasAwait = HasAwait(binary.Left);
             var rightHasAwait = HasAwait(binary.Right);
 
@@ -1456,6 +1461,64 @@ public static class SpillSequenceSpiller
             sideEffects.Add(new BoundLabelStatement(null, endLabel));
 
             locals.Add(resultLocal);
+
+            return new BoundSpillSequenceExpression(
+                null,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                new BoundVariableExpression(null, resultLocal));
+        }
+
+        private BoundSpillSequenceExpression SpillNullCoalesce(BoundBinaryExpression binary)
+        {
+            var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
+            var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
+
+            var spilledLeft = SpillExpression(binary.Left);
+            locals.AddRange(spilledLeft.Locals);
+            sideEffects.AddRange(spilledLeft.SideEffects);
+
+            var leftLocal = MakeSpillTemp(binary.Left.Type);
+            locals.Add(leftLocal);
+            sideEffects.Add(new BoundVariableDeclaration(null, leftLocal, spilledLeft.Value));
+
+            var resultLocal = MakeSpillTemp(binary.Type);
+            locals.Add(resultLocal);
+            var useLeftLabel = MakeLabel();
+            var endLabel = MakeLabel();
+            sideEffects.Add(new BoundConditionalGotoStatement(
+                null,
+                useLeftLabel,
+                new BoundVariableExpression(null, leftLocal),
+                jumpIfTrue: true));
+
+            var spilledRight = SpillExpression(binary.Right);
+            locals.AddRange(spilledRight.Locals);
+            sideEffects.AddRange(spilledRight.SideEffects);
+            sideEffects.Add(new BoundExpressionStatement(
+                null,
+                new BoundAssignmentExpression(null, resultLocal, spilledRight.Value)));
+            sideEffects.Add(new BoundGotoStatement(null, endLabel));
+
+            sideEffects.Add(new BoundLabelStatement(null, useLeftLabel));
+            BoundExpression leftValue = new BoundVariableExpression(null, leftLocal);
+            if (leftLocal.Type is NullableTypeSymbol)
+            {
+                var unwrapOp = Invariant.Required(
+                    BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, leftLocal.Type),
+                    "the left operand of null coalescing is nullable and always supports `!!`");
+                leftValue = new BoundUnaryExpression(null, unwrapOp, leftValue);
+            }
+
+            if (leftValue.Type != binary.Type)
+            {
+                leftValue = new BoundConversionExpression(null, binary.Type, leftValue);
+            }
+
+            sideEffects.Add(new BoundExpressionStatement(
+                null,
+                new BoundAssignmentExpression(null, resultLocal, leftValue)));
+            sideEffects.Add(new BoundLabelStatement(null, endLabel));
 
             return new BoundSpillSequenceExpression(
                 null,

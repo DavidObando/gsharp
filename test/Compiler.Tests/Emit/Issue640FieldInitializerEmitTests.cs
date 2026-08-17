@@ -121,6 +121,89 @@ public class Issue640FieldInitializerEmitTests
     }
 
     [Fact]
+    public void PrimaryConstructorParameter_FieldInitializer()
+    {
+        var source = """
+            package P
+            import System
+
+            class Holder(value string) {
+                let normalized string = value.ToUpperInvariant()
+                func Get() string -> normalized
+            }
+
+            Console.WriteLine(Holder("hello").Get())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"HELLO{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void InterpolatedString_FieldInitializer()
+    {
+        var source = """
+            package P
+            import System
+
+            class Holder {
+                let workerId string = "worker:${Environment.ProcessId}"
+                func Get() string -> workerId
+            }
+
+            Console.WriteLine(Holder().Get().StartsWith("worker:"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void InterpolatedString_StaticAndInterfaceFieldInitializers()
+    {
+        var source = """
+            package P
+            import System
+
+            class Holder {
+                shared {
+                    let WorkerId string = "class:${Environment.ProcessId}"
+                }
+            }
+
+            interface IHolder {
+                shared {
+                    let WorkerId string = "interface:${Environment.ProcessId}"
+                }
+            }
+
+            Console.WriteLine(Holder.WorkerId.StartsWith("class:"))
+            Console.WriteLine(IHolder.WorkerId.StartsWith("interface:"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void PrimaryConstructor_HasSinglePublicConstructor()
+    {
+        var source = """
+            package P
+            import System
+
+            class Holder(value string) {
+                func Get() string -> value
+            }
+
+            Console.WriteLine(Holder("x").GetType().GetConstructors().Length)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"1{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void Multiple_Fields_With_Initializers()
     {
         var source = """

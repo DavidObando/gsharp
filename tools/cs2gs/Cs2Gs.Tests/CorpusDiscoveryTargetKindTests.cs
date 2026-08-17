@@ -82,6 +82,24 @@ public class CorpusDiscoveryTargetKindTests
         Assert.Equal(TargetKind.Exe, app.TargetKind);
     }
 
+    [Theory]
+    [InlineData("Microsoft.NET.Sdk.Worker")]
+    [InlineData("Microsoft.NET.Sdk.Web")]
+    public void Discover_ExecutableSdkWithoutOutputType_ClassifiesAsExe(string sdk)
+    {
+        string root = NewScratchDir("executable-sdk");
+        string appFolder = Path.Combine(root, "SdkApp");
+        Directory.CreateDirectory(appFolder);
+        File.WriteAllText(
+            Path.Combine(appFolder, "SdkApp.csproj"),
+            $"""<Project Sdk="{sdk}"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>""");
+        File.WriteAllText(Path.Combine(appFolder, "Program.cs"), "System.Console.WriteLine(1);");
+
+        CorpusApp app = Assert.Single(CorpusDiscovery.Discover(root));
+
+        Assert.Equal(TargetKind.Exe, app.TargetKind);
+    }
+
     private static string NewScratchApp(string appName, string outputTypeElement)
     {
         string root = NewScratchDir(appName);

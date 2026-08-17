@@ -244,6 +244,55 @@ public class Issue1929CrossAssemblySemanticsTests
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
     }
 
+    [Fact]
+    public void Consumer_Explicitly_Granted_InternalsVisibleTo_Can_Call_InternalConstructor()
+    {
+        var outputDir = Path.Combine(AppContext.BaseDirectory, "Issue1929InternalConstructor");
+        Directory.CreateDirectory(outputDir);
+        var libraryPath = Path.Combine(outputDir, "InternalConstructor.Library.dll");
+
+        var library = new Compilation(
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Demo
+
+                @assembly:InternalsVisibleTo("InternalConstructor.Consumer")
+
+                class Secret {
+                    public let Value int32
+
+                    internal init(value int32) {
+                        Value = value
+                    }
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using (var peStream = File.Create(libraryPath))
+        {
+            var libResult = library.Emit(peStream, pdbStream: null, refStream: null, assemblyName: "InternalConstructor.Library");
+            Assert.True(libResult.Success, string.Join(Environment.NewLine, libResult.Diagnostics));
+        }
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+        resolver.CurrentAssemblyName = "InternalConstructor.Consumer";
+        var consumer = new Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package Consumer
+                import Demo
+
+                func Run() int32 -> Secret(value: 42).Value
+                """)));
+
+        using var output = new MemoryStream();
+        var result = consumer.Emit(output, pdbStream: null, refStream: null, assemblyName: "InternalConstructor.Consumer");
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+    }
+
     /// <summary>
     /// Non-blocking review finding #2: <c>Compilation.AssemblyName</c> must be
     /// honored regardless of whether the caller touches

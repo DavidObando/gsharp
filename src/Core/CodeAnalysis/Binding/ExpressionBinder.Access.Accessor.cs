@@ -3412,11 +3412,18 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            var requiredFixedParamCount = fixedParamCount;
+            while (requiredFixedParamCount > 0 &&
+                   method.Parameters[requiredFixedParamCount - 1].HasExplicitDefaultValue)
+            {
+                requiredFixedParamCount--;
+            }
+
             if (isVariadic)
             {
-                if (arguments.Length < fixedParamCount)
+                if (arguments.Length < requiredFixedParamCount)
                 {
-                    Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, method.Name, fixedParamCount, arguments.Length);
+                    Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, method.Name, requiredFixedParamCount, arguments.Length);
                     return new BoundErrorExpression(null);
                 }
             }
@@ -3469,6 +3476,19 @@ internal sealed partial class ExpressionBinder
                 {
                     parameterSyntax[i] = ce.Arguments[i];
                 }
+            }
+
+            if (isVariadic && arguments.Length < fixedParamCount)
+            {
+                var padded = ImmutableArray.CreateBuilder<BoundExpression>(fixedParamCount);
+                padded.AddRange(arguments);
+                for (var i = arguments.Length; i < fixedParamCount; i++)
+                {
+                    padded.Add(OverloadResolver.CreateOptionalUserDefaultArgument(method.Parameters[i]));
+                }
+
+                arguments = padded.MoveToImmutable();
+                Array.Resize(ref parameterSyntax, fixedParamCount);
             }
 
             // Issue #1379: a `shared` (static) method on a generic user type may

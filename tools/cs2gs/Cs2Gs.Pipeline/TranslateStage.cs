@@ -272,7 +272,10 @@ public sealed class TranslateStage : IMigrationStage
 
                 foreach (string analyzerPath in currentProject.AnalyzerReferencePaths)
                 {
-                    context.AnalyzerReferencePaths.Add(analyzerPath);
+                    if (ShouldForwardAnalyzer(analyzerPath))
+                    {
+                        context.AnalyzerReferencePaths.Add(analyzerPath);
+                    }
                 }
 
                 // Issue #2223: forward the app's non-source generator inputs
@@ -515,6 +518,15 @@ public sealed class TranslateStage : IMigrationStage
 
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
     }
+
+    internal static bool ShouldForwardAnalyzer(string analyzerPath) =>
+        !string.IsNullOrEmpty(analyzerPath)
+        && analyzerPath.IndexOf(
+            "/Microsoft.NET.Sdk.Razor/source-generators/",
+            StringComparison.OrdinalIgnoreCase) < 0
+        && analyzerPath.IndexOf(
+            "\\Microsoft.NET.Sdk.Razor\\source-generators\\",
+            StringComparison.OrdinalIgnoreCase) < 0;
 
     private static void PreserveGeneratedFriendAssemblyAnnotations(
         StageExecutionContext context,

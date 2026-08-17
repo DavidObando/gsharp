@@ -1608,30 +1608,17 @@ internal sealed partial class ExpressionBinder
         // trailing positional arguments into a synthesised slice/array first.
         // The receiver occupies parameter slot 0; the params slot is always
         // the last parameter, so it never collides with the receiver. Named
-        // arguments against an expanded-form extension are funnelled through
-        // an offset mapping so the receiver position lines up with bound[0].
+        // arguments against an expanded-form extension already carry a
+        // receiver-prefixed mapping from overload resolution.
         var parameters = best.GetParameters();
         if (resolution.IsExpanded)
         {
-            ImmutableArray<int> expandedMapping = default;
-            if (!resolution.ParameterMapping.IsDefault)
-            {
-                var offset = ImmutableArray.CreateBuilder<int>(bound.Length);
-                offset.Add(0);
-                for (var i = 0; i < resolution.ParameterMapping.Length; i++)
-                {
-                    offset.Add(resolution.ParameterMapping[i]);
-                }
-
-                expandedMapping = offset.MoveToImmutable();
-            }
-
             bound = overloads.ExpandParamsArguments(
                 bound,
                 parameters,
                 ce,
                 receiverArgCount: 1,
-                parameterMapping: expandedMapping,
+                parameterMapping: resolution.ParameterMapping,
                 symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall);
         }
 

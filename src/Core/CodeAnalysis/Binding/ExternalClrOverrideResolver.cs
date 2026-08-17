@@ -42,6 +42,8 @@ internal static class ExternalClrOverrideResolver
         RefKind returnRefKind,
         ImmutableArray<TypeParameterSymbol> typeParameters,
         Accessibility accessibility,
+        bool isAsync,
+        bool isValueTask,
         ReferenceResolver references)
     {
         bool sawName = false;
@@ -59,7 +61,15 @@ internal static class ExternalClrOverrideResolver
             sawName = true;
             if (method.GetGenericArguments().Length != typeParameters.Length
                 || !ParametersMatch(method.GetParameters(), parameters, typeSubstitutions, method, methodTypeArguments)
-                || !ReturnMatches(method.ReturnType, returnType, returnRefKind, typeSubstitutions, method, methodTypeArguments))
+                || !ReturnMatches(
+                    method.ReturnType,
+                    returnType,
+                    returnRefKind,
+                    typeSubstitutions,
+                    method,
+                    methodTypeArguments,
+                    isAsync,
+                    isValueTask))
             {
                 continue;
             }
@@ -849,7 +859,9 @@ internal static class ExternalClrOverrideResolver
         RefKind returnRefKind,
         ImmutableArray<TypeArgumentSubstitution> typeSubstitutions,
         MethodInfo? openMethodDefinition = null,
-        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default,
+        bool isAsync = false,
+        bool isValueTask = false)
     {
         if (clrReturnType == null)
         {
@@ -871,6 +883,17 @@ internal static class ExternalClrOverrideResolver
             }
         }
 
+        if (isAsync && IsClrNonGenericAsyncReturnType(clrReturnType, isValueTask))
+        {
+            return returnRefKind == RefKind.None && returnType == TypeSymbol.Void;
+        }
+
+        if (isAsync
+            && !TryUnwrapClrAsyncReturnType(clrReturnType, isValueTask, out clrReturnType))
+        {
+            return false;
+        }
+
         if (TypeMatches(
             clrReturnType,
             returnType,
@@ -882,6 +905,42 @@ internal static class ExternalClrOverrideResolver
         }
 
         return returnRefKind == RefKind.None && IsCovariantReturn(clrReturnType, returnType);
+    }
+
+    private static bool TryUnwrapClrAsyncReturnType(
+        Type clrReturnType,
+        bool isValueTask,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Type? awaitedType)
+    {
+        string expectedName = isValueTask
+            ? "System.Threading.Tasks.ValueTask"
+            : "System.Threading.Tasks.Task";
+        if (!clrReturnType.IsGenericType)
+        {
+            awaitedType = string.Equals(clrReturnType.FullName, expectedName, StringComparison.Ordinal)
+                ? clrReturnType.Assembly.GetType("System.Void")
+                : null;
+            return awaitedType != null;
+        }
+
+        Type genericDefinition = clrReturnType.GetGenericTypeDefinition();
+        if (string.Equals(genericDefinition.FullName, expectedName + "`1", StringComparison.Ordinal))
+        {
+            awaitedType = clrReturnType.GetGenericArguments()[0];
+            return true;
+        }
+
+        awaitedType = null;
+        return false;
+    }
+
+    private static bool IsClrNonGenericAsyncReturnType(Type type, bool isValueTask)
+    {
+        string expectedName = isValueTask
+            ? "System.Threading.Tasks.ValueTask"
+            : "System.Threading.Tasks.Task";
+        return !type.IsGenericType
+            && string.Equals(type.FullName, expectedName, StringComparison.Ordinal);
     }
 
     private static bool PropertyTypeMatches(

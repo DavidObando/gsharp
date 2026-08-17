@@ -492,7 +492,7 @@ public sealed partial class CSharpToGSharpTranslator
                             foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                             {
                                 fields.Add(new PropertyPatternField(
-                                    SanitizeIdentifier(sub.NameColon.Name.Identifier.Text),
+                                    SanitizeIdentifier(this.GetSubpatternMemberName(sub)),
                                     this.BuildNativePattern(sub.Pattern, binders)));
                             }
                         }

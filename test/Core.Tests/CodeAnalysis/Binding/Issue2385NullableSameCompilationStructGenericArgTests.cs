@@ -218,6 +218,32 @@ func Outer() {
         Assert.Equal(2, calls.Count);
     }
 
+    [Fact]
+    public void ListOfTupleWithNullableReference_AddNil_RebuildsTargetTuple()
+    {
+        const string source = """
+            package p
+            import System.Collections.Generic
+            func Outer() {
+                let list = List[(string, string?)]()
+                list.Add(("x", nil))
+            }
+            """;
+        var compilation = Compile(source);
+        Assert.Empty(compilation.GlobalScope.Diagnostics);
+
+        var call = FindImportedInstanceCall(compilation, "Outer", "Add");
+        Assert.NotNull(call);
+        Assert.True(call.Method.DeclaringType?.IsGenericType, call.Method.ToString());
+        Assert.Equal(
+            typeof(List<>).FullName,
+            call.Method.DeclaringType?.GetGenericTypeDefinition().FullName);
+        var tuple = Assert.IsType<TupleTypeSymbol>(call.Arguments[0].Type);
+        Assert.IsType<NullableTypeSymbol>(tuple.ElementTypes[1]);
+        var literal = Assert.IsType<BoundTupleLiteralExpression>(call.Arguments[0]);
+        Assert.Equal(tuple.ElementTypes[1], literal.Elements[1].Type);
+    }
+
     private static Compilation Compile(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

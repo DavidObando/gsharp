@@ -64,6 +64,28 @@ public class Issue2228DataClassWithEmitTests
     }
 
     [Fact]
+    public void DataClass_With_FromAsyncStateMachine_CanCallSynthesizedConstructor()
+    {
+        var source = """
+            package Probe
+            import System
+            import System.Threading.Tasks
+
+            data class Row(Name string) {
+            }
+
+            async func Copy(value Row) Row {
+                await Task.Yield()
+                return value with { Name = "after" }
+            }
+
+            Console.WriteLine(Copy(Row("before")).GetAwaiter().GetResult().Name)
+            """;
+
+        Assert.Equal($"after{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
     public void PlainClass_With_StillReportsGs0161()
     {
         var diagnostics = CompileExpectingErrors("""
