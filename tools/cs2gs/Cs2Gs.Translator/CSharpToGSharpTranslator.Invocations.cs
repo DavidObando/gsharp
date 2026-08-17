@@ -125,8 +125,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
 
-            // Extensions that cannot receive an issue #3357 receiver companion
-            // (by-ref receivers or exact owned signature collisions) use
+            // Extensions emitted as static helpers — by-ref receivers, exact owned
+            // signature collisions, or issue #3413 private-nested owners — use
             // positional static-helper calls.
             if (invocation.Expression is MemberAccessExpressionSyntax extMember
                 && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol extMethod
@@ -167,7 +167,7 @@ public sealed partial class CSharpToGSharpTranslator
                     { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } staticExt
                 && staticExt.Parameters.Length >= 1
                 && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
-                && !this.ownedExtensions.IsStaticHelper(staticExt)
+                && !this.IsStaticExtensionHelper(staticExt)
                 && this.context.SemanticModel.GetSymbolInfo(staticExtMember.Expression).Symbol is INamedTypeSymbol
                 && TryGetExplicitExtensionReceiverArgument(
                     staticExtOperation,
@@ -209,7 +209,7 @@ public sealed partial class CSharpToGSharpTranslator
                     { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } bareExt
                 && bareExt.Parameters.Length >= 1
                 && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
-                && !this.ownedExtensions.IsStaticHelper(bareExt)
+                && !this.IsStaticExtensionHelper(bareExt)
                 && TryGetExplicitExtensionReceiverArgument(
                     bareExtOperation,
                     bareExt,
@@ -734,7 +734,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (this.ownedExtensions.HasReceiverCompanion(method) ||
-                !this.ownedExtensions.IsStaticHelper(method))
+                !this.IsStaticExtensionHelper(method))
             {
                 return false;
             }

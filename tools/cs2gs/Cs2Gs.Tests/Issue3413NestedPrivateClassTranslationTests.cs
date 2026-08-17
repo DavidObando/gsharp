@@ -42,17 +42,30 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                 public static void Main()
                 {
                     Console.WriteLine(new EntryHelper<int>(42).Value);
+                    Console.WriteLine(1.Identity());
+                    Console.WriteLine(35.AddCached());
                 }
             }
 
             public static class ExtensionOwner
             {
-                private static class Cache<T>
+                private sealed class Cache<T>
                 {
+                    public Cache(T value)
+                    {
+                        Value = value;
+                    }
+
+                    public T Value { get; }
+
                     public static T Echo(T value) => value;
                 }
 
-                public static T Identity<T>(this T value) => value;
+                private static Cache<int> cache = new Cache<int>(7);
+
+                public static T Identity<T>(this T value) => Cache<T>.Echo(value);
+
+                public static int AddCached(this int value) => value + cache.Value;
             }
 
             public sealed class GenericOwner<TOuter>
@@ -118,10 +131,22 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal("Cache", cache.Name);
         Assert.Equal(Visibility.Private, cache.Visibility);
         Assert.Single(cache.TypeParameters);
+        SharedBlock extensionShared = Assert.Single(extensionOwner.Members.OfType<SharedBlock>());
+        Assert.Equal(
+            Visibility.Private,
+            extensionShared.Members.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
+        Assert.DoesNotContain(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name is "Identity" or "AddCached");
 
         string rendered = GSharpPrinter.Print(unit);
         Assert.Contains("private class EntryHelper[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("private var cache Cache[int32]", rendered, StringComparison.Ordinal);
+        Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
+        Assert.Contains("ExtensionOwner.AddCached", rendered, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", rendered, StringComparison.Ordinal);
         Assert.Contains("private open class Helper[TInner]", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -155,7 +180,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), Source);
         string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
-        File.WriteAllText(goldenPath, "42\n");
+        File.WriteAllText(goldenPath, "42\n1\n42\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var app = new CorpusApp(
@@ -223,6 +248,14 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.True(cache.IsNestedPrivate);
         Assert.Equal(extensionOwner, cache.DeclaringType);
         Assert.Single(cache.GetGenericArguments());
+        Assert.True(
+            extensionOwner.GetField("cache", BindingFlags.NonPublic | BindingFlags.Static)!.IsPrivate);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("Identity", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("AddCached", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
 
         Type genericOwner = Assert.Single(
             assembly.GetTypes(),
@@ -242,6 +275,84 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             1,
             genericHelper.GetMethod("EchoInner", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .ReturnType.GenericParameterPosition);
+    }
+
+    [Fact]
+    public void PrivateNestedExtensionBody_StaysOnOwnerAcrossProjectBoundary()
+    {
+        LoadedCSharpProject producer = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Producer.cs", """
+                    namespace Issue3413;
+
+                    public static class Extensions
+                    {
+                        private sealed class Box<T>
+                        {
+                            public static T Echo(T value) => value;
+                        }
+
+                        public static T Echo<T>(this T value) => Box<T>.Echo(value);
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Issue3413.Producer");
+        Assert.True(
+            producer.BoundWithoutErrors,
+            string.Join(Environment.NewLine, producer.ErrorDiagnostics));
+
+        using var image = new MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult emit = producer.Compilation.Emit(image);
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+
+        MetadataReference producerReference = MetadataReference.CreateFromImage(image.ToArray());
+        LoadedCSharpProject consumer = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Consumer.cs", """
+                    using Issue3413;
+
+                    namespace Consumer;
+
+                    public static class Use
+                    {
+                        public static string Run(string value) => value.Echo();
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences().Append(producerReference).ToList(),
+            "Issue3413.Consumer");
+        Assert.True(
+            consumer.BoundWithoutErrors,
+            string.Join(Environment.NewLine, consumer.ErrorDiagnostics));
+
+        CSharpCompilation[] siblings = { producer.Compilation, consumer.Compilation };
+        LoadedDocument producerDocument = Assert.Single(producer.Documents);
+        LoadedDocument consumerDocument = Assert.Single(consumer.Documents);
+        string printedProducer = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(
+                producerDocument,
+                new TranslationContext(
+                    producer.Compilation,
+                    producerDocument.SemanticModel,
+                    producerDocument.FilePath,
+                    siblings)));
+        string printedConsumer = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(
+                consumerDocument,
+                new TranslationContext(
+                    consumer.Compilation,
+                    consumerDocument.SemanticModel,
+                    consumerDocument.FilePath,
+                    siblings)));
+
+        Assert.Contains("private class Box[T]", printedProducer, StringComparison.Ordinal);
+        Assert.Contains("func Echo[T](value T) T", printedProducer, StringComparison.Ordinal);
+        Assert.DoesNotContain("func (value T) Echo", printedProducer, StringComparison.Ordinal);
+        Assert.Contains("Extensions.Echo(value)", printedConsumer, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printedProducer, printedConsumer);
     }
 
     private static (CompilationUnit Unit, TranslationContext Context) Translate(string source)

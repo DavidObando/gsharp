@@ -489,7 +489,23 @@ public sealed partial class CSharpToGSharpTranslator
                 .OfType<MethodDeclarationSyntax>())
             {
                 if (model.GetDeclaredSymbol(methodDeclaration) is not IMethodSymbol method ||
-                    !TryGetOwnedExtensionReceiver(method, out INamedTypeSymbol receiverDefinition))
+                    !method.IsExtensionMethod)
+                {
+                    continue;
+                }
+
+                // Issue #3413: a lifted receiver func is emitted on the synthetic
+                // top-level <Program> type, which cannot legally access a private
+                // nested aggregate retained on the source extension owner. Keep
+                // every extension on such an owner as its CLR-native static method;
+                // translated receiver calls already use the static-helper rewrite.
+                if (RequiresOwnerScopedExtension(method))
+                {
+                    result.AddStaticHelper(methodDeclaration);
+                    continue;
+                }
+
+                if (!TryGetOwnedExtensionReceiver(method, out INamedTypeSymbol receiverDefinition))
                 {
                     continue;
                 }
@@ -606,6 +622,33 @@ public sealed partial class CSharpToGSharpTranslator
             (HasCrossContainerOwnedExtensionOverload(receiver, original) ||
                 HasReducedDeclarationCollision(receiver, original) ||
                 original.Parameters[0].RefKind != RefKind.None);
+    }
+
+    private static bool RequiresOwnerScopedExtension(IMethodSymbol method)
+    {
+        IMethodSymbol original = method?.ReducedFrom ?? method;
+        return original?.IsExtensionMethod == true &&
+            HasPrivateNestedAggregate(original.ContainingType);
+    }
+
+    private static bool HasPrivateNestedAggregate(INamedTypeSymbol type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        foreach (INamedTypeSymbol nested in type.GetTypeMembers())
+        {
+            if ((nested.TypeKind != TypeKind.Delegate &&
+                    nested.DeclaredAccessibility == Accessibility.Private) ||
+                HasPrivateNestedAggregate(nested))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsReproducibleReceiverCompanion(IMethodSymbol method)

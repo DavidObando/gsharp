@@ -157,6 +157,14 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 
 C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` for non-owned receivers and `func extension (self T) M(…) R` for enum/owned receivers that cannot become canonical in-body members (ADR-0019/0165).
 
+Issue #3413 adds one ownership-preserving exception: when the declaring static
+class contains a private nested aggregate, its extension methods stay as
+ordinary static methods in that owner's `shared` block. Translated call sites
+use `Owner.M(receiver, …)`, including calls from sibling migrated projects.
+Lifting those bodies to top-level receiver funcs would move them onto the
+synthetic `<Program>` type, which cannot legally access the retained private
+nested type or members whose signatures contain it.
+
 #### B.6 Inheritance and the `:` clause — ADR-0017, spec §Type declarations
 
 - C# classes are sealed-by-default in G#; a base class that is subclassed must be emitted `open class`, and the overriding member must carry `override` (ADR-0017). The translator uses Roslyn's `INamedTypeSymbol.IsSealed`/`IsAbstract`/inheritance graph to decide: a class that any other corpus type derives from → `open`; a C# `abstract`/`virtual` member that is overridden → `open`/`override` on the pair. C# `sealed class` → plain `class` (already the default) or `sealed class` when it participates in a closed hierarchy switched on exhaustively (ADR-0078).

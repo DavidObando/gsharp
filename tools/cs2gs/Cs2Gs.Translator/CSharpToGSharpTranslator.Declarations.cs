@@ -454,7 +454,12 @@ public sealed partial class CSharpToGSharpTranslator
                     // to the position default so the qualified reference still binds
                     // (a private helper of a static utility class is an internal
                     // implementation detail with no external callers to over-expose).
-                    if (!preserveStaticClassPrivate && IsMemberOfExtensionBearingStaticClass(symbol))
+                    // Issue #3413 owners with private nested aggregates keep their
+                    // extension bodies as in-owner static helpers, so their private
+                    // siblings remain reachable and must not be widened.
+                    if (!preserveStaticClassPrivate &&
+                        IsMemberOfExtensionBearingStaticClass(symbol) &&
+                        !HasPrivateNestedAggregate(symbol.ContainingType))
                     {
                         return Visibility.Default;
                     }
@@ -487,10 +492,12 @@ public sealed partial class CSharpToGSharpTranslator
         /// <summary>
         /// Returns <see langword="true"/> when <paramref name="symbol"/> is a member
         /// of a <c>static class</c> that also declares at least one extension method.
-        /// Such a class is decomposed at translation time — its extension methods are
-        /// lifted to top-level receiver-clause <c>func</c>s (ADR-0115 §B.5) — so any
-        /// sibling <c>private</c> member the lifted funcs reference must be widened to
-        /// stay reachable across the resulting file scope (would otherwise be GS0472).
+        /// Such a class is normally decomposed at translation time — its extension
+        /// methods are lifted to top-level receiver-clause <c>func</c>s (ADR-0115
+        /// §B.5) — so any sibling <c>private</c> member the lifted funcs reference
+        /// must be widened to stay reachable across the resulting file scope (would
+        /// otherwise be GS0472). Issue #3413's private-nested-owner exception is
+        /// applied by the caller.
         /// </summary>
         private static bool IsMemberOfExtensionBearingStaticClass(ISymbol symbol)
         {

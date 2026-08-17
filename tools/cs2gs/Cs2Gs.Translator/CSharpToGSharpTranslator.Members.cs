@@ -1305,7 +1305,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 else if (self != null &&
                     (forceExtensionReceiver ||
-                        !this.ownedExtensions.IsStaticHelper(symbol)))
+                        !this.IsStaticExtensionHelper(symbol)))
                 {
                     // Issue #3357: enum receivers and source-owned receivers
                     // that cannot become real in-body members use the explicit
@@ -1472,6 +1472,32 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
+        }
+
+        private bool IsStaticExtensionHelper(IMethodSymbol method)
+        {
+            if (this.ownedExtensions.IsStaticHelper(method))
+            {
+                return true;
+            }
+
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (!RequiresOwnerScopedExtension(original) ||
+                this.context.SiblingCompilations == null)
+            {
+                return false;
+            }
+
+            // Reproduce the owner-scoped declaration only for projects translated
+            // in this run. Third-party metadata may also contain private nested
+            // implementation types, but its imported extension remains external.
+            string assemblyName = original.ContainingAssembly?.Identity.GetDisplayName();
+            return assemblyName != null &&
+                this.context.SiblingCompilations.Any(compilation =>
+                    string.Equals(
+                        compilation.Assembly.Identity.GetDisplayName(),
+                        assemblyName,
+                        StringComparison.Ordinal));
         }
 
         /// <summary>
