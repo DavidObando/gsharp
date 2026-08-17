@@ -159,14 +159,16 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (lambda.Body is BlockSyntax block)
                 {
-                    // ADR-0128 / issue #1172: a block-bodied C# lambda renders as the
-                    // idiomatic G# arrow form `(params) -> { … }`. The arrow lambda's
-                    // statement-block body now reaches parity with func literals and
-                    // infers its return type, so no explicit return type is emitted.
+                    // ADR-0128 / issue #1172: block-bodied lambdas normally use the
+                    // idiomatic inferred arrow form. Issue #3414: when a direct
+                    // argument's return expressions need conversion to the target
+                    // delegate result, preserve that exact result on a func literal.
                     return new LambdaExpression(
                         parameters,
                         blockBody: this.WithParameterShadows(lambda, this.TranslateBlock(block)),
-                        isAsync: isAsync);
+                        isAsync: isAsync,
+                        returnType: exactReturnType,
+                        isFunctionLiteral: exactTargetInvoke != null);
                 }
 
                 // A void static-helper `?.` call needs a guarded statement, not

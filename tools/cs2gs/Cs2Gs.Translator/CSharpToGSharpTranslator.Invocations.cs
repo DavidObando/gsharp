@@ -1283,8 +1283,7 @@ public sealed partial class CSharpToGSharpTranslator
             AnonymousFunctionExpressionSyntax lambda,
             IMethodSymbol invoke)
         {
-            if (lambda.Body is not ExpressionSyntax body
-                || invoke.ReturnsVoid)
+            if (invoke.ReturnsVoid)
             {
                 return false;
             }
@@ -1303,11 +1302,27 @@ public sealed partial class CSharpToGSharpTranslator
                 targetResult = task.TypeArguments[0];
             }
 
-            ITypeSymbol bodyType = this.context.GetTypeInfo(body).Type;
-            return bodyType != null
-                && !SymbolEqualityComparer.IncludeNullability.Equals(
-                    bodyType,
-                    targetResult);
+            IEnumerable<ExpressionSyntax> results = lambda.Body switch
+            {
+                ExpressionSyntax expression => new[] { expression },
+                BlockSyntax block => block
+                    .DescendantNodes(static node =>
+                        node is not AnonymousFunctionExpressionSyntax
+                            and not LocalFunctionStatementSyntax)
+                    .OfType<ReturnStatementSyntax>()
+                    .Where(statement => statement.Expression != null)
+                    .Select(statement => statement.Expression),
+                _ => Enumerable.Empty<ExpressionSyntax>(),
+            };
+
+            return results.Any(result =>
+            {
+                ITypeSymbol resultType = this.context.GetTypeInfo(result).Type;
+                return resultType != null
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        resultType,
+                        targetResult);
+            });
         }
 
         private static bool MethodGroupNeedsExactTarget(

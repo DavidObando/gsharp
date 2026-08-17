@@ -70,6 +70,9 @@ public sealed class Issue3414DelegateArgumentInferenceTests
                 Console.WriteLine(CountLambdas(cells));
                 Console.WriteLine(CountMethodGroups(cells));
                 Console.WriteLine(DescribeCell(cells[0]));
+                Console.WriteLine(DescribeCellBlock(cells[0], numeric: true));
+                Console.WriteLine(DescribeCellBlock(cells[0], numeric: false));
+                Console.WriteLine(VisitCell(cells[0]));
                 Console.WriteLine(RebuildCell(cells[0]).GetType().Name);
             }
 
@@ -82,6 +85,28 @@ public sealed class Issue3414DelegateArgumentInferenceTests
             public static object DescribeCell(Cell cell) =>
                 ApplyDescription(cell, Describe);
 
+            public static object DescribeCellBlock(Cell cell, bool numeric) =>
+                ApplyDescription(cell, value =>
+                {
+                    if (numeric)
+                    {
+                        return value.Diagnostics.Length;
+                    }
+
+                    return value.GetType().Name;
+                });
+
+            public static int VisitCell(Cell cell)
+            {
+                int count = 0;
+                ApplyVisit(cell, value =>
+                {
+                    count = value.Diagnostics.Length;
+                    return;
+                });
+                return count;
+            }
+
             public static object RebuildCell(Cell cell) =>
                 new Rebuilder(value => new Cell(value.Diagnostics)).Run(cell);
 
@@ -89,6 +114,9 @@ public sealed class Issue3414DelegateArgumentInferenceTests
                 Cell cell,
                 Func<Cell, object> describe) =>
                 describe(cell);
+
+            private static void ApplyVisit(Cell cell, Action<Cell> visit) =>
+                visit(cell);
 
             private static IEnumerable<CoreModel.Diagnostic> DiagnosticsOf(Cell cell) =>
                 cell.Diagnostics;
@@ -98,6 +126,33 @@ public sealed class Issue3414DelegateArgumentInferenceTests
 
             private static string Describe(object value) =>
                 value.GetType().Name;
+        }
+        """;
+
+    private const string ScopeIsolationSource = """
+        using System;
+        using ReplModel;
+
+        public static class ScopeIsolation
+        {
+            public static string Describe(Cell cell) =>
+                ApplyText(cell, value =>
+                {
+                    Func<Cell, int> nested = nestedValue =>
+                    {
+                        return nestedValue.Diagnostics.Length;
+                    };
+
+                    int Local(Cell localValue)
+                    {
+                        return localValue.Diagnostics.Length;
+                    }
+
+                    return value.GetType().Name + nested(value) + Local(value);
+                });
+
+            private static string ApplyText(Cell cell, Func<Cell, string> describe) =>
+                describe(cell);
         }
         """;
 
@@ -157,6 +212,14 @@ public sealed class Issue3414DelegateArgumentInferenceTests
             consumer,
             StringComparison.Ordinal);
         Assert.Contains("return Cell(value.Diagnostics)", consumer, StringComparison.Ordinal);
+        Assert.Contains(
+            "ApplyDescription(cell, func (value Cell) object",
+            consumer,
+            StringComparison.Ordinal);
+        Assert.Contains("return value.Diagnostics.Length", consumer, StringComparison.Ordinal);
+        Assert.Contains("return value.GetType().Name", consumer, StringComparison.Ordinal);
+        Assert.Contains("ApplyVisit(cell, (value Cell) -> {", consumer, StringComparison.Ordinal);
+        Assert.DoesNotContain("ApplyVisit(cell, func", consumer, StringComparison.Ordinal);
         Assert.Contains("d CoreModel.Diagnostic", consumer, StringComparison.Ordinal);
         Assert.All(
             translated,
@@ -167,6 +230,20 @@ public sealed class Issue3414DelegateArgumentInferenceTests
                     roundTrip.Success,
                     string.Join(Environment.NewLine, roundTrip.Errors));
             });
+    }
+
+    [Fact]
+    public void BlockLambdaReturnScan_ExcludesNestedLambdasAndLocalFunctions()
+    {
+        string[] translated = Translate(
+            ("Diagnostic.cs", CoreSource),
+            ("Cell.cs", CellSource),
+            ("ScopeIsolation.cs", ScopeIsolationSource));
+        string consumer = translated.Single(source =>
+            source.Contains("class ScopeIsolation", StringComparison.Ordinal));
+
+        Assert.Contains("ApplyText(cell, (value Cell) -> {", consumer, StringComparison.Ordinal);
+        Assert.DoesNotContain("ApplyText(cell, func", consumer, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -280,7 +357,7 @@ public sealed class Issue3414DelegateArgumentInferenceTests
         File.WriteAllText(Path.Combine(replDirectory, "Program.cs"), ReplSource);
 
         string stdoutGolden = Path.Combine(sourceRoot, "baseline.stdout.golden");
-        File.WriteAllText(stdoutGolden, "2\n2\nCell\nCell\n");
+        File.WriteAllText(stdoutGolden, "2\n2\nCell\n2\nCell\n2\nCell\n");
         return new Fixture(coreProject, replProject, stdoutGolden);
     }
 
