@@ -326,10 +326,19 @@ public sealed class Binder
             isLvalue: ExpressionBinder.IsLvalue,
             isIteratorReturnType: IsIteratorReturnType,
             resolveAccessibility: ResolveAccessibility,
-            bindVariableDeclarationAttributes: (annotations, positionDescription) => Declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
+            bindVariableDeclarationAttributes: (annotations, positionDescription) =>
+            {
+                return Declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field);
+            },
             getCurrentFunction: () => this.function,
-            bindLambdaWithTargetType: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
-            bindGenericLocalFunctionDeclaration: syntax => Lambdas.BindGenericLocalFunctionDeclaration(syntax),
+            bindLambdaWithTargetType: (syntax, targetType) =>
+            {
+                return Lambdas.BindLambdaExpression(syntax, targetType);
+            },
+            bindGenericLocalFunctionDeclaration: syntax =>
+            {
+                return Lambdas.BindGenericLocalFunctionDeclaration(syntax);
+            },
             checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
         BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
             Expressions.BindTypeOfExpression(syntax);
@@ -1497,9 +1506,26 @@ public sealed class Binder
         // was already snapshotted into `diagnostics`, so append here too.
         var friendDiagnostics = new DiagnosticBag();
         var friendAssemblies = FriendAssemblyDeclarations.Collect(syntaxTrees, friendDiagnostics);
-        result.FriendAssemblies = previous == null
-            ? friendAssemblies
-            : previous.FriendAssemblies.AddRange(friendAssemblies.Where(f => !previous.FriendAssemblies.Contains(f)));
+        if (previous == null)
+        {
+            result.FriendAssemblies = friendAssemblies;
+        }
+        else
+        {
+            var combinedFriends = ImmutableArray.CreateBuilder<string>(
+                previous.FriendAssemblies.Length + friendAssemblies.Length);
+            combinedFriends.AddRange(previous.FriendAssemblies);
+            foreach (var friendAssembly in friendAssemblies)
+            {
+                if (!previous.FriendAssemblies.Contains(friendAssembly))
+                {
+                    combinedFriends.Add(friendAssembly);
+                }
+            }
+
+            result.FriendAssemblies = combinedFriends.ToImmutable();
+        }
+
         if (friendDiagnostics.Any())
         {
             result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics.AddRange(friendDiagnostics), imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable())

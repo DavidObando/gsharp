@@ -298,10 +298,15 @@ public sealed class AssemblyDocumentationProvider
             }
 
             // Find the best matching ref pack version (highest available)
-            var packVersions = Directory.GetDirectories(packsDir)
-                .Select(d => Path.GetFileName(d))
-                .OrderByDescending(v => v, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var packDirectories = Directory.GetDirectories(packsDir);
+            var packVersions = new string[packDirectories.Length];
+            for (var i = 0; i < packDirectories.Length; i++)
+            {
+                packVersions[i] = Path.GetFileName(packDirectories[i]);
+            }
+
+            Array.Sort(packVersions, StringComparer.OrdinalIgnoreCase);
+            Array.Reverse(packVersions);
 
             foreach (var packVersion in packVersions)
             {
