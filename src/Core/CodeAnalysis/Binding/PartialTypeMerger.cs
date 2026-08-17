@@ -819,6 +819,15 @@ internal static class PartialTypeMerger
         }
 
         var text = node.SyntaxTree.Text.ToString(node.Span);
-        return new string(text.Where(c => !char.IsWhiteSpace(c)).ToArray());
+        var normalized = new System.Text.StringBuilder(text.Length);
+        foreach (var character in text)
+        {
+            if (!char.IsWhiteSpace(character))
+            {
+                normalized.Append(character);
+            }
+        }
+
+        return normalized.ToString();
     }
 }
