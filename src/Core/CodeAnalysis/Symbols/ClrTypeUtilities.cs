@@ -1473,29 +1473,32 @@ public static class ClrTypeUtilities
         // re-validate every member on every call (expensive under a
         // MetadataLoadContext); memoize per (Type, Flags, member kind) so a
         // type used at N call sites pays this once instead of N times.
-        return MemberCache<TMember>.Cache.GetOrAdd((type, flags), key =>
+        var key = (type, flags);
+        if (MemberCache<TMember>.Cache.TryGetValue(key, out var cached))
         {
-            TMember[] all;
-            try
-            {
-                all = getAll(key.Type);
-            }
-            catch (Exception ex) when (IsMetadataLoadFailure(ex))
-            {
-                return Array.Empty<TMember>();
-            }
+            return cached;
+        }
 
-            var usable = new List<TMember>(all.Length);
-            foreach (var member in all)
-            {
-                if (CanLoadSignature(member))
-                {
-                    usable.Add(member);
-                }
-            }
+        TMember[] all;
+        try
+        {
+            all = getAll(type);
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return MemberCache<TMember>.Cache.GetOrAdd(key, Array.Empty<TMember>());
+        }
 
-            return usable.ToArray();
-        });
+        var usable = new List<TMember>(all.Length);
+        foreach (var member in all)
+        {
+            if (CanLoadSignature(member))
+            {
+                usable.Add(member);
+            }
+        }
+
+        return MemberCache<TMember>.Cache.GetOrAdd(key, usable.ToArray());
     }
 
     private static TMember? SafeGetMember<TMember>(
