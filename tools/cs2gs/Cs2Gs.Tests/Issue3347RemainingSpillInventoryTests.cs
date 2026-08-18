@@ -179,7 +179,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
     }
 
     [Fact]
-    public void RemainingSpills_AreRequiredCrossScopeCaptures()
+    public void VarPatternBindings_NoLongerRequireCrossScopeSpills()
     {
         string printed = Translate(
             """
@@ -189,36 +189,46 @@ public sealed class Issue3347RemainingSpillInventoryTests
             {
                 public int X;
                 public int Y;
+            }
+
+            public static class C
+            {
+                private static Item GetItem() => new Item();
+
+                public static bool NestedBinding() =>
+                    GetItem() is { X: var x, Y: > 0 } && x > 0;
+            }
+            """);
+
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
+        Assert.Contains("C.GetItem() is { X: var x, Y: > 0 } && x > 0", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
+    }
+
+    [Fact]
+    public void CoalesceAssignmentOnNontrivialTarget_RemainsRequiredSpill()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            public sealed class Item
+            {
                 public string? Name { get; set; }
             }
 
             public static class C
             {
                 private static Item GetItem() => new Item();
-                private static object GetValue() => 1;
-
-                public static bool NestedBinding() =>
-                    GetItem() is { X: var x, Y: > 0 } && x > 0;
 
                 public static string Coalesce() =>
                     GetItem().Name ??= "default";
-
-                public static int ReassignedBinder()
-                {
-                    if (GetValue() is int value)
-                    {
-                        value++;
-                        return value;
-                    }
-
-                    return 0;
-                }
             }
             """);
 
         Assert.Contains("__spill", printed, StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(printed, "C.GetItem()"));
-        Assert.Equal(1, CountOccurrences(printed, "C.GetValue()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
     }
 
     [Fact]

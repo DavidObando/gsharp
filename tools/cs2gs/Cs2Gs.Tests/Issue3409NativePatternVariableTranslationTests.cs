@@ -270,7 +270,7 @@ public class Issue3409NativePatternVariableTranslationTests
     }
 
     [Fact]
-    public void VarDesignation_KeepsTheSubstitutionLowering()
+    public void VarDesignation_UsesNativeTotalPattern()
     {
         string printed = Translate("""
             namespace Demo
@@ -295,7 +295,10 @@ public class Issue3409NativePatternVariableTranslationTests
             }
             """);
 
-        Assert.DoesNotContain("var x }", printed, StringComparison.Ordinal);
+        Assert.Contains("if value is Point { X: var x } {", printed, StringComparison.Ordinal);
+        Assert.Contains("return x", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
     }
 
     private static string Translate(string source)

@@ -345,6 +345,20 @@ public static class SemanticTokensComputer
             case EnumMemberSyntax enumMember:
                 positions.Add(enumMember.Identifier.Span.Start);
                 break;
+            case VarPatternSyntax varPattern when varPattern.Designation.Text != "_":
+                positions.Add(varPattern.Designation.Span.Start);
+                break;
+            case TypePatternSyntax typePattern
+                when typePattern.BindingIdentifier is { Text: not "_" } typeDesignation:
+                positions.Add(typeDesignation.Span.Start);
+                break;
+            case PropertyPatternSyntax propertyPattern
+                when propertyPattern.Designation is { Text: not "_" } propertyDesignation:
+                positions.Add(propertyDesignation.Span.Start);
+                break;
+            case SlicePatternSyntax slicePattern when slicePattern.CaptureIdentifier != null:
+                positions.Add(slicePattern.CaptureIdentifier.Span.Start);
+                break;
         }
 
         foreach (var child in node.GetChildren())

@@ -807,11 +807,12 @@ internal static class CaptureBoxingRewriter
                 var guard = arm.Guard == null ? null : this.RewriteExpression(arm.Guard);
                 var body = this.RewriteStatement(arm.Body);
 
-                if (pattern is BoundTypePattern typePattern
-                    && typePattern.Variable != null
-                    && this.boxInfo.TryGetValue(typePattern.Variable, out var bi))
+                var seed = pattern == null
+                    ? ImmutableArray<BoundStatement>.Empty
+                    : this.BuildPatternBoxSeedStatements(pattern);
+                if (!seed.IsEmpty)
                 {
-                    body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
+                    body = PrependSeedStatements(body, seed);
                 }
 
                 if (builder == null && (pattern != arm.Pattern || guard != arm.Guard || body != arm.Body))
@@ -847,16 +848,16 @@ internal static class CaptureBoxingRewriter
                 var guard = arm.Guard == null ? null : this.RewriteExpression(arm.Guard);
                 var result = this.RewriteExpression(arm.Result);
 
-                if (pattern is BoundTypePattern typePattern
-                    && typePattern.Variable != null
-                    && this.boxInfo.TryGetValue(typePattern.Variable, out var bi))
+                var seed = pattern == null
+                    ? ImmutableArray<BoundStatement>.Empty
+                    : this.BuildPatternBoxSeedStatements(pattern);
+                if (!seed.IsEmpty)
                 {
                     // A switch-expression arm has no statement body to prepend
                     // into — only a `Result` expression — so the seed becomes a
                     // BoundBlockExpression's prefix statements (folding into an
                     // existing one from a prior rewrite, e.g. #2130's expression-
                     // tree lowering, rather than nesting).
-                    var seed = this.BuildBoxSeedStatements(bi);
                     result = result is BoundBlockExpression existingBlock
                         ? new BoundBlockExpression(null, seed.AddRange(existingBlock.Statements), existingBlock.Expression)
                         : new BoundBlockExpression(null, seed, result);
@@ -1117,6 +1118,20 @@ internal static class CaptureBoxingRewriter
                         bi.BoxClass,
                         bi.BoxField,
                         new BoundVariableExpression(null, bi.Original))));
+        }
+
+        private ImmutableArray<BoundStatement> BuildPatternBoxSeedStatements(BoundPattern pattern)
+        {
+            var seed = ImmutableArray.CreateBuilder<BoundStatement>();
+            foreach (var variable in PatternVariables.CollectBindings(pattern))
+            {
+                if (this.boxInfo.TryGetValue(variable, out var bi))
+                {
+                    seed.AddRange(this.BuildBoxSeedStatements(bi));
+                }
+            }
+
+            return seed.ToImmutable();
         }
 
         // Prepends box-seed statements ahead of a construct's already-rewritten

@@ -209,7 +209,8 @@ public sealed partial class CSharpToGSharpTranslator
                 GExpression parentReceiver,
                 List<(ISymbol Symbol, GExpression Replacement)> bindings,
                 HashSet<string> usedDesignators,
-                List<GExpression> guards)
+                List<GExpression> guards,
+                List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
             {
                 var fields = new List<PropertyPatternField>();
                 foreach (string name in this.order)
@@ -219,13 +220,49 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         fields.Add(new PropertyPatternField(
                             name,
-                            translator.TranslatePattern(leafPattern, memberReceiver, bindings, usedDesignators, guards)));
+                            translator.TranslatePattern(
+                                leafPattern,
+                                memberReceiver,
+                                bindings,
+                                usedDesignators,
+                                guards,
+                                mutableBindings)));
                         continue;
                     }
 
                     ExtendedPropertyFieldTree child = this.children[name];
-                    List<PropertyPatternField> childFields = child.ConvertChildren(translator, memberReceiver, bindings, usedDesignators, guards);
+                    List<PropertyPatternField> childFields = child.ConvertChildren(
+                        translator,
+                        memberReceiver,
+                        bindings,
+                        usedDesignators,
+                        guards,
+                        mutableBindings);
                     fields.Add(new PropertyPatternField(name, new PropertyPattern(childFields)));
+                }
+
+                return fields;
+            }
+
+            public List<PropertyPatternField> ConvertNativeChildren(
+                DeclarationVisitor translator,
+                List<ILocalSymbol> binders)
+            {
+                var fields = new List<PropertyPatternField>();
+                foreach (string name in this.order)
+                {
+                    if (this.leaves.TryGetValue(name, out PatternSyntax leafPattern))
+                    {
+                        fields.Add(new PropertyPatternField(
+                            name,
+                            translator.BuildNativePattern(leafPattern, binders)));
+                        continue;
+                    }
+
+                    ExtendedPropertyFieldTree child = this.children[name];
+                    fields.Add(new PropertyPatternField(
+                        name,
+                        new PropertyPattern(child.ConvertNativeChildren(translator, binders))));
                 }
 
                 return fields;

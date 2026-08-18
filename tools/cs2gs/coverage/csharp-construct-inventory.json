@@ -1243,7 +1243,7 @@
     "rule": "ADR-0115 \u00A7B.36",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/IsPatternExpression.cs",
-    "notes": "Native boolean patterns; designations become G# pattern variables scoped to their definitely-assigned regions (ADR-0166, issue #3409). var designations and reassigned binders keep the substitution/hoist lowerings."
+    "notes": "Native boolean patterns; declaration and scalar var designations become G# pattern variables scoped to their definitely-assigned regions (ADR-0166, issues #3409/#3420). Reassigned binders keep the substitution/hoist lowerings."
   },
   {
     "kind": "JoinClause",
@@ -1340,7 +1340,7 @@
     "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ListPattern.cs",
-    "notes": "is-test path lowers to a length test (\u0060==\u0060 exact / \u0060\u003E=\u0060 with a slice) ANDed with per-element index tests; switch-arm path emits a native G# \u0060ListPattern\u0060 (\u0060[1, .., 4]\u0060) since gsc has its own structural list-pattern matching (issue #1889, resolved). Element \u0060var\u0060 binders reuse the #1888 discard\u002Bsubstitution mechanism; \u0060int x\u0060 declaration-pattern elements map to native \u0060TypePattern\u0060. Deferral: gsc\u0027s \u0060BindListPattern\u0060 only accepts array/slice-typed discriminants (not e.g. \u0060List\u003CT\u003E\u0060), a pre-existing gsc scope boundary, not a cs2gs limitation."
+    "notes": "is-test and switch-arm paths emit native G# list patterns when their subpatterns qualify. Element \u0060var\u0060 binders emit native total patterns; typed elements emit native \u0060TypePattern\u0060. Deferral: gsc\u0027s \u0060BindListPattern\u0060 only accepts array/slice-typed discriminants (not e.g. \u0060List\u003CT\u003E\u0060), a pre-existing gsc scope boundary, not a cs2gs limitation."
   },
   {
     "kind": "LoadDirectiveTrivia",
@@ -2409,7 +2409,7 @@
     "rule": "ADR-0115 \u00A7B.22",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/SwitchExpression.cs",
-    "notes": "Always-matching bind (issue #1888, resolved): an is-pattern/loop-condition \u0060x is var v\u0060 lowers to the literal \u0060true\u0060 test with \u0060v\u0060 bound directly to the receiver; a switch/property-pattern \u0060var v\u0060 arm lowers to the G# discard \u0060_\u0060 (gsc\u0027s own total-arm check) with \u0060v\u0060 bound via translator-side substitution to the arm\u0027s discriminant/property receiver."
+    "notes": "Always-matching scalar bind: \u0060var v\u0060 emits verbatim as G#\u0027s native total pattern in is, property/list, and switch positions (issue #3420). Tuple designations remain unsupported."
   },
   {
     "kind": "VariableDeclaration",

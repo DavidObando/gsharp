@@ -189,6 +189,10 @@ internal sealed class DocumentTranslationState
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
     public int SpillCounter { get; set; }
 
+    // Monotonic counter for immutable pattern captures that seed mutable C#
+    // switch-arm pattern locals.
+    public int SwitchPatternCounter { get; set; }
+
     // True only while reusing the switch-pattern code model for a native
     // boolean `is` expression. Boolean type patterns omit switch designators
     // and can compose directly with property/positional constraints.

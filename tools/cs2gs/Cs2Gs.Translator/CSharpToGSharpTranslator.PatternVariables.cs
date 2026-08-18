@@ -24,13 +24,13 @@ public sealed partial class CSharpToGSharpTranslator
     private sealed partial class DeclarationVisitor
     {
         /// <summary>
-        /// The ADR-0166 native path for a binding <c>is</c> pattern. Returns
+        /// The ADR-0166 native path for a binding or <c>var</c> <c>is</c> pattern. Returns
         /// <see langword="null"/> when the enclosing condition does not qualify,
         /// in which case the caller continues with the legacy lowering.
         /// </summary>
         private GExpression TryTranslateNativePatternVariables(IsPatternExpressionSyntax isPattern)
         {
-            if (!PatternIntroducesBinding(isPattern.Pattern)
+            if (!PatternUsesNativeVariableSyntax(isPattern.Pattern)
                 || !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)))
             {
                 return null;
@@ -83,7 +83,7 @@ public sealed partial class CSharpToGSharpTranslator
                 .DescendantNodesAndSelf(node => node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
                 .OfType<IsPatternExpressionSyntax>())
             {
-                if (!PatternIntroducesBinding(isPattern.Pattern))
+                if (!PatternUsesNativeVariableSyntax(isPattern.Pattern))
                 {
                     continue;
                 }
@@ -100,6 +100,12 @@ public sealed partial class CSharpToGSharpTranslator
             this.state.NativePatternConditionCache[condition] = result;
             return result;
         }
+
+        private static bool PatternUsesNativeVariableSyntax(PatternSyntax pattern)
+            => PatternIntroducesBinding(pattern)
+            || pattern.DescendantNodesAndSelf()
+                .OfType<VarPatternSyntax>()
+                .Any(varPattern => varPattern.Designation is SingleVariableDesignationSyntax or DiscardDesignationSyntax);
 
         /// <summary>
         /// The outermost boolean context an <c>is</c> pattern participates in:
@@ -363,10 +369,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// <summary>
         /// Structural mirror of <see cref="BuildNativePattern"/>: true when the
         /// pattern maps onto G# pattern grammar with designations and no
-        /// translator-side substitution (<c>var</c> designations, positional
-        /// clauses, list-pattern designations, and tuple designations do not).
+        /// translator-side substitution (scalar <c>var</c> designations do;
+        /// positional clauses, whole-list designations, and tuple designations do not).
         /// </summary>
-        private static bool IsNativelyExpressiblePattern(PatternSyntax pattern, bool topLevel)
+        private bool IsNativelyExpressiblePattern(PatternSyntax pattern, bool topLevel)
         {
             switch (pattern)
             {
@@ -379,6 +385,9 @@ public sealed partial class CSharpToGSharpTranslator
                 case DeclarationPatternSyntax declaration:
                     return declaration.Designation is SingleVariableDesignationSyntax or DiscardDesignationSyntax;
 
+                case VarPatternSyntax varPattern:
+                    return varPattern.Designation is SingleVariableDesignationSyntax or DiscardDesignationSyntax;
+
                 case RecursivePatternSyntax recursive:
                     if (recursive.PositionalPatternClause != null
                         || recursive.Designation is ParenthesizedVariableDesignationSyntax)
@@ -388,12 +397,46 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (recursive.PropertyPatternClause != null)
                     {
+                        var directRoots = new HashSet<string>(System.StringComparer.Ordinal);
+                        var extendedRoots = new HashSet<string>(System.StringComparer.Ordinal);
+                        var extendedTrees = new Dictionary<string, ExtendedPropertyFieldTree>(System.StringComparer.Ordinal);
                         foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                         {
-                            if (sub.NameColon == null || !IsNativelyExpressiblePattern(sub.Pattern, topLevel: false))
+                            if (!this.IsNativelyExpressiblePattern(sub.Pattern, topLevel: false))
                             {
                                 return false;
                             }
+
+                            if (sub.NameColon != null)
+                            {
+                                directRoots.Add(SanitizeIdentifier(this.GetSubpatternMemberName(sub)));
+                                continue;
+                            }
+
+                            if (sub.ExpressionColon == null)
+                            {
+                                return false;
+                            }
+
+                            List<string> names = SplitMemberPath(sub.ExpressionColon.Expression);
+                            string rootName = SanitizeIdentifier(names[0]);
+                            extendedRoots.Add(rootName);
+                            if (!extendedTrees.TryGetValue(rootName, out ExtendedPropertyFieldTree tree))
+                            {
+                                tree = new ExtendedPropertyFieldTree();
+                                extendedTrees[rootName] = tree;
+                            }
+
+                            tree.Insert(names, 1, sub.Pattern);
+                            if (tree.HasCollision)
+                            {
+                                return false;
+                            }
+                        }
+
+                        if (directRoots.Overlaps(extendedRoots))
+                        {
+                            return false;
                         }
                     }
 
@@ -484,18 +527,12 @@ public sealed partial class CSharpToGSharpTranslator
                         this.MapTypeSyntax(declaration.Type),
                         designationAfterType: true);
 
+                case VarPatternSyntax varPattern:
+                    return new VarPattern(this.NativeDesignator(varPattern.Designation, binders));
+
                 case RecursivePatternSyntax recursive:
                     {
-                        var fields = new List<PropertyPatternField>();
-                        if (recursive.PropertyPatternClause != null)
-                        {
-                            foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
-                            {
-                                fields.Add(new PropertyPatternField(
-                                    SanitizeIdentifier(this.GetSubpatternMemberName(sub)),
-                                    this.BuildNativePattern(sub.Pattern, binders)));
-                            }
-                        }
+                        List<PropertyPatternField> fields = this.BuildNativePropertyFields(recursive, binders);
 
                         string designator = this.NativeDesignator(recursive.Designation, binders);
                         if (recursive.Type != null)
@@ -555,6 +592,51 @@ public sealed partial class CSharpToGSharpTranslator
                         $"pattern '{pattern.Kind()}' has no canonical G# form yet (ADR-0115 §B).");
                     return new DiscardPattern();
             }
+        }
+
+        private List<PropertyPatternField> BuildNativePropertyFields(
+            RecursivePatternSyntax recursive,
+            List<ILocalSymbol> binders)
+        {
+            var fields = new List<PropertyPatternField>();
+            if (recursive.PropertyPatternClause == null)
+            {
+                return fields;
+            }
+
+            var extendedTrees = new Dictionary<string, ExtendedPropertyFieldTree>(System.StringComparer.Ordinal);
+            var extendedIndexes = new Dictionary<string, int>(System.StringComparer.Ordinal);
+            foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
+            {
+                if (sub.NameColon != null)
+                {
+                    fields.Add(new PropertyPatternField(
+                        SanitizeIdentifier(this.GetSubpatternMemberName(sub)),
+                        this.BuildNativePattern(sub.Pattern, binders)));
+                    continue;
+                }
+
+                List<string> names = SplitMemberPath(sub.ExpressionColon.Expression);
+                string rootName = SanitizeIdentifier(names[0]);
+                if (!extendedTrees.TryGetValue(rootName, out ExtendedPropertyFieldTree tree))
+                {
+                    tree = new ExtendedPropertyFieldTree();
+                    extendedTrees[rootName] = tree;
+                    extendedIndexes[rootName] = fields.Count;
+                    fields.Add(null);
+                }
+
+                tree.Insert(names, 1, sub.Pattern);
+            }
+
+            foreach (var pair in extendedTrees)
+            {
+                fields[extendedIndexes[pair.Key]] = new PropertyPatternField(
+                    pair.Key,
+                    new PropertyPattern(pair.Value.ConvertNativeChildren(this, binders)));
+            }
+
+            return fields;
         }
 
         // Records the local a designation declares and returns its sanitized G#

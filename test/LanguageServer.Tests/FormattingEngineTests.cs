@@ -198,4 +198,16 @@ public class FormattingEngineTests
         Assert.Equal(result, FormattingEngine.Format(result));
         Assert.Empty(SyntaxTree.Parse(result).Diagnostics);
     }
+
+    [Fact]
+    public void Format_VarPatterns_IsIdempotentAndParseable()
+    {
+        const string input = "func use(value object?){\nif value is var captured&&captured!=nil{\nreturn captured\n}\n}\n";
+
+        var result = FormattingEngine.Format(input);
+
+        Assert.Contains("if value is var captured && captured != nil {", result);
+        Assert.Equal(result, FormattingEngine.Format(result));
+        Assert.Empty(SyntaxTree.Parse(result).Diagnostics);
+    }
 }

@@ -362,7 +362,7 @@ public sealed class Issue3409PatternVariableEmitTests
             result.Stdout);
     }
 
-    private static (int ExitCode, string Stdout) CompileAndRun(string source)
+    internal static (int ExitCode, string Stdout) CompileAndRun(string source)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,

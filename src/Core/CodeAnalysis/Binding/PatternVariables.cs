@@ -155,6 +155,10 @@ internal static class PatternVariables
     {
         switch (pattern)
         {
+            case BoundDiscardPattern { Variable: not null } varPattern:
+                into.Add(varPattern.Variable);
+                break;
+
             case BoundTypePattern typePattern:
                 if (typePattern.HasBinding)
                 {
@@ -185,9 +189,10 @@ internal static class PatternVariables
                 break;
 
             case BoundSlicePattern slicePattern:
-                if (slicePattern.Variable is PatternVariableSymbol capture)
+                if (slicePattern.Variable != null
+                    && slicePattern.Syntax is Syntax.SlicePatternSyntax { CaptureIdentifier: not null })
                 {
-                    into.Add(capture);
+                    into.Add(slicePattern.Variable);
                 }
 
                 if (slicePattern.Pattern != null)

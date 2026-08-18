@@ -965,6 +965,9 @@ public static class GSharpPrinter
             case DiscardPattern _:
                 return "_";
 
+            case VarPattern varPattern:
+                return $"var {varPattern.Designator}";
+
             case BinaryPattern binary:
                 return $"{RenderPattern(binary.Left, indent, includeTypeDesignator)} {(binary.IsConjunction ? "and" : "or")} {RenderPattern(binary.Right, indent, includeTypeDesignator)}";
 

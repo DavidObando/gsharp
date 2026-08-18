@@ -1015,7 +1015,16 @@ public static class SemanticLookup
             .Concat(FindNodes<ForRangeStatementSyntax>(new[] { bodySyntax }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
             .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { bodySyntax }).Select(f => f.Identifier))
             .Concat(FindNodes<WhileLetStatementSyntax>(new[] { bodySyntax }).SelectMany(
-                statement => statement.Bindings.Select(binding => binding.Identifier)));
+                statement => statement.Bindings.Select(binding => binding.Identifier)))
+            .Concat(FindNodes<TypePatternSyntax>(new[] { bodySyntax })
+                .Select(pattern => pattern.BindingIdentifier))
+            .Concat(FindNodes<PropertyPatternSyntax>(new[] { bodySyntax })
+                .Select(pattern => pattern.Designation))
+            .Concat(FindNodes<VarPatternSyntax>(new[] { bodySyntax })
+                .Select(pattern => pattern.Designation))
+            .Concat(FindNodes<SlicePatternSyntax>(new[] { bodySyntax })
+                .Select(pattern => pattern.CaptureIdentifier))
+            .OfType<SyntaxToken>();
 
         return MatchBoundLocals(body, syntaxLocalIdentifiers);
     }
@@ -1039,6 +1048,11 @@ public static class SemanticLookup
     {
         var boundDeclarations = FindBoundNodes<BoundVariableDeclaration>(boundRoot)
             .Where(d => !d.Variable.Name.StartsWith("<", StringComparison.Ordinal))
+            .Select(declaration => (
+                Variable: (Symbol)declaration.Variable,
+                Syntax: (SyntaxNode?)declaration.Syntax))
+            .Concat(FindBoundNodes<BoundPattern>(boundRoot)
+                .SelectMany(GetPatternBindings))
             .ToList();
         var result = new List<(SyntaxToken Identifier, Symbol Variable)>();
         var used = new HashSet<int>();
@@ -1047,8 +1061,10 @@ public static class SemanticLookup
                      .OrderBy(id => id.Span.Start))
         {
             var exactBindingIndex = boundDeclarations.FindIndex(
-                declaration => declaration.Syntax is IfLetBindingClauseSyntax binding &&
-                    ReferenceEquals(binding.Identifier, syntaxIdentifier));
+                declaration =>
+                    ReferenceEquals(declaration.Syntax, syntaxIdentifier)
+                    || (declaration.Syntax is IfLetBindingClauseSyntax binding
+                        && ReferenceEquals(binding.Identifier, syntaxIdentifier)));
             if (exactBindingIndex >= 0 && !used.Contains(exactBindingIndex))
             {
                 used.Add(exactBindingIndex);
@@ -1070,6 +1086,23 @@ public static class SemanticLookup
         }
 
         return result;
+    }
+
+    private static IEnumerable<(Symbol Variable, SyntaxNode? Syntax)> GetPatternBindings(BoundPattern pattern)
+    {
+        switch (pattern)
+        {
+            case BoundDiscardPattern { Variable: not null } varPattern:
+                yield return (varPattern.Variable, varPattern.Variable.DeclaringSyntax);
+                break;
+            case BoundTypePattern { HasBinding: true } typePattern:
+                yield return (typePattern.Variable, typePattern.Variable.DeclaringSyntax);
+                break;
+
+            case BoundSlicePattern { Variable: not null, Syntax: SlicePatternSyntax { CaptureIdentifier: not null } } slicePattern:
+                yield return (slicePattern.Variable, slicePattern.Variable.DeclaringSyntax);
+                break;
+        }
     }
 
     private static Dictionary<string, Symbol> GetLocals(

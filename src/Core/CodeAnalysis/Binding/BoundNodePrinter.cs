@@ -777,7 +777,18 @@ public static class BoundNodePrinter
                 ((BoundConstantPattern)pattern).Value.WriteTo(writer);
                 break;
             case BoundNodeKind.DiscardPattern:
-                writer.WriteIdentifier("_");
+                var discardPattern = (BoundDiscardPattern)pattern;
+                if (discardPattern.Syntax is VarPatternSyntax)
+                {
+                    writer.WriteKeyword(SyntaxKind.VarKeyword);
+                    writer.WriteSpace();
+                    writer.WriteIdentifier(discardPattern.Variable?.Name ?? "_");
+                }
+                else
+                {
+                    writer.WriteIdentifier("_");
+                }
+
                 break;
             case BoundNodeKind.TypePattern:
                 var typePattern = (BoundTypePattern)pattern;

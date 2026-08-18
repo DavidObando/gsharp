@@ -218,6 +218,7 @@ public enum SyntaxKind
     ConstantPattern,
     TypeOrConstantPattern,
     DiscardPattern,
+    VarPattern,
     TypePattern,
     PropertyPattern,
     PropertyPatternField,

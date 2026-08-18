@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-08-16
 - **Phase**: Language patterns / flow analysis / migration fidelity
-- **Related**: ADR-0009 (switch patterns), ADR-0069 (smart-cast narrowing), ADR-0071 (`if let` / `guard let`), ADR-0115 (cs2gs), ADR-0162 (boolean `is` patterns), ADR-0163 (`while let`), [#3409](https://github.com/DavidObando/gsharp/issues/3409), [#3402](https://github.com/DavidObando/gsharp/issues/3402), parent [#3394](https://github.com/DavidObando/gsharp/issues/3394)
+- **Related**: ADR-0009 (switch patterns), ADR-0069 (smart-cast narrowing), ADR-0071 (`if let` / `guard let`), ADR-0115 (cs2gs), ADR-0162 (boolean `is` patterns), ADR-0163 (`while let`), [#3409](https://github.com/DavidObando/gsharp/issues/3409), [#3420](https://github.com/DavidObando/gsharp/issues/3420), [#3402](https://github.com/DavidObando/gsharp/issues/3402), parent [#3394](https://github.com/DavidObando/gsharp/issues/3394)
 
 ## Context
 
@@ -63,6 +63,8 @@ if value is { Length: > 0 } text { ... }                   // property pattern: 
 if box is { Value: Dog d } && d.Name != "" { ... }         // nested designation
 if value is { } present { ... }                            // empty property pattern: non-nil test
 if values is [1, ..rest] && rest.Length > 0 { ... }        // slice capture
+if value is var captured { ... }                           // total pattern: exact static type
+if box is { Value: var item } { ... }                      // total nested subpattern
 ```
 
 The designation is an identifier that directly follows the type clause (or
@@ -82,6 +84,10 @@ incoherent double test.
 The empty property pattern `{ }` is accepted over every input type as a pure
 non-nil test (C# semantics); a non-empty member list still requires a struct,
 class, interface, or tuple input.
+
+`var name` is a total pattern: it never fails, includes `nil`, and binds the
+input at its exact static type without narrowing. It is valid in every pattern
+position, including property and list subpatterns. `var _` is a total discard.
 
 ### Semantics
 
@@ -124,7 +130,7 @@ bindings under `or` and `not` stay rejected (GS0390).
   and `PropertyPatternSyntax`. Body-header brace speculation looks past a
   designation candidate when deciding whether `{ ... }` is a pattern or the
   statement body.
-- `PatternBinder` binds a designation to a `PatternVariableSymbol` (a
+- `PatternBinder` binds a designation, including `var name`, to a `PatternVariableSymbol` (a
   read-only `LocalVariableSymbol`) without declaring it; a designated
   property pattern is bound as a type pattern over the stripped input type so
   emission reuses the type-pattern pipeline unchanged.
@@ -154,8 +160,8 @@ bindings under `or` and `not` stay rejected (GS0390).
 The translator prefers the native G# form whenever every designation in a
 C# `is` pattern qualifies: the pattern is expressible in G# (declaration and
 recursive property patterns, nested designations, constants, relational,
-`and`/`or`/`not`, discards; no `var` designations, positional or list
-designations), the variable is never reassigned, and every reference lies in a
+`and`/`or`/`not`, discards, and scalar `var` designations; no positional,
+tuple, or whole-list designations), the variable is never reassigned, and every reference lies in a
 region G# scopes it to (computed on the C# syntax with the table above). It
 then emits `x is T t` / `x is { P: T t } u` verbatim, registers each binder
 as an identity substitution, and produces no `__spillN`. Otherwise it falls
