@@ -473,7 +473,7 @@ public sealed partial class CSharpToGSharpTranslator
                 .OfType<IsPatternExpressionSyntax>())
             {
                 if (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
-                    && !IsTrivialPatternReceiver(isPattern.Expression)
+                    && !this.PatternReceiverTranslatesToTrivialOperand(isPattern.Expression)
                     && !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)))
                 {
                     return true;
@@ -481,6 +481,19 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        private bool PatternReceiverTranslatesToTrivialOperand(ExpressionSyntax expression)
+        {
+            if (!IsTrivialPatternReceiver(expression))
+            {
+                return false;
+            }
+
+            // A bare identifier may become a member access through pattern-binding
+            // substitution or implicit static qualification. Classify the emitted
+            // shape so its spill stays behind earlier short-circuit guards.
+            return IsTrivialOperand(this.TranslateExpression(Unparenthesize(expression)));
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not

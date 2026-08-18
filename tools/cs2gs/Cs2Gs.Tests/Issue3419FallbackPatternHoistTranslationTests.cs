@@ -140,6 +140,197 @@ public sealed class Issue3419FallbackPatternHoistTranslationTests
     }
 
     [Fact]
+    public void TranslatedNonTrivialIdentifierScrutinees_StayBehindShortCircuitOperators()
+    {
+        string printed = Translate(
+            """
+            namespace Demo
+            {
+                public sealed class Payload
+                {
+                    public int Value;
+                }
+
+                public sealed class Container
+                {
+                    private readonly Payload child = new Payload { Value = 7 };
+
+                    public bool ThrowOnRead;
+                    public int Reads;
+
+                    public Payload Child
+                    {
+                        get
+                        {
+                            Reads++;
+                            if (ThrowOnRead)
+                            {
+                                throw new System.InvalidOperationException();
+                            }
+
+                            return child;
+                        }
+                    }
+                }
+
+                public class Base
+                {
+                    private static readonly Payload current = new Payload { Value = 7 };
+
+                    protected static bool ThrowOnRead;
+                    protected static int Reads;
+
+                    protected static Payload Current
+                    {
+                        get
+                        {
+                            Reads++;
+                            if (ThrowOnRead)
+                            {
+                                throw new System.InvalidOperationException();
+                            }
+
+                            return current;
+                        }
+                    }
+
+                    protected static void Reset(bool shouldThrow)
+                    {
+                        ThrowOnRead = shouldThrow;
+                        Reads = 0;
+                    }
+                }
+
+                public sealed class Derived : Base
+                {
+                    private static bool And(bool guard, bool shouldThrow)
+                    {
+                        Reset(shouldThrow);
+                        return guard
+                            && Current is { Value: var value }
+                            && value > 0;
+                    }
+
+                    private static bool Or(bool guard, bool shouldThrow)
+                    {
+                        Reset(shouldThrow);
+                        return guard
+                            || (Current is { Value: var value }
+                                && value > 0);
+                    }
+
+                    private static bool Coalesce(bool? preferred, bool shouldThrow)
+                    {
+                        Reset(shouldThrow);
+                        return preferred
+                            ?? (Current is { Value: var value }
+                                && value > 0);
+                    }
+
+                    private static bool Nested(bool guard, Container container) =>
+                        guard
+                        && container is { Child: var child }
+                        && child is { Value: var value }
+                        && value > 0;
+
+                    public static string Run()
+                    {
+                        bool andFalse = And(false, true);
+                        string andFalseResult = andFalse + ":" + Reads;
+                        bool andTrue = And(true, false);
+                        string andTrueResult = andTrue + ":" + Reads;
+                        bool orTrue = Or(true, true);
+                        string orTrueResult = orTrue + ":" + Reads;
+                        bool orFalse = Or(false, false);
+                        string orFalseResult = orFalse + ":" + Reads;
+                        bool coalesceTrue = Coalesce(true, true);
+                        string coalesceTrueResult = coalesceTrue + ":" + Reads;
+                        bool coalesceNull = Coalesce(null, false);
+                        string coalesceNullResult = coalesceNull + ":" + Reads;
+
+                        var container = new Container { ThrowOnRead = true };
+                        bool nestedFalse = Nested(false, container);
+                        string nestedFalseResult = nestedFalse + ":" + container.Reads;
+                        container.ThrowOnRead = false;
+                        bool nestedTrue = Nested(true, container);
+                        string nestedTrueResult = nestedTrue + ":" + container.Reads;
+
+                        return andFalseResult + "," + andTrueResult
+                            + "," + orTrueResult + "," + orFalseResult
+                            + "," + coalesceTrueResult + "," + coalesceNullResult
+                            + "," + nestedFalseResult + "," + nestedTrueResult;
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(Derived.Run())",
+            "False:0,True:1,True:0,True:1,True:0,True:1,False:0,True:1");
+    }
+
+    [Fact]
+    public void NonNullableStructScrutinee_UsesBindingDeferredSpillStorage()
+    {
+        string printed = Translate(
+            """
+            namespace Demo
+            {
+                public struct Measurement
+                {
+                    public int Value;
+                }
+
+                public sealed class Holder
+                {
+                    public bool ThrowOnRead;
+                    public int Reads;
+
+                    public Measurement Current
+                    {
+                        get
+                        {
+                            Reads++;
+                            if (ThrowOnRead)
+                            {
+                                throw new System.InvalidOperationException();
+                            }
+
+                            return new Measurement { Value = 7 };
+                        }
+                    }
+                }
+
+                public static class C
+                {
+                    private static bool Check(bool guard, Holder holder) =>
+                        guard
+                        && holder.Current is { Value: var value }
+                        && value > 0;
+
+                    public static string Run()
+                    {
+                        var holder = new Holder { ThrowOnRead = true };
+                        bool skipped = Check(false, holder);
+                        int skippedReads = holder.Reads;
+                        holder.ThrowOnRead = false;
+                        bool evaluated = Check(true, holder);
+                        return skipped + "," + skippedReads
+                            + "," + evaluated + "," + holder.Reads;
+                    }
+                }
+            }
+            """);
+
+        Assert.Matches("var __spill[0-9]+ Measurement", printed);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C.Run())",
+            "False,0,True,1");
+    }
+
+    [Fact]
     public void ReassignedReferenceBinder_IsDeclaredMutableAndRemainsNonNullInBody()
     {
         string printed = Translate(
