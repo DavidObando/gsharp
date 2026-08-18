@@ -302,7 +302,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression left = this.TranslateExpression(binary.Left);
             string op = binary.OperatorToken.Text;
-            GExpression right = this.TranslateExpression(binary.Right);
+            GExpression right = this.TranslateBinaryRightOperand(binary);
 
             // C# string concatenation `a + b`: when the `+` operator binds to
             // `string`, C# implicitly converts each non-string operand to a string
@@ -423,6 +423,64 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new BinaryExpression(left, op, right);
+        }
+
+        private GExpression TranslateBinaryRightOperand(BinaryExpressionSyntax binary)
+        {
+            // A fallback pattern in a right operand may spill its scrutinee.
+            // Host that spill in the operand itself so `&&`/`||`/`??` still
+            // decide whether the scrutinee runs.
+            if (!IsShortCircuitOperator(binary)
+                || this.state.PendingSpillPrologue == null
+                || !this.ContainsFallbackPatternSpill(binary.Right))
+            {
+                return this.TranslateExpression(binary.Right);
+            }
+
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            List<GStatement> previousDeclarations = this.state.ShortCircuitSpillDeclarations;
+            SyntaxNode previousScope = this.state.ShortCircuitSpillScope;
+            var statements = new List<GStatement>();
+            this.state.PendingSpillPrologue = statements;
+            this.state.ShortCircuitSpillDeclarations ??= outerSpillPrologue;
+            this.state.ShortCircuitSpillScope ??= binary.Right;
+            try
+            {
+                GExpression value = this.TranslateExpression(binary.Right);
+                return statements.Count == 0
+                    ? value
+                    : new BlockExpression(statements, value);
+            }
+            finally
+            {
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.ShortCircuitSpillDeclarations = previousDeclarations;
+                this.state.ShortCircuitSpillScope = previousScope;
+            }
+        }
+
+        private static bool IsShortCircuitOperator(BinaryExpressionSyntax binary) =>
+            binary.IsKind(SyntaxKind.LogicalAndExpression)
+            || binary.IsKind(SyntaxKind.LogicalOrExpression)
+            || binary.IsKind(SyntaxKind.CoalesceExpression);
+
+        private bool ContainsFallbackPatternSpill(ExpressionSyntax expression)
+        {
+            foreach (IsPatternExpressionSyntax isPattern in expression
+                .DescendantNodesAndSelf(
+                    descendIntoChildren: node =>
+                        node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                .OfType<IsPatternExpressionSyntax>())
+            {
+                if (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
+                    && !IsTrivialPatternReceiver(isPattern.Expression)
+                    && !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not

@@ -549,7 +549,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return positiveHoisted;
             }
 
-            return new[] { this.TranslateIf(ifStatement) };
+            return this.TranslateIfWithConditionPrologue(ifStatement);
         }
 
         private GStatement TranslateElseStatement(StatementSyntax statement)
@@ -1484,6 +1484,16 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GStatement TranslateIf(IfStatementSyntax ifStatement)
         {
+            IReadOnlyList<GStatement> translated =
+                this.TranslateIfWithConditionPrologue(ifStatement);
+            return translated.Count == 1
+                ? translated[0]
+                : new BlockStatement(translated);
+        }
+
+        private IReadOnlyList<GStatement> TranslateIfWithConditionPrologue(
+            IfStatementSyntax ifStatement)
+        {
             // Translate the condition first so any `x is T t` declaration pattern
             // registers its Kotlin-style smart-cast binding before the guarded
             // block is translated; the binding is scoped to the then-block only.
@@ -1510,14 +1520,8 @@ public sealed partial class CSharpToGSharpTranslator
                 elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
-            GStatement result = new IfStatement(condition, then, elseBranch);
-            if (conditionPrologue.Count > 0)
-            {
-                conditionPrologue.Add(result);
-                result = new BlockStatement(conditionPrologue);
-            }
-
-            return result;
+            conditionPrologue.Add(new IfStatement(condition, then, elseBranch));
+            return conditionPrologue;
         }
 
         private GStatement TranslateForStatement(ForStatementSyntax forStatement)

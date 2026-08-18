@@ -1031,7 +1031,17 @@ public sealed partial class CSharpToGSharpTranslator
         // native block-expression seam.
         private GExpression SpillOperand(GExpression operand, SyntaxNode operandSyntaxForDiagnostic)
         {
-            if (this.state.PendingSpillPrologue != null || IsTrivialOperand(operand))
+            if (IsTrivialOperand(operand))
+            {
+                return operand;
+            }
+
+            if (this.CanAssignShortCircuitSpill(operandSyntaxForDiagnostic))
+            {
+                return this.AssignShortCircuitSpill(operand, operandSyntaxForDiagnostic);
+            }
+
+            if (this.state.PendingSpillPrologue != null)
             {
                 return this.SpillOperand(operand);
             }
@@ -1041,6 +1051,66 @@ public sealed partial class CSharpToGSharpTranslator
                 "a native block-expression spill seam; emitting it would evaluate it more than once.";
             this.context.ReportUnsupported(operandSyntaxForDiagnostic, message);
             return operand;
+        }
+
+        private bool CanAssignShortCircuitSpill(SyntaxNode operandSyntax)
+        {
+            if (this.state.ShortCircuitSpillDeclarations == null
+                || this.state.PendingSpillPrologue == null
+                || this.state.ShortCircuitSpillScope == null)
+            {
+                return false;
+            }
+
+            for (SyntaxNode current = operandSyntax; current != null; current = current.Parent)
+            {
+                if (current == this.state.ShortCircuitSpillScope)
+                {
+                    return true;
+                }
+
+                if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        private GExpression AssignShortCircuitSpill(
+            GExpression operand,
+            SyntaxNode operandSyntax)
+        {
+            TypeInfo typeInfo = this.context.GetTypeInfo(operandSyntax);
+            ITypeSymbol operandType = typeInfo.Type ?? typeInfo.ConvertedType;
+            if (operandType == null || operandType.TypeKind == TypeKind.Error)
+            {
+                this.context.ReportUnsupported(
+                    operandSyntax,
+                    "a short-circuited fallback pattern scrutinee has no resolvable type for its deferred spill local (issue #3419).");
+                return this.SpillOperand(operand);
+            }
+
+            GTypeReference spillType = this.typeMapper.Map(
+                operandType,
+                this.context,
+                operandSyntax.GetLocation());
+            if (operandType.IsReferenceType)
+            {
+                spillType = MakeNullable(spillType);
+            }
+
+            string temp = $"__spill{this.state.SpillCounter++}";
+            var reference = new IdentifierExpression(temp);
+            this.state.ShortCircuitSpillDeclarations.Add(
+                new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    temp,
+                    spillType));
+            this.state.PendingSpillPrologue.Add(
+                new AssignmentStatement(reference, operand));
+            return reference;
         }
 
         // Issue #3355: field/property initializers and constructor-initializer
