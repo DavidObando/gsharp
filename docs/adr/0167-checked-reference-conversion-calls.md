@@ -27,6 +27,9 @@ constructor-independent checked reference conversions. The existing
 `T(value)` / `T?(value)` conversion-call forms remain available when no
 construction ambiguity exists.
 
+- `cast` is reserved in call position. `cast(...)` and `cast[...](...)` always
+  bind as intrinsic attempts; user functions or types named `cast` cannot
+  intercept them.
 - A compatible non-null value returns the same reference typed as `T`/`T?`.
 - A null reference stays null.
 - An incompatible non-null value throws `InvalidCastException`.

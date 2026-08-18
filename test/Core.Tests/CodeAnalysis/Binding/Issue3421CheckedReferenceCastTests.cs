@@ -3,9 +3,13 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Emit;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -171,6 +175,62 @@ public sealed class Issue3421CheckedReferenceCastTests
     }
 
     [Fact]
+    public void FailedClrConstructorFallbackBindsCaptureArgumentOnce()
+    {
+        var tree = SyntaxTree.Parse(SourceText.From("""
+            import System.Text
+
+            class Holder3421 {
+                prop Value object? { get; init; }
+            }
+
+            func CastCaptured3421(holder Holder3421?) StringBuilder? ->
+                StringBuilder(holder?.Value)
+            """));
+        var compilation = new Compilation(tree) { IsLibrary = true };
+
+        Assert.Empty(compilation.GlobalScope.Diagnostics);
+        var function = compilation.BoundProgram.Functions.Keys.Single(
+            candidate => candidate.Name == "CastCaptured3421");
+        var collector = new CaptureCollector();
+        collector.Visit(compilation.BoundProgram.Functions[function]);
+
+        var capture = Assert.Single(collector.Captures);
+        // A discarded first binding produced $ncap_2 here.
+        Assert.Equal("$ncap_1", capture.Capture.Name);
+        var conversion = Assert.Single(
+            collector.Conversions,
+            candidate => ReferenceEquals(candidate.Expression, capture));
+        Assert.Equal(typeof(System.Text.StringBuilder), conversion.Type.ClrType);
+    }
+
+    [Theory]
+    [InlineData("cast(x)", "GS0148")]
+    [InlineData("cast[A, B](x)", "GS0148")]
+    [InlineData("cast[T](a, b)", "GS0144")]
+    public void IntrinsicRejectsInvalidTypeAndValueArgumentCounts(
+        string expression,
+        string expectedDiagnostic)
+    {
+        var result = EmittedOracle.Evaluate(
+            new[]
+            {
+                $$"""
+                func cast(value object) object -> value
+                func InvalidCastShape3421[T, A, B](
+                    x object,
+                    a object,
+                    b object
+                ) object -> {{expression}}
+                """,
+            },
+            new EmittedOracleOptions { IsLibrary = true });
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal(expectedDiagnostic, diagnostic.Id);
+    }
+
+    [Fact]
     public void RuntimePreservesSuccessFailureNullInterfaceAndGenericSemantics()
     {
         var result = EmittedOracle.Evaluate("""
@@ -260,5 +320,27 @@ public sealed class Issue3421CheckedReferenceCastTests
 
     private sealed class SealedReference3421
     {
+    }
+
+    private sealed class CaptureCollector : BoundTreeWalker
+    {
+        public List<BoundNullConditionalAccessExpression> Captures { get; } = new();
+
+        public List<BoundConversionExpression> Conversions { get; } = new();
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundNullConditionalAccessExpression capture)
+            {
+                Captures.Add(capture);
+            }
+
+            if (node is BoundConversionExpression conversion)
+            {
+                Conversions.Add(conversion);
+            }
+
+            base.VisitExpression(node);
+        }
     }
 }
