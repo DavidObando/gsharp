@@ -280,16 +280,12 @@ namespace Demo
 
     public sealed class C
     {
-        public bool IsNil(Value? value)
-        {
-            var boxed = (IValue)value;
-            return boxed is null;
-        }
+        public IValue Return(Value? value) => (IValue)value;
 
-        public int Read(Value? value)
+        public bool AssignIsNil(Value? value)
         {
-            var boxed = (IValue)value;
-            return boxed?.Read() ?? -1;
+            IValue boxed = (IValue)value;
+            return boxed is null;
         }
     }
 }
@@ -297,22 +293,34 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("let boxed = value as IValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("cast[IValue](value as IValue)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("(value as IValue)!!", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
-        EmittedOracleResult nilResult = EmittedOracle.Evaluate(
-            rendered + Environment.NewLine + "C().IsNil(default(Value?))");
-        Assert.Empty(nilResult.Diagnostics);
-        Assert.Null(nilResult.UnhandledException);
-        Assert.Equal(true, nilResult.Value);
+        EmittedOracleResult returnNil = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().Return(default(Value?))");
+        Assert.Empty(returnNil.Diagnostics);
+        Assert.Null(returnNil.UnhandledException);
+        Assert.Null(returnNil.Value);
 
-        EmittedOracleResult valueResult = EmittedOracle.Evaluate(
-            rendered + Environment.NewLine + "C().Read(Value{})");
-        Assert.Empty(valueResult.Diagnostics);
-        Assert.Null(valueResult.UnhandledException);
-        Assert.Equal(7, valueResult.Value);
+        EmittedOracleResult assignedNil = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().AssignIsNil(default(Value?))");
+        Assert.Empty(assignedNil.Diagnostics);
+        Assert.Null(assignedNil.UnhandledException);
+        Assert.Equal(true, assignedNil.Value);
+
+        EmittedOracleResult assignedValue = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().AssignIsNil(Value{})");
+        Assert.Empty(assignedValue.Diagnostics);
+        Assert.Null(assignedValue.UnhandledException);
+        Assert.Equal(false, assignedValue.Value);
+
+        EmittedOracleResult returnValue = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().Return(Value{}).Read()");
+        Assert.Empty(returnValue.Diagnostics);
+        Assert.Null(returnValue.UnhandledException);
+        Assert.Equal(7, returnValue.Value);
     }
 
     [Fact]

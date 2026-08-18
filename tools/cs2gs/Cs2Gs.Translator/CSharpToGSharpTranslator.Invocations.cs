@@ -2778,10 +2778,19 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
                     };
+
                 // Boxing Nullable<T> with HasValue=false yields null; asserting
                 // here would turn a valid C# null result into a throw.
-                return boxingTargetType.IsNullable || sourceIsNullableValueType
-                    ? projection
+                if (boxingTargetType.IsNullable)
+                {
+                    return projection;
+                }
+
+                return sourceIsNullableValueType
+                    ? new ConversionExpression(
+                        boxingTargetType,
+                        projection,
+                        isCheckedReferenceCast: true)
                     : new NonNullAssertionExpression(projection);
             }
 
