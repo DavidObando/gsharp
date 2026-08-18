@@ -221,6 +221,34 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void TupleDeconstructionBetweenGuardAndUse_InvalidatesSmartCastNarrowing()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            public static class C
+            {
+                private static string? replacement;
+
+                public static int TupleWrite(string? value)
+                {
+                    if (value is null || replacement is null)
+                    {
+                        return 0;
+                    }
+
+                    int marker = 0;
+                    (value, marker) = (replacement, 1);
+                    return value.Length;
+                }
+            }
+            """);
+
+        Assert.Contains("return value!!.Length", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

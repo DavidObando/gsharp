@@ -1270,14 +1270,10 @@ public sealed partial class CSharpToGSharpTranslator
             return scope
                 .DescendantNodes(node =>
                     node is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
-                .OfType<IdentifierNameSyntax>()
-                .Any(identifier =>
-                    identifier.SpanStart > start.Span.End
-                    && identifier.SpanStart < use.SpanStart
-                    && IsDirectWrite(identifier)
-                    && SymbolEqualityComparer.Default.Equals(
-                        this.context.GetSymbolInfo(identifier).Symbol,
-                        symbol));
+                .Any(node =>
+                    node.SpanStart > start.Span.End
+                    && node.Span.End <= use.SpanStart
+                    && this.SyntaxNodeWritesSymbol(node, symbol));
         }
 
         private ITypeSymbol GetDeclaredValueType(ExpressionSyntax value) =>
