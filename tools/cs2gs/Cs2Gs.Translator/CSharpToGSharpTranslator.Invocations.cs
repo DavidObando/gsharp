@@ -2773,7 +2773,14 @@ public sealed partial class CSharpToGSharpTranslator
                     operand,
                     "as",
                     new TypeExpression(boxingTargetType));
-                return boxingTargetType.IsNullable
+                bool sourceIsNullableValueType =
+                    sourceSymbol is INamedTypeSymbol
+                    {
+                        OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
+                    };
+                // Boxing Nullable<T> with HasValue=false yields null; asserting
+                // here would turn a valid C# null result into a throw.
+                return boxingTargetType.IsNullable || sourceIsNullableValueType
                     ? projection
                     : new NonNullAssertionExpression(projection);
             }

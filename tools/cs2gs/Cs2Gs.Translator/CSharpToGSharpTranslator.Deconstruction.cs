@@ -685,13 +685,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Nested target tuples still need recursive lowering. Fresh `var`
-            // declarations can use G#'s inline let/var multi-assignment targets.
+            // Nested target tuples/designations still need recursive lowering.
+            // Flat fresh `var` declarations can use G#'s inline let/var targets.
             foreach (ArgumentSyntax argument in leftTuple.Arguments)
             {
                 if (argument.Expression is TupleExpressionSyntax
                     || (argument.Expression is DeclarationExpressionSyntax declaration
-                        && !declaration.Type.IsVar))
+                        && (!declaration.Type.IsVar
+                            || declaration.Designation is ParenthesizedVariableDesignationSyntax)))
                 {
                     return false;
                 }
@@ -887,42 +888,11 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (targetExpr is DeclarationExpressionSyntax declaration)
                 {
-                    // Mixed form, e.g. `(x, var y) = ...`: `y` is a NEW local,
-                    // not a write to an existing one — bind it directly from
-                    // the temp, `var`/`let` per whether it is reassigned later
-                    // (mirrors the plain-declaration path's mutability rule).
-                    string name = declaration.Designation switch
-                    {
-                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
-                        _ => "_",
-                    };
-
-                    if (name == "_")
-                    {
-                        values.Add(forceRealTemps ? tempRead : null);
-                        continue;
-                    }
-
-                    ILocalSymbol localSymbol = declaration.Designation is SingleVariableDesignationSyntax singleDesignation
-                        ? this.context.GetDeclaredSymbol(singleDesignation) as ILocalSymbol
-                        : null;
-
-                    // Issue #1967: `(x, Index i) = ...` declares `i` via this
-                    // mixed-tuple-assignment designation, not a declarator.
-                    if (declaration.Designation is SingleVariableDesignationSyntax indexCheckDesignation)
-                    {
-                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckDesignation);
-                    }
-
-                    BindingKind binding = localSymbol != null && this.IsLocalReassigned(localSymbol)
-                        ? BindingKind.Var
-                        : BindingKind.Let;
-                    statements.Add(new LocalDeclarationStatement(
-                        binding,
-                        name,
-                        type: null,
-                        initializer: tempRead));
-                    values.Add(new IdentifierExpression(name));
+                    values.Add(this.LowerDeconstructionDeclaration(
+                        declaration.Designation,
+                        tempRead,
+                        forceRealTemps,
+                        statements));
                     continue;
                 }
 
@@ -949,6 +919,61 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return values;
+        }
+
+        private GExpression LowerDeconstructionDeclaration(
+            VariableDesignationSyntax designation,
+            GExpression value,
+            bool preserveValue,
+            List<GStatement> statements)
+        {
+            if (designation is DiscardDesignationSyntax)
+            {
+                return preserveValue ? value : null;
+            }
+
+            if (designation is SingleVariableDesignationSyntax single)
+            {
+                this.ReportIfIndexOrRangeTypedDesignation(single);
+                string name = SanitizeIdentifier(single.Identifier.Text);
+                ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
+                statements.Add(new LocalDeclarationStatement(
+                    local != null && this.IsLocalReassigned(local)
+                        ? BindingKind.Var
+                        : BindingKind.Let,
+                    name,
+                    type: null,
+                    initializer: value));
+                return new IdentifierExpression(name);
+            }
+
+            var parenthesized = (ParenthesizedVariableDesignationSyntax)designation;
+            var temps = new List<string>(parenthesized.Variables.Count);
+            foreach (VariableDesignationSyntax child in parenthesized.Variables)
+            {
+                temps.Add(child is DiscardDesignationSyntax && !preserveValue
+                    ? "_"
+                    : $"__decon{this.state.DeconCounter++}");
+            }
+
+            statements.Add(new TupleDeconstructionStatement(BindingKind.Let, temps, value));
+            var values = new List<GExpression>(parenthesized.Variables.Count);
+            for (int i = 0; i < parenthesized.Variables.Count; i++)
+            {
+                if (temps[i] == "_")
+                {
+                    values.Add(null);
+                    continue;
+                }
+
+                values.Add(this.LowerDeconstructionDeclaration(
+                    parenthesized.Variables[i],
+                    new IdentifierExpression(temps[i]),
+                    preserveValue,
+                    statements));
+            }
+
+            return preserveValue ? new TupleLiteralExpression(values) : null;
         }
 
         private bool TryGetDeconstructionTargets(

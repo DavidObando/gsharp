@@ -7,6 +7,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -224,6 +225,36 @@ namespace Corpus.Issue1895
         Assert.Contains("b = __decon3", rendered, StringComparison.Ordinal);
         Assert.Contains("c = __decon1", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void NestedVarDesignation_DeclaresEveryLeafAndRuns()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1895
+{
+    public sealed class Holder
+    {
+        public int Run()
+        {
+            int existing = 0;
+            (existing, var (x, y)) = (1, (2, 3));
+            return (existing * 100) + (x * 10) + y;
+        }
+    }
+}
+");
+
+        Assert.Contains("let x = __decon", rendered, StringComparison.Ordinal);
+        Assert.Contains("let y = __decon", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("let _ = __decon", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(123, result.Value);
     }
 
     [Fact]

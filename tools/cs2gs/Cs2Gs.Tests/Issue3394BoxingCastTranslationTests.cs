@@ -262,6 +262,60 @@ namespace Demo
     }
 
     [Fact]
+    public void NullableValueToNonNullableInterfaceBoxing_PreservesNilAndValue()
+    {
+        const string source = @"
+#nullable enable
+namespace Demo
+{
+    public interface IValue
+    {
+        int Read();
+    }
+
+    public struct Value : IValue
+    {
+        public int Read() => 7;
+    }
+
+    public sealed class C
+    {
+        public bool IsNil(Value? value)
+        {
+            var boxed = (IValue)value;
+            return boxed is null;
+        }
+
+        public int Read(Value? value)
+        {
+            var boxed = (IValue)value;
+            return boxed?.Read() ?? -1;
+        }
+    }
+}
+";
+
+        string rendered = Translate(source);
+
+        Assert.Contains("let boxed = value as IValue", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("(value as IValue)!!", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        EmittedOracleResult nilResult = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().IsNil(default(Value?))");
+        Assert.Empty(nilResult.Diagnostics);
+        Assert.Null(nilResult.UnhandledException);
+        Assert.Equal(true, nilResult.Value);
+
+        EmittedOracleResult valueResult = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().Read(Value{})");
+        Assert.Empty(valueResult.Diagnostics);
+        Assert.Null(valueResult.UnhandledException);
+        Assert.Equal(7, valueResult.Value);
+    }
+
+    [Fact]
     public void ReferenceTypedUserDefinedCast_UsesConversionCall()
     {
         const string source = @"
