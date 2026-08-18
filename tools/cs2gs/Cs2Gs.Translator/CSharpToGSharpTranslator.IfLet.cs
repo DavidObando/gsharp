@@ -421,6 +421,7 @@ public sealed partial class CSharpToGSharpTranslator
                 elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
+            BlockStatement translatedThen = then;
             GStatement inner;
             if (directBinding)
             {
@@ -459,6 +460,14 @@ public sealed partial class CSharpToGSharpTranslator
             if (prefix.Count == 0)
             {
                 result = new[] { inner };
+                if (elseBranch != null)
+                {
+                    this.ReportPatternGuardControlTransferMismatch(
+                        ifStatement,
+                        result,
+                        new GStatement[] { translatedThen, elseBranch });
+                }
+
                 return true;
             }
 
@@ -478,6 +487,14 @@ public sealed partial class CSharpToGSharpTranslator
                     new BlockStatement(new[] { inner }),
                     elseBranch),
             };
+            if (elseBranch != null)
+            {
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    result,
+                    new GStatement[] { translatedThen, elseBranch });
+            }
+
             return true;
         }
 

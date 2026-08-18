@@ -1236,148 +1236,148 @@ public sealed partial class CSharpToGSharpTranslator
         private BlockStatement TranslateBody(SyntaxNode bodyOwner, string description)
         {
             SyntaxNode previousScope = this.state.CurrentBodyScope;
-            bool previousLegacyPatternGuardHoist = this.state.CurrentBodyUsesLegacyPatternGuardHoist;
             this.state.CurrentBodyScope = bodyOwner;
-            this.state.CurrentBodyUsesLegacyPatternGuardHoist = false;
             try
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
                 body = this.WithParameterShadows(bodyOwner, body);
-                body = AddIteratorExitLabel(bodyOwner, body);
-                if (this.state.CurrentBodyUsesLegacyPatternGuardHoist)
-                {
-                    this.ReportPatternGuardControlTransferMismatch(bodyOwner, description, body);
-                }
-
-                return body;
+                return AddIteratorExitLabel(bodyOwner, body);
             }
             finally
             {
                 this.state.CurrentBodyScope = previousScope;
-                this.state.CurrentBodyUsesLegacyPatternGuardHoist = previousLegacyPatternGuardHoist;
             }
         }
 
         private void ReportPatternGuardControlTransferMismatch(
-            SyntaxNode bodyOwner,
-            string description,
-            BlockStatement body)
+            IfStatementSyntax ifStatement,
+            IReadOnlyList<GStatement> emittedHoist,
+            IReadOnlyList<GStatement> translatedBranches)
         {
-            BlockSyntax sourceBody = bodyOwner switch
+            // Compare the translated branch nodes by identity before and after
+            // hoist assembly. Unrelated method statements cannot affect this
+            // invariant, while intentional shared nodes such as filtered-catch
+            // rethrows retain their original multiplicity.
+            var branchTransfers = new Dictionary<GStatement, int>(
+                System.Collections.Generic.ReferenceEqualityComparer.Instance);
+            foreach (GStatement branch in translatedBranches)
             {
-                BaseMethodDeclarationSyntax method => method.Body,
-                AccessorDeclarationSyntax accessor => accessor.Body,
-                LocalFunctionStatementSyntax localFunction => localFunction.Body,
-                _ => null,
-            };
-            if (sourceBody == null)
+                CountTranslatedControlTransferReferences(branch, branchTransfers);
+            }
+
+            if (branchTransfers.Count == 0)
             {
                 return;
             }
 
-            int sourceReturns = sourceBody.DescendantNodesAndSelf(
-                    descendIntoChildren: node =>
-                        node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
-                .OfType<ReturnStatementSyntax>()
-                .Count();
-            int sourceThrows = sourceBody.DescendantNodesAndSelf(
-                    descendIntoChildren: node =>
-                        node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
-                .OfType<ThrowStatementSyntax>()
-                .Count();
-            int translatedReturns = 0;
-            int translatedThrows = 0;
-            CountTranslatedControlTransfers(body, ref translatedReturns, ref translatedThrows);
+            var emittedTransfers = new Dictionary<GStatement, int>(
+                System.Collections.Generic.ReferenceEqualityComparer.Instance);
+            foreach (GStatement statement in emittedHoist)
+            {
+                CountTranslatedControlTransferReferences(statement, emittedTransfers);
+            }
 
-            if (sourceReturns == translatedReturns && sourceThrows == translatedThrows)
+            if (branchTransfers.All(expected =>
+                    emittedTransfers.TryGetValue(expected.Key, out int actual)
+                    && actual == expected.Value))
             {
                 return;
             }
 
+            int branchReturns = branchTransfers
+                .Where(pair => pair.Key is ReturnStatement)
+                .Sum(pair => pair.Value);
+            int branchThrows = branchTransfers
+                .Where(pair => pair.Key is ThrowStatement)
+                .Sum(pair => pair.Value);
+            int emittedReturns = branchTransfers
+                .Where(pair => pair.Key is ReturnStatement)
+                .Sum(pair => emittedTransfers.TryGetValue(pair.Key, out int count) ? count : 0);
+            int emittedThrows = branchTransfers
+                .Where(pair => pair.Key is ThrowStatement)
+                .Sum(pair => emittedTransfers.TryGetValue(pair.Key, out int count) ? count : 0);
             string message =
-                $"legacy pattern-guard lowering changed control-transfer structure in {description}: " +
-                $"C# has {sourceReturns} return statement(s) and {sourceThrows} throw statement(s), " +
-                $"but emitted G# has {translatedReturns} return statement(s) and {translatedThrows} throw statement(s) " +
+                "legacy pattern-guard lowering changed translated branch control-transfer structure: " +
+                $"branches contain {branchReturns} return occurrence(s) and {branchThrows} throw occurrence(s), " +
+                $"but emitted hoist preserves {emittedReturns} return occurrence(s) and {emittedThrows} throw occurrence(s) " +
                 "(issue #3418).";
             this.context.Report(new TranslationDiagnostic(
                 "PatternGuardControlFlow",
                 message,
-                bodyOwner.GetLocation(),
+                ifStatement.GetLocation(),
                 TranslationSeverity.Unsupported));
         }
 
-        private static void CountTranslatedControlTransfers(
+        private static void CountTranslatedControlTransferReferences(
             GStatement statement,
-            ref int returns,
-            ref int throws)
+            IDictionary<GStatement, int> counts)
         {
             switch (statement)
             {
                 case null:
                     return;
                 case ReturnStatement:
-                    returns++;
-                    return;
                 case ThrowStatement:
-                    throws++;
+                    counts.TryGetValue(statement, out int count);
+                    counts[statement] = count + 1;
                     return;
                 case BlockStatement block:
                     foreach (GStatement child in block.Statements)
                     {
-                        CountTranslatedControlTransfers(child, ref returns, ref throws);
+                        CountTranslatedControlTransferReferences(child, counts);
                     }
 
                     return;
                 case IfStatement conditional:
-                    CountTranslatedControlTransfers(conditional.Then, ref returns, ref throws);
-                    CountTranslatedControlTransfers(conditional.ElseBranch, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(conditional.Then, counts);
+                    CountTranslatedControlTransferReferences(conditional.ElseBranch, counts);
                     return;
                 case IfLetStatement ifLet:
-                    CountTranslatedControlTransfers(ifLet.Then, ref returns, ref throws);
-                    CountTranslatedControlTransfers(ifLet.Else, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(ifLet.Then, counts);
+                    CountTranslatedControlTransferReferences(ifLet.Else, counts);
                     return;
                 case WhileStatement loop:
-                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(loop.Body, counts);
                     return;
                 case WhileLetStatement loop:
-                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(loop.Body, counts);
                     return;
                 case DoWhileStatement loop:
-                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(loop.Body, counts);
                     return;
                 case ForStatement loop:
-                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(loop.Body, counts);
                     return;
                 case ForInStatement loop:
-                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(loop.Body, counts);
                     return;
                 case ForTupleInStatement loop:
-                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(loop.Body, counts);
                     return;
                 case LockStatement locked:
-                    CountTranslatedControlTransfers(locked.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(locked.Body, counts);
                     return;
                 case FixedStatement fixedStatement:
-                    CountTranslatedControlTransfers(fixedStatement.Body, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(fixedStatement.Body, counts);
                     return;
                 case TryStatement tryStatement:
-                    CountTranslatedControlTransfers(tryStatement.TryBlock, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(tryStatement.TryBlock, counts);
                     foreach (CatchClause catchClause in tryStatement.CatchClauses)
                     {
-                        CountTranslatedControlTransfers(catchClause.Body, ref returns, ref throws);
+                        CountTranslatedControlTransferReferences(catchClause.Body, counts);
                     }
 
-                    CountTranslatedControlTransfers(tryStatement.FinallyBlock, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(tryStatement.FinallyBlock, counts);
                     return;
                 case SwitchStatement switchStatement:
                     foreach (SwitchStatementCase switchCase in switchStatement.Cases)
                     {
-                        CountTranslatedControlTransfers(switchCase.Body, ref returns, ref throws);
+                        CountTranslatedControlTransferReferences(switchCase.Body, counts);
                     }
 
                     return;
                 case LabeledStatement labeled:
-                    CountTranslatedControlTransfers(labeled.Statement, ref returns, ref throws);
+                    CountTranslatedControlTransferReferences(labeled.Statement, counts);
                     return;
                 default:
                     return;

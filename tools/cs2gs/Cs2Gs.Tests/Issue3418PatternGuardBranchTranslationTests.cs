@@ -113,6 +113,59 @@ public sealed class Issue3418PatternGuardBranchTranslationTests
             "20");
     }
 
+    [Fact]
+    public void PatternGuardHoists_WithFilteredCatch_DoNotReportControlFlowMismatch()
+    {
+        string printed = Translate(
+            """
+            namespace Demo
+            {
+                public static class C
+                {
+                    public static int Select(object value, bool useFilter)
+                    {
+                        if (value is int number && number > 0)
+                        {
+                            number += 1;
+                            return number;
+                        }
+                        else if (value is string text && text.Length > 0)
+                        {
+                            text += "!";
+                            return text.Length;
+                        }
+                        else
+                        {
+                        }
+
+                        try
+                        {
+                            throw new System.InvalidOperationException();
+                        }
+                        catch (System.InvalidOperationException) when (useFilter)
+                        {
+                            return 30;
+                        }
+                        catch (System.Exception)
+                        {
+                            return 40;
+                        }
+                    }
+                }
+            }
+            """);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            """
+            Console.WriteLine(C.Select(2, false))
+            Console.WriteLine(C.Select("text", false))
+            Console.WriteLine(C.Select(Object(), true))
+            Console.WriteLine(C.Select(Object(), false))
+            """,
+            string.Join(Environment.NewLine, "3", "5", "30", "40"));
+    }
+
     private static string Translate(string source, bool allowPositionalPatternDiagnostic = false)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

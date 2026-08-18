@@ -536,7 +536,6 @@ public sealed partial class CSharpToGSharpTranslator
             // and translates nothing when it declines.
             if (this.TryBuildIfLetGuard(ifStatement, out IReadOnlyList<GStatement> ifLetHoisted))
             {
-                this.state.CurrentBodyUsesLegacyPatternGuardHoist |= ifStatement.Else != null;
                 return ifLetHoisted;
             }
 
@@ -547,7 +546,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (this.TryBuildPositiveGuardHoist(ifStatement, out IReadOnlyList<GStatement> positiveHoisted))
             {
-                this.state.CurrentBodyUsesLegacyPatternGuardHoist |= ifStatement.Else != null;
                 return positiveHoisted;
             }
 
@@ -680,6 +678,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
+            if (elseBranch != null)
+            {
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    result,
+                    new GStatement[] { then, elseBranch });
+            }
+
             return true;
         }
 
@@ -784,6 +790,10 @@ public sealed partial class CSharpToGSharpTranslator
                 guardedStatements.Add(new LabeledStatement(
                     endLabel,
                     new BlockStatement(new List<GStatement>())));
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    guardedStatements,
+                    new GStatement[] { body, elseBranch });
                 return guardedStatements;
             }
 
@@ -798,6 +808,14 @@ public sealed partial class CSharpToGSharpTranslator
                 guard,
                 new BlockStatement(thenStatements),
                 guards.Count == 0 ? elseBranch : null));
+            if (elseBranch != null)
+            {
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    statements,
+                    new GStatement[] { body, elseBranch });
+            }
+
             return statements;
         }
 
