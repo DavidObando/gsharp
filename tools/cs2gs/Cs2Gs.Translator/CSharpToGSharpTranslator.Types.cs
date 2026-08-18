@@ -500,7 +500,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // pattern designation, not a declarator — check the whole arm
                 // pattern tree here.
                 this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
-                GPattern pattern = this.TranslatePattern(
+                GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
                     bindings,
@@ -731,7 +731,7 @@ public sealed partial class CSharpToGSharpTranslator
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
                 this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
-                GPattern pattern = this.TranslatePattern(
+                GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
                     bindings,
@@ -863,7 +863,7 @@ public sealed partial class CSharpToGSharpTranslator
                             // Issue #1967: same guard as the switch-expression arm
                             // path above, for the switch-statement `case` form.
                             this.ReportIndexOrRangeDesignationsInPattern(patternLabel.Pattern);
-                            GPattern pattern = this.TranslatePattern(
+                            GPattern pattern = this.TranslateSwitchPattern(
                                 patternLabel.Pattern,
                                 subject,
                                 bindings,
@@ -1399,6 +1399,49 @@ public sealed partial class CSharpToGSharpTranslator
                         $"pattern '{pattern.Kind()}' has no canonical G# form yet (ADR-0115 §B).");
                     return new DiscardPattern();
             }
+        }
+
+        private GPattern TranslateSwitchPattern(
+            PatternSyntax pattern,
+            GExpression receiver,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            HashSet<string> usedDesignators,
+            List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
+        {
+            if (pattern is RecursivePatternSyntax { Type: not null, PropertyPatternClause: not null }
+                && PatternIntroducesBinding(pattern)
+                && this.IsNativelyExpressiblePattern(pattern, topLevel: true))
+            {
+                SyntaxNode scope = this.state.CurrentBodyScope ?? pattern.SyntaxTree.GetRoot();
+                List<ILocalSymbol> locals = pattern
+                    .DescendantNodesAndSelf()
+                    .OfType<SingleVariableDesignationSyntax>()
+                    .Select(this.context.GetDeclaredSymbol)
+                    .OfType<ILocalSymbol>()
+                    .ToList();
+                if (locals.All(local => !this.IsSymbolReassigned(local, scope)))
+                {
+                    var nativeBinders = new List<ILocalSymbol>();
+                    GPattern native = this.BuildNativePattern(pattern, nativeBinders);
+                    foreach (ILocalSymbol binder in nativeBinders)
+                    {
+                        bindings.Add((
+                            binder,
+                            new IdentifierExpression(SanitizeIdentifier(binder.Name))));
+                    }
+
+                    return native;
+                }
+            }
+
+            return this.TranslatePattern(
+                pattern,
+                receiver,
+                bindings,
+                usedDesignators,
+                guards,
+                mutableBindings);
         }
 
         // Issue #1889: G# has a native list pattern (spec §Pattern matching,

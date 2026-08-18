@@ -934,14 +934,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// A tuple literal element is a value position: a declared-nullable
-    /// (<c>T?</c>) operand flow-proven non-null by a preceding guard must be
-    /// emitted with the G# non-null assertion (<c>x!!</c>), because G# does not
-    /// smart-cast across the tuple boundary and would otherwise reject the
-    /// nullable element against the non-null tuple slot (issue #914).
+    /// A tuple literal element keeps the bare local when G#'s own flow analysis
+    /// carries the preceding non-null guard into the tuple value.
     /// </summary>
     [Fact]
-    public void TupleLiteralElement_GuardedNullable_RendersNonNullAssertion()
+    public void TupleLiteralElement_GuardedNullable_UsesGSharpSmartCast()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -959,7 +956,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return (a!!,", printed);
+        Assert.Contains("return (a,", printed);
+        Assert.DoesNotContain("a!!", printed);
     }
 
     private static string TranslateUnit(string source, string roundTripOnlyReason = null)

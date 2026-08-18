@@ -196,12 +196,22 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private static List<SyntaxNode> ComputeNativePatternVariableRegions(IsPatternExpressionSyntax isPattern)
         {
-            var regions = new List<SyntaxNode>();
-            SyntaxNode node = isPattern;
-
             // `x is not T t` assigns `t` when the whole test is FALSE.
             StripTopLevelNegation(isPattern.Pattern, out bool negated);
-            bool whenTrue = !negated;
+            return ComputePatternFlowRegions(isPattern, whenTrue: !negated);
+        }
+
+        private static List<SyntaxNode> ComputePatternFlowRegions(
+            IsPatternExpressionSyntax isPattern,
+            bool whenTrue) =>
+            ComputeBooleanFlowRegions(isPattern, whenTrue);
+
+        private static List<SyntaxNode> ComputeBooleanFlowRegions(
+            ExpressionSyntax condition,
+            bool whenTrue)
+        {
+            var regions = new List<SyntaxNode>();
+            SyntaxNode node = condition;
 
             while (true)
             {
@@ -306,6 +316,84 @@ public sealed partial class CSharpToGSharpTranslator
                         return regions;
                 }
             }
+        }
+
+        private static bool TryGetPatternNonNullPolarity(
+            PatternSyntax pattern,
+            out bool whenTrue)
+        {
+            switch (pattern)
+            {
+                case ParenthesizedPatternSyntax parenthesized:
+                    return TryGetPatternNonNullPolarity(parenthesized.Pattern, out whenTrue);
+
+                case UnaryPatternSyntax unary when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
+                    if (TryGetPatternNonNullPolarity(unary.Pattern, out whenTrue))
+                    {
+                        whenTrue = !whenTrue;
+                        return true;
+                    }
+
+                    break;
+
+                case ConstantPatternSyntax constant when IsNullLiteral(constant.Expression):
+                    whenTrue = false;
+                    return true;
+
+                case BinaryPatternSyntax binary when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword):
+                    {
+                        bool leftKnown = TryGetPatternNonNullPolarity(binary.Left, out bool leftWhenTrue);
+                        bool rightKnown = TryGetPatternNonNullPolarity(binary.Right, out bool rightWhenTrue);
+                        if ((leftKnown && leftWhenTrue) || (rightKnown && rightWhenTrue))
+                        {
+                            whenTrue = true;
+                            return true;
+                        }
+
+                        if (leftKnown && rightKnown && !leftWhenTrue && !rightWhenTrue)
+                        {
+                            whenTrue = false;
+                            return true;
+                        }
+
+                        break;
+                    }
+
+                case BinaryPatternSyntax binary when binary.OperatorToken.IsKind(SyntaxKind.OrKeyword):
+                    {
+                        bool leftKnown = TryGetPatternNonNullPolarity(binary.Left, out bool leftWhenTrue);
+                        bool rightKnown = TryGetPatternNonNullPolarity(binary.Right, out bool rightWhenTrue);
+                        if ((leftKnown && !leftWhenTrue) || (rightKnown && !rightWhenTrue))
+                        {
+                            whenTrue = false;
+                            return true;
+                        }
+
+                        if (leftKnown && rightKnown && leftWhenTrue && rightWhenTrue)
+                        {
+                            whenTrue = true;
+                            return true;
+                        }
+
+                        break;
+                    }
+
+                case VarPatternSyntax:
+                case DiscardPatternSyntax:
+                    break;
+
+                case ConstantPatternSyntax:
+                case RelationalPatternSyntax:
+                case TypePatternSyntax:
+                case DeclarationPatternSyntax:
+                case RecursivePatternSyntax:
+                case ListPatternSyntax:
+                    whenTrue = true;
+                    return true;
+            }
+
+            whenTrue = false;
+            return false;
         }
 
         // Peels parentheses and top-level `not` layers off a pattern, reporting

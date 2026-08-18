@@ -373,7 +373,7 @@ namespace Demo
     }
 
     [Fact]
-    public void EarlyReturnNullGuard_LocalPassedToNonNullConstructor_AssertsNonNull()
+    public void EarlyReturnNullGuard_LocalPassedToNonNullConstructor_UsesSmartCast()
     {
         string printed = TranslateNullableEnabled(@"
 #nullable enable
@@ -395,7 +395,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return Holder(item!!)", printed);
+        Assert.Contains("return Holder(item)", printed);
+        Assert.DoesNotContain("item!!", printed);
     }
 
     [Fact]

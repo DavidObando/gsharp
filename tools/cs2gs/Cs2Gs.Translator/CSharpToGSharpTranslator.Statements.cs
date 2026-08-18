@@ -576,7 +576,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return this.IsNullablePromotedValue(assignment.Right)
-                ? new NonNullAssertionExpression(translatedRhs)
+                ? EnsureNonNullAssertion(translatedRhs)
                 : translatedRhs;
         }
 
@@ -623,7 +623,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            return new NonNullAssertionExpression(translatedRhs);
+            return EnsureNonNullAssertion(translatedRhs);
         }
 
         // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
@@ -673,7 +673,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            return new NonNullAssertionExpression(translatedRhs);
+            return EnsureNonNullAssertion(translatedRhs);
         }
 
         // For a compound numeric assignment `x OP= y` (`+= -= *= /= %= &= |= ^=`),
@@ -2041,7 +2041,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
                         this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))
                     {
-                        qualifiedReceiver = new NonNullAssertionExpression(qualifiedReceiver);
+                        qualifiedReceiver = EnsureNonNullAssertion(qualifiedReceiver);
                     }
 
                     return new MemberAccessExpression(
@@ -2055,7 +2055,7 @@ public sealed partial class CSharpToGSharpTranslator
                      this.state.HoistedNullableGuardLocals.Contains(hoistedSymbol)))
                 {
                     return new MemberAccessExpression(
-                        new NonNullAssertionExpression(this.TranslateExpression(member.Expression)),
+                        EnsureNonNullAssertion(this.TranslateExpression(member.Expression)),
                         SanitizeIdentifier(member.Name.Identifier.Text));
                 }
             }

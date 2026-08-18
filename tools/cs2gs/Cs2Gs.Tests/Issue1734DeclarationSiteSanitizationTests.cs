@@ -201,11 +201,8 @@ namespace Corpus.Issue1734
     }
 
     [Fact]
-    public void RecursivePatternSynthesizedDesignator_QualifiedGenericType_UsesRightmostSimpleName()
+    public void RecursivePatternBinding_QualifiedGenericType_UsesNativePattern()
     {
-        // The synthesized designator must be derived from the right-most simple
-        // identifier of the type ('List', not the invalid 'list<int>' that
-        // 'Type.ToString()' would yield for a generic type).
         string rendered = Render(@"
 using System.Collections.Generic;
 
@@ -228,7 +225,8 @@ namespace Corpus.Issue1734
 ");
 
         Assert.DoesNotContain("list<int>", rendered, StringComparison.Ordinal);
-        Assert.Contains("list", rendered, StringComparison.Ordinal);
+        Assert.Contains("List[int32] { Count: var c }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("list.Count", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

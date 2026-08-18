@@ -218,7 +218,8 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
             """,
             NullableContextOptions.Enable);
 
-        Assert.Contains("return items[key!!]", enabled, StringComparison.Ordinal);
+        Assert.Contains("return items[key]", enabled, StringComparison.Ordinal);
+        Assert.DoesNotContain("key!!", enabled, StringComparison.Ordinal);
     }
 
     [Fact]
