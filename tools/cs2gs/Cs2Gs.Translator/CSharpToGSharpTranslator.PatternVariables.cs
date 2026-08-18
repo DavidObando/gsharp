@@ -203,12 +203,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static List<SyntaxNode> ComputePatternFlowRegions(
             IsPatternExpressionSyntax isPattern,
-            bool whenTrue) =>
-            ComputeBooleanFlowRegions(isPattern, whenTrue);
+            bool whenTrue,
+            bool includeWhenClauseRegion = true) =>
+            ComputeBooleanFlowRegions(isPattern, whenTrue, includeWhenClauseRegion);
 
         private static List<SyntaxNode> ComputeBooleanFlowRegions(
             ExpressionSyntax condition,
-            bool whenTrue)
+            bool whenTrue,
+            bool includeWhenClauseRegion = true)
         {
             var regions = new List<SyntaxNode>();
             SyntaxNode node = condition;
@@ -298,7 +300,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return regions;
 
                     case WhenClauseSyntax whenClause:
-                        if (whenTrue)
+                        if (whenTrue && includeWhenClauseRegion)
                         {
                             if (whenClause.Parent is CasePatternSwitchLabelSyntax { Parent: SwitchSectionSyntax section })
                             {

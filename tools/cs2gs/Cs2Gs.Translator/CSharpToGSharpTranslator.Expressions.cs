@@ -1207,7 +1207,10 @@ public sealed partial class CSharpToGSharpTranslator
                     || !TryGetPatternNonNullPolarity(isPattern.Pattern, out bool whenTrue)
                     || (PatternUsesNativeVariableSyntax(isPattern.Pattern)
                         && !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)))
-                    || !ComputePatternFlowRegions(isPattern, whenTrue)
+                    || !ComputePatternFlowRegions(
+                            isPattern,
+                            whenTrue,
+                            includeWhenClauseRegion: false)
                         .Any(region => region.Span.Contains(expression.Span))
                     || this.SymbolIsWrittenBetween(symbol, isPattern, expression, scope))
                 {
@@ -1227,7 +1230,10 @@ public sealed partial class CSharpToGSharpTranslator
                         nullCheck,
                         symbol,
                         out bool whenTrue)
-                    || !ComputeBooleanFlowRegions(nullCheck, whenTrue)
+                    || !ComputeBooleanFlowRegions(
+                            nullCheck,
+                            whenTrue,
+                            includeWhenClauseRegion: false)
                         .Any(region => region.Span.Contains(expression.Span))
                     || this.SymbolIsWrittenBetween(symbol, nullCheck, expression, scope))
                 {

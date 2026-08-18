@@ -249,6 +249,32 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         Assert.Contains("return value!!.Length", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SwitchWhenNullGuard_DoesNotNarrowSectionBody()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            public static class C
+            {
+                public static int Measure(int kind, string? value)
+                {
+                    switch (kind)
+                    {
+                        case 1 when value is not null:
+                            return value.Length;
+                        default:
+                            return 0;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("case 1 when value != nil", printed, StringComparison.Ordinal);
+        Assert.Contains("return value!!.Length", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
