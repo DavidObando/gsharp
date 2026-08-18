@@ -41,6 +41,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int castCount = 0;
         int deconstructionCount = 0;
+        int spillCount = 0;
         int usingCount = 0;
         foreach (LoadedDocument document in project.Documents)
         {
@@ -52,11 +53,13 @@ public sealed class Issue3347RemainingSpillInventoryTests
                 translator.TranslateDocument(document, context));
             castCount += CountOccurrences(printed, "__cast");
             deconstructionCount += CountOccurrences(printed, "__decon");
+            spillCount += CountOccurrences(printed, "let __spill");
             usingCount += CountOccurrences(printed, "__using");
         }
 
         Assert.Equal(0, castCount);
         Assert.Equal(0, deconstructionCount);
+        Assert.Equal(0, spillCount);
         Assert.Equal(0, usingCount);
     }
 
@@ -246,6 +249,74 @@ public sealed class Issue3347RemainingSpillInventoryTests
         Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
         Assert.Contains("C.GetItem() is { X: var x, Y: > 0 } && x > 0", printed, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
+    }
+
+    [Fact]
+    public void MutableNestedGuardBinder_UsesNativeMatchThenAuthorNamedStorage()
+    {
+        string printed = Translate(
+            """
+            using Microsoft.CodeAnalysis;
+            using Microsoft.CodeAnalysis.CSharp.Syntax;
+            using System.Linq;
+
+            public static class C
+            {
+                public static bool IsAsLocal(ILocalSymbol local)
+                {
+                    if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                        is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                    {
+                        return false;
+                    }
+
+                    while (initializer is ParenthesizedExpressionSyntax parenthesized)
+                    {
+                        initializer = parenthesized.Expression;
+                    }
+
+                    return initializer is BinaryExpressionSyntax;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
+        Assert.Contains("initializerMatch", printed, StringComparison.Ordinal);
+        Assert.Contains("var initializer ExpressionSyntax = initializerMatch", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullabilityOnlyMethodGroupDifference_UsesDirectMemberReference()
+    {
+        string printed = Translate(
+            """
+            using System;
+            using System.Diagnostics.CodeAnalysis;
+
+            public sealed class Mapper
+            {
+                [return: NotNullIfNotNull(nameof(value))]
+                public string? Map(string? value) => value;
+            }
+
+            public sealed class Holder
+            {
+                public Mapper Mapper { get; } = new Mapper();
+            }
+
+            public static class C
+            {
+                private static string Apply(string value, Func<string, string> map) => map(value);
+
+                public static string Run(Holder holder, string value) =>
+                    Apply(value, holder.Mapper.Map);
+            }
+            """);
+
+        Assert.Contains("C.Apply(value, holder.Mapper.Map)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
     }
 
     [Fact]

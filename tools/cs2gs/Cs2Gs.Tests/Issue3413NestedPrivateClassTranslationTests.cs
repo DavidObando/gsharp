@@ -137,9 +137,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             extensionShared.Members.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
-        Assert.DoesNotContain(
+        Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name is "Identity" or "AddCached");
+            method => method.Name == "Identity");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "AddCached");
 
         string rendered = GSharpPrinter.Print(unit);
         Assert.Contains("private class EntryHelper[T]", rendered, StringComparison.Ordinal);
@@ -191,10 +194,14 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
         Assert.Equal(Visibility.Private, cache.Visibility);
         Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
-        Assert.DoesNotContain(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
+        Assert.Contains(unit.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
         Assert.Contains("private class Cache[T]", rendered, StringComparison.Ordinal);
         Assert.Contains("Cache[T].Echo(value)", rendered, StringComparison.Ordinal);
         Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
+        Assert.Contains(
+            "func (value T) Identity[T]() T -> ExtensionOwner.Identity[T](value)",
+            rendered,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -392,8 +399,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 
         Assert.Contains("private class Box[T]", printedProducer, StringComparison.Ordinal);
         Assert.Contains("func Echo[T](value T) T", printedProducer, StringComparison.Ordinal);
-        Assert.DoesNotContain("func (value T) Echo", printedProducer, StringComparison.Ordinal);
-        Assert.Contains("Extensions.Echo(value)", printedConsumer, StringComparison.Ordinal);
+        Assert.Contains(
+            "func (value T) Echo[T]() T -> Extensions.Echo[T](value)",
+            printedProducer,
+            StringComparison.Ordinal);
+        Assert.Contains("value.Echo()", printedConsumer, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printedProducer, printedConsumer);
     }
 

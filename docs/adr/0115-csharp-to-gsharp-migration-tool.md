@@ -159,9 +159,11 @@ C# **extension methods** (`static R M(this T self, …)`) translate to `func (se
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
-ordinary static methods in that owner's `shared` block. Translated call sites
-use `Owner.M(receiver, …)`, including calls from sibling migrated projects.
-Lifting those bodies to top-level receiver funcs would move them onto the
+ordinary static methods in that owner's `shared` block. A forwarding
+receiver-clause companion keeps reduced calls, null-conditional calls, and
+method groups in member form without moving the original body or its CLR
+declaring identity; explicitly qualified calls still use `Owner.M(receiver, …)`.
+Lifting the original bodies to top-level receiver funcs would move them onto the
 synthetic `<Program>` type, which cannot legally access the retained private
 nested type or members whose signatures contain it.
 

@@ -1340,7 +1340,7 @@ public sealed partial class CSharpToGSharpTranslator
                 IParameterSymbol methodParameter = method.Parameters[index];
                 IParameterSymbol invokeParameter = invoke.Parameters[index];
                 if (methodParameter.RefKind != invokeParameter.RefKind
-                    || !SymbolEqualityComparer.IncludeNullability.Equals(
+                    || !SymbolEqualityComparer.Default.Equals(
                         methodParameter.Type,
                         invokeParameter.Type))
                 {
@@ -1349,7 +1349,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return !method.ReturnsVoid
-                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                && !SymbolEqualityComparer.Default.Equals(
                     method.ReturnType,
                     invoke.ReturnType);
         }

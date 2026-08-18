@@ -1417,7 +1417,7 @@ public sealed partial class CSharpToGSharpTranslator
                 List<ILocalSymbol> locals = pattern
                     .DescendantNodesAndSelf()
                     .OfType<SingleVariableDesignationSyntax>()
-                    .Select(this.context.GetDeclaredSymbol)
+                    .Select(designation => this.context.GetDeclaredSymbol(designation))
                     .OfType<ILocalSymbol>()
                     .ToList();
                 if (locals.All(local => !this.IsSymbolReassigned(local, scope)))

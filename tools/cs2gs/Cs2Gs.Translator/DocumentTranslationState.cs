@@ -53,6 +53,12 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> NativePatternVariables { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
+    // Temporary designator overrides used when a mutable C# pattern local is
+    // first captured by an immutable native G# pattern variable, then copied
+    // into its author-named `var` after an exiting guard.
+    public Dictionary<ISymbol, string> NativePatternVariableAliases { get; } =
+        new Dictionary<ISymbol, string>(SymbolEqualityComparer.Default);
+
     // Pattern variables (`x is T t`) that <see cref="TryBuildPositiveGuardHoist"/>
     // materialised as a *nullable* G# local (`var t T? = scrutinee as T`). gsc
     // flow-narrows such a local for reads inside the `if t != nil { … }` guard,

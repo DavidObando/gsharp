@@ -1334,9 +1334,22 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
             BlockStatement body;
-            body = hasBody
-                ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
-                : null;
+            if (hasBody
+                && forceExtensionReceiver
+                && RequiresOwnerScopedExtension(symbol))
+            {
+                body = this.BuildOwnerScopedExtensionCompanionBody(
+                    symbol,
+                    receiver,
+                    parameters,
+                    returnType);
+            }
+            else
+            {
+                body = hasBody
+                    ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
+                    : null;
+            }
 
             if (body != null && ownedExtensionSelf != null)
             {
@@ -1472,6 +1485,46 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
+        }
+
+        private BlockStatement BuildOwnerScopedExtensionCompanionBody(
+            IMethodSymbol method,
+            Receiver receiver,
+            IReadOnlyList<Parameter> parameters,
+            GTypeReference returnType)
+        {
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            var arguments = new List<GExpression>(parameters.Count + 1)
+            {
+                new IdentifierExpression(receiver.Name),
+            };
+            for (int index = 0; index < parameters.Count; index++)
+            {
+                GExpression argument = new IdentifierExpression(parameters[index].Name);
+                if (original.Parameters[index + 1].RefKind is RefKind.Ref or RefKind.Out)
+                {
+                    argument = new UnaryExpression("&", argument);
+                }
+
+                arguments.Add(argument);
+            }
+
+            IReadOnlyList<GTypeReference> typeArguments = original.TypeParameters
+                .Select(parameter =>
+                    (GTypeReference)new NamedTypeReference(
+                        SanitizeIdentifier(parameter.Name)))
+                .ToList();
+            var call = new InvocationExpression(
+                new MemberAccessExpression(
+                    new IdentifierExpression(
+                        SanitizeIdentifier(original.ContainingType.Name)),
+                    SanitizeIdentifier(original.Name)),
+                arguments,
+                typeArguments);
+            GStatement statement = returnType == null
+                ? new ExpressionStatement(call)
+                : new ReturnStatement(call);
+            return new BlockStatement(new[] { statement });
         }
 
         private bool IsStaticExtensionHelper(IMethodSymbol method)

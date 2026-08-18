@@ -503,6 +503,11 @@ public sealed partial class CSharpToGSharpTranslator
                 if (RequiresOwnerScopedExtension(method))
                 {
                     result.AddStaticHelper(methodDeclaration);
+                    if (CanEmitOwnerScopedReceiverCompanion(method))
+                    {
+                        result.AddReceiverCompanion(methodDeclaration);
+                    }
+
                     continue;
                 }
 
@@ -632,6 +637,16 @@ public sealed partial class CSharpToGSharpTranslator
             HasPrivateNestedAggregate(original.ContainingType);
     }
 
+    private static bool CanEmitOwnerScopedReceiverCompanion(IMethodSymbol method)
+    {
+        IMethodSymbol original = method?.ReducedFrom ?? method;
+        return original?.Parameters.Length > 0
+            && original.Parameters[0].RefKind == RefKind.None
+            && !original.Parameters.Any(parameter => parameter.IsParams)
+            && !original.ReturnsByRef
+            && !original.ReturnsByRefReadonly;
+    }
+
     private static bool HasPrivateNestedAggregate(INamedTypeSymbol type)
     {
         if (type == null)
@@ -655,6 +670,11 @@ public sealed partial class CSharpToGSharpTranslator
     private static bool IsReproducibleReceiverCompanion(IMethodSymbol method)
     {
         IMethodSymbol original = method?.ReducedFrom ?? method;
+        if (RequiresOwnerScopedExtension(original))
+        {
+            return CanEmitOwnerScopedReceiverCompanion(original);
+        }
+
         return TryGetOwnedExtensionReceiver(original, out INamedTypeSymbol receiver) &&
             original.Parameters[0].RefKind == RefKind.None &&
             HasCrossContainerOwnedExtensionOverload(receiver, original) &&
