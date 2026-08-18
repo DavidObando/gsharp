@@ -574,13 +574,14 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol receiverType = this.context.GetTypeInfo(isPattern.Expression).Type;
 
-            // ADR-0162 / issue #3347: G# evaluates a native boolean pattern
-            // subject exactly once. Emit that form whenever C# introduces no
-            // pattern local; the old hand-expanded member-test tree was the
-            // dominant source of avoidable __spillN locals.
+            // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
+            // pattern subject exactly once. Use that form when C# introduces no
+            // pattern local and gsc cannot smart-cast the original scrutinee.
+            // An implicit property/field can translate to a bare identifier, but
+            // only bare locals and parameters are smart-castable (ADR-0069).
             if (!PatternIntroducesBinding(isPattern.Pattern)
                 && !PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
-                && !IsTrivialOperand(receiver))
+                && !this.IsSmartCastableScrutinee(isPattern.Expression))
             {
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var guards = new List<GExpression>();
