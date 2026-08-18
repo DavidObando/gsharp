@@ -597,11 +597,12 @@ internal sealed partial class ExpressionBinder
                         // surfaces as `ICollection[K]` (a generic shape
                         // containing the in-scope `K`) instead of the
                         // type-erased `ICollection<object>`.
-                        var receiverOverride = ResolveInstancePropertyTypeFromReceiver(clrInstanceReceiverType, prop);
-                        var propType = receiverOverride
-                            ?? (prop.PropertyType.IsByRef
-                                ? MapClrMemberType(prop.PropertyType)
-                                : ClrNullability.GetPropertyTypeSymbol(prop));
+                        var propType = prop.PropertyType.IsByRef
+                            ? MapClrMemberType(prop.PropertyType)
+                            : MemberLookup.GetClrPropertyTypeSymbol(
+                                clrInstanceReceiverType,
+                                prop,
+                                projectOnlyWhenSymbolicallyRequired: true);
                         propType = NormalizeImportedSemanticAggregate(propType, prop);
                         return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver!, prop, propType));
                     }
@@ -2469,123 +2470,6 @@ internal sealed partial class ExpressionBinder
                 || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
                 || openMemberType.IsGenericParameter
                 || openMemberType.IsGenericType
-                ? mapped
-                : null;
-        }
-        catch (System.Reflection.AmbiguousMatchException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Issue #794: substitute the receiver's symbolic type arguments back
-    /// through a CLR property's open declaring type. The closed `clrReceiverType`
-    /// is the type-erased shape (#313 / #671), so reflection's
-    /// <see cref="PropertyInfo.PropertyType"/> reports the property's open type
-    /// closed over `object` — e.g. `Dictionary[K, V].Keys` surfaces as
-    /// `ICollection&lt;object&gt;`. Walk the open property on the receiver's
-    /// <see cref="ImportedTypeSymbol.OpenDefinition"/> and project its property
-    /// type using the receiver's <see cref="ImportedTypeSymbol.TypeArguments"/>.
-    /// Returns <see langword="null"/> when no substitution applies.
-    /// </summary>
-    private static TypeSymbol? ResolveInstancePropertyTypeFromReceiver(TypeSymbol receiverType, PropertyInfo closedProperty)
-    {
-        if (receiverType is not ImportedTypeSymbol imp
-            || imp.OpenDefinition == null
-            || imp.TypeArguments.IsDefaultOrEmpty
-            || closedProperty == null)
-        {
-            return null;
-        }
-
-        try
-        {
-            // Match by name + indexer arity to find the open counterpart.
-            // Properties on closed generic instances carry stable
-            // metadata-name overlap with their open declaration; an exact
-            // name lookup on the open type with the same instance-binding
-            // flags is sufficient for the single-name, non-indexer
-            // properties that surface real receiver-type generics.
-            var openType = imp.OpenDefinition;
-            if (closedProperty.DeclaringType != imp.ClrType
-                && closedProperty.DeclaringType?.IsGenericType == true)
-            {
-                foreach (var candidateInterface in imp.OpenDefinition.GetInterfaces())
-                {
-                    if (candidateInterface.IsGenericType
-                        && candidateInterface.GetGenericTypeDefinition()
-                            == closedProperty.DeclaringType.GetGenericTypeDefinition())
-                    {
-                        openType = candidateInterface;
-                        break;
-                    }
-                }
-            }
-
-            var openProperty = ClrTypeUtilities.SafeGetProperty(
-                openType,
-                closedProperty.Name,
-                BindingFlags.Public | BindingFlags.Instance);
-            if (openProperty == null || openProperty.GetIndexParameters().Length != 0)
-            {
-                return null;
-            }
-
-            var openPropType = openProperty.PropertyType;
-            if (openPropType == null)
-            {
-                return null;
-            }
-
-            var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openPropType, imp.OpenDefinition, imp.TypeArguments);
-
-            // Issue #794 surfaced this projection for in-scope type parameters
-            // (e.g. `Dictionary[K, V].Keys` -> `ICollection[K]`). Issue #1304
-            // extends it to same-compilation user-defined type arguments: a
-            // member whose open type is a generic parameter — e.g.
-            // `IEnumerator[Ch].Current` -> `Ch` — must keep the user element
-            // `Ch` instead of erasing to `object`. A user-defined `Ch` has a
-            // null `ClrType` during binding, so the closed reflection property
-            // reports the erased `object`; surface the symbolic projection.
-            //
-            // Issue #1418 generalizes the #1304/#1328/#1344 progression: surface
-            // the symbolic projection whenever it carries a same-compilation
-            // user type ANYWHERE — whether the member is the user type itself
-            // (`IEnumerator[Ch].Current` -> `Ch`, #1304), a constructed generic
-            // that is an enumerable collection (`Dictionary[K, V].Values` ->
-            // `ValueCollection[K, V]`, #1328), a channel reader/writer
-            // (`Channel[Entry].Reader` -> `ChannelReader[Entry]`, #1344), or any
-            // OTHER constructed CLR generic over a user element
-            // (`TaskCompletionSource[Entry].Task` -> `Task[Entry]`,
-            // `Lazy[Entry]`, `IReadOnlyList[Entry]`, …). In every case the
-            // mapped type keeps the type-erased closed `ClrType` (e.g.
-            // `Task<object>`) for member/extension lookup — which resolves
-            // against the erased shape exactly as before (proven by #1088) —
-            // while its symbolic `[Entry]` argument keeps the element type from
-            // collapsing to `object` for downstream projections (`await`,
-            // `await for`, `.Result`, the `for … in` surface, LINQ terminals).
-            //
-            // The earlier #1305 worry — that surfacing a constructed generic
-            // over a user element would regress method lookup — does not
-            // materialize precisely because lookup reads `ClrType`, not the
-            // symbolic arguments; #1328 and #1344 already proved this for the
-            // collection and channel shapes, and `ContainsSameCompilationUserType`
-            // simply removes the type-specific allow-list.
-            //
-            // When the OPEN property type is itself a bare generic parameter
-            // (e.g. `KeyValuePair[K, V].Key` -> `K`, `.Value` -> `V`), the
-            // receiver's closed `ClrType` may have erased *every* type argument
-            // to `object` because a SIBLING argument is a same-compilation user
-            // type (a constructed generic over a user element erases the whole
-            // closed shape — so `KeyValuePair[uint32, E]` closes to
-            // `KeyValuePair<object, object>`, erasing the concrete `uint32`
-            // too). The symbolic projection is then authoritative, so prefer it
-            // via the `openPropType.IsGenericParameter` arm even when the mapped
-            // result no longer mentions the user type.
-            return TypeSymbol.ContainsTypeParameter(mapped)
-                || TypeSymbol.ContainsSameCompilationUserType(mapped)
-                || openPropType.IsGenericParameter
                 ? mapped
                 : null;
         }

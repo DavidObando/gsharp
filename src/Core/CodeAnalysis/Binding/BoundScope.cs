@@ -54,8 +54,6 @@ public sealed class BoundScope
     // Issue #2342: the ambient "current declaring package" (see
     // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
     // of the chain, exactly like anonymousTypeCache above.
-    // Empty string is the AsyncLocal storage sentinel for null; setter and
-    // getter normalize null <-> empty so save/restore preserves the contract.
     private AsyncLocal<string?> currentDeclaringPackageName = new AsyncLocal<string?>();
 
     // Issue #2456 (per-file import scoping / #2395 follow-up): the ambient
@@ -64,8 +62,8 @@ public sealed class BoundScope
     // single member body, mirroring currentDeclaringPackageName exactly.
     // Import enumeration consults this to expose only imports declared in the
     // same file as the reference being resolved, plus implicit imports.
-    private AsyncLocal<object?> currentReferencingSyntaxTree =
-        new AsyncLocal<object?>();
+    private AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?> currentReferencingSyntaxTree =
+        new AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?>();
 
     // Issue #2455: the ambient "qualified construction package hint" (see
     // SetQualifiedConstructionPackageHint), set only while re-binding the
@@ -1440,9 +1438,8 @@ public sealed class BoundScope
             return Parent.SetCurrentDeclaringPackage(packageName);
         }
 
-        var stored = currentDeclaringPackageName.Value;
-        var previous = string.IsNullOrEmpty(stored) ? null : stored;
-        currentDeclaringPackageName.Value = packageName ?? string.Empty;
+        var previous = currentDeclaringPackageName.Value;
+        currentDeclaringPackageName.Value = packageName;
         return previous;
     }
 
@@ -1470,8 +1467,8 @@ public sealed class BoundScope
             return Parent.SetCurrentReferencingSyntaxTree(tree);
         }
 
-        var previous = (currentReferencingSyntaxTree.Value as ReferencingSyntaxTreeState)?.Tree;
-        currentReferencingSyntaxTree.Value = new ReferencingSyntaxTreeState(tree);
+        var previous = currentReferencingSyntaxTree.Value;
+        currentReferencingSyntaxTree.Value = tree;
         return previous;
     }
 
@@ -1518,9 +1515,8 @@ public sealed class BoundScope
             return Parent.SetQualifiedConstructionPackageHint(packageName);
         }
 
-        var stored = qualifiedConstructionPackageHint.Value;
-        var previous = string.IsNullOrEmpty(stored) ? null : stored;
-        qualifiedConstructionPackageHint.Value = packageName ?? string.Empty;
+        var previous = qualifiedConstructionPackageHint.Value;
+        qualifiedConstructionPackageHint.Value = packageName;
         return previous;
     }
 
@@ -1530,15 +1526,7 @@ public sealed class BoundScope
     /// none is set.
     /// </summary>
     private string? GetCurrentDeclaringPackage()
-    {
-        if (Parent != null)
-        {
-            return Parent.GetCurrentDeclaringPackage();
-        }
-
-        var packageName = currentDeclaringPackageName.Value;
-        return string.IsNullOrEmpty(packageName) ? null : packageName;
-    }
+        => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName.Value;
 
     /// <summary>
     /// Issue #2456: gets the ambient "current referencing syntax tree" set by
@@ -1547,9 +1535,7 @@ public sealed class BoundScope
     /// import-based disambiguation this fix adds simply does not fire).
     /// </summary>
     private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? GetCurrentReferencingSyntaxTree()
-        => Parent != null
-            ? Parent.GetCurrentReferencingSyntaxTree()
-            : (currentReferencingSyntaxTree.Value as ReferencingSyntaxTreeState)?.Tree;
+        => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree.Value;
 
     /// <summary>
     /// Issue #2455: gets the ambient qualified-construction package hint set
@@ -1557,15 +1543,7 @@ public sealed class BoundScope
     /// <see langword="null"/> when none is set.
     /// </summary>
     private string? GetQualifiedConstructionPackageHint()
-    {
-        if (Parent != null)
-        {
-            return Parent.GetQualifiedConstructionPackageHint();
-        }
-
-        var packageName = qualifiedConstructionPackageHint.Value;
-        return string.IsNullOrEmpty(packageName) ? null : packageName;
-    }
+        => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint.Value;
 
     /// <summary>
     /// Issue #2455: tries to resolve (<paramref name="name"/>, <paramref name="arity"/>)
@@ -2845,14 +2823,4 @@ public sealed class BoundScope
         EnumSymbol e => e.Accessibility == Accessibility.Private,
         _ => false,
     };
-
-    private sealed class ReferencingSyntaxTreeState
-    {
-        public ReferencingSyntaxTreeState(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? tree)
-        {
-            Tree = tree;
-        }
-
-        public GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? Tree { get; }
-    }
 }

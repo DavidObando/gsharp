@@ -514,7 +514,7 @@ internal sealed partial class ExpressionBinder
                 return null;
             }
 
-            if (!TryGetWritableClrMember(instanceMember, out _, out var instTargetSymbol, out _))
+            if (!TryGetWritableClrMember(instanceMember, receiverType, out _, out var instTargetSymbol, out _))
             {
                 Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
                 _ = BindExpression(initSyntax.Value);
@@ -826,7 +826,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instTargetSymbol, out var instWritable))
+            if (!TryGetWritableClrMember(instanceMember, assignmentReceiverType, out var instTargetType, out var instTargetSymbol, out var instWritable))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 return new BoundErrorExpression(null);
@@ -1664,7 +1664,7 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        if (!TryGetWritableClrMember(instanceMember, out _, out var targetSymbol, out _))
+        if (!TryGetWritableClrMember(instanceMember, boundReceiver.Type, out _, out var targetSymbol, out _))
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             return new BoundErrorExpression(null);
@@ -2533,7 +2533,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(instanceMember, out var instTargetType, out var instTargetSymbol, out var instWritable))
+            if (!TryGetWritableClrMember(instanceMember, receiverType, out var instTargetType, out var instTargetSymbol, out var instWritable))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 return new BoundErrorExpression(null);
@@ -3015,7 +3015,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (!TryGetWritableClrMember(instanceMember, out _, out var targetSymbol, out _))
+        if (!TryGetWritableClrMember(instanceMember, globalType, out _, out var targetSymbol, out _))
         {
             Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, memberName);
             result = new BoundErrorExpression(null);

@@ -3755,8 +3755,15 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="closedProperty">The reflected property selected from the erased receiver.</param>
+    /// <param name="projectOnlyWhenSymbolicallyRequired">
+    /// Whether to use closed-property nullability unless receiver substitution carries
+    /// information that CLR metadata cannot represent.
+    /// </param>
     /// <returns>The property type after symbolic receiver substitution.</returns>
-    internal static TypeSymbol GetClrPropertyTypeSymbol(TypeSymbol targetType, PropertyInfo closedProperty)
+    internal static TypeSymbol GetClrPropertyTypeSymbol(
+        TypeSymbol targetType,
+        PropertyInfo closedProperty,
+        bool projectOnlyWhenSymbolicallyRequired = false)
     {
         if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
@@ -3769,10 +3776,22 @@ internal sealed class MemberLookup
             var openProperty = FindOpenIndexerDefinition(openDefinition, closedProperty);
             if (openProperty != null)
             {
-                return MapOpenClrTypeToSymbolic(
+                var mapped = MapOpenClrTypeToSymbolic(
                     openProperty.PropertyType,
                     openDefinition,
                     declaringTypeArguments);
+
+                // Issue #3415: reflection erases reference nullability from a
+                // constructed receiver such as AsyncLocal<string?>. Keep the
+                // receiver-projected property type when CLR metadata cannot
+                // represent its symbolic shape.
+                if (!projectOnlyWhenSymbolicallyRequired
+                    || openProperty.PropertyType.IsGenericParameter
+                    || (openProperty.PropertyType.ContainsGenericParameters
+                        && TypeSymbol.RequiresSymbolicProjection(mapped)))
+                {
+                    return mapped;
+                }
             }
         }
 
