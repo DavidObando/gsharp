@@ -594,6 +594,26 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #3421: canonical `T(value)` reference downcasts use the CLR's
+        // checked-cast operation. `castclass` preserves null, returns the same
+        // reference on success, and throws InvalidCastException for an
+        // incompatible non-null value. Reference-nullable targets erase to
+        // their underlying type. A type-parameter target uses `unbox.any`,
+        // matching C#'s generic cast lowering for both reference and value
+        // instantiations.
+        if (Conversion.HasCheckedReferenceConversion(from, to))
+        {
+            var checkedTarget = to is NullableTypeSymbol nullableCheckedTarget
+                && Conversion.IsReferenceLikeTarget(nullableCheckedTarget.UnderlyingType)
+                    ? nullableCheckedTarget.UnderlyingType
+                    : to;
+            this.il.OpCode(checkedTarget is TypeParameterSymbol
+                ? ILOpCode.Unbox_any
+                : ILOpCode.Castclass);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(checkedTarget));
+            return;
+        }
+
         // Issue #663: fall back to user-defined op_Implicit / op_Explicit when
         // no built-in emit path fires. This covers types like JsonNode that
         // expose conversion operators to string, int, bool, etc.

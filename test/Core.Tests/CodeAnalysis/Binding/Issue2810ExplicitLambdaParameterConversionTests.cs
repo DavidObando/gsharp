@@ -111,7 +111,7 @@ public sealed class Issue2810ExplicitLambdaParameterConversionTests
     }
 
     [Fact]
-    public void TargetObject_ExplicitUserParameter_IsRejected()
+    public void TargetObject_ExplicitUserParameter_RequiresCheckedCast()
     {
         var diagnostics = Bind($$"""
             import System.Collections.Generic
@@ -123,7 +123,7 @@ public sealed class Issue2810ExplicitLambdaParameterConversionTests
             }
             """);
 
-        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0155");
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0156");
     }
 
     [Fact]

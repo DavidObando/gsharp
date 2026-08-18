@@ -2718,11 +2718,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateCast(CastExpressionSyntax cast)
         {
-            // C# explicit cast `(T)expr` maps to the canonical G# width-bearing
-            // conversion-call form `T(expr)` (spec §Types and values; ADR-0115
-            // §B.12). For floating→integral conversions the CLR truncates toward
-            // zero, matching the C# `(int)` truncation semantics, so e.g.
-            // `(int)Math.Floor(d + 0.5)` is behavior-faithful.
+            // C# explicit cast `(T)expr` maps to the canonical G# checked
+            // conversion-call form `T(expr)` / `T?(expr)` (ADR-0115 §B.17 and
+            // ADR-0167). Numeric casts retain their existing checked/unchecked
+            // behavior; reference downcasts use castclass semantics: null stays
+            // null and an incompatible non-null value throws InvalidCastException.
             ITypeSymbol targetSymbol = this.context.GetTypeInfo(cast.Type).Type;
 
             ITypeSymbol sourceSymbol = this.context.GetTypeInfo(cast.Expression).Type;
@@ -2730,6 +2730,13 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference targetType = targetSymbol != null
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
+            if (targetSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateTarget)
+            {
+                targetType = this.typeMapper.MapNominalDelegate(
+                    delegateTarget,
+                    this.context,
+                    cast.Type.GetLocation());
+            }
 
             if (cast.Expression.IsKind(SyntaxKind.NullLiteralExpression)
                 && (targetSymbol is { IsReferenceType: true } || targetType.IsNullable))
@@ -2743,28 +2750,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GExpression operand = this.TranslateExpression(cast.Expression);
-
-            // Issue #914 (oblivious sink): an oblivious promoted-`T?` operand cast
-            // to a NON-NULL reference target (e.g. `(IEnumerable)o` where `o` is a
-            // promoted `object?`) is rejected by gsc — its `IEnumerable(o)`
-            // conversion requires a non-null operand (GS0155). C# performs the
-            // reference cast on the (possibly null) value and throws only on the
-            // subsequent non-null use (e.g. `foreach`), so asserting the operand
-            // `!!` here both compiles and preserves the throw-on-null semantics —
-            // the same mechanism the receiver / foreach-iterable null-forgiveness
-            // pass uses. Gated to oblivious; a `(object)`/`(object?)` reference
-            // upcast is already dropped above, and an already-`!` operand is not
-            // re-asserted.
-            if (this.IsObliviousCompilation()
-                && targetSymbol is { IsReferenceType: true }
-                && targetSymbol.NullableAnnotation != NullableAnnotation.Annotated
-                && cast.Type is not NullableTypeSyntax
-                && !IsNullOrSuppressedNull(cast.Expression)
-                && cast.Expression is not PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
-                && this.IsNullablePromotedValue(cast.Expression))
-            {
-                operand = new NonNullAssertionExpression(operand);
-            }
 
             Microsoft.CodeAnalysis.CSharp.Conversion conversion =
                 sourceSymbol == null || targetSymbol == null
@@ -2804,46 +2789,6 @@ public sealed partial class CSharpToGSharpTranslator
                         ? MakeNullable(targetType)
                         : targetType;
                 return new ConversionExpression(objectTargetType, operand);
-            }
-
-            // Issue #914: a CLR REFERENCE conversion `(T)expr` (a downcast such as
-            // `(IEnumerable)o`, or a cross-cast between reference types) has no
-            // conversion-call form in G# — gsc's `T(expr)` is the value/numeric/
-            // string-conversion form and rejects a reference cast (GS0155/GS0130
-            // "IEnumerable(o)" / "List[int32](o)"). The reference downcast form is
-            // `expr as T`, which yields `T?`. Boxing/unboxing and user-defined
-            // conversions are NOT reference conversions and keep the
-            // conversion-call form.
-            //
-            // ADR-0160: the `!!` is asserted HERE rather than left to the
-            // surrounding null-forgiveness pass. Those passes key off Roslyn's
-            // nullability analysis, which — correctly — reports a C# hard cast to a
-            // non-nullable target as non-null, since a failing cast throws. So they
-            // decline to assert precisely where the RENDERING needs it, and every
-            // consuming position (receiver, index target, return, argument,
-            // initializer, …) would need its own carve-out. Asserting at the cast
-            // is both faithful — `(T)expr` yields a non-null `T` or throws — and
-            // complete. A cast to a nullable-annotated target (`(T?)x`) genuinely
-            // may be nil and is left unasserted.
-            if (targetSymbol is { IsReferenceType: true }
-                && sourceSymbol != null
-                && !conversion.IsUserDefined
-                && (conversion.IsReference
-                    || (sourceSymbol.IsReferenceType && conversion.Exists)))
-            {
-                GExpression converted = new BinaryExpression(operand, "as", new TypeExpression(targetType));
-
-                // A cast written `(T?)x` may legitimately yield nil, so it keeps the
-                // bare `T?` — asserting would throw where C# does not. The written
-                // syntax is checked as well as the symbol annotation: for a
-                // `NullableTypeSyntax` the symbol from `GetTypeInfo(cast.Type)` does
-                // not reliably carry `Annotated`.
-                bool nullableTarget = cast.Type is NullableTypeSyntax
-                    || targetSymbol.NullableAnnotation == NullableAnnotation.Annotated;
-
-                return nullableTarget
-                    ? converted
-                    : new NonNullAssertionExpression(new ParenthesizedExpression(converted));
             }
 
             GTypeReference conversionTargetType = cast.Type is NullableTypeSyntax

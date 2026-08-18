@@ -589,6 +589,9 @@ public partial class Parser
             case SyntaxKind.InterpolatedStringToken:
                 return ParsePostfixChain(ParseInterpolatedStringLiteral());
 
+            case SyntaxKind.OpenSquareBracketToken when LooksLikeCompositeTypeConversionCall():
+                return ParsePostfixChain(ParseCompositeTypeConversionCall());
+
             case SyntaxKind.OpenSquareBracketToken:
                 return ParsePostfixChain(ParseArrayCreationExpression());
 

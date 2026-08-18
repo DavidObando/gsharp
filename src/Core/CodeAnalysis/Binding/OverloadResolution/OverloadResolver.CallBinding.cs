@@ -302,6 +302,34 @@ internal sealed partial class OverloadResolver
 
     public BoundExpression BindCallExpression(CallExpressionSyntax syntax)
     {
+        if (syntax.ConversionTypeClause != null)
+        {
+            var compositeConversionType = bindTypeClause(syntax.ConversionTypeClause);
+            if (compositeConversionType == null)
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (syntax.Arguments.Count != 1)
+            {
+                Diagnostics.ReportWrongArgumentCount(
+                    syntax.ConversionTypeClause.Location,
+                    compositeConversionType.Name,
+                    expectedCount: 1,
+                    actualCount: syntax.Arguments.Count);
+                return new BoundErrorExpression(syntax);
+            }
+
+            reportObsoleteUseIfApplicable(
+                syntax.ConversionTypeClause.Location,
+                compositeConversionType,
+                compositeConversionType.Name);
+            return conversions.BindConversion(
+                syntax.Arguments[0],
+                compositeConversionType,
+                allowExplicit: true);
+        }
+
         // Issue #2185: an indirect invocation whose callee is an arbitrary
         // function-typed expression (`(expr)(args)`, `expr!!(args)`, a curried
         // `f()(x)`, ...). The parser tags these with a non-null Callee (there is
@@ -386,7 +414,9 @@ internal sealed partial class OverloadResolver
         // Also handles closed-generic imports (`List[int]()`,
         // `Dictionary[string, int]()`). Interpreter-only — resolves a
         // ConstructorInfo and emits BoundClrConstructorCallExpression.
-        if (!hasNonConstructorCallable && !hasSourceConstructibleType && tryBindClrConstructorCall(syntax, out var clrCtorCall))
+        if (!hasNonConstructorCallable
+            && !hasSourceConstructibleType
+            && tryBindClrConstructorCall(syntax, out var clrCtorCall))
         {
             return clrCtorCall;
         }
@@ -398,38 +428,69 @@ internal sealed partial class OverloadResolver
             && syntax.Arguments.Count == 1
             && conversionType is TypeSymbol)
         {
+            var explicitConversionType = TryConstructConversionTarget(
+                syntax,
+                conversionType);
+            if (explicitConversionType == null)
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
             // Issue #663: when the call carries a `?` token (e.g. `string?(x)`),
             // wrap the resolved type in NullableTypeSymbol so the conversion
             // targets the nullable form.
             if (syntax.NullableQuestionToken != null)
             {
-                conversionType = NullableTypeSymbol.Get(conversionType);
+                explicitConversionType = NullableTypeSymbol.Get(explicitConversionType);
             }
 
-            // A single-arg call to a primitive-typed name is a conversion
-            // (`int(x)`, `string(x)`). Defer to BindConversion. For a class
-            // or inline-struct type, treat it as a ctor call instead — even
-            // when no explicit/primary constructor is declared, so the user
-            // sees an actionable "wrong argument count" diagnostic rather
-            // than a misleading conversion error (issue #524). Issue #1069: a
-            // value struct (e.g. a `data struct`) declaring a primary
-            // constructor is likewise positionally constructible — `Entry(1)`
-            // builds the struct, not a conversion to it.
-            if (!(conversionType is StructSymbol singleArgStruct
-                  && (singleArgStruct.IsClass
-                      || singleArgStruct.IsInline
-                      || singleArgStruct.HasPrimaryConstructor
-                      || !singleArgStruct.ExplicitConstructors.IsDefaultOrEmpty)))
+            // A class call remains construction when an applicable one-argument
+            // constructor exists. Otherwise a legal checked reference
+            // conversion uses the same canonical `T(value)` spelling.
+            var singleArgClass = explicitConversionType switch
+            {
+                StructSymbol { IsClass: true } directClass => directClass,
+                NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } nullableClass } => nullableClass,
+                _ => null,
+            };
+            if (singleArgClass != null)
+            {
+                var diagnosticMark = Diagnostics.Count;
+                var argument = bindExpression(syntax.Arguments[0]);
+                if (Conversion.HasCheckedReferenceConversion(argument.Type, explicitConversionType)
+                    && (syntax.NullableQuestionToken != null
+                        || !HasApplicableSingleArgumentConstructor(singleArgClass, argument.Type)))
+                {
+                    reportObsoleteUseIfApplicable(
+                        syntax.Identifier.Location,
+                        explicitConversionType,
+                        explicitConversionType.Name);
+                    return conversions.BindConversion(
+                        syntax.Arguments[0].Location,
+                        argument,
+                        explicitConversionType,
+                        allowExplicit: true);
+                }
+
+                Diagnostics.TruncateTo(diagnosticMark);
+            }
+
+            if (syntax.NullableQuestionToken != null
+                || !(conversionType is StructSymbol constructibleSingleArgStruct
+                  && (constructibleSingleArgStruct.IsClass
+                      || constructibleSingleArgStruct.IsInline
+                      || constructibleSingleArgStruct.HasPrimaryConstructor
+                      || !constructibleSingleArgStruct.ExplicitConstructors.IsDefaultOrEmpty)))
             {
                 // ADR-0047 §6 / #175: `Type(x)` as an explicit conversion
                 // is still a use of the named type.
                 reportObsoleteUseIfApplicable(
                     syntax.Identifier.Location,
-                    conversionType,
-                    conversionType.Name);
+                    explicitConversionType,
+                    explicitConversionType.Name);
                 return conversions.BindConversion(
                     syntax.Arguments[0],
-                    conversionType,
+                    explicitConversionType,
                     allowExplicit: true);
             }
         }
@@ -2057,6 +2118,128 @@ internal sealed partial class OverloadResolver
         }
 
         return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: null, methodTypeArguments);
+    }
+
+    private static bool HasApplicableSingleArgumentConstructor(
+        StructSymbol classType,
+        TypeSymbol argumentType)
+    {
+        if (!classType.ExplicitConstructors.IsDefaultOrEmpty)
+        {
+            foreach (var constructor in classType.ExplicitConstructors)
+            {
+                if (ParametersAcceptSingleArgument(constructor.Parameters, argumentType))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return ParametersAcceptSingleArgument(
+            classType.PrimaryConstructorParameters,
+            argumentType);
+    }
+
+    private static bool ParametersAcceptSingleArgument(
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol argumentType)
+    {
+        if (parameters.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        for (var i = 1; i < parameters.Length; i++)
+        {
+            if (!parameters[i].HasExplicitDefaultValue && !parameters[i].IsVariadic)
+            {
+                return false;
+            }
+        }
+
+        var first = parameters[0];
+        if (CanConvertImplicitly(argumentType, first.Type))
+        {
+            return true;
+        }
+
+        return first.IsVariadic
+            && first.Type is SliceTypeSymbol slice
+            && CanConvertImplicitly(argumentType, slice.ElementType);
+    }
+
+    private static bool CanConvertImplicitly(TypeSymbol source, TypeSymbol target)
+        => Conversion.Classify(source, target).IsImplicit
+            || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target);
+
+    private TypeSymbol? TryConstructConversionTarget(
+        CallExpressionSyntax syntax,
+        TypeSymbol type)
+    {
+        if (syntax.TypeArgumentList == null)
+        {
+            return type;
+        }
+
+        ImmutableArray<TypeParameterSymbol> typeParameters;
+        if (type is StructSymbol { IsGenericDefinition: true } genericStruct)
+        {
+            typeParameters = genericStruct.TypeParameters;
+        }
+        else if (type is InterfaceSymbol { IsGenericDefinition: true } genericInterface)
+        {
+            typeParameters = genericInterface.TypeParameters;
+        }
+        else
+        {
+            return type;
+        }
+
+        if (syntax.TypeArgumentList.Arguments.Count != typeParameters.Length)
+        {
+            Diagnostics.ReportWrongTypeArgumentCount(
+                syntax.TypeArgumentList.Location,
+                type.Name,
+                typeParameters.Length,
+                syntax.TypeArgumentList.Arguments.Count);
+            return null;
+        }
+
+        var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(typeParameters.Length);
+        for (var i = 0; i < typeParameters.Length; i++)
+        {
+            var typeArgument = bindTypeClause(syntax.TypeArgumentList.Arguments[i]);
+            if (typeArgument == null)
+            {
+                return null;
+            }
+
+            if (!satisfiesConstraint(typeArgument, typeParameters[i]))
+            {
+                Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
+                    syntax.TypeArgumentList.Arguments[i].Location,
+                    typeParameters[i].Name,
+                    typeArgument,
+                    describeConstraint(typeParameters[i]));
+                return null;
+            }
+
+            typeArguments.Add(typeArgument);
+        }
+
+        var arguments = typeArguments.MoveToImmutable();
+        return type switch
+        {
+            StructSymbol targetStruct => MapClrType is { } structMapClrType
+                ? StructSymbol.Construct(targetStruct, arguments, structMapClrType)
+                : StructSymbol.Construct(targetStruct, arguments),
+            InterfaceSymbol targetInterface => MapClrType is { } interfaceMapClrType
+                ? InterfaceSymbol.Construct(targetInterface, arguments, interfaceMapClrType)
+                : InterfaceSymbol.Construct(targetInterface, arguments),
+            _ => type,
+        };
     }
 
     /// <summary>

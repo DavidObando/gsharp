@@ -96,7 +96,7 @@ public sealed class Issue2644TransitiveGenericInterfaceTests
     }
 
     [Fact]
-    public void GenericInterfaceClosure_DoesNotPermitMismatchedConstruction()
+    public void GenericInterfaceClosure_RequiresCheckedCrossCast()
     {
         var compilation = Compile(
             """
@@ -110,7 +110,7 @@ public sealed class Issue2644TransitiveGenericInterfaceTests
             }
             """);
 
-        Assert.Contains(GetDiagnostics(compilation), diagnostic => diagnostic.Id == "GS0155");
+        Assert.Contains(GetDiagnostics(compilation), diagnostic => diagnostic.Id == "GS0156");
     }
 
     private static Compilation Compile(string source)

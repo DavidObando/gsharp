@@ -1,4 +1,4 @@
-// <copyright file="Adr0160ReferenceCastAssertionTranslationTests.cs" company="GSharp">
+// <copyright file="Issue3421CheckedReferenceCastTranslationTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -12,24 +12,17 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// ADR-0160 / issue #3349: G# has no conversion-call form for a reference downcast,
-/// so <c>TranslateCast</c> renders a C# hard cast <c>(T)expr</c> as <c>expr as T</c>
-/// (issue #914). Once <c>as</c> yielded <c>T?</c>, every consuming position — member
-/// receiver, index target, return, argument, initializer — needed a <c>!!</c> that
-/// the null-forgiveness passes would not supply: those key off Roslyn's nullability,
-/// and Roslyn correctly reports a hard cast's result as non-null, since a failing
-/// cast throws. The assertion is therefore emitted at the CAST, which is both
-/// faithful and complete.
+/// Issue #3421: C# hard casts use G#'s canonical checked conversion call
+/// <c>T(expr)</c> / <c>T?(expr)</c>. Testing conversions remain <c>expr as T</c>.
 /// <para>
-/// The distinction that must not regress: a cast written <c>(T?)expr</c> may
-/// legitimately be nil and stays unasserted. Getting that wrong throws at runtime
-/// where C# does not — a silent behaviour change no compile error would catch.
+/// A checked reference cast preserves null and throws <see cref="InvalidCastException"/>
+/// for an incompatible non-null value, matching C#.
 /// </para>
 /// </summary>
-public class Adr0160ReferenceCastAssertionTranslationTests
+public class Issue3421CheckedReferenceCastTranslationTests
 {
     [Fact]
-    public void NonNullableTargetCast_UsedAsReceiver_IsAsserted()
+    public void NonNullableTargetCast_UsedAsReceiver_UsesConversionCall()
     {
         // The oahu-corpus shape: `((IProfile)p).Member` was GS0158 without the
         // assertion, because the receiver is `IProfile?`.
@@ -42,11 +35,13 @@ public sealed class C
     public string Read(Profile p) => ((IProfile)p).Name;
 }");
 
-        Assert.Contains("as IProfile)!!", printed, StringComparison.Ordinal);
+        Assert.Contains("IProfile(p)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as IProfile", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     [Fact]
-    public void NonNullableTargetCast_Indexed_IsAsserted()
+    public void NonNullableTargetCast_Indexed_UsesConversionCall()
     {
         // The oahu-corpus shape behind `GS0116: Type '[]?object' is not indexable`.
         string printed = Translate(@"
@@ -55,12 +50,14 @@ public sealed class C
     public object First(object o) => ((object[])o)[0];
 }");
 
-        Assert.Contains("!!", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("(o as []object)[", printed, StringComparison.Ordinal);
+        Assert.Contains("[]object(o)", printed, StringComparison.Ordinal);
+        Assert.Contains("[0]", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as []object", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     [Fact]
-    public void NonNullableTargetCast_Returned_IsAsserted()
+    public void NonNullableTargetCast_Returned_UsesConversionCall()
     {
         // The oahu-corpus shape behind `GS0155: Cannot convert 'string?' to 'string'`.
         string printed = Translate(@"
@@ -69,15 +66,16 @@ public sealed class C
     public string Text(object o) => (string)o;
 }");
 
-        Assert.Contains("(o as string)!!", printed, StringComparison.Ordinal);
+        Assert.Contains("string(o)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as string", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// The regression guard that matters most: a nullable-annotated target keeps the
-    /// bare <c>T?</c>. Asserting here would throw at runtime where C# returns null.
+    /// A nullable-annotated target keeps the checked <c>T?(value)</c> form:
+    /// null stays null, while an incompatible non-null value still throws.
     /// </summary>
     [Fact]
-    public void NullableTargetCast_IsNotAsserted()
+    public void NullableTargetCast_UsesNullableConversionCall()
     {
         string printed = Translate(@"
 #nullable enable
@@ -86,8 +84,8 @@ public sealed class C
     public string? Text(object o) => (string?)o;
 }");
 
-        Assert.Contains("as string", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
+        Assert.Contains("string?(o)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as string", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -121,6 +119,45 @@ public sealed class C
 }");
 
         Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CSharpAsExpression_RemainsTestingConversion()
+    {
+        string printed = Translate(@"
+public sealed class C
+{
+    public string? Text(object o) => o as string;
+}");
+
+        Assert.Contains("o as string", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("string?(o)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericAndDynamicReferenceCasts_UseConversionCalls()
+    {
+        string printed = Translate(@"
+using System;
+using System.Collections.Generic;
+
+public static class C
+{
+    public static T Generic<T>(object value) where T : class => (T)value;
+    public static string Dynamic(dynamic value) => (string)value;
+    public static Func<int> Function(object value) => (Func<int>)value;
+    public static Func<int>? NullableFunction(object? value) => (Func<int>?)value;
+    public static List<int>? GenericNullable(object? value) => (List<int>?)value;
+}");
+
+        Assert.Contains("T(value)", printed, StringComparison.Ordinal);
+        Assert.Contains("string(value)", printed, StringComparison.Ordinal);
+        Assert.Contains("Func[int32](value)", printed, StringComparison.Ordinal);
+        Assert.Contains("Func[int32]?(value)", printed, StringComparison.Ordinal);
+        Assert.Contains("List[int32]?(value)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as T", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as string", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     /// <summary>

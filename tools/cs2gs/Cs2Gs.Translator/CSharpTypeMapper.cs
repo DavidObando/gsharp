@@ -235,6 +235,13 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference(UnsupportedPlaceholderType);
         }
 
+        // C# `dynamic` has the same CLR representation as `object`; dynamic
+        // dispatch is already resolved by Roslyn at the source call sites.
+        if (type.TypeKind == TypeKind.Dynamic)
+        {
+            return new NamedTypeReference("object");
+        }
+
         // Issue #1894: `System.Index`/`System.Range` have no canonical G# value
         // type. G#'s own `^n`/`a..b` syntax exists only as bracket-scoped index
         // sugar (gsc's Parser.ParseIndexBound) that lowers directly against the
@@ -512,6 +519,18 @@ public sealed class CSharpTypeMapper
         return IsSystemIndexOrRange(type)
             ? this.MapCore(type, context, location)
             : this.Map(type, context, location);
+    }
+
+    internal GTypeReference MapNominalDelegate(
+        INamedTypeSymbol type,
+        TranslationContext context,
+        Location location)
+    {
+        return type.IsGenericType
+            ? new NamedTypeReference(
+                this.DelegateTypeName(type, context, location),
+                type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
+            : new NamedTypeReference(this.DelegateTypeName(type, context, location));
     }
 
     /// <summary>

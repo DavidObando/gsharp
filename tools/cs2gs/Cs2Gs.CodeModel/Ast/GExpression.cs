@@ -605,11 +605,10 @@ public sealed class ArrayAllocationExpression : GExpression
 }
 
 /// <summary>
-/// A width-bearing numeric/value conversion written in the canonical G#
-/// conversion-call form <c>Type(expr)</c> (spec §Types and values; e.g.
-/// <c>uint8(5)</c>, <c>int32(expr)</c>). The C# explicit cast <c>(int)expr</c>
-/// maps here (ADR-0115 §B.12); the CLR truncates toward zero for
-/// floating→integral conversions, matching C# cast semantics.
+/// A checked conversion written in the canonical G# conversion-call form
+/// <c>Type(expr)</c> or <c>Type?(expr)</c>. Numeric conversions preserve their
+/// checked/unchecked behavior; reference downcasts preserve null and throw
+/// <see cref="System.InvalidCastException"/> for incompatible non-null values.
 /// </summary>
 public sealed class ConversionExpression : GExpression
 {
