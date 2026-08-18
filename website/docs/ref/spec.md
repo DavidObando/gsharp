@@ -1040,6 +1040,11 @@ spelling `name is Type` stays a switch-only form — in boolean position it
 reports `GS0525` — while `Type name` is accepted in every pattern position,
 including `switch` arms.
 
+The total pattern `var name` always matches, including when the input is
+`nil`, and binds the input at its exact static type without narrowing. It may
+appear anywhere a pattern may appear, including property and list
+subpatterns. `var _` is a total discard.
+
 ```gsharp
 if value is string text && text.Length > 3 { use(text) }
 if !(node is Leaf leaf) { return }
@@ -1894,8 +1899,9 @@ AndPattern        ::= UnaryPattern ('and' UnaryPattern)*
 UnaryPattern      ::= 'not' UnaryPattern | PrimaryPattern
 PrimaryPattern    ::= '(' Pattern ')'
                     | '[' ListPatternElement (',' ListPatternElement)* ']'
-                    | PropertyPattern
-                    | TypeClause PropertyPattern?             (* bare type pattern; name-shaped forms are semantically disambiguated from value patterns *)
+                    | 'var' identifier                        (* total pattern; identifier may be '_' *)
+                    | PropertyPattern identifier?             (* optional designation *)
+                    | TypeClause PropertyPattern? identifier? (* bare type pattern with optional designation; name-shaped forms are semantically disambiguated from value patterns *)
                     | identifier 'is' TypeClause PropertyPattern?
                     | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)
                     | ('<' | '<=' | '>' | '>=' | '==' | '!=') Expression

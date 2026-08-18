@@ -15,25 +15,20 @@ namespace Cs2Gs.Tests;
 /// Issue #1888: a C# <c>var</c> pattern (<c>VarPatternSyntax</c>) ALWAYS
 /// matches and binds the subject (or sub-value); it had no canonical G# form
 /// and reported the CS2GS-GAP "pattern 'VarPattern' has no canonical G# form
-/// yet". Covers all three surface positions:
+/// yet". Native G# <c>var name</c> patterns now preserve every scalar surface:
 /// <list type="bullet">
 /// <item>a top-level <c>is</c>-pattern (<c>x is var v</c>) — lowers to the
-/// literal <c>true</c> test with <c>v</c> bound directly to the receiver
-/// (no narrowing, since unlike a type/declaration pattern a <c>var</c>
-/// pattern also matches <see langword="null"/>).</item>
-/// <item>a switch-expression/statement arm (<c>var v =&gt;</c>) — lowers to
-/// the G# discard <c>_</c> (gsc's own total-arm check treats a bare discard
-/// the same as an explicit <c>default:</c>), with <c>v</c> bound via a
-/// translator-side substitution to the arm's discriminant.</item>
-/// <item>a nested property subpattern (<c>{ Prop: var v }</c>) — the same
-/// discard-plus-substitution mapping, with the receiver rewritten to the
-/// member access on the enclosing property.</item>
+/// native <c>x is var v</c>.</item>
+/// <item>a switch-expression/statement arm (<c>var v =&gt;</c>) — native
+/// <c>case var v</c>.</item>
+/// <item>a nested property subpattern (<c>{ Prop: var v }</c>) — native
+/// nested total binding.</item>
 /// </list>
 /// </summary>
 public class Issue1888VarPatternTranslationTests
 {
     [Fact]
-    public void IsPattern_VarBinder_LowersToAlwaysTrueTestWithDirectBind()
+    public void IsPattern_VarBinder_EmitsNativeTotalBinding()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1888
@@ -53,14 +48,13 @@ namespace Corpus.Issue1888
 }
 ");
 
-        Assert.Contains("if true {", rendered, StringComparison.Ordinal);
-        Assert.Contains("product.ToString()", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("captured", rendered, StringComparison.Ordinal);
+        Assert.Contains("if product is var captured {", rendered, StringComparison.Ordinal);
+        Assert.Contains("captured.ToString()", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void SwitchExpression_VarArm_LowersToDiscardArmWithSubstitutedBind()
+    public void SwitchExpression_VarArm_EmitsNativeTotalBinding()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1888
@@ -76,13 +70,13 @@ namespace Corpus.Issue1888
 }
 ");
 
-        Assert.Contains("case _:", rendered, StringComparison.Ordinal);
-        Assert.Contains("other ($n)", rendered, StringComparison.Ordinal);
+        Assert.Contains("case var v:", rendered, StringComparison.Ordinal);
+        Assert.Contains("other ($v)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void SwitchStatement_VarArm_LowersToDiscardArmWithSubstitutedBind()
+    public void SwitchStatement_VarArm_EmitsNativeTotalBinding()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1888
@@ -103,8 +97,8 @@ namespace Corpus.Issue1888
 }
 ");
 
-        Assert.Contains("case _ {", rendered, StringComparison.Ordinal);
-        Assert.Contains("other ($n)", rendered, StringComparison.Ordinal);
+        Assert.Contains("case var v {", rendered, StringComparison.Ordinal);
+        Assert.Contains("other ($v)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -139,9 +133,9 @@ namespace Corpus.Issue1888
 }
 ");
 
-        Assert.Contains("person != nil && true", rendered, StringComparison.Ordinal);
-        Assert.Contains("person.Address.City", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("addr", rendered, StringComparison.Ordinal);
+        Assert.Contains("person is { Address: var addr }", rendered, StringComparison.Ordinal);
+        Assert.Contains("addr.City", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -174,9 +168,8 @@ namespace Corpus.Issue1888
 }
 ");
 
-        Assert.Contains("{ Address: _ }", rendered, StringComparison.Ordinal);
-        Assert.Contains("person.Address.City", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("addr", rendered, StringComparison.Ordinal);
+        Assert.Contains("{ Address: var addr }", rendered, StringComparison.Ordinal);
+        Assert.Contains("addr.City", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

@@ -242,6 +242,7 @@ public static class GNodeSamples
             [typeof(PropertyPatternField)] = PropertyPatternSample,
             [typeof(PropertyPattern)] = PropertyPatternSample,
             [typeof(DiscardPattern)] = () => Pattern(new DiscardPattern()),
+            [typeof(VarPattern)] = () => Pattern(new VarPattern("value")),
             [typeof(BinaryPattern)] = () => Pattern(new BinaryPattern(
                 isConjunction: false,
                 new ConstantPattern(Int("1")),

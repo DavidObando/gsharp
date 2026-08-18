@@ -2731,6 +2731,11 @@ internal sealed class LambdaBinder
 
         protected override BoundPattern RewritePattern(BoundPattern node)
         {
+            if (node is BoundDiscardPattern { Variable: not null } varPattern)
+            {
+                this.declared.Add(varPattern.Variable);
+            }
+
             if (node is BoundTypePattern typePattern && typePattern.Variable != null)
             {
                 this.declared.Add(typePattern.Variable);

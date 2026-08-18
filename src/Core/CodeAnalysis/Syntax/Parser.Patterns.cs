@@ -175,6 +175,13 @@ public partial class Parser
 
     private PatternSyntax ParsePrimaryPattern()
     {
+        if (Current.Kind == SyntaxKind.VarKeyword)
+        {
+            var varKeyword = MatchToken(SyntaxKind.VarKeyword);
+            var designation = MatchToken(SyntaxKind.IdentifierToken);
+            return new VarPatternSyntax(syntaxTree, varKeyword, designation);
+        }
+
         if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.IsKeyword)
         {
             return ParseTypePattern();

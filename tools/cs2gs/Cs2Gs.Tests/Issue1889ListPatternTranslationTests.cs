@@ -159,8 +159,9 @@ namespace Corpus.Issue1889
 }
 ");
 
-        Assert.Contains("values.Length >= 1", rendered, StringComparison.Ordinal);
-        Assert.Contains("values[0] + values[1..].Length", rendered, StringComparison.Ordinal);
+        Assert.Contains("values is [var head, ..rest]", rendered, StringComparison.Ordinal);
+        Assert.Contains("head + rest.Length", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -185,8 +186,8 @@ namespace Corpus.Issue1889
 
         Assert.Contains("case []:", rendered, StringComparison.Ordinal);
         Assert.Contains("case [1, .., 4]:", rendered, StringComparison.Ordinal);
-        Assert.Contains("case [_, ..rest]:", rendered, StringComparison.Ordinal);
-        Assert.Contains("\"${values[0]}:${rest.Length}\"", rendered, StringComparison.Ordinal);
+        Assert.Contains("case [var head, ..rest]:", rendered, StringComparison.Ordinal);
+        Assert.Contains("\"$head:${rest.Length}\"", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

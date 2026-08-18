@@ -163,8 +163,14 @@ internal sealed partial class MethodBodyEmitter
     {
         switch (pattern)
         {
+            case BoundDiscardPattern { Variable: not null } varPattern:
+                // `var name` always matches and stores the unmodified input at
+                // its static type.
+                loadValue();
+                this.EmitStoreVariable(varPattern.Variable);
+                break;
             case BoundDiscardPattern:
-                // Always matches; emit nothing.
+                // A discard always matches; emit nothing.
                 break;
             case BoundConstantPattern cp:
                 this.EmitConstantPattern(cp, loadValue, valueType, failLabel);

@@ -266,6 +266,7 @@ UnsignedShiftRightToken
 UsingKeyword
 UsingStatement
 VarKeyword
+VarPattern
 VariableDeclaration
 WhileKeyword
 WhileStatement

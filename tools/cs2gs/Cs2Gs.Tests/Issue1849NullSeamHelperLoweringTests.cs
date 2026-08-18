@@ -191,8 +191,11 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             }
             """);
 
-        Assert.Contains("init({", printed, StringComparison.Ordinal);
-        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "is { X: > 0, Y: var y } && y == expected",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.Contains("expected", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
     }

@@ -2011,7 +2011,7 @@ internal sealed partial class DeclarationBinder
     /// Pattern captures come from <c>switch</c>/<c>match</c> arm patterns and,
     /// since ADR-0166, from boolean <c>is</c> designations
     /// (<see cref="TypePatternSyntax"/>, <see cref="PropertyPatternSyntax"/>,
-    /// <see cref="SlicePatternSyntax"/>). The generic child walk scopes both
+    /// <see cref="VarPatternSyntax"/>, <see cref="SlicePatternSyntax"/>). The generic child walk scopes both
     /// conservatively: a capture is added to the shadow set only while
     /// iterating the owning <see cref="SwitchCaseSyntax"/>/
     /// <see cref="SwitchExpressionArmSyntax"/>/<see cref="IfStatementSyntax"/>'s
@@ -2270,6 +2270,9 @@ internal sealed partial class DeclarationBinder
                 break;
             case PropertyPatternSyntax propertyPattern when propertyPattern.Designation != null:
                 captures.Add(propertyPattern.Designation.Text);
+                break;
+            case VarPatternSyntax varPattern when varPattern.Designation.Text != "_":
+                captures.Add(varPattern.Designation.Text);
                 break;
 
             case SlicePatternSyntax slicePattern when slicePattern.CaptureIdentifier != null:

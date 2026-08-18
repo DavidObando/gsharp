@@ -230,6 +230,30 @@ public sealed partial class CSharpToGSharpTranslator
 
                 return fields;
             }
+
+            public List<PropertyPatternField> ConvertNativeChildren(
+                DeclarationVisitor translator,
+                List<ILocalSymbol> binders)
+            {
+                var fields = new List<PropertyPatternField>();
+                foreach (string name in this.order)
+                {
+                    if (this.leaves.TryGetValue(name, out PatternSyntax leafPattern))
+                    {
+                        fields.Add(new PropertyPatternField(
+                            name,
+                            translator.BuildNativePattern(leafPattern, binders)));
+                        continue;
+                    }
+
+                    ExtendedPropertyFieldTree child = this.children[name];
+                    fields.Add(new PropertyPatternField(
+                        name,
+                        new PropertyPattern(child.ConvertNativeChildren(translator, binders))));
+                }
+
+                return fields;
+            }
         }
     }
 }

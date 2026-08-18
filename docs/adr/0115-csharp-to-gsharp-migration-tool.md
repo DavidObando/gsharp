@@ -534,17 +534,17 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
 - **`is` patterns → native boolean patterns / pattern variables.** G# `is` in
   expression position supports the full pattern grammar (ADR-0162) including
   C#-style designations (ADR-0166): `x is T t`, `x is { P: T t } u`,
-  `x is { } t`, `x is [..rest]`, scoped to the regions where the match is known
+  `x is { } t`, `x is var t`, `x is { P: var p }`, `x is [..rest]`, scoped to the regions where the match is known
   to have happened. cs2gs emits a C# `is` pattern with designations **verbatim**
   whenever every designation qualifies — the pattern is natively expressible
-  (no `var` designation, positional clause, or list designation), the binder is
+  (including scalar `var` designations; no tuple, positional, or whole-list designation), the binder is
   never reassigned, and every reference lies in a region G# scopes it to
   (`&&`/negated-`||` continuation, the selected branch, loop body, guarded
   switch arm, statements after an exiting `if`); `x is not T t` lowers to
   `!(x is T t)`. Conditions are all-or-nothing. Otherwise the earlier lowerings
   apply: `if let`, `while let`, the negated-guard hoist, or a scoped
   author-named local plus a native residual pattern, with manual subject
-  captures only for `var` designations and reassigned binders.
+  captures only for unsupported tuple/positional designations and reassigned binders.
 - **Expression-position spills → native block expressions (issue #3355).**
   When preserving C# left-to-right evaluation requires temporary receiver,
   index, argument, field/property-initializer, or constructor-initializer

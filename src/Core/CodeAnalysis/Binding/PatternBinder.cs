@@ -181,6 +181,11 @@ internal sealed class PatternBinder
                     preferTypeNames);
             case SyntaxKind.DiscardPattern:
                 return new BoundDiscardPattern(syntax, discriminantType);
+            case SyntaxKind.VarPattern:
+                return BindVarPattern(
+                    (VarPatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext);
             case SyntaxKind.TypePattern:
                 return BindTypePattern(
                     (TypePatternSyntax)syntax,
@@ -234,6 +239,42 @@ internal sealed class PatternBinder
         }
     }
 
+    private BoundPattern BindVarPattern(
+        VarPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext)
+    {
+        if (syntax.Designation.Text == "_")
+        {
+            return new BoundDiscardPattern(syntax, discriminantType);
+        }
+
+        var variable = CreatePatternVariable(
+            syntax.Designation.Text,
+            discriminantType,
+            syntax.Designation,
+            isExpressionBinding: bindingContext == PatternBindingContext.IsExpression);
+        variable.HasDefinitelyNonNullValue = false;
+
+        if (bindingContext == PatternBindingContext.Allowed)
+        {
+            if (!Scope.TryDeclareVariable(variable))
+            {
+                Diagnostics.ReportSymbolAlreadyDeclared(
+                    syntax.Designation.Location,
+                    syntax.Designation.Text);
+            }
+        }
+        else if (bindingContext == PatternBindingContext.OrOrNot)
+        {
+            Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(
+                syntax.Designation.Location,
+                syntax.Designation.Text);
+        }
+
+        return new BoundDiscardPattern(syntax, discriminantType, variable);
+    }
+
     // Issue #992: a conjunction (`and`) keeps bindings (both sub-patterns must
     // match, so a variable bound on either side is definitely assigned). A
     // disjunction (`or`) forbids bindings on both sides.
@@ -244,7 +285,7 @@ internal sealed class PatternBinder
         bool preferTypeNames)
     {
         var isConjunction = syntax.OperatorToken.Text == "and";
-        var childBindingContext = bindingContext == PatternBindingContext.Allowed && !isConjunction
+        var childBindingContext = !isConjunction
             ? PatternBindingContext.OrOrNot
             : bindingContext;
         var left = BindPattern(
@@ -315,9 +356,7 @@ internal sealed class PatternBinder
             return new BoundDiscardPattern(syntax, discriminantType);
         }
 
-        var childBindingContext = bindingContext == PatternBindingContext.Allowed
-            ? PatternBindingContext.OrOrNot
-            : bindingContext;
+        var childBindingContext = PatternBindingContext.OrOrNot;
         var operand = BindPattern(
             syntax.Pattern,
             discriminantType,

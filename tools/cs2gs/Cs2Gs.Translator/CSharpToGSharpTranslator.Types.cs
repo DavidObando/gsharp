@@ -542,7 +542,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // for a `var v =>` arm, which also always matches (it never
                 // narrows, so it is total too — see `TranslatePattern`'s
                 // `VarPatternSyntax` case above).
-                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern);
+                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern or VarPattern);
             }
 
             // Issue #1962: a C# switch expression can be exhaustive purely by
@@ -654,7 +654,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 cases.Add(new SwitchStatementCase(pattern, new BlockStatement(new[] { body }), guard));
 
-                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern);
+                hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern or VarPattern);
             }
 
             // As in TranslateSwitchExpression: a C# switch expression is
@@ -1172,27 +1172,18 @@ public sealed partial class CSharpToGSharpTranslator
                 case TypePatternSyntax typePattern:
                     return new TypePattern("_", this.MapTypeSyntax(typePattern.Type));
 
-                // `var v` (a top-level switch arm, or a nested `{ Prop: var v }`
-                // subpattern — this method recurses for both) ALWAYS matches, so
-                // there is no real test to lower: it maps to the G# discard token
-                // `_` (which gsc's own exhaustiveness/binder treats as a total
-                // arm — the same as an explicit `default:` — see
-                // BindSwitchExpression's `pattern is BoundDiscardPattern` check),
-                // and `v` binds via a translator-side substitution of every
-                // reference to `receiver` (no runtime pattern is needed since
-                // `var` never narrows and also matches `null`) (issue #1888).
+                // G# has the same total, static-type binding form as C#.
                 case VarPatternSyntax varPattern:
-                    if (varPattern.Designation is SingleVariableDesignationSyntax varVariable &&
-                        this.context.GetDeclaredSymbol(varVariable) is { } varBound)
-                    {
-                        bindings.Add((varBound, receiver));
-                    }
-                    else if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
+                    if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
                     {
                         this.context.ReportUnsupported(varPattern, "var pattern with tuple designation ('var (a, b)') has no canonical G# form yet (ADR-0115 §B).");
+                        return new DiscardPattern();
                     }
 
-                    return new DiscardPattern();
+                    return new VarPattern(
+                        varPattern.Designation is SingleVariableDesignationSyntax varVariable
+                            ? SanitizeIdentifier(varVariable.Identifier.Text)
+                            : "_");
 
                 case RecursivePatternSyntax { Type: { } type } recursive
                     when this.state.TranslatingBooleanPattern
@@ -1251,12 +1242,9 @@ public sealed partial class CSharpToGSharpTranslator
         // array/slice element-by-element — unlike the property/positional-
         // pattern branches above, no manual member-test composition is needed;
         // gsc's own pattern binder tests length and element shape at runtime.
-        // Each non-slice, non-discard element still recurses through the shared
-        // `TranslatePattern` so a `var`/declaration binder at that position picks
-        // up the SAME discard-plus-substitution treatment as everywhere else
-        // (issue #1888) — the substitution receiver is the element read at that
-        // position (forward from the start, or backward from the end once past
-        // the slice, since gsc has no negative array index).
+        // Each non-slice, non-discard element recurses through the shared
+        // `TranslatePattern`, so `var` and declaration binders keep their native
+        // pattern form at the element read from the start or end.
         private GPattern TranslateListPattern(
             ListPatternSyntax listPattern,
             GExpression receiver,
@@ -1293,9 +1281,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Issue #1889: a named capture (`.. var rest`/`.. T rest`) binds directly
         // to G#'s own slice-capture designator (`..rest`) — a REAL runtime
-        // binding (unlike a scalar element's `var`, this one needs no
-        // discard-plus-substitution: the captured name IS the designator, so
-        // references to it in the arm body resolve naturally). A nested
+        // binding: the captured name IS the designator, so references to it in
+        // the arm body resolve naturally. A nested
         // subpattern (`..[> 0]`) recurses through `TranslatePattern` against the
         // materialized slice value, matching G#'s own `SlicePattern.Pattern`
         // (spec §Pattern matching). A bare `..` carries neither.

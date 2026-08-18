@@ -165,6 +165,22 @@ public sealed class DiscardPattern : GPattern
 }
 
 /// <summary>
+/// A total <c>var name</c> pattern that binds the input at its static type.
+/// </summary>
+public sealed class VarPattern : GPattern
+{
+    /// <summary>Initializes a new instance of the <see cref="VarPattern"/> class.</summary>
+    /// <param name="designator">The bound variable name, or <c>_</c> for a discard.</param>
+    public VarPattern(string designator)
+    {
+        Designator = designator;
+    }
+
+    /// <summary>Gets the bound variable name or discard.</summary>
+    public string Designator { get; }
+}
+
+/// <summary>
 /// A binary pattern combinator — a conjunction (<c>and</c>) or disjunction
 /// (<c>or</c>) of two sub-patterns (issue #992, spec §Pattern matching,
 /// <c>BinaryPattern</c>).

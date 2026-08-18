@@ -323,7 +323,12 @@ public sealed class Issue3419FallbackPatternHoistTranslationTests
             }
             """);
 
-        Assert.Matches("var __spill[0-9]+ Measurement", printed);
+        Assert.Contains(
+            "holder.Current is { Value: var value } && value > 0",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Console.WriteLine(C.Run())",

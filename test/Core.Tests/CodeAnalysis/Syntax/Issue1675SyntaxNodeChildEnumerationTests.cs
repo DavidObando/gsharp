@@ -46,6 +46,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // pattern combinators: and / or / not / parenthesized
         "package p\nfunc F(v int32) int32 {\n  let x = switch v { case > 0 and < 10: 1 case not > 20: 2 case (== 0 or > 5): 3 default: 0 }\n  return x\n}\n",
 
+        // total var pattern
+        "package p\nfunc F(v object?) bool {\n  return v is var captured && captured == nil\n}\n",
+
         // from-end index and ranges
         "package p\nfunc F(a []int32) {\n  let b = a[^1]\n  let c = a[1..^1]\n  let d = a[..2]\n}\n",
 

@@ -101,6 +101,7 @@ PropertyPattern
 RelationalPattern
 SlicePattern
 TypePattern
+VarPattern
 
 [GTypeReference]
 ArrayTypeReference

@@ -103,6 +103,33 @@ public class SemanticTokensHandlerTests
     }
 
     [Fact]
+    public void Tokenize_ClassifiesVarPatternDeclarationAndReference()
+    {
+        const string source =
+            "func use(value object?) bool {\n" +
+            "  if value is var captured && captured == nil {\n" +
+            "    return true\n" +
+            "  }\n" +
+            "  return false\n" +
+            "}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var tokens = GetTokens(content);
+        string patternLine = source.Split('\n')[1];
+        int declarationColumn = patternLine.IndexOf("captured", System.StringComparison.Ordinal);
+        int referenceColumn = patternLine.LastIndexOf("captured", System.StringComparison.Ordinal);
+
+        var declaration = FindToken(tokens, 1, declarationColumn, "captured".Length);
+        Assert.NotNull(declaration);
+        Assert.Equal(TokenTypeIndex("Variable"), declaration.Value.TokenType);
+        Assert.True((declaration.Value.TokenModifiers & ModifierBit("Declaration")) != 0);
+
+        var reference = FindToken(tokens, 1, referenceColumn, "captured".Length);
+        Assert.NotNull(reference);
+        Assert.Equal(TokenTypeIndex("Variable"), reference.Value.TokenType);
+        Assert.Equal(0, reference.Value.TokenModifiers);
+    }
+
+    [Fact]
     public void Tokenize_ClassifiesStructDeclaration()
     {
         const string source = "struct Point {\n    var X int32\n    var Y int32\n}\n";
@@ -334,4 +361,3 @@ public class SemanticTokensHandlerTests
 
     private readonly record struct DecodedToken(int Line, int Character, int Length, int TokenType, int TokenModifiers);
 }
-

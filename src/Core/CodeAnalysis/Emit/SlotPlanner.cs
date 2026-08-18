@@ -689,6 +689,9 @@ internal sealed class SlotPlanner
         {
             switch (pattern)
             {
+                case BoundDiscardPattern { Variable: not null } varPattern:
+                    AllocatePatternLocal(varPattern.Variable, locals, localTypes);
+                    break;
                 case BoundTypePattern tp:
                     if (!typePatternScratchSlots.ContainsKey(tp))
                     {
