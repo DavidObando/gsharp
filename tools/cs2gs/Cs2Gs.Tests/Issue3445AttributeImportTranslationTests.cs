@@ -126,15 +126,38 @@ public sealed class Issue3445AttributeImportTranslationTests
     public void NestedAttribute_TracksContainingNamespaceAndMappedName()
     {
         IReadOnlyDictionary<string, string> translated = Translate(
-            ("GlobalUsings.cs", "global using External.Attributes;"),
+            ("GlobalUsings.cs", """
+                global using External.Attributes;
+                global using AttributeNamespace = External.Attributes;
+                """),
             ("Attributes.cs", """
                 using System;
 
                 namespace External.Attributes;
 
+                public sealed class NestedAttribute : Attribute
+                {
+                }
+
+                public sealed class GenericAttribute<T> : Attribute
+                {
+                }
+
                 public static class Holder
                 {
+                    public sealed class Nested
+                    {
+                    }
+
                     public sealed class NestedAttribute : Attribute
+                    {
+                    }
+
+                    public sealed class Generic<T>
+                    {
+                    }
+
+                    public sealed class GenericAttribute<T> : Attribute
                     {
                     }
                 }
@@ -146,11 +169,40 @@ public sealed class Issue3445AttributeImportTranslationTests
                 public sealed class Consumer
                 {
                 }
+
+                [Holder.NestedAttribute]
+                public sealed class ExplicitConsumer
+                {
+                }
+
+                [Holder.Generic<int>]
+                public sealed class GenericConsumer
+                {
+                }
+
+                [global::External.Attributes.Holder.Nested]
+                public sealed class QualifiedConsumer
+                {
+                }
+
+                [AttributeNamespace.Holder.Nested]
+                public sealed class AliasQualifiedConsumer
+                {
+                }
                 """));
 
         string consumer = translated["Consumer.cs"];
         Assert.Contains("import External.Attributes", consumer, StringComparison.Ordinal);
         Assert.Contains("@Holder.Nested", consumer, StringComparison.Ordinal);
+        Assert.Contains("@Holder.NestedAttribute", consumer, StringComparison.Ordinal);
+        Assert.Contains("@Holder.Generic[int32]", consumer, StringComparison.Ordinal);
+        Assert.Contains("@External.Attributes.Holder.Nested", consumer, StringComparison.Ordinal);
+        Assert.Contains("@AttributeNamespace.Holder.Nested", consumer, StringComparison.Ordinal);
+        Assert.Contains(
+            "import AttributeNamespace = External.Attributes",
+            consumer,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(translated.Values.ToArray());
     }
 
     [Fact]

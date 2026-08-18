@@ -374,37 +374,53 @@ internal sealed partial class DeclarationBinder
             simpleName = name.Substring(dotIndex + 1);
         }
 
-        // The `Attribute`-suffix retry only ever applies to a simple
-        // (non-dotted) name, same as `ResolveAttributeType` — a dotted name's
-        // last segment is resolved by `bindTypeClause` itself via the
-        // reference-assembly path, which does its own suffix-free lookup.
-        var directExists = dotIndex < 0
-            && !string.IsNullOrEmpty(simpleName)
-            && scope.TryLookupTypeAlias(simpleName, arity, out _);
-
-        string? suffixedName = null;
-        var suffixedExists = false;
-        if (dotIndex < 0 && !string.IsNullOrEmpty(simpleName) && !simpleName.EndsWith("Attribute", StringComparison.Ordinal))
+        TypeSymbol? direct = null;
+        if (dotIndex < 0)
         {
-            suffixedName = simpleName + "Attribute";
-            suffixedExists = scope.TryLookupTypeAlias(suffixedName, arity, out _);
+            scope.TryLookupTypeAlias(simpleName, arity, out direct);
+        }
+        else
+        {
+            direct = ResolveNestedAttributeName(name, arity);
         }
 
-        if (directExists && suffixedExists)
+        TypeSymbol? suffixed = null;
+        string? suffixedName = null;
+        if (!string.IsNullOrEmpty(simpleName) && !simpleName.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            suffixedName = dotIndex >= 0
+                ? string.Concat(name.Substring(0, dotIndex + 1), simpleName, "Attribute")
+                : simpleName + "Attribute";
+            if (dotIndex < 0)
+            {
+                scope.TryLookupTypeAlias(suffixedName, arity, out suffixed);
+            }
+            else
+            {
+                suffixed = ResolveNestedAttributeName(suffixedName, arity);
+            }
+        }
+
+        if (IsAttributeType(direct) && IsAttributeType(suffixed))
         {
             Diagnostics.ReportAmbiguousAttributeName(nameLocation, name);
         }
 
         string resolvedLastSegment;
-        if (directExists)
+        if (IsAttributeType(direct))
         {
             nameIsExact = true;
             resolvedLastSegment = simpleName;
         }
-        else if (suffixedExists)
+        else if (suffixed != null)
         {
             nameIsExact = false;
-            resolvedLastSegment = Invariant.Required(suffixedName, "a detected suffixed attribute name is assigned before lookup");
+            resolvedLastSegment = simpleName + "Attribute";
+        }
+        else if (direct != null)
+        {
+            nameIsExact = true;
+            resolvedLastSegment = simpleName;
         }
         else if (dotIndex < 0)
         {
@@ -549,12 +565,129 @@ internal sealed partial class DeclarationBinder
             return resolved;
         }
 
-        if (name.IndexOf('.') >= 0 && scope.References.TryResolveType(name, out var clrType) && clrType != null)
+        if (name.IndexOf('.') >= 0)
         {
-            return TypeSymbol.FromClrType(clrType);
+            resolved = ResolveNestedAttributeName(name);
+            if (resolved != null)
+            {
+                return resolved;
+            }
+
+            if (scope.References.TryResolveType(name, out var clrType) && clrType != null)
+            {
+                return TypeSymbol.FromClrType(clrType);
+            }
         }
 
         return null;
+    }
+
+    private TypeSymbol? ResolveNestedAttributeName(string name, int preferredArity = -1)
+    {
+        string[] segments = name.Split('.');
+        if (segments.Length < 2)
+        {
+            return null;
+        }
+
+        for (int outerIndex = 0; outerIndex < segments.Length - 1; outerIndex++)
+        {
+            TypeSymbol? current = lookupType(segments[outerIndex]);
+            if (current == null || !QualifierMatchesContainingNamespace(current, segments, outerIndex))
+            {
+                continue;
+            }
+
+            bool resolved = true;
+            for (int i = outerIndex + 1; i < segments.Length; i++)
+            {
+                int arity = i == segments.Length - 1 ? preferredArity : -1;
+                if (scope.TryLookupNestedTypeAlias(current, segments[i], arity, out var nested))
+                {
+                    current = nested;
+                    continue;
+                }
+
+                if (current is StructSymbol container
+                    && scope.TryLookupNestedTypeAliasIncludingInherited(
+                        container,
+                        segments[i],
+                        arity,
+                        out nested,
+                        out _))
+                {
+                    current = nested;
+                    continue;
+                }
+
+                Type? containingType = current.ClrType;
+                Type? nestedClrType = null;
+                if (containingType != null && arity > 0)
+                {
+                    scope.References.TryResolveNestedType(
+                        containingType,
+                        segments[i] + "`" + arity,
+                        out nestedClrType);
+                }
+
+                if (containingType == null
+                    || (nestedClrType == null
+                        && !scope.References.TryResolveNestedType(
+                            containingType,
+                            segments[i],
+                            out nestedClrType)))
+                {
+                    resolved = false;
+                    break;
+                }
+
+                current = TypeSymbol.FromClrType(nestedClrType);
+            }
+
+            if (resolved)
+            {
+                return current;
+            }
+        }
+
+        return null;
+    }
+
+    private bool QualifierMatchesContainingNamespace(TypeSymbol type, string[] segments, int typeIndex)
+    {
+        if (typeIndex == 0)
+        {
+            return true;
+        }
+
+        string? containingNamespace = type switch
+        {
+            StructSymbol structure => structure.PackageName,
+            EnumSymbol @enum => @enum.PackageName,
+            InterfaceSymbol @interface => @interface.PackageName,
+            DelegateTypeSymbol @delegate => @delegate.PackageName,
+            _ => type.ClrType?.Namespace,
+        };
+        if (containingNamespace == null)
+        {
+            return false;
+        }
+
+        string qualifier = string.Join(".", segments, 0, typeIndex);
+        if (string.Equals(qualifier, containingNamespace, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!scope.TryLookupImport(segments[0], out var import) || !import.IsAlias)
+        {
+            return false;
+        }
+
+        string expandedQualifier = typeIndex == 1
+            ? import.Target
+            : import.Target + "." + string.Join(".", segments, 1, typeIndex - 1);
+        return string.Equals(expandedQualifier, containingNamespace, StringComparison.Ordinal);
     }
 
     private bool IsAttributeType(TypeSymbol? typeSymbol)

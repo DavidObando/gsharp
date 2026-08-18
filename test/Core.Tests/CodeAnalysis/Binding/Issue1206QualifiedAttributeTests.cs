@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -58,6 +59,57 @@ public class Issue1206QualifiedAttributeTests
         var attr = Assert.Single(helper.Attributes);
         Assert.Equal("System.ObsoleteAttribute", attr.AttributeType.Name);
         Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0198");
+    }
+
+    [Fact]
+    public void Nested_UserAttribute_UsesContainerAndSuffix()
+    {
+        var globalScope = BindSource(
+            """
+            class NestedAttribute : Attribute {
+            }
+
+            class GenericAttribute[T] : Attribute {
+            }
+
+            class Holder {
+                class Nested {
+                }
+
+                class NestedAttribute : Attribute {
+                }
+
+                class Generic[T] {
+                }
+
+                class GenericAttribute[T] : Attribute {
+                }
+            }
+
+            @Holder.Nested
+            class Consumer {
+            }
+
+            @Holder.Generic[int32]
+            class GenericConsumer {
+            }
+            """);
+        var consumer = globalScope.Structs.Single(type => type.Name == "Consumer");
+        var genericConsumer = globalScope.Structs.Single(type => type.Name == "GenericConsumer");
+
+        var attribute = Assert.Single(consumer.Attributes);
+        var attributeType = Assert.IsType<StructSymbol>(attribute.AttributeType);
+        Assert.Equal("NestedAttribute", attributeType.Name);
+        Assert.Equal("Holder", attributeType.ContainingType?.Name);
+
+        var genericAttribute = Assert.Single(genericConsumer.Attributes);
+        var genericAttributeType = Assert.IsType<StructSymbol>(genericAttribute.AttributeType);
+        Assert.Equal("GenericAttribute", genericAttributeType.Name);
+        Assert.Equal(
+            "Holder",
+            (genericAttributeType.Definition ?? genericAttributeType).ContainingType?.Name);
+        Assert.Equal(TypeSymbol.Int32, Assert.Single(genericAttributeType.TypeArguments));
+        Assert.Empty(GetBinderDiagnostics(globalScope));
     }
 
     [Fact]

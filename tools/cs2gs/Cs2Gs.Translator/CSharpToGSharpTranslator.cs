@@ -383,7 +383,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        var alreadyImported = new HashSet<string>(allImports.Select(i => i.Name));
+        var alreadyImported = new HashSet<string>(
+            allImports.Where(import => import.Alias == null).Select(import => import.Name));
         foreach (string ns in typeMapper.ShortenedNamespaces.OrderBy(n => n, System.StringComparer.Ordinal))
         {
             if (ns != package && alreadyImported.Add(ns))
