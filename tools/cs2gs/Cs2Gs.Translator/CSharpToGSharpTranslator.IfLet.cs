@@ -322,6 +322,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // A statement-form `if let` has no guard clause. Nesting a residual
+            // or conjoined guard would require attaching the same C# else branch
+            // to both binding failure and guard failure; a leading prefix would
+            // add a third copy. Let the general pattern lowering keep one branch.
+            if (ifStatement.Else != null
+                && (prefix.Count > 0
+                    || (!directBinding && (residualPattern != null || guards.Count > 0))))
+            {
+                return false;
+            }
+
             // A guard that itself hoists a spill would need a statement seam
             // ahead of the `if`, but the spill may read the binding — which is
             // only in scope inside the `if let`. Leave those to the general path.

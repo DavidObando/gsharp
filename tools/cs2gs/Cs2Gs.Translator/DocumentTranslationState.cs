@@ -53,6 +53,10 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> NativePatternVariables { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
+    // Enables the per-body return/throw count guard only for branch-sensitive
+    // legacy pattern hoists; other lowerings can intentionally synthesize exits.
+    public bool CurrentBodyUsesLegacyPatternGuardHoist { get; set; }
+
     // Pattern variables (`x is T t`) that <see cref="TryBuildPositiveGuardHoist"/>
     // materialised as a *nullable* G# local (`var t T? = scrutinee as T`). gsc
     // flow-narrows such a local for reads inside the `if t != nil { … }` guard,

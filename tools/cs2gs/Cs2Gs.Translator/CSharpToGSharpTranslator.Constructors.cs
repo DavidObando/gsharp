@@ -1236,16 +1236,151 @@ public sealed partial class CSharpToGSharpTranslator
         private BlockStatement TranslateBody(SyntaxNode bodyOwner, string description)
         {
             SyntaxNode previousScope = this.state.CurrentBodyScope;
+            bool previousLegacyPatternGuardHoist = this.state.CurrentBodyUsesLegacyPatternGuardHoist;
             this.state.CurrentBodyScope = bodyOwner;
+            this.state.CurrentBodyUsesLegacyPatternGuardHoist = false;
             try
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
                 body = this.WithParameterShadows(bodyOwner, body);
-                return AddIteratorExitLabel(bodyOwner, body);
+                body = AddIteratorExitLabel(bodyOwner, body);
+                if (this.state.CurrentBodyUsesLegacyPatternGuardHoist)
+                {
+                    this.ReportPatternGuardControlTransferMismatch(bodyOwner, description, body);
+                }
+
+                return body;
             }
             finally
             {
                 this.state.CurrentBodyScope = previousScope;
+                this.state.CurrentBodyUsesLegacyPatternGuardHoist = previousLegacyPatternGuardHoist;
+            }
+        }
+
+        private void ReportPatternGuardControlTransferMismatch(
+            SyntaxNode bodyOwner,
+            string description,
+            BlockStatement body)
+        {
+            BlockSyntax sourceBody = bodyOwner switch
+            {
+                BaseMethodDeclarationSyntax method => method.Body,
+                AccessorDeclarationSyntax accessor => accessor.Body,
+                LocalFunctionStatementSyntax localFunction => localFunction.Body,
+                _ => null,
+            };
+            if (sourceBody == null)
+            {
+                return;
+            }
+
+            int sourceReturns = sourceBody.DescendantNodesAndSelf(
+                    descendIntoChildren: node =>
+                        node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                .OfType<ReturnStatementSyntax>()
+                .Count();
+            int sourceThrows = sourceBody.DescendantNodesAndSelf(
+                    descendIntoChildren: node =>
+                        node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                .OfType<ThrowStatementSyntax>()
+                .Count();
+            int translatedReturns = 0;
+            int translatedThrows = 0;
+            CountTranslatedControlTransfers(body, ref translatedReturns, ref translatedThrows);
+
+            if (sourceReturns == translatedReturns && sourceThrows == translatedThrows)
+            {
+                return;
+            }
+
+            string message =
+                $"legacy pattern-guard lowering changed control-transfer structure in {description}: " +
+                $"C# has {sourceReturns} return statement(s) and {sourceThrows} throw statement(s), " +
+                $"but emitted G# has {translatedReturns} return statement(s) and {translatedThrows} throw statement(s) " +
+                "(issue #3418).";
+            this.context.Report(new TranslationDiagnostic(
+                "PatternGuardControlFlow",
+                message,
+                bodyOwner.GetLocation(),
+                TranslationSeverity.Unsupported));
+        }
+
+        private static void CountTranslatedControlTransfers(
+            GStatement statement,
+            ref int returns,
+            ref int throws)
+        {
+            switch (statement)
+            {
+                case null:
+                    return;
+                case ReturnStatement:
+                    returns++;
+                    return;
+                case ThrowStatement:
+                    throws++;
+                    return;
+                case BlockStatement block:
+                    foreach (GStatement child in block.Statements)
+                    {
+                        CountTranslatedControlTransfers(child, ref returns, ref throws);
+                    }
+
+                    return;
+                case IfStatement conditional:
+                    CountTranslatedControlTransfers(conditional.Then, ref returns, ref throws);
+                    CountTranslatedControlTransfers(conditional.ElseBranch, ref returns, ref throws);
+                    return;
+                case IfLetStatement ifLet:
+                    CountTranslatedControlTransfers(ifLet.Then, ref returns, ref throws);
+                    CountTranslatedControlTransfers(ifLet.Else, ref returns, ref throws);
+                    return;
+                case WhileStatement loop:
+                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    return;
+                case WhileLetStatement loop:
+                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    return;
+                case DoWhileStatement loop:
+                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    return;
+                case ForStatement loop:
+                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    return;
+                case ForInStatement loop:
+                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    return;
+                case ForTupleInStatement loop:
+                    CountTranslatedControlTransfers(loop.Body, ref returns, ref throws);
+                    return;
+                case LockStatement locked:
+                    CountTranslatedControlTransfers(locked.Body, ref returns, ref throws);
+                    return;
+                case FixedStatement fixedStatement:
+                    CountTranslatedControlTransfers(fixedStatement.Body, ref returns, ref throws);
+                    return;
+                case TryStatement tryStatement:
+                    CountTranslatedControlTransfers(tryStatement.TryBlock, ref returns, ref throws);
+                    foreach (CatchClause catchClause in tryStatement.CatchClauses)
+                    {
+                        CountTranslatedControlTransfers(catchClause.Body, ref returns, ref throws);
+                    }
+
+                    CountTranslatedControlTransfers(tryStatement.FinallyBlock, ref returns, ref throws);
+                    return;
+                case SwitchStatement switchStatement:
+                    foreach (SwitchStatementCase switchCase in switchStatement.Cases)
+                    {
+                        CountTranslatedControlTransfers(switchCase.Body, ref returns, ref throws);
+                    }
+
+                    return;
+                case LabeledStatement labeled:
+                    CountTranslatedControlTransfers(labeled.Statement, ref returns, ref throws);
+                    return;
+                default:
+                    return;
             }
         }
 

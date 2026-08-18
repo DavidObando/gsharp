@@ -536,6 +536,7 @@ public sealed partial class CSharpToGSharpTranslator
             // and translates nothing when it declines.
             if (this.TryBuildIfLetGuard(ifStatement, out IReadOnlyList<GStatement> ifLetHoisted))
             {
+                this.state.CurrentBodyUsesLegacyPatternGuardHoist |= ifStatement.Else != null;
                 return ifLetHoisted;
             }
 
@@ -546,6 +547,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (this.TryBuildPositiveGuardHoist(ifStatement, out IReadOnlyList<GStatement> positiveHoisted))
             {
+                this.state.CurrentBodyUsesLegacyPatternGuardHoist |= ifStatement.Else != null;
                 return positiveHoisted;
             }
 
@@ -737,7 +739,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 thenStatements.AddRange(body.Statements);
             }
-            else
+            else if (elseBranch == null)
             {
                 GExpression guardExpression = null;
                 foreach (ExpressionSyntax guardClause in guards)
@@ -749,6 +751,40 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 thenStatements.Add(new IfStatement(guardExpression, body, elseBranch));
+            }
+            else
+            {
+                GExpression guardExpression = null;
+                foreach (ExpressionSyntax guardClause in guards)
+                {
+                    GExpression translated = this.TranslateExpression(guardClause);
+                    guardExpression = guardExpression == null
+                        ? translated
+                        : new BinaryExpression(guardExpression, "&&", translated);
+                }
+
+                string endLabel = $"__patternGuardEnd{ifStatement.SpanStart}";
+                List<GStatement> matchedBody = body.Statements.ToList();
+                matchedBody.Add(new GotoStatement(endLabel));
+                thenStatements.Add(new IfStatement(
+                    guardExpression,
+                    new BlockStatement(matchedBody)));
+
+                var guardedStatements = new List<GStatement>();
+                if (hoist != null)
+                {
+                    guardedStatements.Add(hoist);
+                }
+
+                guardedStatements.Add(binder);
+                guardedStatements.Add(new IfStatement(
+                    guard,
+                    new BlockStatement(thenStatements)));
+                guardedStatements.Add(elseBranch);
+                guardedStatements.Add(new LabeledStatement(
+                    endLabel,
+                    new BlockStatement(new List<GStatement>())));
+                return guardedStatements;
             }
 
             var statements = new List<GStatement>();
