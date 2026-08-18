@@ -599,7 +599,10 @@ internal sealed partial class ExpressionBinder
                         // type-erased `ICollection<object>`.
                         var propType = prop.PropertyType.IsByRef
                             ? MapClrMemberType(prop.PropertyType)
-                            : MemberLookup.GetClrPropertyTypeSymbol(clrInstanceReceiverType, prop);
+                            : MemberLookup.GetClrPropertyTypeSymbol(
+                                clrInstanceReceiverType,
+                                prop,
+                                projectOnlyWhenSymbolicallyRequired: true);
                         propType = NormalizeImportedSemanticAggregate(propType, prop);
                         return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver!, prop, propType));
                     }

@@ -1229,7 +1229,10 @@ internal sealed partial class ExpressionBinder
                 targetType = p.PropertyType;
                 targetTypeSymbol = receiverType == null
                     ? ClrNullability.GetPropertyTypeSymbol(p)
-                    : MemberLookup.GetClrPropertyTypeSymbol(receiverType, p);
+                    : MemberLookup.GetClrPropertyTypeSymbol(
+                        receiverType,
+                        p,
+                        projectOnlyWhenSymbolicallyRequired: true);
                 writable = p.CanWrite && p.GetSetMethod(nonPublic: false) != null;
                 return writable;
             case FieldInfo f:
