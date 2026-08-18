@@ -207,6 +207,31 @@ public sealed class Issue3347RemainingSpillInventoryTests
     }
 
     [Fact]
+    public void CoalesceAssignmentOnNontrivialTarget_RemainsRequiredSpill()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            public sealed class Item
+            {
+                public string? Name { get; set; }
+            }
+
+            public static class C
+            {
+                private static Item GetItem() => new Item();
+
+                public static string Coalesce() =>
+                    GetItem().Name ??= "default";
+            }
+            """);
+
+        Assert.Contains("__spill", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
+    }
+
+    [Fact]
     public void AssignmentBodiedLambdas_PreserveValueOrDiscardContract()
     {
         string printed = Translate(

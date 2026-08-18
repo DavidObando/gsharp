@@ -494,16 +494,28 @@ public sealed partial class CSharpToGSharpTranslator
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
                 var guards = new List<GExpression>();
+                var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
                 // Issue #1967: `case Index i:`/`Index i =>` binds via a switch
                 // pattern designation, not a declarator — check the whole arm
                 // pattern tree here.
                 this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
-                GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators, guards);
+                GPattern pattern = this.TranslatePattern(
+                    arm.Pattern,
+                    subject,
+                    bindings,
+                    usedDesignators,
+                    guards,
+                    mutableBindings);
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
                     this.state.PatternBindings[symbol] = replacement;
+                }
+
+                foreach ((ILocalSymbol symbol, GExpression matchedValue) in mutableBindings)
+                {
+                    this.state.PatternBindings[symbol] = matchedValue;
                 }
 
                 GExpression guard;
@@ -517,15 +529,25 @@ public sealed partial class CSharpToGSharpTranslator
                     // `guards` above instead; AND it together with any explicit
                     // `when` clause (`case Point p when p.X == 0 && p.Y == 0 &&
                     // <user guard>:`).
-                    guard = arm.WhenClause != null
-                        ? this.TranslateExpression(arm.WhenClause.Condition)
-                        : null;
-                    guard = CombinePatternGuards(guards, guard);
+                    guard = this.TranslateSwitchPatternGuard(
+                        arm.WhenClause,
+                        guards,
+                        mutableBindings);
+                    this.UseMutableSwitchPatternLocals(mutableBindings);
                     body = this.TranslateSwitchArmExpression(arm.Expression, nullableResultType);
+                    body = this.MaterializeMutableSwitchPatternLocals(
+                        body,
+                        mutableBindings,
+                        arm.Pattern);
                 }
                 finally
                 {
                     foreach ((ISymbol symbol, _) in bindings)
+                    {
+                        this.state.PatternBindings.Remove(symbol);
+                    }
+
+                    foreach ((ILocalSymbol symbol, _) in mutableBindings)
                     {
                         this.state.PatternBindings.Remove(symbol);
                     }
@@ -607,6 +629,87 @@ public sealed partial class CSharpToGSharpTranslator
                 : this.TranslateValueWithNullForgiveness(expression);
         }
 
+        private GExpression TranslateSwitchPatternGuard(
+            WhenClauseSyntax whenClause,
+            List<GExpression> patternGuards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
+        {
+            ILocalSymbol guardMutation = whenClause == null
+                ? null
+                : mutableBindings
+                    .Select(binding => binding.Symbol)
+                    .FirstOrDefault(symbol => this.IsSymbolReassigned(symbol, whenClause));
+            GExpression guard = null;
+            if (guardMutation != null)
+            {
+                this.context.ReportUnsupported(
+                    whenClause,
+                    $"switch pattern variable '{guardMutation.Name}' is reassigned in a when guard; G# has no arm-local mutable storage visible to both guard and body.");
+                guard = LiteralExpression.Bool(false);
+            }
+            else if (whenClause != null)
+            {
+                guard = this.TranslateExpression(whenClause.Condition);
+            }
+
+            return CombinePatternGuards(patternGuards, guard);
+        }
+
+        private void UseMutableSwitchPatternLocals(
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
+        {
+            foreach ((ILocalSymbol symbol, _) in mutableBindings)
+            {
+                this.state.PatternBindings[symbol] =
+                    new IdentifierExpression(SanitizeIdentifier(symbol.Name));
+            }
+        }
+
+        private GExpression MaterializeMutableSwitchPatternLocals(
+            GExpression body,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings,
+            PatternSyntax pattern)
+        {
+            List<GStatement> declarations =
+                this.BuildMutableSwitchPatternDeclarations(mutableBindings, pattern);
+            return declarations.Count == 0
+                ? body
+                : new BlockExpression(declarations, body);
+        }
+
+        private BlockStatement MaterializeMutableSwitchPatternLocals(
+            BlockStatement body,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings,
+            PatternSyntax pattern)
+        {
+            List<GStatement> declarations =
+                this.BuildMutableSwitchPatternDeclarations(mutableBindings, pattern);
+            if (declarations.Count == 0)
+            {
+                return body;
+            }
+
+            declarations.AddRange(body.Statements);
+            return new BlockStatement(declarations);
+        }
+
+        private List<GStatement> BuildMutableSwitchPatternDeclarations(
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings,
+            PatternSyntax pattern)
+        {
+            var declarations = new List<GStatement>(mutableBindings.Count);
+            foreach ((ILocalSymbol symbol, GExpression matchedValue) in mutableBindings)
+            {
+                declarations.Add(new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    SanitizeIdentifier(symbol.Name),
+                    this.typeMapper.Map(symbol.Type, this.context, pattern.GetLocation()),
+                    initializer: matchedValue));
+            }
+
+            return declarations;
+        }
+
         // Lowers a C# switch EXPRESSION that appears in statement position
         // (a discard `_ = x switch { ... };` or any other expression-statement)
         // into a G# switch STATEMENT. Each arm's expression is run for its side
@@ -625,23 +728,36 @@ public sealed partial class CSharpToGSharpTranslator
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
                 var guards = new List<GExpression>();
+                var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
                 this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
-                GPattern pattern = this.TranslatePattern(arm.Pattern, subject, bindings, usedDesignators, guards);
+                GPattern pattern = this.TranslatePattern(
+                    arm.Pattern,
+                    subject,
+                    bindings,
+                    usedDesignators,
+                    guards,
+                    mutableBindings);
 
                 foreach ((ISymbol symbol, GExpression replacement) in bindings)
                 {
                     this.state.PatternBindings[symbol] = replacement;
                 }
 
+                foreach ((ILocalSymbol symbol, GExpression matchedValue) in mutableBindings)
+                {
+                    this.state.PatternBindings[symbol] = matchedValue;
+                }
+
                 GExpression guard;
                 GStatement body;
                 try
                 {
-                    guard = arm.WhenClause != null
-                        ? this.TranslateExpression(arm.WhenClause.Condition)
-                        : null;
-                    guard = CombinePatternGuards(guards, guard);
+                    guard = this.TranslateSwitchPatternGuard(
+                        arm.WhenClause,
+                        guards,
+                        mutableBindings);
+                    this.UseMutableSwitchPatternLocals(mutableBindings);
                     body = this.TranslateSwitchArmExpressionAsStatement(arm.Expression);
                 }
                 finally
@@ -650,9 +766,18 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         this.state.PatternBindings.Remove(symbol);
                     }
+
+                    foreach ((ILocalSymbol symbol, _) in mutableBindings)
+                    {
+                        this.state.PatternBindings.Remove(symbol);
+                    }
                 }
 
-                cases.Add(new SwitchStatementCase(pattern, new BlockStatement(new[] { body }), guard));
+                BlockStatement armBody = this.MaterializeMutableSwitchPatternLocals(
+                    new BlockStatement(new[] { body }),
+                    mutableBindings,
+                    arm.Pattern);
+                cases.Add(new SwitchStatementCase(pattern, armBody, guard));
 
                 hasTotalArm |= guard == null && (pattern == null || pattern is DiscardPattern or VarPattern);
             }
@@ -733,11 +858,18 @@ public sealed partial class CSharpToGSharpTranslator
                             var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                             var usedDesignators = new HashSet<string>(StringComparer.Ordinal);
                             var guards = new List<GExpression>();
+                            var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
                             // Issue #1967: same guard as the switch-expression arm
                             // path above, for the switch-statement `case` form.
                             this.ReportIndexOrRangeDesignationsInPattern(patternLabel.Pattern);
-                            GPattern pattern = this.TranslatePattern(patternLabel.Pattern, subject, bindings, usedDesignators, guards);
+                            GPattern pattern = this.TranslatePattern(
+                                patternLabel.Pattern,
+                                subject,
+                                bindings,
+                                usedDesignators,
+                                guards,
+                                mutableBindings);
 
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -749,6 +881,11 @@ public sealed partial class CSharpToGSharpTranslator
                                 this.state.PatternBindings[symbol] = replacement;
                             }
 
+                            foreach ((ILocalSymbol symbol, GExpression matchedValue) in mutableBindings)
+                            {
+                                this.state.PatternBindings[symbol] = matchedValue;
+                            }
+
                             GExpression guard;
                             BlockStatement patternBody;
                             try
@@ -758,15 +895,25 @@ public sealed partial class CSharpToGSharpTranslator
                                 // a typed positional/property subpattern with no
                                 // room in its `TypePattern` node is collected into
                                 // `guards` and AND-ed with any explicit `when`.
-                                guard = patternLabel.WhenClause != null
-                                    ? this.TranslateExpression(patternLabel.WhenClause.Condition)
-                                    : null;
-                                guard = CombinePatternGuards(guards, guard);
+                                guard = this.TranslateSwitchPatternGuard(
+                                    patternLabel.WhenClause,
+                                    guards,
+                                    mutableBindings);
+                                this.UseMutableSwitchPatternLocals(mutableBindings);
                                 patternBody = this.TranslateSwitchSectionBody(section);
+                                patternBody = this.MaterializeMutableSwitchPatternLocals(
+                                    patternBody,
+                                    mutableBindings,
+                                    patternLabel.Pattern);
                             }
                             finally
                             {
                                 foreach ((ISymbol symbol, _) in bindings)
+                                {
+                                    this.state.PatternBindings.Remove(symbol);
+                                }
+
+                                foreach ((ILocalSymbol symbol, _) in mutableBindings)
                                 {
                                     this.state.PatternBindings.Remove(symbol);
                                 }
@@ -1128,7 +1275,8 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators,
-            List<GExpression> guards)
+            List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings = null)
         {
             switch (pattern)
             {
@@ -1180,6 +1328,21 @@ public sealed partial class CSharpToGSharpTranslator
                         return new DiscardPattern();
                     }
 
+                    if (mutableBindings != null
+                        && varPattern.Designation is SingleVariableDesignationSyntax mutableVariable
+                        && this.context.GetDeclaredSymbol(mutableVariable) is ILocalSymbol mutableSymbol
+                        && this.IsSymbolReassigned(
+                            mutableSymbol,
+                            this.state.CurrentBodyScope ?? varPattern.SyntaxTree.GetRoot()))
+                    {
+                        string captureName =
+                            this.NewMutableSwitchPatternCaptureName(varPattern, usedDesignators);
+                        mutableBindings.Add((
+                            mutableSymbol,
+                            new IdentifierExpression(captureName)));
+                        return new VarPattern(captureName);
+                    }
+
                     return new VarPattern(
                         varPattern.Designation is SingleVariableDesignationSyntax varVariable
                             ? SanitizeIdentifier(varVariable.Identifier.Text)
@@ -1203,10 +1366,11 @@ public sealed partial class CSharpToGSharpTranslator
                             bindings,
                             usedDesignators,
                             guards,
+                            mutableBindings,
                             treatAsUntyped: true));
 
                 case RecursivePatternSyntax recursive:
-                    return this.TranslateRecursivePattern(recursive, receiver, bindings, usedDesignators, guards);
+                    return this.TranslateRecursivePattern(recursive, receiver, bindings, usedDesignators, guards, mutableBindings);
 
                 // Issue #992: C# `and` / `or` pattern combinators map to G#
                 // `and` / `or`. C# `BinaryPatternSyntax` carries an `and`/`or`
@@ -1215,19 +1379,19 @@ public sealed partial class CSharpToGSharpTranslator
                     when binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) || binary.OperatorToken.IsKind(SyntaxKind.OrKeyword):
                     return new BinaryPattern(
                         binary.OperatorToken.IsKind(SyntaxKind.AndKeyword),
-                        this.TranslatePattern(binary.Left, receiver, bindings, usedDesignators, guards),
-                        this.TranslatePattern(binary.Right, receiver, bindings, usedDesignators, guards));
+                        this.TranslatePattern(binary.Left, receiver, bindings, usedDesignators, guards, mutableBindings),
+                        this.TranslatePattern(binary.Right, receiver, bindings, usedDesignators, guards, mutableBindings));
 
                 // Issue #992: C# `not <pattern>` maps to G# `not <pattern>`.
                 case UnaryPatternSyntax unary
                     when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
-                    return new NotPattern(this.TranslatePattern(unary.Pattern, receiver, bindings, usedDesignators, guards));
+                    return new NotPattern(this.TranslatePattern(unary.Pattern, receiver, bindings, usedDesignators, guards, mutableBindings));
 
                 case ParenthesizedPatternSyntax parenthesized:
-                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, receiver, bindings, usedDesignators, guards));
+                    return new ParenthesizedPattern(this.TranslatePattern(parenthesized.Pattern, receiver, bindings, usedDesignators, guards, mutableBindings));
 
                 case ListPatternSyntax listPattern:
-                    return this.TranslateListPattern(listPattern, receiver, bindings, usedDesignators, guards);
+                    return this.TranslateListPattern(listPattern, receiver, bindings, usedDesignators, guards, mutableBindings);
 
                 default:
                     this.context.ReportUnsupported(
@@ -1250,7 +1414,8 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators,
-            List<GExpression> guards)
+            List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
         {
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
@@ -1262,7 +1427,15 @@ public sealed partial class CSharpToGSharpTranslator
                 PatternSyntax element = elements[i];
                 if (element is SlicePatternSyntax slice)
                 {
-                    translated.Add(this.TranslateSlicePattern(slice, receiver, i, elements.Count - i - 1, bindings, usedDesignators, guards));
+                    translated.Add(this.TranslateSlicePattern(
+                        slice,
+                        receiver,
+                        i,
+                        elements.Count - i - 1,
+                        bindings,
+                        usedDesignators,
+                        guards,
+                        mutableBindings));
                     continue;
                 }
 
@@ -1273,7 +1446,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 GExpression elementReceiver = this.BuildListElementReceiver(receiver, lengthAccess, i, elements.Count, sliceIndex);
-                translated.Add(this.TranslatePattern(element, elementReceiver, bindings, usedDesignators, guards));
+                translated.Add(this.TranslatePattern(element, elementReceiver, bindings, usedDesignators, guards, mutableBindings));
             }
 
             return new ListPattern(translated);
@@ -1293,7 +1466,8 @@ public sealed partial class CSharpToGSharpTranslator
             int suffixCount,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators,
-            List<GExpression> guards)
+            List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
         {
             switch (slice.Pattern)
             {
@@ -1301,6 +1475,20 @@ public sealed partial class CSharpToGSharpTranslator
                     return new SlicePattern(designator: null);
 
                 case VarPatternSyntax { Designation: SingleVariableDesignationSyntax variable }:
+                    if (mutableBindings != null
+                        && this.context.GetDeclaredSymbol(variable) is ILocalSymbol mutableSymbol
+                        && this.IsSymbolReassigned(
+                            mutableSymbol,
+                            this.state.CurrentBodyScope ?? slice.SyntaxTree.GetRoot()))
+                    {
+                        string captureName =
+                            this.NewMutableSwitchPatternCaptureName(slice, usedDesignators);
+                        mutableBindings.Add((
+                            mutableSymbol,
+                            new IdentifierExpression(captureName)));
+                        return new SlicePattern(captureName);
+                    }
+
                     return new SlicePattern(SanitizeIdentifier(variable.Identifier.Text));
 
                 case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
@@ -1318,7 +1506,15 @@ public sealed partial class CSharpToGSharpTranslator
 
                 default:
                     GExpression sliceValue = BuildSliceExpression(receiver, prefixCount, suffixCount);
-                    return new SlicePattern(designator: null, this.TranslatePattern(slice.Pattern, sliceValue, bindings, usedDesignators, guards));
+                    return new SlicePattern(
+                        designator: null,
+                        this.TranslatePattern(
+                            slice.Pattern,
+                            sliceValue,
+                            bindings,
+                            usedDesignators,
+                            guards,
+                            mutableBindings));
             }
         }
 
@@ -1328,6 +1524,7 @@ public sealed partial class CSharpToGSharpTranslator
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             HashSet<string> usedDesignators,
             List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings = null,
             bool treatAsUntyped = false)
         {
             // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
@@ -1352,7 +1549,8 @@ public sealed partial class CSharpToGSharpTranslator
                                     new MemberAccessExpression(receiver, fieldName),
                                     bindings,
                                     usedDesignators,
-                                    guards)));
+                                    guards,
+                                    mutableBindings)));
                             continue;
                         }
 
@@ -1425,7 +1623,12 @@ public sealed partial class CSharpToGSharpTranslator
                             }
 
                             List<PropertyPatternField> childFields = tree.ConvertChildren(
-                                this, new MemberAccessExpression(receiver, rootName), bindings, usedDesignators, guards);
+                                this,
+                                new MemberAccessExpression(receiver, rootName),
+                                bindings,
+                                usedDesignators,
+                                guards,
+                                mutableBindings);
                             fields[placeholderIndex] = new PropertyPatternField(rootName, new PropertyPattern(childFields));
                         }
                     }
@@ -1465,7 +1668,8 @@ public sealed partial class CSharpToGSharpTranslator
                                 new MemberAccessExpression(receiver, SanitizeIdentifier(memberName)),
                                 bindings,
                                 usedDesignators,
-                                guards)));
+                                guards,
+                                mutableBindings)));
                     }
                 }
 
@@ -1519,7 +1723,12 @@ public sealed partial class CSharpToGSharpTranslator
                             SanitizeIdentifier(memberName));
                     }
 
-                    this.AddTypedSubpatternTest(sub.Pattern, memberAccess, bindings, guards);
+                    this.AddTypedSubpatternTest(
+                        sub.Pattern,
+                        memberAccess,
+                        bindings,
+                        guards,
+                        mutableBindings);
                 }
             }
 
@@ -1568,7 +1777,12 @@ public sealed partial class CSharpToGSharpTranslator
 
                     GExpression memberAccess = new MemberAccessExpression(
                         new IdentifierExpression(designator), SanitizeIdentifier(memberName));
-                    this.AddTypedSubpatternTest(sub.Pattern, memberAccess, bindings, guards);
+                    this.AddTypedSubpatternTest(
+                        sub.Pattern,
+                        memberAccess,
+                        bindings,
+                        guards,
+                        mutableBindings);
                 }
             }
 
@@ -1579,7 +1793,8 @@ public sealed partial class CSharpToGSharpTranslator
             PatternSyntax pattern,
             GExpression memberAccess,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            List<GExpression> guards)
+            List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
         {
             if (pattern is DiscardPatternSyntax)
             {
@@ -1589,6 +1804,16 @@ public sealed partial class CSharpToGSharpTranslator
             if (pattern is VarPatternSyntax { Designation: SingleVariableDesignationSyntax bound } &&
                 this.context.GetDeclaredSymbol(bound) is { } boundSymbol)
             {
+                if (mutableBindings != null
+                    && boundSymbol is ILocalSymbol mutableSymbol
+                    && this.IsSymbolReassigned(
+                        mutableSymbol,
+                        this.state.CurrentBodyScope ?? pattern.SyntaxTree.GetRoot()))
+                {
+                    mutableBindings.Add((mutableSymbol, memberAccess));
+                    return;
+                }
+
                 bindings.Add((boundSymbol, memberAccess));
                 return;
             }
@@ -1637,6 +1862,28 @@ public sealed partial class CSharpToGSharpTranslator
                 suffix++;
             }
 
+            return candidate;
+        }
+
+        private string NewMutableSwitchPatternCaptureName(
+            PatternSyntax pattern,
+            HashSet<string> usedDesignators)
+        {
+            PatternSyntax rootPattern = pattern.AncestorsAndSelf()
+                .OfType<PatternSyntax>()
+                .Last();
+            string candidate;
+            do
+            {
+                candidate = $"__pattern{this.state.SwitchPatternCounter++}";
+            }
+            while (usedDesignators.Contains(candidate)
+                || rootPattern.DescendantNodesAndSelf()
+                    .OfType<SingleVariableDesignationSyntax>()
+                    .Any(designation =>
+                        SanitizeIdentifier(designation.Identifier.Text) == candidate));
+
+            usedDesignators.Add(candidate);
             return candidate;
         }
 

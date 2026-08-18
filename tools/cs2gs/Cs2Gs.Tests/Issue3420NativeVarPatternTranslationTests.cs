@@ -48,6 +48,53 @@ public sealed class Issue3420NativeVarPatternTranslationTests
             "error,tree,nil,7,address,switch");
     }
 
+    [Fact]
+    public void ReassignedSwitchVarPatterns_MaterializeMutableArmLocals()
+    {
+        string printed = Translate(ReassignedSwitchSource);
+
+        Assert.Contains("case var stableValue:", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("case var exprValue:", printed, StringComparison.Ordinal);
+        Assert.Contains("var exprValue int32 = __pattern", printed, StringComparison.Ordinal);
+        Assert.Contains("var stmtValue int32 = __pattern", printed, StringComparison.Ordinal);
+        Assert.Contains("var nestedValue int32 = __pattern", printed, StringComparison.Ordinal);
+        Assert.Contains("var listValue int32 = __pattern", printed, StringComparison.Ordinal);
+        Assert.Contains("var typedValue int32 =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C.Run(6))",
+            "7,8,9,10,11,6");
+    }
+
+    [Fact]
+    public void ReassignedSwitchVarPatternInGuard_ReportsUnsupportedWithoutInvalidBinding()
+    {
+        (string printed, TranslationContext context) = TranslateWithDiagnostics(
+            """
+            namespace Demo
+            {
+                public static class C
+                {
+                    public static int Run(int input) => input switch
+                    {
+                        var guardValue when (guardValue = guardValue + 1) > 0 => guardValue,
+                        _ => 0,
+                    };
+                }
+            }
+            """);
+
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "switch pattern variable 'guardValue' is reassigned in a when guard",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain("__pattern0 =", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private const string Source = """
         using System;
 
@@ -138,7 +185,69 @@ public sealed class Issue3420NativeVarPatternTranslationTests
         }
         """;
 
+    private const string ReassignedSwitchSource = """
+        using System;
+
+        namespace Demo
+        {
+            public sealed class Box
+            {
+                public int Value { get; init; }
+            }
+
+            public static class C
+            {
+                public static string Run(int input)
+                {
+                    string expression = input switch
+                    {
+                        var exprValue => (exprValue = exprValue + 1).ToString(),
+                    };
+
+                    int statementResult = 0;
+                    switch (input)
+                    {
+                        case var stmtValue:
+                            stmtValue += 2;
+                            statementResult = stmtValue;
+                            break;
+                    }
+
+                    int nested = new Box { Value = input } switch
+                    {
+                        { Value: var nestedValue } => nestedValue = nestedValue + 3,
+                    };
+                    int listed = new[] { input } switch
+                    {
+                        [var listValue] => listValue = listValue + 4,
+                        _ => 0,
+                    };
+                    object boxed = new Box { Value = input };
+                    int typed = boxed switch
+                    {
+                        Box { Value: var typedValue } => typedValue = typedValue + 5,
+                        _ => 0,
+                    };
+                    string stable = input switch
+                    {
+                        var stableValue => stableValue.ToString(),
+                    };
+
+                    return $"{expression},{statementResult},{nested},{listed},{typed},{stable}";
+                }
+            }
+        }
+        """;
+
     private static string Translate(string source)
+    {
+        (string printed, TranslationContext context) = TranslateWithDiagnostics(source);
+        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity != TranslationSeverity.Info);
+        TranslationTestValidation.AssertBinds(printed);
+        return printed;
+    }
+
+    private static (string Printed, TranslationContext Context) TranslateWithDiagnostics(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Snippet.cs", source) });
@@ -151,8 +260,6 @@ public sealed class Issue3420NativeVarPatternTranslationTests
             document.FilePath);
         string printed = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.Severity != TranslationSeverity.Info);
-        TranslationTestValidation.AssertBinds(printed);
-        return printed;
+        return (printed, context);
     }
 }
