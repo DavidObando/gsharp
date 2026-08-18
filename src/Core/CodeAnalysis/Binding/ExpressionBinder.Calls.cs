@@ -1028,6 +1028,49 @@ internal sealed partial class ExpressionBinder
         var name = syntax.Identifier.Text;
         switch (name)
         {
+            case "cast":
+            {
+                if (syntax.TypeArgumentList == null
+                    || syntax.TypeArgumentList.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(
+                        syntax.TypeArgumentList?.Location ?? syntax.Identifier.Location,
+                        name,
+                        expectedCount: 1,
+                        actualCount: syntax.TypeArgumentList?.Arguments.Count ?? 0);
+                    result = new BoundErrorExpression(syntax);
+                    return true;
+                }
+
+                if (syntax.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongArgumentCount(
+                        syntax.Identifier.Location,
+                        name,
+                        expectedCount: 1,
+                        actualCount: syntax.Arguments.Count);
+                    result = new BoundErrorExpression(syntax);
+                    return true;
+                }
+
+                var targetType = bindTypeClause(syntax.TypeArgumentList.Arguments[0]);
+                if (targetType == null)
+                {
+                    result = new BoundErrorExpression(syntax);
+                    return true;
+                }
+
+                reportObsoleteUseIfApplicable(
+                    syntax.TypeArgumentList.Arguments[0].Location,
+                    targetType,
+                    targetType.Name);
+                result = conversions.BindConversion(
+                    syntax.Arguments[0],
+                    targetType,
+                    allowExplicit: true);
+                return true;
+            }
+
             case "len":
             case "cap":
             {

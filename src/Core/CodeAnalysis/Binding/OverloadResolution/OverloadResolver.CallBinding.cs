@@ -340,6 +340,15 @@ internal sealed partial class OverloadResolver
             return BindIndirectCallExpression(syntax);
         }
 
+        // Issue #3421 review: `cast[T](value)` is the unambiguous,
+        // constructor-independent explicit-conversion form. Bind it before
+        // callable/type lookup so no symbol named `cast` can redirect it.
+        if (syntax.Identifier.Text == "cast"
+            && tryBindIntrinsicCall(syntax, out var checkedCast))
+        {
+            return checkedCast;
+        }
+
         // ADR-0065 §2: a bare `init(args)` call inside a constructor body is
         // a self-delegation to a sibling constructor on the same aggregate. This
         // is the only legal use of `init` as a callable identifier. Recognise
@@ -444,35 +453,30 @@ internal sealed partial class OverloadResolver
                 explicitConversionType = NullableTypeSymbol.Get(explicitConversionType);
             }
 
-            // A class call remains construction when an applicable one-argument
-            // constructor exists. Otherwise a legal checked reference
-            // conversion uses the same canonical `T(value)` spelling.
-            var singleArgClass = explicitConversionType switch
+            // A class exposing a one-argument constructor shape reserves
+            // `T(value)` for construction. `cast[T](value)` is the unambiguous
+            // checked-cast spelling when construction and conversion overlap.
+            // This decision uses declaration shape only: binding the argument
+            // speculatively here and again in the constructor binder can
+            // duplicate capture/spill state even if diagnostics are truncated.
+            var singleArgClass = conversionType as StructSymbol;
+            var typeArgumentsMatchConversionTarget = syntax.TypeArgumentList == null
+                || (singleArgClass is { IsGenericDefinition: true }
+                    && syntax.TypeArgumentList.Arguments.Count == singleArgClass.TypeParameters.Length);
+            if (singleArgClass != null
+                && singleArgClass.IsClass
+                && typeArgumentsMatchConversionTarget
+                && (syntax.NullableQuestionToken != null
+                    || !HasSingleArgumentConstructorShape(singleArgClass)))
             {
-                StructSymbol { IsClass: true } directClass => directClass,
-                NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } nullableClass } => nullableClass,
-                _ => null,
-            };
-            if (singleArgClass != null)
-            {
-                var diagnosticMark = Diagnostics.Count;
-                var argument = bindExpression(syntax.Arguments[0]);
-                if (Conversion.HasCheckedReferenceConversion(argument.Type, explicitConversionType)
-                    && (syntax.NullableQuestionToken != null
-                        || !HasApplicableSingleArgumentConstructor(singleArgClass, argument.Type)))
-                {
-                    reportObsoleteUseIfApplicable(
-                        syntax.Identifier.Location,
-                        explicitConversionType,
-                        explicitConversionType.Name);
-                    return conversions.BindConversion(
-                        syntax.Arguments[0].Location,
-                        argument,
-                        explicitConversionType,
-                        allowExplicit: true);
-                }
-
-                Diagnostics.TruncateTo(diagnosticMark);
+                reportObsoleteUseIfApplicable(
+                    syntax.Identifier.Location,
+                    explicitConversionType,
+                    explicitConversionType.Name);
+                return conversions.BindConversion(
+                    syntax.Arguments[0],
+                    explicitConversionType,
+                    allowExplicit: true);
             }
 
             if (syntax.NullableQuestionToken != null
@@ -2120,15 +2124,13 @@ internal sealed partial class OverloadResolver
         return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: null, methodTypeArguments);
     }
 
-    private static bool HasApplicableSingleArgumentConstructor(
-        StructSymbol classType,
-        TypeSymbol argumentType)
+    private static bool HasSingleArgumentConstructorShape(StructSymbol classType)
     {
-        if (!classType.ExplicitConstructors.IsDefaultOrEmpty)
+        if (!classType.EffectiveExplicitConstructors.IsDefaultOrEmpty)
         {
-            foreach (var constructor in classType.ExplicitConstructors)
+            foreach (var constructor in classType.EffectiveExplicitConstructors)
             {
-                if (ParametersAcceptSingleArgument(constructor.Parameters, argumentType))
+                if (ParametersAcceptSingleArgument(constructor.Parameters))
                 {
                     return true;
                 }
@@ -2137,14 +2139,11 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        return ParametersAcceptSingleArgument(
-            classType.PrimaryConstructorParameters,
-            argumentType);
+        return ParametersAcceptSingleArgument(classType.PrimaryConstructorParameters);
     }
 
     private static bool ParametersAcceptSingleArgument(
-        ImmutableArray<ParameterSymbol> parameters,
-        TypeSymbol argumentType)
+        ImmutableArray<ParameterSymbol> parameters)
     {
         if (parameters.IsDefaultOrEmpty)
         {
@@ -2159,20 +2158,8 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        var first = parameters[0];
-        if (CanConvertImplicitly(argumentType, first.Type))
-        {
-            return true;
-        }
-
-        return first.IsVariadic
-            && first.Type is SliceTypeSymbol slice
-            && CanConvertImplicitly(argumentType, slice.ElementType);
+        return true;
     }
-
-    private static bool CanConvertImplicitly(TypeSymbol source, TypeSymbol target)
-        => Conversion.Classify(source, target).IsImplicit
-            || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target);
 
     private TypeSymbol? TryConstructConversionTarget(
         CallExpressionSyntax syntax,

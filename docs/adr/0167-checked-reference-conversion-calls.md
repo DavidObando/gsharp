@@ -22,8 +22,10 @@ casts read like expected-to-fail testing conversions.
 
 ## Decision
 
-`T(value)` and `T?(value)` are checked reference conversions when source and
-target have a legal CLR reference-cast relationship.
+`cast[T](value)` and `cast[T?](value)` are unambiguous,
+constructor-independent checked reference conversions. The existing
+`T(value)` / `T?(value)` conversion-call forms remain available when no
+construction ambiguity exists.
 
 - A compatible non-null value returns the same reference typed as `T`/`T?`.
 - A null reference stays null.
@@ -39,25 +41,31 @@ constraint-proven generic casts. The emitter uses `castclass`; generic targets
 use `unbox.any`, matching CLR/C# generic cast semantics. Composite targets use
 the same spelling, for example `[]object(value)`.
 
-A named class call with an applicable one-argument constructor remains
-construction. Checked conversion is the fallback when that constructor shape
-is not applicable.
+A named class exposing a one-argument constructor shape reserves `T(value)` for
+construction. This is decided from declaration shape without speculatively
+binding the argument. Callers requiring conversion use `cast[T](value)`, which
+cannot resolve to a constructor. `T?(value)` remains unambiguously a nullable
+conversion target.
 
-cs2gs maps every C# explicit reference cast `(T)value` to `T(value)` or
-`T?(value)`. C# `as` expressions continue to map to G# `as`.
+cs2gs maps every C# explicit reference cast `(T)value` to `cast[T](value)` or
+`cast[T?](value)`. Numeric/value casts keep `T(value)` / `T?(value)`. C# `as`
+expressions continue to map to G# `as`.
 
 ## Consequences
 
 - Core's 648 synthetic checked-cast `as`/`!!` sites become conversion calls.
 - Failure and null behavior match C#.
 - Genuine pattern/testing conversions remain visibly nullable.
-- Conversion calls now cover named, generic, nullable, interface, dynamic-as-
-  object, and composite reference targets.
+- Checked casts cover named, generic, nullable, interface, dynamic-as-object,
+  and composite reference targets without constructor ambiguity.
 
 ## Alternatives considered
 
-- **`value as! T`.** Rejected: duplicates the existing explicit-conversion
-  form and adds syntax without semantic need.
+- **`value as! T`.** Rejected: combines checked-cast semantics with testing-
+  conversion syntax and obscures target type.
+- **Always emit `T(value)`.** Rejected after review: an applicable one-argument
+  constructor constructs instead of casting. Static translation intent must
+  survive target constructor shape.
 - **Keep `(value as T)!!`.** Rejected: wrong exception semantics and persistent
   translation noise.
 - **Make `T?(value)` a testing conversion.** Rejected: nullable annotations do

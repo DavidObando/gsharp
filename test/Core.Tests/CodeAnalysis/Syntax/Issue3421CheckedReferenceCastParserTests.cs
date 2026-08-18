@@ -20,6 +20,7 @@ public sealed class Issue3421CheckedReferenceCastParserTests
             func CastNullable(value object?) string? -> string?(value)
             func CastSlice(value object) []object -> ([]object(value))[0..]
             func CastGenericNullable(value object?) List[int32]? -> List[int32]?(value)
+            func CastUnambiguously(value object) string -> cast[string](value)
             """);
 
         Assert.Empty(tree.Diagnostics);
@@ -42,6 +43,30 @@ public sealed class Issue3421CheckedReferenceCastParserTests
             .ToArray();
         Assert.Single(compositeCalls);
         Assert.All(compositeCalls, call => Assert.Single(call.Arguments));
+        var unambiguousCast = Assert.Single(
+            Descendants(tree.Root).OfType<CallExpressionSyntax>(),
+            call => call.Identifier.Text == "cast");
+        Assert.Single(unambiguousCast.TypeArgumentList!.Arguments);
+        Assert.Single(unambiguousCast.Arguments);
+    }
+
+    [Fact]
+    public void SpacedQuestionAfterIndexerRemainsTernary()
+    {
+        var tree = SyntaxTree.Parse("""
+            func Pick(d []bool, k int32, a int32, b int32) int32 -> d[k] ? (a) : b
+            func Sum(flags []bool, i int32, a int32, b int32) int32 -> flags[i] ? (a + b) : b
+            func CastNullable(value object?) List[int32]? -> List[int32]?(value)
+            """);
+
+        Assert.Empty(tree.Diagnostics);
+        Assert.Equal(
+            2,
+            Descendants(tree.Root).OfType<ConditionalExpressionSyntax>().Count());
+        Assert.Single(
+            Descendants(tree.Root).OfType<CallExpressionSyntax>(),
+            call => call.Identifier.Text == "List"
+                && call.NullableQuestionToken != null);
     }
 
     private static IEnumerable<SyntaxNode> Descendants(SyntaxNode node)

@@ -129,6 +129,48 @@ public sealed class Issue3421CheckedReferenceCastTests
     }
 
     [Fact]
+    public void UnambiguousCastBypassesApplicableSingleArgumentConstructor()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            open class Base3421 {}
+            class Target3421(payload object) : Base3421 {}
+
+            func Cast3421(value Base3421) Target3421 -> cast[Target3421](value)
+
+            let target Target3421 = Target3421("constructed")
+            let compatible Base3421 = target
+            Console.WriteLine(Cast3421(compatible) is Target3421)
+
+            try {
+                Cast3421(Base3421())
+                Console.WriteLine("constructed")
+            } catch (e InvalidCastException) {
+                Console.WriteLine(e.GetType().Name)
+            }
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "True",
+                "InvalidCastException") + Environment.NewLine,
+            result.Output);
+        Assert.Equal(string.Empty, result.ErrorOutput);
+        Assert.Equal(0, result.ExitCode);
+
+        var method = Assert.Single(
+            result.Assembly!.GetTypes()
+                .SelectMany(type => type.GetMethods()),
+            candidate => candidate.Name == "Cast3421");
+        var il = method.GetMethodBody()!.GetILAsByteArray()!;
+        Assert.Contains(unchecked((byte)OpCodes.Castclass.Value), il);
+        Assert.DoesNotContain(unchecked((byte)OpCodes.Newobj.Value), il);
+    }
+
+    [Fact]
     public void RuntimePreservesSuccessFailureNullInterfaceAndGenericSemantics()
     {
         var result = EmittedOracle.Evaluate("""

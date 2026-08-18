@@ -2718,11 +2718,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateCast(CastExpressionSyntax cast)
         {
-            // C# explicit cast `(T)expr` maps to the canonical G# checked
-            // conversion-call form `T(expr)` / `T?(expr)` (ADR-0115 §B.17 and
-            // ADR-0167). Numeric casts retain their existing checked/unchecked
-            // behavior; reference downcasts use castclass semantics: null stays
-            // null and an incompatible non-null value throws InvalidCastException.
+            // C# explicit casts map to G# explicit conversions (ADR-0115 §B.17
+            // and ADR-0167). Numeric/value conversions retain `T(expr)`.
+            // Reference casts use constructor-independent `cast[T](expr)` so a
+            // target class's applicable one-argument constructor cannot change
+            // cast semantics.
             ITypeSymbol targetSymbol = this.context.GetTypeInfo(cast.Type).Type;
 
             ITypeSymbol sourceSymbol = this.context.GetTypeInfo(cast.Expression).Type;
@@ -2795,7 +2795,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && !targetType.IsNullable
                     ? MakeNullable(targetType)
                     : targetType;
-            return new ConversionExpression(conversionTargetType, operand);
+            bool isCheckedReferenceCast = conversion.IsReference
+                || (conversion.IsIdentity
+                    && sourceSymbol is { IsReferenceType: true }
+                    && targetSymbol is { IsReferenceType: true })
+                || (sourceSymbol is { TypeKind: TypeKind.Dynamic }
+                    && targetSymbol is { IsReferenceType: true });
+            return new ConversionExpression(
+                conversionTargetType,
+                operand,
+                isCheckedReferenceCast);
         }
 
         private GExpression TranslateWith(WithExpressionSyntax with)

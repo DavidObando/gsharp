@@ -26,8 +26,8 @@ namespace Cs2Gs.Tests;
 /// receiver emits directly without a translator spill,</item>
 /// <item>a promoted-nullable function value subscribed to a CLR event must be
 /// forgiven with <c>!!</c> at the subscription sink,</item>
-/// <item>a CLR reference cast <c>(T)expr</c> emits the canonical checked
-/// conversion call <c>T(expr)</c>.</item>
+/// <item>a CLR reference cast <c>(T)expr</c> emits the unambiguous checked
+/// cast <c>cast[T](expr)</c>.</item>
 /// </list>
 /// Every promotion is gated to oblivious compilations, so a nullable-enabled
 /// compilation stays byte-identical (unpromoted).
@@ -157,7 +157,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("IEnumerable(o)", printed);
+        Assert.Contains("cast[IEnumerable](o)", printed);
         Assert.DoesNotContain("o as IEnumerable", printed);
     }
 
@@ -180,7 +180,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Dog(a)", printed);
+        Assert.Contains("cast[Dog](a)", printed);
         Assert.DoesNotContain("a as Dog", printed);
     }
 

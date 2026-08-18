@@ -51,9 +51,11 @@ lines in dotnet/roslyn and 186 per 100k in this repository.
 
 **`x as T` has type `T?`.**
 
-ADR-0167 later added the distinct checked spelling `T(x)` / `T?(x)`.
-Those forms preserve null and throw `InvalidCastException` for an incompatible
-non-null value; they do not change this ADR's testing-conversion contract.
+ADR-0167 later added checked conversion calls plus the unambiguous
+constructor-independent reference-cast spelling `cast[T](x)` /
+`cast[T?](x)`. Checked reference casts preserve null and throw
+`InvalidCastException` for an incompatible non-null value; they do not change
+this ADR's testing-conversion contract.
 
 1. **Binder.** `BindAsExpression` wraps the bound target type in a
    `NullableTypeSymbol` unless it already is one, so `x as T` is `T?` and

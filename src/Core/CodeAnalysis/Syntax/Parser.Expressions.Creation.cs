@@ -862,7 +862,9 @@ public partial class Parser
         // generic call site (`Box[int32?].Make`, `Box[[]int32].Make`,
         // `Box[List[int32]].Make`).
         if (nextKind == SyntaxKind.QuestionToken
-            && Peek(pos + 1).Kind == SyntaxKind.OpenParenthesisToken)
+            && Peek(pos + 1).Kind == SyntaxKind.OpenParenthesisToken
+            && Peek(pos).Position == Peek(pos - 1).Span.End
+            && Peek(pos + 1).Position == Peek(pos).Span.End)
         {
             return true;
         }

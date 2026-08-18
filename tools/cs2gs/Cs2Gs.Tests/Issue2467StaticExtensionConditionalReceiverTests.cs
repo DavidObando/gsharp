@@ -73,7 +73,7 @@ public class Issue2467StaticExtensionConditionalReceiverTests
 
         Assert.Contains("(left ?? right).Size()", printed, StringComparison.Ordinal);
         Assert.Contains("(if pickLeft { left } else { right }).Size()", printed, StringComparison.Ordinal);
-        Assert.Contains("(string?(value)).Size()", printed, StringComparison.Ordinal);
+        Assert.Contains("(cast[string?](value)).Size()", printed, StringComparison.Ordinal);
         Assert.Contains("(await GetAsync()).Size()", printed, StringComparison.Ordinal);
 
         Assert.DoesNotContain("value as string", printed, StringComparison.Ordinal);

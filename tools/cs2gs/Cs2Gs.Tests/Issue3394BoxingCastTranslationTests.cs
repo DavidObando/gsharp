@@ -42,7 +42,7 @@ namespace Demo
     }
 
     [Fact]
-    public void SameCompilationReferenceDowncast_UsesCheckedConversionCall()
+    public void SameCompilationReferenceDowncast_UsesCheckedCast()
     {
         const string source = @"
 namespace Demo
@@ -59,7 +59,7 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("Derived(value)", rendered, StringComparison.Ordinal);
+        Assert.Contains("cast[Derived](value)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(" as Derived", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }

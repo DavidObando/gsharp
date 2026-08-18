@@ -7,13 +7,14 @@ using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #3421: C# hard casts use G#'s canonical checked conversion call
-/// <c>T(expr)</c> / <c>T?(expr)</c>. Testing conversions remain <c>expr as T</c>.
+/// Issue #3421: C# hard reference casts use G#'s unambiguous checked cast
+/// <c>cast[T](expr)</c>. Testing conversions remain <c>expr as T</c>.
 /// <para>
 /// A checked reference cast preserves null and throws <see cref="InvalidCastException"/>
 /// for an incompatible non-null value, matching C#.
@@ -35,7 +36,7 @@ public sealed class C
     public string Read(Profile p) => ((IProfile)p).Name;
 }");
 
-        Assert.Contains("IProfile(p)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[IProfile](p)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as IProfile", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
@@ -50,7 +51,7 @@ public sealed class C
     public object First(object o) => ((object[])o)[0];
 }");
 
-        Assert.Contains("[]object(o)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[[]object](o)", printed, StringComparison.Ordinal);
         Assert.Contains("[0]", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as []object", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
@@ -66,12 +67,12 @@ public sealed class C
     public string Text(object o) => (string)o;
 }");
 
-        Assert.Contains("string(o)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[string](o)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as string", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// A nullable-annotated target keeps the checked <c>T?(value)</c> form:
+    /// A nullable-annotated target keeps checked <c>cast[T?](value)</c> semantics:
     /// null stays null, while an incompatible non-null value still throws.
     /// </summary>
     [Fact]
@@ -84,7 +85,7 @@ public sealed class C
     public string? Text(object o) => (string?)o;
 }");
 
-        Assert.Contains("string?(o)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[string?](o)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as string", printed, StringComparison.Ordinal);
     }
 
@@ -150,14 +151,48 @@ public static class C
     public static List<int>? GenericNullable(object? value) => (List<int>?)value;
 }");
 
-        Assert.Contains("T(value)", printed, StringComparison.Ordinal);
-        Assert.Contains("string(value)", printed, StringComparison.Ordinal);
-        Assert.Contains("Func[int32](value)", printed, StringComparison.Ordinal);
-        Assert.Contains("Func[int32]?(value)", printed, StringComparison.Ordinal);
-        Assert.Contains("List[int32]?(value)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[T](value)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[string](value)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[Func[int32]](value)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[Func[int32]?](value)", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[List[int32]?](value)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as T", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as string", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void TargetWithApplicableConstructor_StillPerformsCheckedCast()
+    {
+        string printed = Translate(@"
+using System;
+
+public class Base { }
+
+public sealed class Target : Base
+{
+    public Target(object value) { }
+    public string Value => ""constructed"";
+}
+
+public static class C
+{
+    public static string Run(Base value)
+    {
+        try { return ((Target)value).Value; }
+        catch (InvalidCastException) { return nameof(InvalidCastException); }
+    }
+}");
+
+        Assert.Contains("cast[Target](value)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Target(value)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "C.Run(Base())");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("InvalidCastException", result.Value);
     }
 
     /// <summary>

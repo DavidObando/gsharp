@@ -605,10 +605,9 @@ public sealed class ArrayAllocationExpression : GExpression
 }
 
 /// <summary>
-/// A checked conversion written in the canonical G# conversion-call form
-/// <c>Type(expr)</c> or <c>Type?(expr)</c>. Numeric conversions preserve their
-/// checked/unchecked behavior; reference downcasts preserve null and throw
-/// <see cref="System.InvalidCastException"/> for incompatible non-null values.
+/// An explicit G# conversion. Ordinary conversions use <c>Type(expr)</c> or
+/// <c>Type?(expr)</c>; checked reference casts can request the unambiguous
+/// constructor-independent <c>cast[Type](expr)</c> form.
 /// </summary>
 public sealed class ConversionExpression : GExpression
 {
@@ -617,10 +616,16 @@ public sealed class ConversionExpression : GExpression
     /// </summary>
     /// <param name="targetType">The conversion target type.</param>
     /// <param name="operand">The value being converted.</param>
-    public ConversionExpression(GTypeReference targetType, GExpression operand)
+    /// <param name="isCheckedReferenceCast">Whether to use the unambiguous
+    /// checked-reference-cast spelling.</param>
+    public ConversionExpression(
+        GTypeReference targetType,
+        GExpression operand,
+        bool isCheckedReferenceCast = false)
     {
         TargetType = targetType;
         Operand = operand;
+        IsCheckedReferenceCast = isCheckedReferenceCast;
     }
 
     /// <summary>Gets the conversion target type.</summary>
@@ -628,6 +633,9 @@ public sealed class ConversionExpression : GExpression
 
     /// <summary>Gets the value being converted.</summary>
     public GExpression Operand { get; }
+
+    /// <summary>Gets a value indicating whether this conversion bypasses constructor binding.</summary>
+    public bool IsCheckedReferenceCast { get; }
 }
 
 /// <summary>
