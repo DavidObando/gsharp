@@ -75,7 +75,6 @@ public sealed class Issue3445AttributeImportTranslationTests
                 [Marker]
                 [MarkerAttribute]
                 [AttributeAlias]
-                [global::External.Attributes.Marker]
                 [Generic<int>]
                 public sealed class Consumer
                 {
@@ -93,11 +92,34 @@ public sealed class Issue3445AttributeImportTranslationTests
             1,
             consumer.Split('\n').Count(line => line == "import External.Attributes"));
         Assert.Contains("@assembly:Marker", consumer, StringComparison.Ordinal);
-        Assert.Contains("@MarkerAttribute", consumer, StringComparison.Ordinal);
+        Assert.Contains(
+            "import AttributeAlias = External.Attributes.MarkerAttribute",
+            consumer,
+            StringComparison.Ordinal);
+        Assert.Contains("@AttributeAlias", consumer, StringComparison.Ordinal);
         Assert.Contains("@Generic[int32]", consumer, StringComparison.Ordinal);
         Assert.Contains("@return:Marker", consumer, StringComparison.Ordinal);
         Assert.Contains("@Marker value string", consumer, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(translated.Values.ToArray());
+    }
+
+    [Fact]
+    public void QualifiedAttribute_PreservesNameAndSynthesizesImport()
+    {
+        IReadOnlyDictionary<string, string> translated = Translate(
+            ("Consumer.cs", """
+                namespace Demo;
+
+                [global::System.Obsolete]
+                public sealed class Consumer
+                {
+                }
+                """));
+
+        string consumer = translated["Consumer.cs"];
+        Assert.Contains("import System", consumer, StringComparison.Ordinal);
+        Assert.Contains("@System.Obsolete", consumer, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(consumer);
     }
 
     [Fact]

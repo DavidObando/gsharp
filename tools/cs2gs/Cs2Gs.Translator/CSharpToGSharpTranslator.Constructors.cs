@@ -1112,10 +1112,9 @@ public sealed partial class CSharpToGSharpTranslator
             return attributes;
         }
 
-        // Issue #3445: resolve attributes through the ordinary type mapper so
-        // their containing namespaces participate in synthesized imports and
-        // alias/qualified names expand to a bindable semantic type name. This
-        // also reuses the mapper's nested/generic naming and collision rules.
+        // Issue #3445: resolve attributes semantically so their containing
+        // namespaces and aliases participate in synthesized imports, while
+        // retaining source qualification and Attribute-suffix spelling.
         private string TranslateAttributeName(AttributeSyntax attribute)
         {
             ISymbol symbol = this.context.GetSymbolInfo(attribute).Symbol
@@ -1124,50 +1123,20 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 IMethodSymbol constructor => constructor.ContainingType,
                 INamedTypeSymbol namedType => namedType,
-                IAliasSymbol alias => alias.Target as INamedTypeSymbol,
+                IAliasSymbol aliasSymbol => aliasSymbol.Target as INamedTypeSymbol,
                 _ => null,
             };
-            if (attributeType == null)
-            {
-                return this.TranslateUnresolvedAttributeName(attribute.Name);
-            }
-
-            GTypeReference mappedType = this.typeMapper.Map(
-                attributeType,
-                this.context,
-                attribute.GetLocation());
-            if (mappedType is NamedTypeReference named
-                && AttributeSuffixWasElided(attribute.Name, attributeType)
-                && named.Name.EndsWith("Attribute", System.StringComparison.Ordinal))
-            {
-                mappedType = new NamedTypeReference(
-                    named.Name.Substring(0, named.Name.Length - "Attribute".Length),
-                    named.TypeArguments,
-                    named.ContainingType);
-            }
-
-            return GSharpPrinter.RenderTypeReference(mappedType);
+            IAliasSymbol sourceAlias = attribute.Name
+                .DescendantNodesAndSelf()
+                .OfType<IdentifierNameSyntax>()
+                .Select(identifier => this.context.SemanticModel.GetAliasInfo(identifier))
+                .FirstOrDefault(candidate => candidate != null);
+            this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
+            return this.TranslateUnresolvedAttributeName(attribute.Name);
         }
 
-        private static bool AttributeSuffixWasElided(
-            NameSyntax nameSyntax,
-            INamedTypeSymbol attributeType)
-        {
-            SimpleNameSyntax simpleName = nameSyntax switch
-            {
-                SimpleNameSyntax simple => simple,
-                QualifiedNameSyntax qualified => qualified.Right,
-                AliasQualifiedNameSyntax aliasQualified => aliasQualified.Name,
-                _ => null,
-            };
-
-            return simpleName != null
-                && attributeType.Name == simpleName.Identifier.ValueText + "Attribute";
-        }
-
-        // Issue #1913 fallback for an unresolved C# 11 generic attribute:
-        // convert angle-bracket type arguments to G# square brackets while
-        // retaining the source name for diagnostic-tolerant translation.
+        // Issue #1913: convert C# generic attribute angle brackets to G# square
+        // brackets while retaining the source name and qualification.
         private string TranslateUnresolvedAttributeName(NameSyntax nameSyntax)
         {
             string attributeName = nameSyntax.ToString();
