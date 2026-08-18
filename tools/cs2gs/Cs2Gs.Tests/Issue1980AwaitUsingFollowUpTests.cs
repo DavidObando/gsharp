@@ -7,6 +7,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -15,8 +16,8 @@ namespace Cs2Gs.Tests;
 /// Issue #1980: non-blocking follow-ups from the #1978 (#1903) Opus review.
 /// 1. Covers the await-using BLOCK-with-EXPRESSION form
 ///    <c>await using (expr) { }</c> (no declaration) — the synthetic
-///    <c>__using</c> local must still thread <c>isAwait</c> through to the
-///    emitted <c>await using let</c>.
+///    discard resource must still thread <c>isAwait</c> through to the emitted
+///    <c>await using let _</c>.
 /// 2. Confirms a plain <c>using</c> declaration inside an <c>async</c>
 ///    method, with no <c>await</c> prefix, still emits the sync
 ///    <c>using let</c> form — async context alone must not set
@@ -66,7 +67,8 @@ namespace Corpus.Issue1980
 }
 ");
 
-        Assert.Contains("await using let __using", rendered, StringComparison.Ordinal);
+        Assert.Contains("await using let _", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__using", rendered, StringComparison.Ordinal);
         Assert.Contains("Create()", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
@@ -146,9 +148,56 @@ namespace Corpus.Issue1980
 }
 ");
 
-        Assert.Contains("using let __using", rendered, StringComparison.Ordinal);
+        Assert.Contains("using let _", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__using", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("await using", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void NestedUsingBlock_ExpressionForms_DisposeRepeatedDiscardsInOrder()
+    {
+        string rendered = Render(@"
+using System;
+
+namespace Corpus.Issue1980
+{
+    public sealed class Resource : IDisposable
+    {
+        public static string Disposals = """";
+        private readonly string name;
+
+        public Resource(string name)
+        {
+            this.name = name;
+        }
+
+        public void Dispose() { Disposals += name; }
+    }
+
+    public sealed class Holder
+    {
+        public static string Run()
+        {
+            using (new Resource(""outer""))
+            using (new Resource(""inner""))
+            {
+            }
+
+            return Resource.Disposals;
+        }
+    }
+}
+");
+
+        Assert.Equal(
+            2,
+            rendered.Split("using let _ = Resource(", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("__using", rendered, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("innerouter", result.Value);
     }
 
     private static void AssertRoundTripParses(string rendered)

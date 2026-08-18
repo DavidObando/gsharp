@@ -1080,7 +1080,14 @@ public static class GSharpPrinter
 
             case MultiAssignmentStatement multiAssignment:
                 return $"{pad}" +
-                    string.Join(", ", multiAssignment.Targets.Select(target => RenderExpression(target, indent))) +
+                    string.Join(
+                        ", ",
+                        multiAssignment.Targets.Select(
+                            (target, index) =>
+                                (multiAssignment.TargetBindings[index] is { } binding
+                                    ? RenderBinding(binding) + " "
+                                    : string.Empty) +
+                                RenderExpression(target, indent))) +
                     " = " +
                     string.Join(", ", multiAssignment.Values.Select(value => RenderExpression(value, indent)));
 

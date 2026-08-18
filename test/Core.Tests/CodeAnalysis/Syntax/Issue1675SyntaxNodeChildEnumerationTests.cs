@@ -67,6 +67,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // multi-assignment
         "package p\nfunc F() {\n  var a = 1\n  var b = 2\n  a, b = b, a\n}\n",
 
+        // ADR-0168: multi-assignment with an inline fresh-local target
+        "package p\nfunc F() {\n  var existing = 0\n  existing, let fresh = (1, 2)\n}\n",
+
         // issue #3353: storage targets and tuple-valued RHS
         "package p\nclass Box { var Value int32 }\nfunc Pair() (int32, int32) { return (1, 2) }\nfunc F(a []int32, box Box) {\n  a[0], box.Value = Pair()\n}\n",
 

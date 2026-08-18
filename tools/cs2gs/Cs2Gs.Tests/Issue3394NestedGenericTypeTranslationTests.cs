@@ -11,6 +11,7 @@ using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -268,8 +269,59 @@ namespace Demo
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("var left", rendered, StringComparison.Ordinal);
-        Assert.Contains("var right", rendered, StringComparison.Ordinal);
+        Assert.Contains("var (left, right) = C.Pair()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (left, right)", rendered, StringComparison.Ordinal);
+        Assert.Contains("C.Touch(&left)", rendered, StringComparison.Ordinal);
+        Assert.Contains("C.Touch(&right)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void DeconstructedLocals_PassedByRef_MutateAtRuntime()
+    {
+        const string source = """
+            namespace Demo
+            {
+                public static class C
+                {
+                    private static (int, int) Pair() => (0, 0);
+
+                    private static void Touch(ref int value)
+                    {
+                        value = value + 1;
+                    }
+
+                    public static int M()
+                    {
+                        var (left, right) = Pair();
+                        Touch(ref left);
+                        Touch(ref right);
+                        return left + right;
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("var (left, right) = C.Pair()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (left, right)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C.M()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(2, result.Value);
     }
 }

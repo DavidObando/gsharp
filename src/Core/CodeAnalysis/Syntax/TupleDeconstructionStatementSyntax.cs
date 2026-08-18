@@ -5,15 +5,15 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// A tuple deconstruction declaration <c>let (a, b, ...) = expr</c> (Phase 4.5).
-/// Each identifier becomes an immutable local bound to the corresponding tuple
-/// element of the right-hand-side initializer.
+/// A tuple deconstruction declaration <c>let (a, b, ...) = expr</c> or
+/// <c>var (a, b, ...) = expr</c>. Each identifier becomes a local bound to the
+/// corresponding tuple element of the right-hand-side initializer.
 /// </summary>
 public sealed class TupleDeconstructionStatementSyntax : StatementSyntax
 {
     /// <summary>Initializes a new instance of the <see cref="TupleDeconstructionStatementSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
-    /// <param name="keyword">The <c>let</c> keyword.</param>
+    /// <param name="keyword">The <c>let</c> or <c>var</c> keyword.</param>
     /// <param name="openParenToken">The opening <c>(</c>.</param>
     /// <param name="identifiers">The comma-separated identifier list.</param>
     /// <param name="closeParenToken">The closing <c>)</c>.</param>
@@ -40,7 +40,7 @@ public sealed class TupleDeconstructionStatementSyntax : StatementSyntax
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TupleDeconstructionStatement;
 
-    /// <summary>Gets the <c>let</c> keyword token.</summary>
+    /// <summary>Gets the <c>let</c> or <c>var</c> keyword token.</summary>
     public SyntaxToken Keyword { get; }
 
     /// <summary>Gets the opening parenthesis token.</summary>

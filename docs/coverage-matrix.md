@@ -161,6 +161,7 @@ MemberIndexAssignmentExpression
 MinusEqualsToken
 MinusMinusToken
 MinusToken
+MultiAssignmentDeclarationExpression
 MultiAssignmentStatement
 NameExpression
 NameOfExpression
@@ -269,6 +270,7 @@ VarKeyword
 VarPattern
 VariableDeclaration
 WhileKeyword
+WhileLetStatement
 WhileStatement
 WhitespaceToken
 WithExpression

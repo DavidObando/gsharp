@@ -7,6 +7,7 @@ using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -170,7 +171,7 @@ namespace Demo
     }
 
     [Fact]
-    public void ImmutableArrayToReadOnlyList_UsesTypedBlockLocal()
+    public void ImmutableArrayToReadOnlyList_UsesNativeInterfaceProjection()
     {
         const string source = @"
 using System.Collections.Generic;
@@ -189,10 +190,137 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("let __cast", rendered, StringComparison.Ordinal);
-        Assert.Contains("IReadOnlyList[string] = values", rendered, StringComparison.Ordinal);
+        Assert.Contains("(values as IReadOnlyList[string])!!", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("IReadOnlyList[string](values)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void InferredLocal_BoxingCastKeepsInterfaceTypeAndRuns()
+    {
+        const string source = @"
+namespace Demo
+{
+    public interface IValue
+    {
+        int Read();
+    }
+
+    public struct Value : IValue
+    {
+        public int Read() => 7;
+    }
+
+    public sealed class C
+    {
+        public int Run()
+        {
+            var value = new Value();
+            var boxed = (IValue)value;
+            return boxed.Read();
+        }
+    }
+}
+";
+
+        string rendered = Translate(source);
+
+        Assert.Contains("let boxed = (value as IValue)!!", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(rendered + Environment.NewLine + "C().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void NullableInterfaceBoxingCast_PreservesNullableAnnotation()
+    {
+        const string source = @"
+#nullable enable
+namespace Demo
+{
+    public interface IValue { }
+    public struct Value : IValue { }
+
+    public static class C
+    {
+        public static IValue? Box(Value value) => (IValue?)value;
+    }
+}
+";
+
+        string rendered = Translate(source);
+
+        Assert.Contains("value as IValue?", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("(value as IValue?)!!", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void NullableValueToNonNullableInterfaceBoxing_PreservesNilAndValue()
+    {
+        const string source = @"
+#nullable enable
+namespace Demo
+{
+    public interface IValue
+    {
+        int Read();
+    }
+
+    public struct Value : IValue
+    {
+        public int Read() => 7;
+    }
+
+    public sealed class C
+    {
+        public IValue Return(Value? value) => (IValue)value;
+
+        public bool AssignIsNil(Value? value)
+        {
+            IValue boxed = (IValue)value;
+            return boxed is null;
+        }
+    }
+}
+";
+
+        string rendered = Translate(source);
+
+        Assert.Contains("cast[IValue](value as IValue)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("(value as IValue)!!", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        EmittedOracleResult returnNil = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().Return(default(Value?))");
+        Assert.Empty(returnNil.Diagnostics);
+        Assert.Null(returnNil.UnhandledException);
+        Assert.Null(returnNil.Value);
+
+        EmittedOracleResult assignedNil = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().AssignIsNil(default(Value?))");
+        Assert.Empty(assignedNil.Diagnostics);
+        Assert.Null(assignedNil.UnhandledException);
+        Assert.Equal(true, assignedNil.Value);
+
+        EmittedOracleResult assignedValue = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().AssignIsNil(Value{})");
+        Assert.Empty(assignedValue.Diagnostics);
+        Assert.Null(assignedValue.UnhandledException);
+        Assert.Equal(false, assignedValue.Value);
+
+        EmittedOracleResult returnValue = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "C().Return(Value{}).Read()");
+        Assert.Empty(returnValue.Diagnostics);
+        Assert.Null(returnValue.UnhandledException);
+        Assert.Equal(7, returnValue.Value);
     }
 
     [Fact]

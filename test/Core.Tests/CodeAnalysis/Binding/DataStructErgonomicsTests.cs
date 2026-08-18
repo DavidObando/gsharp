@@ -108,6 +108,19 @@ a * 10 + b
     }
 
     [Fact]
+    public void MutablePositionalDeconstruction_BindsFieldsInDeclarationOrder()
+    {
+        var result = Evaluate(PointPrelude + @"
+let p = Point{x: 3, y: 4}
+var (a, b) = p
+a = 5
+a * 10 + b
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(54, result.Value);
+    }
+
+    [Fact]
     public void NamedDeconstruction_BindsFieldsByName()
     {
         var result = Evaluate(PointPrelude + @"

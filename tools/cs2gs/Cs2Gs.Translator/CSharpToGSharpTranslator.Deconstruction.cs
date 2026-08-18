@@ -662,9 +662,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// temporaries before any write, then assigns left-to-right — exactly the
         /// order C# specifies, so aliasing swaps and storage targets stay correct.
         /// <para>
-        /// Mixed declarations and nested target tuples have no flat assignment
-        /// form and keep the existing lowering. Non-tuple deconstruction sources
-        /// also keep it because native multi-assignment unifies tuple values only.
+        /// Mixed fresh/existing targets use ADR-0168 inline bindings. Nested
+        /// target tuples keep the existing lowering. Non-tuple deconstruction
+        /// sources also keep it because native multi-assignment unifies tuple
+        /// values only.
         /// </para>
         /// </remarks>
         /// <param name="leftTuple">The C# deconstruction target tuple.</param>
@@ -684,19 +685,51 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Declarations and nested target tuples still need recursive lowering.
+            // Nested target tuples/designations still need recursive lowering.
+            // Flat fresh `var` declarations can use G#'s inline let/var targets.
             foreach (ArgumentSyntax argument in leftTuple.Arguments)
             {
-                if (argument.Expression is DeclarationExpressionSyntax or TupleExpressionSyntax)
+                if (argument.Expression is TupleExpressionSyntax
+                    || (argument.Expression is DeclarationExpressionSyntax declaration
+                        && (!declaration.Type.IsVar
+                            || declaration.Designation is ParenthesizedVariableDesignationSyntax)))
                 {
                     return false;
                 }
             }
 
             var targets = new List<GExpression>(leftTuple.Arguments.Count);
+            var targetBindings = new List<BindingKind?>(leftTuple.Arguments.Count);
             foreach (ArgumentSyntax argument in leftTuple.Arguments)
             {
+                if (argument.Expression is DeclarationExpressionSyntax declaration)
+                {
+                    if (declaration.Designation is not SingleVariableDesignationSyntax single)
+                    {
+                        targets.Add(new IdentifierExpression("_"));
+                        targetBindings.Add(null);
+                        continue;
+                    }
+
+                    string name = SanitizeIdentifier(single.Identifier.Text);
+                    if (name == "_")
+                    {
+                        targets.Add(new IdentifierExpression(name));
+                        targetBindings.Add(null);
+                        continue;
+                    }
+
+                    this.ReportIfIndexOrRangeTypedDesignation(single);
+                    ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
+                    targets.Add(new IdentifierExpression(name));
+                    targetBindings.Add(local != null && this.IsLocalReassigned(local)
+                        ? BindingKind.Var
+                        : BindingKind.Let);
+                    continue;
+                }
+
                 targets.Add(this.TranslateExpression(argument.Expression));
+                targetBindings.Add(null);
             }
 
             ExpressionSyntax unwrappedRight = right;
@@ -708,7 +741,7 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<GExpression> values = unwrappedRight is TupleExpressionSyntax rightTuple
                 ? rightTuple.Arguments.Select(argument => this.TranslateExpression(argument.Expression)).ToList()
                 : new[] { this.TranslateExpression(right) };
-            result = new GStatement[] { new MultiAssignmentStatement(targets, values) };
+            result = new GStatement[] { new MultiAssignmentStatement(targets, values, targetBindings) };
             return true;
         }
 
@@ -821,10 +854,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Spill the WHOLE right-hand side in one native decon-binding.
-            // G#'s tuple-deconstruction grammar only accepts `let (...)`
-            // (docs/adr/0032-data-struct-ergonomics.md), never `var (...)`,
-            // but that is no loss here — these temps are single-use compiler
-            // internals, never reassigned. This is exactly the mechanism the
+            // These temps are single-use compiler internals, never reassigned,
+            // so use the immutable `let (...)` spelling even though ADR-0168
+            // also permits mutable `var (...)`. This is exactly the mechanism the
             // declaration form (`var (a, b) = e`) already uses, so it inherits
             // the same RHS-shape support for free.
             statements.Add(new TupleDeconstructionStatement(BindingKind.Let, temps, rhsValue));
@@ -856,42 +888,11 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (targetExpr is DeclarationExpressionSyntax declaration)
                 {
-                    // Mixed form, e.g. `(x, var y) = ...`: `y` is a NEW local,
-                    // not a write to an existing one — bind it directly from
-                    // the temp, `var`/`let` per whether it is reassigned later
-                    // (mirrors the plain-declaration path's mutability rule).
-                    string name = declaration.Designation switch
-                    {
-                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
-                        _ => "_",
-                    };
-
-                    if (name == "_")
-                    {
-                        values.Add(forceRealTemps ? tempRead : null);
-                        continue;
-                    }
-
-                    ILocalSymbol localSymbol = declaration.Designation is SingleVariableDesignationSyntax singleDesignation
-                        ? this.context.GetDeclaredSymbol(singleDesignation) as ILocalSymbol
-                        : null;
-
-                    // Issue #1967: `(x, Index i) = ...` declares `i` via this
-                    // mixed-tuple-assignment designation, not a declarator.
-                    if (declaration.Designation is SingleVariableDesignationSyntax indexCheckDesignation)
-                    {
-                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckDesignation);
-                    }
-
-                    BindingKind binding = localSymbol != null && this.IsLocalReassigned(localSymbol)
-                        ? BindingKind.Var
-                        : BindingKind.Let;
-                    statements.Add(new LocalDeclarationStatement(
-                        binding,
-                        name,
-                        type: null,
-                        initializer: tempRead));
-                    values.Add(new IdentifierExpression(name));
+                    values.Add(this.LowerDeconstructionDeclaration(
+                        declaration.Designation,
+                        tempRead,
+                        forceRealTemps,
+                        statements));
                     continue;
                 }
 
@@ -918,6 +919,61 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return values;
+        }
+
+        private GExpression LowerDeconstructionDeclaration(
+            VariableDesignationSyntax designation,
+            GExpression value,
+            bool preserveValue,
+            List<GStatement> statements)
+        {
+            if (designation is DiscardDesignationSyntax)
+            {
+                return preserveValue ? value : null;
+            }
+
+            if (designation is SingleVariableDesignationSyntax single)
+            {
+                this.ReportIfIndexOrRangeTypedDesignation(single);
+                string name = SanitizeIdentifier(single.Identifier.Text);
+                ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
+                statements.Add(new LocalDeclarationStatement(
+                    local != null && this.IsLocalReassigned(local)
+                        ? BindingKind.Var
+                        : BindingKind.Let,
+                    name,
+                    type: null,
+                    initializer: value));
+                return new IdentifierExpression(name);
+            }
+
+            var parenthesized = (ParenthesizedVariableDesignationSyntax)designation;
+            var temps = new List<string>(parenthesized.Variables.Count);
+            foreach (VariableDesignationSyntax child in parenthesized.Variables)
+            {
+                temps.Add(child is DiscardDesignationSyntax && !preserveValue
+                    ? "_"
+                    : $"__decon{this.state.DeconCounter++}");
+            }
+
+            statements.Add(new TupleDeconstructionStatement(BindingKind.Let, temps, value));
+            var values = new List<GExpression>(parenthesized.Variables.Count);
+            for (int i = 0; i < parenthesized.Variables.Count; i++)
+            {
+                if (temps[i] == "_")
+                {
+                    values.Add(null);
+                    continue;
+                }
+
+                values.Add(this.LowerDeconstructionDeclaration(
+                    parenthesized.Variables[i],
+                    new IdentifierExpression(temps[i]),
+                    preserveValue,
+                    statements));
+            }
+
+            return preserveValue ? new TupleLiteralExpression(values) : null;
         }
 
         private bool TryGetDeconstructionTargets(

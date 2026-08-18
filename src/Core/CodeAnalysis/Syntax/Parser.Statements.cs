@@ -160,6 +160,11 @@ public partial class Parser
             case SyntaxKind.ConstKeyword:
             case SyntaxKind.LetKeyword:
             case SyntaxKind.VarKeyword:
+                if (Current.Kind != SyntaxKind.ConstKeyword && LooksLikeMultiAssignment())
+                {
+                    return ParseMultiAssignmentStatement();
+                }
+
                 var declaration = ParseVariableDeclaration();
                 if (declaration is VariableDeclarationSyntax variableDeclaration &&
                     !leadingAnnotations.IsDefaultOrEmpty)
@@ -457,7 +462,7 @@ public partial class Parser
         var savedDiagnosticCount = Diagnostics.Count;
         try
         {
-            _ = ParseRangeExpression();
+            _ = ParseMultiAssignmentTarget();
             if (Current.Kind != SyntaxKind.CommaToken)
             {
                 return false;
@@ -466,7 +471,7 @@ public partial class Parser
             do
             {
                 _ = MatchToken(SyntaxKind.CommaToken);
-                _ = ParseRangeExpression();
+                _ = ParseMultiAssignmentTarget();
             }
             while (Current.Kind == SyntaxKind.CommaToken);
 
@@ -599,7 +604,7 @@ public partial class Parser
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         while (true)
         {
-            nodesAndSeparators.Add(ParseRangeExpression());
+            nodesAndSeparators.Add(ParseMultiAssignmentTarget());
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {
@@ -611,6 +616,21 @@ public partial class Parser
         }
 
         return new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
+    }
+
+    private ExpressionSyntax ParseMultiAssignmentTarget()
+    {
+        if (Current.Kind is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword)
+        {
+            var keyword = NextToken();
+            var identifier = MatchToken(SyntaxKind.IdentifierToken);
+            return new MultiAssignmentDeclarationExpressionSyntax(
+                syntaxTree,
+                keyword,
+                identifier);
+        }
+
+        return ParseRangeExpression();
     }
 
     private SeparatedSyntaxList<ExpressionSyntax> ParseMultiValueList()
@@ -656,10 +676,11 @@ public partial class Parser
         var keyword = MatchToken(expected);
 
         // Phase 4.5: `let (a, b, ...) = expr` deconstructs a tuple-typed
-        // initializer. The opening paren must come *directly* after the
-        // keyword: an explicit type clause or identifier always starts with
-        // an identifier, so this is unambiguous.
-        if (expected == SyntaxKind.LetKeyword && Current.Kind == SyntaxKind.OpenParenthesisToken)
+        // initializer; ADR-0168 adds mutable `var (...)`. The opening paren
+        // must come directly after the keyword: an explicit type clause or
+        // identifier always starts with an identifier, so this is unambiguous.
+        if ((expected is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword)
+            && Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
             var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();

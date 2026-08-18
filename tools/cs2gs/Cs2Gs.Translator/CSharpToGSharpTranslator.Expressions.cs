@@ -1147,10 +1147,16 @@ public sealed partial class CSharpToGSharpTranslator
                 : expression;
         }
 
+        // `cast[T](value)` has static type T while deliberately preserving a
+        // CLR null value. Treat it as statically non-null so sink forgiveness
+        // does not append `!!` and change that checked-cast runtime contract.
         private static bool TranslatedExpressionIsStaticallyNonNull(GExpression expression) =>
             expression switch
             {
                 NonNullAssertionExpression => true,
+                ConversionExpression conversion
+                    when conversion.IsCheckedReferenceCast
+                        && !conversion.TargetType.IsNullable => true,
                 ParenthesizedExpression parenthesized =>
                     TranslatedExpressionIsStaticallyNonNull(parenthesized.Inner),
                 BlockExpression block =>

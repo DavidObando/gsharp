@@ -103,7 +103,8 @@ import GSharp.Core.Tests.Fixtures
 
 func Run() int32 {
     var pair = ImportedPair2537[int32](4, 5)
-    let (left, right) = pair
+    var (left, right) = pair
+    left = 6
     return left + right
 }
 ";

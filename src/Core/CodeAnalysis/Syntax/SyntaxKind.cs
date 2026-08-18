@@ -209,6 +209,7 @@ public enum SyntaxKind
     ContinueStatement,
     ReturnStatement,
     MultiAssignmentStatement,
+    MultiAssignmentDeclarationExpression,
     SwitchStatement,
     SwitchCase,
     SwitchExpression,

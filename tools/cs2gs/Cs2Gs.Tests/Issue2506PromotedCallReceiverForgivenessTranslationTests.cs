@@ -216,7 +216,8 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             """,
             "G# currently rejects nullable disposable resources even though C# using is null-tolerant.");
 
-        Assert.Contains("using let __using = Repro.Open()", printed, StringComparison.Ordinal);
+        Assert.Contains("using let _ = Repro.Open()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__using", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Repro.Open()!!", printed, StringComparison.Ordinal);
     }
 
