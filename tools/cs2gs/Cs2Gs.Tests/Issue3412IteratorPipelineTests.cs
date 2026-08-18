@@ -143,7 +143,8 @@ public sealed class Issue3412IteratorPipelineTests
         Assert.Contains("sequence[KeyValuePair[string, Node]]", translated, StringComparison.Ordinal);
         Assert.Contains("sequence[Type]", translated, StringComparison.Ordinal);
         Assert.Contains("yield KeyValuePair[string, Node]", translated, StringComparison.Ordinal);
-        Assert.Contains("yield current!!", translated, StringComparison.Ordinal);
+        Assert.Contains("yield current", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("yield current!!", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("List[KeyValuePair[string, Node]]()", translated, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,

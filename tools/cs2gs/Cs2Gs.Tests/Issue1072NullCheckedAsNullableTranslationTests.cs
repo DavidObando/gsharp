@@ -133,7 +133,7 @@ namespace Demo
     }
 
     [Fact]
-    public void FlowNarrowedNullableValue_IsAssertedAtNonNullSinks()
+    public void FlowNarrowedNullableValue_UsesGSharpSmartCastsAtNonNullSinks()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -158,9 +158,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Use(next!!)", printed);
-        Assert.Contains("current = next!!", printed);
+        Assert.Contains("Use(next)", printed);
+        Assert.Contains("current = next", printed);
         Assert.Contains("values[0] = next!!", printed);
+        Assert.DoesNotContain("Use(next!!)", printed);
+        Assert.DoesNotContain("current = next!!", printed);
     }
 
     [Fact]

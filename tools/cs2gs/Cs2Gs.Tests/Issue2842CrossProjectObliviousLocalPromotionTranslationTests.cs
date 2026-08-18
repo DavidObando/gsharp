@@ -158,7 +158,8 @@ namespace App
 
         string compactApp = Compact(printedApp);
         Assert.Contains("func Read(conversion Conversion?)", compactApp);
-        Assert.Contains("let reason = conversion!!.FailureReason!!", compactApp);
+        Assert.Contains("let reason = conversion.FailureReason!!", compactApp);
+        Assert.DoesNotContain("conversion!!", compactApp);
         Assert.DoesNotContain("return reason!!", compactApp);
     }
 

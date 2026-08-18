@@ -19,7 +19,7 @@ namespace Cs2Gs.Tests;
 public class CodeExploderTranslationTests
 {
     [Fact]
-    public void FlowNarrowedCollectionElement_IsAsserted()
+    public void FlowNarrowedCollectionElement_UsesGSharpSmartCast()
     {
         string printed = TranslateUnit("""
             #nullable enable
@@ -40,8 +40,9 @@ public class CodeExploderTranslationTests
             """);
 
         Assert.True(
-            printed.Contains("""[]string{"--branch", gitRef!!}""", StringComparison.Ordinal),
+            printed.Contains("""[]string{"--branch", gitRef}""", StringComparison.Ordinal),
             printed);
+        Assert.DoesNotContain("gitRef!!", printed, StringComparison.Ordinal);
     }
 
     [Fact]

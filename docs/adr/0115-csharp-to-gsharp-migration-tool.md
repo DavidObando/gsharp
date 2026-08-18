@@ -560,10 +560,12 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   has **no range operator** (gsc gap, §G OD-1); a `RangeExpression` index over a
   `Span`/`Memory`/`ReadOnlySpan` lowers to a `.Slice` call: `s[i..j]` →
   `s.Slice(i, j - i)`, `s[i..]` → `s.Slice(i)`, `s[..j]` → `s.Slice(0, j)`.
-- **Null-forgiving `expr!` → non-null assertion `expr!!`.** G#'s postfix `!!`
-  asserts non-null (spec: "Postfix `!!` asserts non-null"), the direct analogue
-  of the C# null-forgiving operator, so the `SuppressNullableWarningExpression`
-  operand is preserved with `!!` rather than dropped.
+- **Null-forgiving `expr!` → non-null assertion `expr!!` when still needed.**
+  G#'s postfix `!!` asserts non-null (spec: "Postfix `!!` asserts non-null"),
+  but cs2gs omits it when native pattern bindings, G# smart-cast flow, or
+  non-null conditional/coalesce arms already give the translated value a
+  non-null type. Assertion insertion is idempotent, so an existing `!!` is
+  never wrapped in another one.
 - **Post/pre-increment/decrement as an expression.** G# now models `++`/`--`
   both as statements *and* as value-producing expressions (issue #1027). A
   `PostIncrementExpression`/`PostDecrementExpression` used as a **value** in a

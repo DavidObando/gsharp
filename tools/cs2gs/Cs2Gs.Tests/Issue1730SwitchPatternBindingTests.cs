@@ -25,9 +25,8 @@ namespace Cs2Gs.Tests;
 /// (`Circle { Radius: var r } when r > 0 => ...`) resolved it while still out
 /// of scope.
 ///
-/// Both are fixed by installing each pattern's bindings before translating
-/// anything that can reference them (guard and body alike), scoped per
-/// case/arm exactly like the existing `TranslateIf` condition-binding scope.
+/// Native G# property-pattern bindings now preserve those names directly in
+/// the switch pattern, guard, and body, scoped per case/arm.
 /// </summary>
 public class Issue1730SwitchPatternBindingTests
 {
@@ -44,12 +43,10 @@ namespace Demo
 
     /// <summary>
     /// A switch-statement pattern label's `var` property binding must be
-    /// installed before the case body is translated, so a body reference to
-    /// the bound variable resolves to the rewritten member access instead of a
-    /// bare, undeclared name.
+    /// preserved in the native G# pattern so the body reads the bound name.
     /// </summary>
     [Fact]
-    public void SwitchStatement_RecursivePatternVarBinding_UsedInBody_ResolvesToMemberAccess()
+    public void SwitchStatement_RecursivePatternVarBinding_UsedInBody_UsesNativeBinding()
     {
         string printed = TranslateUnit(ShapesPrelude + @"
     public static class Shapes
@@ -67,8 +64,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("circle.Radius", printed);
-        Assert.DoesNotContain("return r", printed);
+        Assert.Contains("case Circle { Radius: var r }", printed);
+        Assert.Contains("return r", printed);
+        Assert.DoesNotContain("circle.Radius", printed);
     }
 
     /// <summary>
@@ -77,7 +75,7 @@ namespace Demo
     /// installed scope).
     /// </summary>
     [Fact]
-    public void SwitchStatement_RecursivePatternVarBinding_UsedInGuard_ResolvesToMemberAccess()
+    public void SwitchStatement_RecursivePatternVarBinding_UsedInGuard_UsesNativeBinding()
     {
         string printed = TranslateUnit(ShapesPrelude + @"
     public static class Shapes
@@ -95,10 +93,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("when circle.Radius > 0", printed);
-        Assert.Contains("circle.Radius", printed);
-        Assert.DoesNotContain("when r > 0", printed);
-        Assert.DoesNotContain("return r", printed);
+        Assert.Contains("case Circle { Radius: var r } when r > 0", printed);
+        Assert.Contains("return r", printed);
+        Assert.DoesNotContain("circle.Radius", printed);
     }
 
     /// <summary>
@@ -121,10 +118,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("when circle.Radius > 0", printed);
-        Assert.Contains("circle.Radius", printed);
-        Assert.DoesNotContain("when r > 0", printed);
-        Assert.DoesNotContain("=> r,", printed);
+        Assert.Contains("case Circle { Radius: var r } when r > 0: r", printed);
+        Assert.DoesNotContain("circle.Radius", printed);
     }
 
     /// <summary>
@@ -158,9 +153,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("circle.Radius", printed);
-        Assert.Contains("square.Side", printed);
-        Assert.DoesNotContain("return r", printed);
+        Assert.Contains("case Circle { Radius: var r }", printed);
+        Assert.Contains("case Square { Side: var r }", printed);
+        Assert.Contains("return r", printed);
+        Assert.DoesNotContain("circle.Radius", printed);
+        Assert.DoesNotContain("square.Side", printed);
     }
 
     [Fact]

@@ -1941,6 +1941,33 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        // Shared by declaration mutability and smart-cast invalidation so tuple,
+        // ref/out, address-of, and ref-alias writes cannot drift apart.
+        private bool SyntaxNodeWritesSymbol(SyntaxNode node, ISymbol symbol) =>
+            node switch
+            {
+                AssignmentExpressionSyntax assignment
+                    when this.BindsTo(assignment.Left, symbol) => true,
+                AssignmentExpressionSyntax { Left: TupleExpressionSyntax leftTuple }
+                    when this.TupleAssignmentTargetsInclude(leftTuple, symbol) => true,
+                PostfixUnaryExpressionSyntax postfix
+                    when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                            || postfix.IsKind(SyntaxKind.PostDecrementExpression))
+                        && this.BindsTo(postfix.Operand, symbol) => true,
+                PrefixUnaryExpressionSyntax prefix
+                    when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                            || prefix.IsKind(SyntaxKind.PreDecrementExpression)
+                            || prefix.IsKind(SyntaxKind.AddressOfExpression))
+                        && this.BindsTo(prefix.Operand, symbol) => true,
+                ArgumentSyntax argument
+                    when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
+                        && this.BindsTo(argument.Expression, symbol) => true,
+                RefExpressionSyntax refOf
+                    when refOf.Expression is IdentifierNameSyntax
+                        && this.BindsTo(refOf.Expression, symbol) => true,
+                _ => false,
+            };
+
         // Returns true when <paramref name="symbol"/> is assigned, incremented,
         // decremented, or passed by ref/out anywhere in <paramref name="scope"/>.
         // Generalises <see cref="IsLocalReassigned"/> to any symbol (used for
@@ -1967,62 +1994,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             foreach (SyntaxNode node in scope.DescendantNodes())
             {
-                switch (node)
+                if (this.SyntaxNodeWritesSymbol(node, symbol))
                 {
-                    case AssignmentExpressionSyntax assignment
-                        when this.BindsTo(assignment.Left, symbol):
-                        return true;
-
-                    // `(x, y) = (y, x)` deconstruction-ASSIGNMENT: `assignment.Left`
-                    // is the whole tuple, not `symbol` itself, so the plain
-                    // `BindsTo` case above never matches — without this, an
-                    // existing local written only via deconstruction-assignment
-                    // was (mis-)classified as never-reassigned and bound `let`,
-                    // then the element-wise write-back lowering (see
-                    // `LowerTupleAssignment`) failed gsc GS0127 "read-only"
-                    // (issue #1895). A tuple element that is itself a
-                    // declaration (`var y` in the mixed `(x, var y) = ...` form)
-                    // introduces a NEW binding, not a write to `symbol`, so it is
-                    // deliberately excluded by `TupleAssignmentTargetsInclude`.
-                    case AssignmentExpressionSyntax tupleAssignment
-                        when tupleAssignment.Left is TupleExpressionSyntax leftTuple
-                            && this.TupleAssignmentTargetsInclude(leftTuple, symbol):
-                        return true;
-
-                    case PostfixUnaryExpressionSyntax postfix
-                        when (postfix.IsKind(SyntaxKind.PostIncrementExpression)
-                                || postfix.IsKind(SyntaxKind.PostDecrementExpression))
-                            && this.BindsTo(postfix.Operand, symbol):
-                        return true;
-
-                    case PrefixUnaryExpressionSyntax prefix
-                        when (prefix.IsKind(SyntaxKind.PreIncrementExpression)
-                                || prefix.IsKind(SyntaxKind.PreDecrementExpression))
-                            && this.BindsTo(prefix.Operand, symbol):
-                        return true;
-
-                    case ArgumentSyntax argument
-                        when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
-                            && this.BindsTo(argument.Expression, symbol):
-                        return true;
-
-                    case PrefixUnaryExpressionSyntax addressOf
-                        when addressOf.IsKind(SyntaxKind.AddressOfExpression)
-                            && this.BindsTo(addressOf.Operand, symbol):
-                        return true;
-
-                    // Issue #1900: `ref int alias = ref v;` aliases `v`'s storage
-                    // through G#'s native ref-local (`let/var ref alias T = v`,
-                    // no address-of operator on the RHS — see
-                    // TranslateRefExpression). gsc's ref-alias binder rejects
-                    // aliasing a `let`-bound (read-only) variable
-                    // (GS9005-equivalent "cannot take address of constant"), so
-                    // `v` must be forced to `var` here exactly like a variable
-                    // whose address is taken with the unsafe `&` operator above.
-                    case RefExpressionSyntax refOf
-                        when refOf.Expression is IdentifierNameSyntax
-                            && this.BindsTo(refOf.Expression, symbol):
-                        return true;
+                    return true;
                 }
             }
 

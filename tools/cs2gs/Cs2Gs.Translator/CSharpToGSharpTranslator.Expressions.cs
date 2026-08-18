@@ -511,7 +511,7 @@ public sealed partial class CSharpToGSharpTranslator
                         GExpression nullableValue = this.TranslateExpression(member.Expression);
                         return this.IsWithinExpressionTreeLambda(member.Expression)
                             ? new MemberAccessExpression(nullableValue, "Value")
-                            : new NonNullAssertionExpression(nullableValue);
+                            : EnsureNonNullAssertion(nullableValue);
                     case "HasValue":
                         // Parenthesize the null test so it composes correctly
                         // under any surrounding operator. C# `!x.HasValue` would
@@ -617,13 +617,18 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(recv);
 
+            if (this.GSharpExpressionIsStaticallyNonNull(recv, translated))
+            {
+                return ParenthesizeIfBareNumericLiteral(translated);
+            }
+
             if (!this.IsActivePatternBinding(recv)
                 && !this.IsWithinExpressionTreeLambda(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
                     || this.NullableReferenceValueMayBeNull(recv)))
             {
-                translated = new NonNullAssertionExpression(translated);
+                translated = EnsureNonNullAssertion(translated);
             }
             else if (!this.IsWithinExpressionTreeLambda(recv) && this.IsLocalBoundFromAsExpression(recv))
             {
@@ -640,7 +645,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // move the throw earlier and break the guarded shape
                 // (`var p = o as T; if (p != null) …`), which Roslyn DOES flag and
                 // which the predicates above already handle correctly.
-                translated = new NonNullAssertionExpression(translated);
+                translated = EnsureNonNullAssertion(translated);
             }
 
             return ParenthesizeIfBareNumericLiteral(translated);
@@ -873,21 +878,23 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Issue #1354: a value-position read (a `return` expression or a
         // conditional-expression arm) of a declared-`T?`/promoted-to-`T?` symbol
-        // that Roslyn's flow analysis has narrowed to non-null needs a `!!`
-        // assertion to satisfy a non-null target. G# does not smart-cast
-        // property/field chains, so unlike the receiver pass this also covers
-        // bare reads consumed as values (`return Continuation` /
-        // `cond ? a : Continuation`). The shared <see cref="ReceiverNeedsNullForgiveness"/>
-        // predicate already excludes null-comparison operands (flow there is not
-        // NotNull), `?.` receivers, `this`/`base`, and literals.
+        // that Roslyn's flow analysis has narrowed to non-null may need a `!!`
+        // assertion to satisfy a non-null target. G# smart-casts stable locals
+        // under native guards, but property/field chains and other nullable
+        // values still need the bridge.
         private GExpression TranslateValueWithNullForgiveness(ExpressionSyntax value)
         {
             GExpression translated = this.TranslateExpression(value);
 
+            if (this.GSharpExpressionIsStaticallyNonNull(value, translated))
+            {
+                return translated;
+            }
+
             if (!this.IsActivePatternBinding(value)
                 && this.ReceiverNeedsNullForgiveness(value))
             {
-                return new NonNullAssertionExpression(translated);
+                return EnsureNonNullAssertion(translated);
             }
 
             (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
@@ -913,7 +920,7 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol targetSymbol,
             bool includePromotedValue = false)
         {
-            if (this.IsActivePatternBinding(value))
+            if (this.GSharpExpressionIsStaticallyNonNull(value, translated))
             {
                 return translated;
             }
@@ -966,7 +973,7 @@ public sealed partial class CSharpToGSharpTranslator
                 or ConditionalAccessExpressionSyntax
                     ? new ParenthesizedExpression(translated)
                     : translated;
-            return new NonNullAssertionExpression(operand);
+            return EnsureNonNullAssertion(operand);
         }
 
         private GExpression AssertFlowNarrowedNullableReference(
@@ -975,15 +982,304 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference targetType)
         {
             ITypeSymbol declaredValueType = this.GetDeclaredValueType(value);
-            if (translated is not NonNullAssertionExpression
+            if (!this.GSharpExpressionIsStaticallyNonNull(value, translated)
                 && targetType is { IsNullable: false }
                 && declaredValueType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
                 && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull)
             {
-                return new NonNullAssertionExpression(translated);
+                return EnsureNonNullAssertion(translated);
             }
 
             return translated;
+        }
+
+        private static GExpression EnsureNonNullAssertion(GExpression expression) =>
+            TranslatedExpressionIsStaticallyNonNull(expression)
+                ? expression
+                : new NonNullAssertionExpression(expression);
+
+        private bool GSharpExpressionIsStaticallyNonNull(
+            ExpressionSyntax expression,
+            GExpression translated = null)
+        {
+            if (translated != null && TranslatedExpressionIsStaticallyNonNull(translated))
+            {
+                return true;
+            }
+
+            if (this.PatternLocalUsesNullableStorage(expression))
+            {
+                return false;
+            }
+
+            if (this.IsActivePatternBinding(expression)
+                || this.IsGSharpFlowNarrowedLocal(expression))
+            {
+                return true;
+            }
+
+            ExpressionSyntax unwrapped = expression;
+            while (unwrapped is ParenthesizedExpressionSyntax parenthesized)
+            {
+                unwrapped = parenthesized.Expression;
+            }
+
+            switch (unwrapped)
+            {
+                case PostfixUnaryExpressionSyntax suppression
+                    when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return !IsNullOrSuppressedNull(suppression.Operand);
+
+                case ConditionalExpressionSyntax conditional:
+                    GExpression conditionalValue = UnwrapTranslatedValue(translated);
+                    if (conditionalValue is IfExpression ifExpression)
+                    {
+                        return this.GSharpExpressionIsStaticallyNonNull(
+                                conditional.WhenTrue,
+                                ifExpression.ThenExpression)
+                            && this.GSharpExpressionIsStaticallyNonNull(
+                                conditional.WhenFalse,
+                                ifExpression.ElseExpression);
+                    }
+
+                    if (conditionalValue is IfLetExpression ifLet)
+                    {
+                        return this.GSharpExpressionIsStaticallyNonNull(
+                                conditional.WhenTrue,
+                                ifLet.ThenExpression)
+                            && this.GSharpExpressionIsStaticallyNonNull(
+                                conditional.WhenFalse,
+                                ifLet.ElseExpression);
+                    }
+
+                    return this.GSharpExpressionIsStaticallyNonNull(conditional.WhenTrue)
+                        && this.GSharpExpressionIsStaticallyNonNull(conditional.WhenFalse);
+
+                case SwitchExpressionSyntax switchExpression:
+                    if (UnwrapTranslatedValue(translated) is SwitchExpression translatedSwitch
+                        && translatedSwitch.Arms.Count == switchExpression.Arms.Count)
+                    {
+                        return switchExpression.Arms
+                            .Select((arm, index) => (arm, index))
+                            .All(pair => this.GSharpExpressionIsStaticallyNonNull(
+                                pair.arm.Expression,
+                                translatedSwitch.Arms[pair.index].Body));
+                    }
+
+                    return switchExpression.Arms.All(arm =>
+                        this.GSharpExpressionIsStaticallyNonNull(arm.Expression));
+
+                case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression):
+                    return UnwrapTranslatedValue(translated) is BinaryExpression
+                            { Operator: "??" } translatedBinary
+                        ? this.GSharpExpressionIsStaticallyNonNull(
+                            binary.Right,
+                            translatedBinary.Right)
+                        : this.GSharpExpressionIsStaticallyNonNull(binary.Right);
+
+                case AssignmentExpressionSyntax assignment:
+                    if (this.PatternLocalUsesNullableStorage(assignment.Left))
+                    {
+                        return false;
+                    }
+
+                    return UnwrapTranslatedValue(translated) is AssignmentExpression translatedAssignment
+                        ? this.GSharpExpressionIsStaticallyNonNull(
+                            assignment.Right,
+                            translatedAssignment.Value)
+                        : this.GSharpExpressionIsStaticallyNonNull(assignment.Right);
+
+                case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AsExpression):
+                case ConditionalAccessExpressionSyntax:
+                    return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            ITypeSymbol type = symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IPropertySymbol property => property.Type,
+                IMethodSymbol { MethodKind: not MethodKind.Constructor } method => method.ReturnType,
+                _ => this.context.GetTypeInfo(expression).Type,
+            };
+
+            if (type is { IsValueType: true })
+            {
+                return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T;
+            }
+
+            return type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.NotAnnotated }
+                && !this.IsImportedObliviousNullableMember(symbol)
+                && !this.LocalInitializedFromImportedObliviousNullable(symbol)
+                && (symbol == null || !this.ShouldPromoteToNullableReference(symbol));
+        }
+
+        private bool PatternLocalUsesNullableStorage(ExpressionSyntax expression)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            if (symbol is not ILocalSymbol { Type.IsReferenceType: true } local)
+            {
+                return false;
+            }
+
+            if (this.state.HoistedNullableGuardLocals.Contains(local))
+            {
+                return true;
+            }
+
+            bool isPatternLocal = local.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is SingleVariableDesignationSyntax);
+            SyntaxNode scope = this.state.CurrentBodyScope ?? expression.SyntaxTree.GetRoot();
+            return isPatternLocal && this.IsSymbolReassigned(local, scope);
+        }
+
+        private static GExpression UnwrapTranslatedValue(GExpression expression)
+        {
+            while (expression is ParenthesizedExpression parenthesized)
+            {
+                expression = parenthesized.Inner;
+            }
+
+            return expression is BlockExpression block
+                ? UnwrapTranslatedValue(block.Value)
+                : expression;
+        }
+
+        private static bool TranslatedExpressionIsStaticallyNonNull(GExpression expression) =>
+            expression switch
+            {
+                NonNullAssertionExpression => true,
+                ParenthesizedExpression parenthesized =>
+                    TranslatedExpressionIsStaticallyNonNull(parenthesized.Inner),
+                BlockExpression block =>
+                    TranslatedExpressionIsStaticallyNonNull(block.Value),
+                IfExpression ifExpression =>
+                    TranslatedExpressionIsStaticallyNonNull(ifExpression.ThenExpression)
+                        && TranslatedExpressionIsStaticallyNonNull(ifExpression.ElseExpression),
+                IfLetExpression ifLet =>
+                    TranslatedExpressionIsStaticallyNonNull(ifLet.ThenExpression)
+                        && TranslatedExpressionIsStaticallyNonNull(ifLet.ElseExpression),
+                SwitchExpression switchExpression =>
+                    switchExpression.Arms.Count > 0
+                        && switchExpression.Arms.All(arm =>
+                            TranslatedExpressionIsStaticallyNonNull(arm.Body)),
+                BinaryExpression binary when binary.Operator == "??" =>
+                    TranslatedExpressionIsStaticallyNonNull(binary.Right),
+                _ => false,
+            };
+
+        private bool IsGSharpFlowNarrowedLocal(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            if (expression is not IdentifierNameSyntax
+                || symbol is not (ILocalSymbol or IParameterSymbol)
+                || this.context.GetTypeInfo(expression).Nullability.FlowState != NullableFlowState.NotNull)
+            {
+                return false;
+            }
+
+            SyntaxNode scope = this.state.CurrentBodyScope
+                ?? expression.Ancestors().FirstOrDefault(node =>
+                    node is BaseMethodDeclarationSyntax
+                        or AccessorDeclarationSyntax
+                        or LocalFunctionStatementSyntax
+                        or AnonymousFunctionExpressionSyntax);
+            if (scope == null)
+            {
+                return false;
+            }
+
+            foreach (IsPatternExpressionSyntax isPattern in scope
+                .DescendantNodes(node =>
+                    node is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
+                .OfType<IsPatternExpressionSyntax>())
+            {
+                if (isPattern.SpanStart >= expression.SpanStart
+                    || !this.BindsToGuardSymbol(isPattern.Expression, symbol)
+                    || !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true)
+                    || !TryGetPatternNonNullPolarity(isPattern.Pattern, out bool whenTrue)
+                    || (PatternUsesNativeVariableSyntax(isPattern.Pattern)
+                        && !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)))
+                    || !ComputePatternFlowRegions(
+                            isPattern,
+                            whenTrue,
+                            includeWhenClauseRegion: false)
+                        .Any(region => region.Span.Contains(expression.Span))
+                    || this.SymbolIsWrittenBetween(symbol, isPattern, expression, scope))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            foreach (BinaryExpressionSyntax nullCheck in scope
+                .DescendantNodes(node =>
+                    node is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
+                .OfType<BinaryExpressionSyntax>())
+            {
+                if (nullCheck.SpanStart >= expression.SpanStart
+                    || !this.TryGetNullComparisonNonNullPolarity(
+                        nullCheck,
+                        symbol,
+                        out bool whenTrue)
+                    || !ComputeBooleanFlowRegions(
+                            nullCheck,
+                            whenTrue,
+                            includeWhenClauseRegion: false)
+                        .Any(region => region.Span.Contains(expression.Span))
+                    || this.SymbolIsWrittenBetween(symbol, nullCheck, expression, scope))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryGetNullComparisonNonNullPolarity(
+            BinaryExpressionSyntax comparison,
+            ISymbol symbol,
+            out bool whenTrue)
+        {
+            if (!comparison.IsKind(SyntaxKind.EqualsExpression)
+                && !comparison.IsKind(SyntaxKind.NotEqualsExpression))
+            {
+                whenTrue = false;
+                return false;
+            }
+
+            bool comparesSymbolToNull =
+                (IsNullLiteral(comparison.Left)
+                    && this.BindsToGuardSymbol(comparison.Right, symbol))
+                || (IsNullLiteral(comparison.Right)
+                    && this.BindsToGuardSymbol(comparison.Left, symbol));
+            whenTrue = comparison.IsKind(SyntaxKind.NotEqualsExpression);
+            return comparesSymbolToNull;
+        }
+
+        private bool SymbolIsWrittenBetween(
+            ISymbol symbol,
+            SyntaxNode start,
+            SyntaxNode use,
+            SyntaxNode scope)
+        {
+            return scope
+                .DescendantNodes(node =>
+                    node is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
+                .Any(node =>
+                    node.SpanStart > start.Span.End
+                    && node.Span.End <= use.SpanStart
+                    && this.SyntaxNodeWritesSymbol(node, symbol));
         }
 
         private ITypeSymbol GetDeclaredValueType(ExpressionSyntax value) =>
@@ -998,7 +1294,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {
-            if (value is PostfixUnaryExpressionSyntax
+            if (this.GSharpExpressionIsStaticallyNonNull(value)
+                || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || this.IsWithinExpressionTreeLambda(value)
                 || this.IsCallableValueExpression(value))
@@ -1037,6 +1334,8 @@ public sealed partial class CSharpToGSharpTranslator
                 BinaryExpressionSyntax coalesce
                     when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
                         this.NullableReferenceValueMayBeNull(coalesce.Right),
+                AssignmentExpressionSyntax assignment =>
+                    this.PatternLocalUsesNullableStorage(assignment.Left),
                 _ => false,
             };
 
@@ -1118,7 +1417,7 @@ public sealed partial class CSharpToGSharpTranslator
                 or ConditionalAccessExpressionSyntax
                     ? new ParenthesizedExpression(translated)
                     : translated;
-            return new NonNullAssertionExpression(assertionOperand);
+            return EnsureNonNullAssertion(assertionOperand);
         }
 
         private bool IndexArgumentValueNeedsNullForgiveness(ExpressionSyntax value)
@@ -1200,6 +1499,12 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax recv,
             bool isDereferenceReceiver = false)
         {
+            if (this.IsActivePatternBinding(recv)
+                || this.IsGSharpFlowNarrowedLocal(recv))
+            {
+                return false;
+            }
+
             // `expr!` already lowers to a `NonNullAssertionExpression`; never
             // double-assert. `this`/`base`, a null literal, and a `?.` conditional
             // access receiver are handled by their own paths and are not

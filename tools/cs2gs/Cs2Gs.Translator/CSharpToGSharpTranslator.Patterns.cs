@@ -416,8 +416,8 @@ public sealed partial class CSharpToGSharpTranslator
                 case PostfixUnaryExpressionSyntax suppressNullable
                     when suppressNullable.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                     // The C# null-forgiving operator `expr!` maps to G#'s postfix
-                    // non-null assertion `expr!!` (spec: "Postfix `!!` asserts
-                    // non-null"), preserving the assertion (ADR-0115 §B).
+                    // non-null assertion `expr!!` when the translated operand
+                    // still has a nullable static type (ADR-0115 §B).
                     // A null literal is never forgivable: preserve `nil` so its
                     // target type accepts nullable sinks and rejects non-null ones.
                     if (IsNullOrSuppressedNull(suppressNullable.Operand))
@@ -425,8 +425,12 @@ public sealed partial class CSharpToGSharpTranslator
                         return this.TranslateExpression(suppressNullable.Operand);
                     }
 
-                    return new NonNullAssertionExpression(
-                        this.TranslateExpression(suppressNullable.Operand));
+                    GExpression suppressed = this.TranslateExpression(suppressNullable.Operand);
+                    return this.GSharpExpressionIsStaticallyNonNull(
+                        suppressNullable.Operand,
+                        suppressed)
+                            ? suppressed
+                            : EnsureNonNullAssertion(suppressed);
 
                 case PostfixUnaryExpressionSyntax postfixValue
                     when postfixValue.IsKind(SyntaxKind.PostIncrementExpression)
@@ -1898,7 +1902,7 @@ public sealed partial class CSharpToGSharpTranslator
             return sourceType is { IsReferenceType: true }
                 && (sourceType.NullableAnnotation == NullableAnnotation.Annotated
                     || this.ShouldPromoteToNullableReference(symbol))
-                ? new NonNullAssertionExpression(translated)
+                ? EnsureNonNullAssertion(translated)
                 : translated;
         }
 
@@ -2014,7 +2018,7 @@ public sealed partial class CSharpToGSharpTranslator
                     out GExpression replacement)
                 && replacement is NonNullAssertionExpression)
             {
-                result = new NonNullAssertionExpression(result);
+                result = EnsureNonNullAssertion(result);
             }
 
             return result;
@@ -2038,7 +2042,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression result =
                 this.context.GetTypeInfo(assignment).Nullability.FlowState == NullableFlowState.NotNull
                 || !this.NullableReferenceValueMayBeNull(assignment.Right)
-                ? new NonNullAssertionExpression(value)
+                ? EnsureNonNullAssertion(value)
                 : value;
             return statements.Count == 0
                 ? result

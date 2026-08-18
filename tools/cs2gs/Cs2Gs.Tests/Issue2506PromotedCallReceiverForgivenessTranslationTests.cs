@@ -281,7 +281,8 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
         Assert.DoesNotContain("Repro.ExplicitMaybe().Name", enabled, StringComparison.Ordinal);
         Assert.Contains("Repro.Always().Name", enabled, StringComparison.Ordinal);
         Assert.DoesNotContain("Repro.Always()!!.Name", enabled, StringComparison.Ordinal);
-        Assert.Contains("item!!.Name", enabled, StringComparison.Ordinal);
+        Assert.Contains("return item.Name", enabled, StringComparison.Ordinal);
+        Assert.DoesNotContain("item!!.Name", enabled, StringComparison.Ordinal);
     }
 
     [Fact]
