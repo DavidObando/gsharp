@@ -1090,6 +1090,7 @@ public sealed partial class CSharpToGSharpTranslator
                 string target = list.Target?.Identifier.Text;
                 foreach (AttributeSyntax attribute in list.Attributes)
                 {
+                    using IDisposable modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree);
                     var arguments = new List<AttributeArgument>();
                     if (attribute.ArgumentList != null)
                     {
@@ -1102,7 +1103,7 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
-                    string attributeName = this.TranslateAttributeName(attribute.Name);
+                    string attributeName = this.TranslateAttributeName(attribute);
 
                     attributes.Add(new AttributeUse(attributeName, arguments, target));
                 }
@@ -1111,16 +1112,32 @@ public sealed partial class CSharpToGSharpTranslator
             return attributes;
         }
 
-        // Issue #1913: a C# 11 generic attribute (`[Tag<int>]`) parses its type
-        // arguments in ANGLE brackets, so `nameSyntax.ToString()` carries them as
-        // `Tag<int>` verbatim. G# has no angle-bracket syntax at all (ADR-0020) —
-        // every generic construct, including a generic attribute, spells its
-        // type-argument list in SQUARE brackets. Reuse the same
-        // <see cref="MapTypeArguments"/>/<see cref="GSharpPrinter.RenderTypeReference"/>
-        // path a generic type reference or generic call already routes through,
-        // rather than hand-rolling the bracket text, so an unsupported/unresolvable
-        // type argument still gets the placeholder the type mapper already emits.
-        private string TranslateAttributeName(NameSyntax nameSyntax)
+        // Issue #3445: resolve attributes semantically so their containing
+        // namespaces and aliases participate in synthesized imports, while
+        // retaining source qualification and Attribute-suffix spelling.
+        private string TranslateAttributeName(AttributeSyntax attribute)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(attribute).Symbol
+                ?? this.context.GetSymbolInfo(attribute.Name).Symbol;
+            INamedTypeSymbol attributeType = symbol switch
+            {
+                IMethodSymbol constructor => constructor.ContainingType,
+                INamedTypeSymbol namedType => namedType,
+                IAliasSymbol aliasSymbol => aliasSymbol.Target as INamedTypeSymbol,
+                _ => null,
+            };
+            IAliasSymbol sourceAlias = attribute.Name
+                .DescendantNodesAndSelf()
+                .OfType<IdentifierNameSyntax>()
+                .Select(identifier => this.context.SemanticModel.GetAliasInfo(identifier))
+                .FirstOrDefault(candidate => candidate != null);
+            this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
+            return this.TranslateUnresolvedAttributeName(attribute.Name);
+        }
+
+        // Issue #1913: convert C# generic attribute angle brackets to G# square
+        // brackets while retaining the source name and qualification.
+        private string TranslateUnresolvedAttributeName(NameSyntax nameSyntax)
         {
             string attributeName = nameSyntax.ToString();
             int aliasSeparator = attributeName.IndexOf("::", System.StringComparison.Ordinal);

@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -205,10 +206,9 @@ public static class Program
     /// Parses gsc-style reference switches: <c>/r:&lt;file&gt;</c> or
     /// <c>/reference:&lt;file&gt;</c> (also accepted with a leading dash).
     /// </summary>
-    // Oats #3445: keep the out slot non-null until cs2gs preserves NotNullWhen's namespace import.
-    private static bool TryParseReferenceSwitch(string arg, out string referencePath)
+    private static bool TryParseReferenceSwitch(string arg, [NotNullWhen(true)] out string? referencePath)
     {
-        referencePath = string.Empty;
+        referencePath = null;
         if (arg.Length < 2 || (arg[0] != '/' && arg[0] != '-'))
         {
             return false;

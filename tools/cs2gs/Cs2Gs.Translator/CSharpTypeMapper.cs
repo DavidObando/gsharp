@@ -169,6 +169,33 @@ public sealed class CSharpTypeMapper
     public IReadOnlyList<TypeDeclaration> PendingAnonymousDataClasses => this.pendingAnonymousDataClasses;
 
     /// <summary>
+    /// Records a translated attribute type's containing namespace and any
+    /// source alias so the compilation-unit import synthesis can resolve the
+    /// attribute without changing its source spelling.
+    /// </summary>
+    /// <param name="attributeType">The semantically resolved attribute type.</param>
+    /// <param name="alias">The alias used by the attribute name, if any.</param>
+    public void TrackAttributeType(INamedTypeSymbol attributeType, IAliasSymbol alias)
+    {
+        if (attributeType != null)
+        {
+            this.TrackShortenedNamespace(attributeType);
+        }
+
+        string aliasTarget = alias?.Target switch
+        {
+            INamespaceSymbol ns when !ns.IsGlobalNamespace => ns.ToDisplayString(),
+            INamedTypeSymbol type => StripGlobalPrefix(
+                type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),
+            _ => null,
+        };
+        if (!string.IsNullOrEmpty(aliasTarget))
+        {
+            this.synthesizedTypeAliases[alias.Name] = aliasTarget;
+        }
+    }
+
+    /// <summary>
     /// Records the declaring namespace of a resolved extension-method
     /// invocation or method-group reference into the same shortened-namespace
     /// tracking set used for type imports (see <see cref="shortenedNamespaces"/>),
