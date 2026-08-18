@@ -3,9 +3,12 @@
 // </copyright>
 
 using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Symbols;
@@ -132,6 +135,49 @@ public class ReferenceResolverTests
             typeof(System.Diagnostics.DiagnosticSource).FullName,
             requireExternalVisibility: false,
             out _));
+    }
+
+    [Fact]
+    public void TryResolveType_SkipsInternalDuplicateForPublicType()
+    {
+        string directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "reference-resolver-3445",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string internalPath = EmitCollisionAssembly(
+                directory,
+                "InternalAttributeShim",
+                "internal");
+            string publicPath = EmitCollisionAssembly(
+                directory,
+                "PublicFrameworkType",
+                "public");
+            using var resolver = ReferenceResolver.WithReferences(new[]
+            {
+                internalPath,
+                publicPath,
+            });
+
+            Assert.True(resolver.TryResolveType(
+                "ResolverCollision3445.MarkerAttribute",
+                requireExternalVisibility: false,
+                out var raw));
+            Assert.Equal("InternalAttributeShim", raw.Assembly.GetName().Name);
+
+            Assert.True(resolver.TryResolveType(
+                "ResolverCollision3445.MarkerAttribute",
+                out var resolved));
+            Assert.True(resolved.IsPublic);
+            Assert.Equal("PublicFrameworkType", resolved.Assembly.GetName().Name);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -347,6 +393,32 @@ public class ReferenceResolverTests
         // cross-context identity mismatches the resolver exists to prevent).
         Assert.NotSame(typeof(string), stringType);
         Assert.NotSame(typeof(System.Console), consoleType);
+    }
+
+    private static string EmitCollisionAssembly(
+        string directory,
+        string assemblyName,
+        string accessibility)
+    {
+        string path = Path.Combine(directory, assemblyName + ".dll");
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            assemblyName,
+            new[]
+            {
+                CSharpSyntaxTree.ParseText(
+                    $"namespace ResolverCollision3445; {accessibility} sealed class MarkerAttribute {{ }}"),
+            },
+            new[]
+            {
+                MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        using FileStream stream = File.Create(path);
+        Microsoft.CodeAnalysis.Emit.EmitResult result = compilation.Emit(stream);
+        Assert.True(
+            result.Success,
+            string.Join(Environment.NewLine, result.Diagnostics));
+        return path;
     }
 
     private static ReferenceResolver BuildMetadataLoadContextResolver()

@@ -776,6 +776,22 @@ public sealed class ReferenceResolver : IDisposable
 
         if (requireExternalVisibility && !IsExternallyResolvable(resolved))
         {
+            // Issue #3445 follow-through: dependency assemblies can carry
+            // internal compatibility shims with the same full name as a public
+            // framework type. The raw index intentionally keeps first-writer
+            // precedence for infrastructure lookups, but user-written names
+            // must skip an inaccessible shim and continue to an accessible
+            // duplicate, matching C# reference resolution.
+            foreach (Assembly assembly in this.assemblies)
+            {
+                Type? candidate = SafeGetType(assembly, fullName);
+                if (candidate != null && IsExternallyResolvable(candidate))
+                {
+                    type = candidate;
+                    return true;
+                }
+            }
+
             return false;
         }
 
