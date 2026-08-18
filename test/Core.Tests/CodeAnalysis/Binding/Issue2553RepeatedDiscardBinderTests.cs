@@ -48,6 +48,30 @@ public class Issue2553RepeatedDiscardBinderTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0125");
     }
 
+    [Fact]
+    public void RepeatedDiscardDeclarations_BindAndDispose()
+    {
+        var result = Evaluate("""
+            import System
+
+            class Resource : IDisposable {
+                func Dispose() { }
+            }
+
+            func Run() {
+                let _ = 1
+                let _ = 2
+                using let _ = Resource{}
+                using let _ = Resource{}
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+    }
+
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);

@@ -202,7 +202,8 @@ public sealed class IfLetStatement : GStatement
 }
 
 /// <summary>
-/// A Go-style multi-target assignment — <c>a, b = x, y</c> (ADR-0015).
+/// A Go-style multi-target assignment — <c>a, b = x, y</c> (ADR-0015),
+/// optionally introducing fresh locals such as <c>a, let b = Pair()</c>.
 /// </summary>
 /// <remarks>
 /// The native G# rendering of a C# deconstruction assignment into existing
@@ -210,9 +211,9 @@ public sealed class IfLetStatement : GStatement
 /// every target's receiver/index first, then every right-hand value, then writes
 /// left-to-right — exactly C#'s deconstruction-assignment order.
 /// <para>
-/// A tuple-valued single right-hand expression is supported. Mixed declarations
-/// and nested target tuples keep the <c>let (__deconN, …)</c> lowering because
-/// they have no flat assignment form.
+/// A tuple-valued single right-hand expression is supported. Fresh
+/// <c>let</c>/<c>var</c> targets may mix with existing storage. Nested target
+/// tuples keep recursive lowering because they have no flat assignment form.
 /// </para>
 /// </remarks>
 public sealed class MultiAssignmentStatement : GStatement
@@ -222,10 +223,21 @@ public sealed class MultiAssignmentStatement : GStatement
     /// </summary>
     /// <param name="targets">The assignment targets, in source order.</param>
     /// <param name="values">One value per target, or one tuple-valued expression.</param>
-    public MultiAssignmentStatement(IReadOnlyList<GExpression> targets, IReadOnlyList<GExpression> values)
+    /// <param name="targetBindings">Optional fresh-local binding per target.</param>
+    public MultiAssignmentStatement(
+        IReadOnlyList<GExpression> targets,
+        IReadOnlyList<GExpression> values,
+        IReadOnlyList<BindingKind?> targetBindings = null)
     {
         Targets = targets;
         Values = values;
+        TargetBindings = targetBindings ?? new BindingKind?[Targets.Count];
+        if (TargetBindings.Count != Targets.Count)
+        {
+            throw new ArgumentException(
+                "Multi-assignment target binding count must match target count.",
+                nameof(targetBindings));
+        }
     }
 
     /// <summary>Gets the assignment targets, in source order.</summary>
@@ -233,6 +245,9 @@ public sealed class MultiAssignmentStatement : GStatement
 
     /// <summary>Gets the assigned values or single tuple-valued expression.</summary>
     public IReadOnlyList<GExpression> Values { get; }
+
+    /// <summary>Gets the optional fresh-local binding for each target.</summary>
+    public IReadOnlyList<BindingKind?> TargetBindings { get; }
 }
 
 /// <summary>

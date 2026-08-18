@@ -3,10 +3,13 @@
 // </copyright>
 
 using System;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -18,6 +21,45 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public sealed class Issue3347RemainingSpillInventoryTests
 {
+    /// <summary>
+    /// Issue #3423 ratchet. Regenerated from <c>be857f02c4</c>, Core started
+    /// with 16 <c>__castN</c> occurrences (8 block conversions), 22
+    /// <c>__deconN</c> occurrences (11 temp names), and 17 <c>__using</c>
+    /// declarations. All three families are now retired from Core output.
+    /// </summary>
+    [Fact]
+    public async Task CoreMigration_RemainingSynthesizedNameFamiliesStayRetired()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
+            Path.Combine(repoRoot, "src", "Core", "Core.csproj"));
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Core should bind with no C# errors: "
+                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
+        int castCount = 0;
+        int deconstructionCount = 0;
+        int usingCount = 0;
+        foreach (LoadedDocument document in project.Documents)
+        {
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            string printed = GSharpPrinter.Print(
+                translator.TranslateDocument(document, context));
+            castCount += CountOccurrences(printed, "__cast");
+            deconstructionCount += CountOccurrences(printed, "__decon");
+            usingCount += CountOccurrences(printed, "__using");
+        }
+
+        Assert.Equal(0, castCount);
+        Assert.Equal(0, deconstructionCount);
+        Assert.Equal(0, usingCount);
+    }
+
     [Fact]
     public void NonBindingPatterns_UseNativeBooleanPatterns()
     {

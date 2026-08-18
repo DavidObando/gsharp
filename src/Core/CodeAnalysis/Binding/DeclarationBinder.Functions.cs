@@ -2894,6 +2894,14 @@ internal sealed partial class DeclarationBinder
     internal VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type, Accessibility accessibility)
     {
         var name = identifier.Text ?? "?";
+        if (name == "_")
+        {
+            // `_` is a discard declaration, not a lookup-visible binding.
+            // Give every occurrence private storage so repeated `let _` and
+            // `using let _` declarations can coexist in one scope.
+            name = $"<>discard{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}";
+        }
+
         var declare = !identifier.IsMissing;
 
         // Direct top-level declarations become global fields. Variables in a

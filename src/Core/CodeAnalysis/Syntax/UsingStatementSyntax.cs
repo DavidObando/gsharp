@@ -8,7 +8,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// Represents a <c>using let name = expr</c> or
 /// <c>using var name = expr</c> declaration whose bound variable is
 /// disposed (via <c>IDisposable.Dispose</c>) when the enclosing scope
-/// exits.
+/// exits. The name may be the repeatable discard <c>_</c> (ADR-0168).
 /// </summary>
 public sealed class UsingStatementSyntax : StatementSyntax
 {

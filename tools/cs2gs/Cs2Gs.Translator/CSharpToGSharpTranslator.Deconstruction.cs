@@ -662,9 +662,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// temporaries before any write, then assigns left-to-right — exactly the
         /// order C# specifies, so aliasing swaps and storage targets stay correct.
         /// <para>
-        /// Mixed declarations and nested target tuples have no flat assignment
-        /// form and keep the existing lowering. Non-tuple deconstruction sources
-        /// also keep it because native multi-assignment unifies tuple values only.
+        /// Mixed fresh/existing targets use ADR-0168 inline bindings. Nested
+        /// target tuples keep the existing lowering. Non-tuple deconstruction
+        /// sources also keep it because native multi-assignment unifies tuple
+        /// values only.
         /// </para>
         /// </remarks>
         /// <param name="leftTuple">The C# deconstruction target tuple.</param>
@@ -684,19 +685,50 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Declarations and nested target tuples still need recursive lowering.
+            // Nested target tuples still need recursive lowering. Fresh `var`
+            // declarations can use G#'s inline let/var multi-assignment targets.
             foreach (ArgumentSyntax argument in leftTuple.Arguments)
             {
-                if (argument.Expression is DeclarationExpressionSyntax or TupleExpressionSyntax)
+                if (argument.Expression is TupleExpressionSyntax
+                    || (argument.Expression is DeclarationExpressionSyntax declaration
+                        && !declaration.Type.IsVar))
                 {
                     return false;
                 }
             }
 
             var targets = new List<GExpression>(leftTuple.Arguments.Count);
+            var targetBindings = new List<BindingKind?>(leftTuple.Arguments.Count);
             foreach (ArgumentSyntax argument in leftTuple.Arguments)
             {
+                if (argument.Expression is DeclarationExpressionSyntax declaration)
+                {
+                    if (declaration.Designation is not SingleVariableDesignationSyntax single)
+                    {
+                        targets.Add(new IdentifierExpression("_"));
+                        targetBindings.Add(null);
+                        continue;
+                    }
+
+                    string name = SanitizeIdentifier(single.Identifier.Text);
+                    if (name == "_")
+                    {
+                        targets.Add(new IdentifierExpression(name));
+                        targetBindings.Add(null);
+                        continue;
+                    }
+
+                    this.ReportIfIndexOrRangeTypedDesignation(single);
+                    ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
+                    targets.Add(new IdentifierExpression(name));
+                    targetBindings.Add(local != null && this.IsLocalReassigned(local)
+                        ? BindingKind.Var
+                        : BindingKind.Let);
+                    continue;
+                }
+
                 targets.Add(this.TranslateExpression(argument.Expression));
+                targetBindings.Add(null);
             }
 
             ExpressionSyntax unwrappedRight = right;
@@ -708,7 +740,7 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<GExpression> values = unwrappedRight is TupleExpressionSyntax rightTuple
                 ? rightTuple.Arguments.Select(argument => this.TranslateExpression(argument.Expression)).ToList()
                 : new[] { this.TranslateExpression(right) };
-            result = new GStatement[] { new MultiAssignmentStatement(targets, values) };
+            result = new GStatement[] { new MultiAssignmentStatement(targets, values, targetBindings) };
             return true;
         }
 
@@ -821,10 +853,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Spill the WHOLE right-hand side in one native decon-binding.
-            // G#'s tuple-deconstruction grammar only accepts `let (...)`
-            // (docs/adr/0032-data-struct-ergonomics.md), never `var (...)`,
-            // but that is no loss here — these temps are single-use compiler
-            // internals, never reassigned. This is exactly the mechanism the
+            // These temps are single-use compiler internals, never reassigned,
+            // so use the immutable `let (...)` spelling even though ADR-0168
+            // also permits mutable `var (...)`. This is exactly the mechanism the
             // declaration form (`var (a, b) = e`) already uses, so it inherits
             // the same RHS-shape support for free.
             statements.Add(new TupleDeconstructionStatement(BindingKind.Let, temps, rhsValue));

@@ -118,8 +118,8 @@ namespace Corpus.Issue1895
 }
 ");
 
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("let y = __decon1", rendered, StringComparison.Ordinal);
+        Assert.Contains("x, let y = 2, 3", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -173,6 +173,29 @@ namespace Corpus.Issue1895
     }
 
     [Fact]
+    public void MutableDeclarationForm_UsesVarTupleBinding()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1895
+{
+    public class Holder
+    {
+        public void M()
+        {
+            var (x, y) = (1, 2);
+            x = 3;
+            System.Console.WriteLine(x + y);
+        }
+    }
+}
+");
+
+        Assert.Contains("var (x, y) = (1, 2)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void NestedTarget_LowersToChainedDeconstructionStatements()
     {
         // `((a, b), c) = ((4, 5), 6)` (issue #1974): the outer temp holding the
@@ -204,12 +227,11 @@ namespace Corpus.Issue1895
     }
 
     [Fact]
-    public void DeclarationDiscardTarget_UsesUnderscoreInSpillNoUnusedTemp()
+    public void DeclarationDiscardTarget_UsesNativeDiscard()
     {
         // `(x, var _) = e`: the discard is a `DeclarationExpressionSyntax`
         // wrapping a `DiscardDesignationSyntax`, not a bare `_` identifier.
-        // It must spill as a literal `_` (discarded by G#'s native
-        // deconstruction binding), not an unused `__deconN` temp.
+        // It remains a literal `_` target, with no unused temp.
         string rendered = Render(@"
 namespace Corpus.Issue1895
 {
@@ -225,8 +247,8 @@ namespace Corpus.Issue1895
 }
 ");
 
-        Assert.Contains("let (__decon0, _) = (2, 3)", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
+        Assert.Contains("x, _ = 2, 3", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

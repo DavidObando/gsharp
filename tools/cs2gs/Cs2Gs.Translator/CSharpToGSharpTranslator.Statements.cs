@@ -1847,7 +1847,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // is scoped to the block.
                 statements.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
-                    "__using",
+                    "_",
                     type: null,
                     initializer: this.TranslateExpression(node.Expression),
                     isUsing: true,
@@ -2103,34 +2103,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))
                 {
-                    if (binding == BindingKind.Var)
-                    {
-                        var temps = names.Select(_ => $"__decon{this.state.DeconCounter++}").ToList();
-                        var statements = new List<GStatement>
-                        {
-                            new TupleDeconstructionStatement(
-                                BindingKind.Let,
-                                temps,
-                                this.TranslateExpression(assignment.Right)),
-                        };
-                        for (var i = 0; i < names.Count; i++)
-                        {
-                            if (names[i] != "_")
-                            {
-                                statements.Add(new LocalDeclarationStatement(
-                                    BindingKind.Var,
-                                    names[i],
-                                    initializer: new IdentifierExpression(temps[i])));
-                            }
-                        }
-
-                        return statements;
-                    }
-
                     return new[]
                     {
                         (GStatement)new TupleDeconstructionStatement(
-                            BindingKind.Let,
+                            binding,
                             names,
                             this.TranslateExpression(assignment.Right)),
                     };

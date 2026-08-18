@@ -1139,6 +1139,11 @@ internal sealed partial class StatementBinder
         {
             plans.Add(IsDiscardTarget(targets[i])
                 ? new MultiAssignmentTargetPlan(bindExpression(values[i]), createWrite: null)
+                : targets[i] is MultiAssignmentDeclarationExpressionSyntax declaration
+                    ? new MultiAssignmentTargetPlan(
+                        bindExpression(values[i]),
+                        createWrite: null,
+                        declaration)
                 : BindMultiAssignmentTarget(
                     targets[i],
                     values[i],
@@ -1182,6 +1187,15 @@ internal sealed partial class StatementBinder
             if (IsDiscardTarget(targets[i]))
             {
                 plans.Add(new MultiAssignmentTargetPlan(assignedValue: null, createWrite: null));
+                continue;
+            }
+
+            if (targets[i] is MultiAssignmentDeclarationExpressionSyntax declaration)
+            {
+                plans.Add(new MultiAssignmentTargetPlan(
+                    tupleElements[i],
+                    createWrite: null,
+                    declaration));
                 continue;
             }
 
@@ -1253,14 +1267,26 @@ internal sealed partial class StatementBinder
 
         for (var i = 0; i < plans.Count; i++)
         {
-            var createWrite = plans[i].CreateWrite;
-            if (valueTemps[i] is not { } valueTemp || createWrite == null)
+            if (valueTemps[i] is not { } valueTemp)
             {
                 continue;
             }
 
-            var write = createWrite(new BoundVariableExpression(null, valueTemp));
-            statements.Add(new BoundExpressionStatement(syntax, write));
+            var value = new BoundVariableExpression(null, valueTemp);
+            if (plans[i].Declaration is { } declaration)
+            {
+                var variable = bindLocalVariable(
+                    declaration.Identifier,
+                    isReadOnly: declaration.Keyword.Kind == SyntaxKind.LetKeyword,
+                    valueTemp.Type);
+                statements.Add(new BoundVariableDeclaration(declaration, variable, value));
+                continue;
+            }
+
+            if (plans[i].CreateWrite is { } createWrite)
+            {
+                statements.Add(new BoundExpressionStatement(syntax, createWrite(value)));
+            }
         }
     }
 
@@ -1629,24 +1655,33 @@ internal sealed partial class StatementBinder
     }
 
     private static bool IsDiscardTarget(ExpressionSyntax target) =>
-        target is NameExpressionSyntax name && IsDiscard(name.IdentifierToken);
+        target switch
+        {
+            NameExpressionSyntax name => IsDiscard(name.IdentifierToken),
+            MultiAssignmentDeclarationExpressionSyntax declaration => IsDiscard(declaration.Identifier),
+            _ => false,
+        };
 
     private sealed class MultiAssignmentTargetPlan
     {
         public MultiAssignmentTargetPlan(
             BoundExpression? assignedValue,
-            Func<BoundExpression, BoundExpression>? createWrite)
+            Func<BoundExpression, BoundExpression>? createWrite,
+            MultiAssignmentDeclarationExpressionSyntax? declaration = null)
         {
             AssignedValue = assignedValue;
             CreateWrite = createWrite;
+            Declaration = declaration;
         }
 
         public BoundExpression? AssignedValue { get; }
 
         public Func<BoundExpression, BoundExpression>? CreateWrite { get; }
 
+        public MultiAssignmentDeclarationExpressionSyntax? Declaration { get; }
+
         public MultiAssignmentTargetPlan WithAssignedValue(BoundExpression assignedValue) =>
-            new(assignedValue, CreateWrite);
+            new(assignedValue, CreateWrite, Declaration);
     }
 
     private sealed class MultiAssignmentTupleElementRewriter : BoundTreeRewriter

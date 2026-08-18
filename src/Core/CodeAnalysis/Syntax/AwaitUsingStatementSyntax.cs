@@ -7,7 +7,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// <summary>
 /// Represents an <c>await using let name = expr</c> declaration whose
 /// bound variable is asynchronously disposed (via
-/// <c>IAsyncDisposable.DisposeAsync</c>) when the enclosing scope exits.
+/// <c>IAsyncDisposable.DisposeAsync</c>) when the enclosing scope exits. The
+/// name may be the repeatable discard <c>_</c> (ADR-0168).
 /// </summary>
 public sealed class AwaitUsingStatementSyntax : StatementSyntax
 {

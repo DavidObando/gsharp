@@ -18,6 +18,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <c>a, b := 1, 2</c> was removed by ADR-0077 / issue #717; the parser
 /// now emits GS0305 for that spelling — covered by
 /// <see cref="GSharp.Core.Tests.CodeAnalysis.Syntax.Issue717ColonEqualsRemovedParserTests"/>.
+/// ADR-0168 instead permits explicit fresh targets such as
+/// <c>existing, let fresh = Pair()</c>.
 /// </summary>
 public class MultiAssignmentTests
 {
@@ -32,6 +34,35 @@ public class MultiAssignmentTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void MutableTupleDeclaration_Executes()
+    {
+        var result = EmittedOracle.Evaluate("""
+            var (left, right) = (3, 4)
+            left = 5
+            (left * 10) + right
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(54, result.Value);
+    }
+
+    [Fact]
+    public void MixedFreshAndExistingTargets_Execute()
+    {
+        var result = EmittedOracle.Evaluate("""
+            var existing = 0
+            existing, let fresh = (2, 3)
+            var mutableExisting = 0
+            var mutable, mutableExisting = 4, 5
+            mutable = 6
+            (existing * 1000) + (fresh * 100) + (mutable * 10) + mutableExisting
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2365, result.Value);
     }
 
     [Fact]

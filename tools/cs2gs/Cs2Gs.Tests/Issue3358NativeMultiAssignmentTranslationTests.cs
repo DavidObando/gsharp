@@ -204,11 +204,8 @@ public sealed class C
         Assert.Contains("__decon", printed, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// A mixed declaration (`a, let y = …`) is GS0005 in the native form.
-    /// </summary>
     [Fact]
-    public void MixedDeclaration_KeepsTheDeconLowering()
+    public void MixedDeclaration_UsesInlineFreshTarget()
     {
         string printed = Translate(@"
 public sealed class C
@@ -221,7 +218,8 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("__decon", printed, StringComparison.Ordinal);
+        Assert.Contains("a, let y = 1, 2", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
     }
 
     /// <summary>

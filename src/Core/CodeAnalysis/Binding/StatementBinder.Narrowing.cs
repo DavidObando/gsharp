@@ -369,6 +369,10 @@ internal sealed partial class StatementBinder
                     {
                         assigned.Add(ne.IdentifierToken.Text);
                     }
+                    else if (t is MultiAssignmentDeclarationExpressionSyntax)
+                    {
+                        // Fresh locals do not mutate pre-existing storage.
+                    }
                     else
                     {
                         mayMutateMemberPaths = true;
@@ -1717,8 +1721,10 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
     {
-        // Phase 4.5: `let (a, b, ...) = expr`. Phase 7.3 extends the RHS from
+        // Phase 4.5: `let (a, b, ...) = expr`. Issue #3423 adds the mutable
+        // `var (a, b, ...) = expr` counterpart. Phase 7.3 extends the RHS from
         // tuple-only to data structs, preserving single-eval via a synthetic local.
+        var isReadOnly = syntax.Keyword.Kind == SyntaxKind.LetKeyword;
         var initializer = bindExpression(syntax.Initializer);
         if (initializer.Type == TypeSymbol.Error)
         {
@@ -1747,7 +1753,7 @@ internal sealed partial class StatementBinder
                 }
 
                 var elemType = tupleType.ElementTypes[i];
-                var elemVar = bindLocalVariable(idTok, isReadOnly: true, elemType);
+                var elemVar = bindLocalVariable(idTok, isReadOnly, elemType);
                 statements.Add(new BoundVariableDeclaration(syntax, elemVar, elements[i]));
             }
 
@@ -1780,7 +1786,7 @@ internal sealed partial class StatementBinder
                 }
 
                 var member = members[i];
-                var elemVar = bindLocalVariable(idTok, isReadOnly: true, GetDeconstructionMemberType(member));
+                var elemVar = bindLocalVariable(idTok, isReadOnly, GetDeconstructionMemberType(member));
                 var access = BindDeconstructionMemberAccess(
                     new BoundVariableExpression(null, tempVar),
                     structType,
@@ -1795,6 +1801,7 @@ internal sealed partial class StatementBinder
             initializer,
             syntax.Identifiers,
             syntax.OpenParenToken.Location,
+            isReadOnly,
             out var deconstructStatements))
         {
             return new BoundBlockStatement(syntax, deconstructStatements);
@@ -1909,6 +1916,7 @@ internal sealed partial class StatementBinder
             elementAccessBase,
             identifiers,
             openParenLocation,
+            isReadOnly: true,
             out var deconstructStatements))
         {
             return deconstructStatements;
@@ -1944,6 +1952,7 @@ internal sealed partial class StatementBinder
         BoundExpression receiver,
         SeparatedSyntaxList<SyntaxToken> identifiers,
         TextLocation location,
+        bool isReadOnly,
         out ImmutableArray<BoundStatement> statements)
     {
         statements = default;
@@ -2112,7 +2121,7 @@ internal sealed partial class StatementBinder
                 refKinds.Add(RefKind.Out);
                 if (!IsDiscard(identifiers[i]))
                 {
-                    var variable = bindLocalVariable(identifiers[i], isReadOnly: true, elementType);
+                    var variable = bindLocalVariable(identifiers[i], isReadOnly, elementType);
                     declarations.Add(new BoundVariableDeclaration(
                         null,
                         variable,

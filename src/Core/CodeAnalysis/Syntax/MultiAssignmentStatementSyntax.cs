@@ -6,7 +6,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// Represents a multi-target assignment statement, e.g.
-/// <c>a, obj.Field, values[i] = b, 1, 2</c>.
+/// <c>a, obj.Field, values[i] = b, 1, 2</c> or
+/// <c>a, let fresh = Pair()</c>.
 /// </summary>
 public sealed class MultiAssignmentStatementSyntax : StatementSyntax
 {
@@ -14,7 +15,7 @@ public sealed class MultiAssignmentStatementSyntax : StatementSyntax
     /// Initializes a new instance of the <see cref="MultiAssignmentStatementSyntax"/> class.
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
-    /// <param name="targets">The comma-separated assignment targets.</param>
+    /// <param name="targets">The comma-separated assignment or fresh-local targets.</param>
     /// <param name="operatorToken">The operator token (<c>=</c> or <c>:=</c>).</param>
     /// <param name="values">The comma-separated right-hand side expressions.</param>
     public MultiAssignmentStatementSyntax(
@@ -33,7 +34,7 @@ public sealed class MultiAssignmentStatementSyntax : StatementSyntax
     public override SyntaxKind Kind => SyntaxKind.MultiAssignmentStatement;
 
     /// <summary>
-    /// Gets the comma-separated assignment targets.
+    /// Gets the comma-separated assignment or fresh-local targets.
     /// </summary>
     public SeparatedSyntaxList<ExpressionSyntax> Targets { get; }
 
