@@ -161,8 +161,11 @@ Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
 ordinary static methods in that owner's `shared` block. A forwarding
 receiver-clause companion keeps reduced calls, null-conditional calls, and
-method groups in member form without moving the original body or its CLR
-declaring identity; explicitly qualified calls still use `Owner.M(receiver, …)`.
+method groups in member form when the source method is accessible and the
+companion would not collide with an instance or sibling extension signature.
+Async companions await the retained `Task`/`Task<T>` helper so their own
+`async func` keeps G#'s unwrapped return convention. Explicitly qualified calls
+still use `Owner.M(receiver, …)`.
 Lifting the original bodies to top-level receiver funcs would move them onto the
 synthetic `<Program>` type, which cannot legally access the retained private
 nested type or members whose signatures contain it.

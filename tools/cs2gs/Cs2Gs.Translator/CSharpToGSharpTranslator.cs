@@ -640,11 +640,49 @@ public sealed partial class CSharpToGSharpTranslator
     private static bool CanEmitOwnerScopedReceiverCompanion(IMethodSymbol method)
     {
         IMethodSymbol original = method?.ReducedFrom ?? method;
-        return original?.Parameters.Length > 0
-            && original.Parameters[0].RefKind == RefKind.None
-            && !original.Parameters.Any(parameter => parameter.IsParams)
-            && !original.ReturnsByRef
-            && !original.ReturnsByRefReadonly;
+        if (original?.Parameters.Length is not > 0
+            || original.DeclaredAccessibility == Accessibility.Private
+            || original.Parameters[0].RefKind != RefKind.None
+            || original.Parameters.Any(parameter => parameter.IsParams)
+            || original.ReturnsByRef
+            || original.ReturnsByRefReadonly
+            || HasCrossContainerExtensionDuplicate(original))
+        {
+            return false;
+        }
+
+        return original.Parameters[0].Type is not INamedTypeSymbol receiver
+            || !HasReducedDeclarationCollision(receiver.OriginalDefinition, original);
+    }
+
+    private static bool HasCrossContainerExtensionDuplicate(IMethodSymbol method)
+    {
+        IMethodSymbol original = method?.ReducedFrom ?? method;
+        if (original?.IsExtensionMethod != true || original.Parameters.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (INamedTypeSymbol type in original.ContainingNamespace.GetTypeMembers())
+        {
+            foreach (IMethodSymbol other in type.GetMembers(original.Name).OfType<IMethodSymbol>())
+            {
+                IMethodSymbol otherOriginal = other.ReducedFrom ?? other;
+                if (otherOriginal.IsExtensionMethod
+                    && !SymbolEqualityComparer.Default.Equals(
+                        otherOriginal.ContainingType,
+                        original.ContainingType)
+                    && otherOriginal.Parameters.Length > 0
+                    && SignatureType(otherOriginal.Parameters[0].Type)
+                        == SignatureType(original.Parameters[0].Type)
+                    && HaveSameReducedSignature(original, otherOriginal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool HasPrivateNestedAggregate(INamedTypeSymbol type)

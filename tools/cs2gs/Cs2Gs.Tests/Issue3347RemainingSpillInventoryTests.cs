@@ -25,7 +25,9 @@ public sealed class Issue3347RemainingSpillInventoryTests
     /// Issue #3423 ratchet. Regenerated from <c>be857f02c4</c>, Core started
     /// with 16 <c>__castN</c> occurrences (8 block conversions), 22
     /// <c>__deconN</c> occurrences (11 temp names), and 17 <c>__using</c>
-    /// declarations. All three families are now retired from Core output.
+    /// declarations. Those families and issue #3347's <c>__spillN</c>
+    /// declarations are now retired from Core output; the companion translator
+    /// project ratchet below protects its independently verified zero-spill output.
     /// </summary>
     [Fact]
     public async Task CoreMigration_RemainingSynthesizedNameFamiliesStayRetired()
@@ -61,6 +63,38 @@ public sealed class Issue3347RemainingSpillInventoryTests
         Assert.Equal(0, deconstructionCount);
         Assert.Equal(0, spillCount);
         Assert.Equal(0, usingCount);
+    }
+
+    [Fact]
+    public async Task TranslatorMigration_SpillFamilyStaysRetired()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
+            Path.Combine(
+                repoRoot,
+                "tools",
+                "cs2gs",
+                "Cs2Gs.Translator",
+                "Cs2Gs.Translator.csproj"));
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Translator should bind with no C# errors: "
+                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
+        int spillCount = 0;
+        foreach (LoadedDocument document in project.Documents)
+        {
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            string printed = GSharpPrinter.Print(
+                translator.TranslateDocument(document, context));
+            spillCount += CountOccurrences(printed, "let __spill");
+        }
+
+        Assert.Equal(0, spillCount);
     }
 
     [Fact]

@@ -1521,9 +1521,15 @@ public sealed partial class CSharpToGSharpTranslator
                     SanitizeIdentifier(original.Name)),
                 arguments,
                 typeArguments);
+            GExpression forwarded = original.IsAsync
+                && original.ReturnType is INamedTypeSymbol { Name: "Task" } task
+                && task.ContainingNamespace?.ToDisplayString()
+                    == "System.Threading.Tasks"
+                    ? new AwaitExpression(call)
+                    : call;
             GStatement statement = returnType == null
-                ? new ExpressionStatement(call)
-                : new ReturnStatement(call);
+                ? new ExpressionStatement(forwarded)
+                : new ReturnStatement(forwarded);
             return new BlockStatement(new[] { statement });
         }
 

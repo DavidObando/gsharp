@@ -24,6 +24,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
 {
     private const string Source = """
         using System;
+        using System.Threading.Tasks;
 
         namespace Issue3413
         {
@@ -44,6 +45,9 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     Console.WriteLine(new EntryHelper<int>(42).Value);
                     Console.WriteLine(1.Identity());
                     Console.WriteLine(35.AddCached());
+                    Console.WriteLine(6.DelayIdentityAsync().GetAwaiter().GetResult());
+                    7.DelayAsync().GetAwaiter().GetResult();
+                    Console.WriteLine("async");
                 }
             }
 
@@ -66,6 +70,17 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                 public static T Identity<T>(this T value) => Cache<T>.Echo(value);
 
                 public static int AddCached(this int value) => value + cache.Value;
+
+                public static async Task<T> DelayIdentityAsync<T>(this T value)
+                {
+                    await Task.Yield();
+                    return Cache<T>.Echo(value);
+                }
+
+                public static async Task DelayAsync(this int value)
+                {
+                    await Task.Yield();
+                }
             }
 
             public sealed class GenericOwner<TOuter>
@@ -137,12 +152,20 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             extensionShared.Members.OfType<FieldDeclaration>().Single(field => field.Name == "cache").Visibility);
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "Identity");
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayIdentityAsync");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayAsync");
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Identity");
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "AddCached");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "DelayIdentityAsync");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "DelayAsync");
 
         string rendered = GSharpPrinter.Print(unit);
         Assert.Contains("private class EntryHelper[T]", rendered, StringComparison.Ordinal);
@@ -150,6 +173,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("private var cache Cache[int32]", rendered, StringComparison.Ordinal);
         Assert.Contains("ExtensionOwner.Identity", rendered, StringComparison.Ordinal);
         Assert.Contains("ExtensionOwner.AddCached", rendered, StringComparison.Ordinal);
+        Assert.Contains("return await ExtensionOwner.DelayIdentityAsync", rendered, StringComparison.Ordinal);
+        Assert.Contains("await ExtensionOwner.DelayAsync", rendered, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", rendered, StringComparison.Ordinal);
         Assert.Contains("private open class Helper[TInner]", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -205,6 +230,102 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
+    public void PrivateOwnerScopedExtension_RemainsStaticHelper()
+    {
+        const string source = """
+            using System;
+
+            namespace Issue3413
+            {
+                public static class Program
+                {
+                    public static void Main() => Console.WriteLine(Owner.Run("ok"));
+                }
+
+                public static class Owner
+                {
+                    private sealed class Cache
+                    {
+                    }
+
+                    private static string Secret(this string value) => value + "!";
+
+                    public static string Run(string value) => value.Secret();
+                }
+            }
+            """;
+
+        (CompilationUnit unit, _) = Translate(source);
+        string rendered = GSharpPrinter.Print(unit);
+        TypeDeclaration owner = unit.Members
+            .OfType<TypeDeclaration>()
+            .Single(type => type.Name == "Owner");
+
+        Assert.Contains(
+            Assert.Single(owner.Members.OfType<SharedBlock>()).Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Secret" && method.Visibility == Visibility.Private);
+        Assert.DoesNotContain(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Secret");
+        Assert.Contains("Owner.Secret(value)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void OwnerScopedCompanion_RespectsInstanceAndSiblingCollisions()
+    {
+        const string source = """
+            using System;
+
+            namespace Issue3413
+            {
+                public static class Program
+                {
+                    public static void Main() => Console.WriteLine(new Host().Describe());
+                }
+
+                public sealed class Host
+                {
+                    public string Describe() => "instance";
+                }
+
+                public static class OwnerScoped
+                {
+                    private sealed class Cache
+                    {
+                    }
+
+                    public static string Describe(this Host host) => "extension";
+
+                    public static string Format(this string value) => "owner";
+                }
+
+                public static class Sibling
+                {
+                    public static string Format(this string value) => "sibling";
+                }
+            }
+            """;
+
+        (CompilationUnit unit, _) = Translate(source);
+        string rendered = GSharpPrinter.Print(unit);
+        TypeDeclaration owner = unit.Members
+            .OfType<TypeDeclaration>()
+            .Single(type => type.Name == "OwnerScoped");
+        SharedBlock shared = Assert.Single(owner.Members.OfType<SharedBlock>());
+
+        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Describe");
+        Assert.Contains(shared.Members.OfType<MethodDeclaration>(), method => method.Name == "Format");
+        Assert.DoesNotContain(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Describe");
+        Assert.Single(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "Format");
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public async Task Pipeline_CompilesVerifiesRunsAndEmitsNestedPrivateGenericMetadata()
     {
         string compiler = FindCompiler();
@@ -229,7 +350,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), Source);
         string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
-        File.WriteAllText(goldenPath, "42\n1\n42\n");
+        File.WriteAllText(goldenPath, "42\n1\n42\n6\nasync\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var app = new CorpusApp(
@@ -268,6 +389,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("class Program", translated, StringComparison.Ordinal);
         Assert.Contains("private class EntryHelper[T]", translated, StringComparison.Ordinal);
         Assert.Contains("private class Cache[T]", translated, StringComparison.Ordinal);
+        Assert.Contains("return await ExtensionOwner.DelayIdentityAsync", translated, StringComparison.Ordinal);
+        Assert.Contains("await ExtensionOwner.DelayAsync", translated, StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);
         Assert.Contains("private open class Helper[TInner]", translated, StringComparison.Ordinal);
         Assert.True(
@@ -305,6 +428,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(
             extensionOwner,
             extensionOwner.GetMethod("AddCached", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("DelayIdentityAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("DelayAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
 
         Type genericOwner = Assert.Single(
             assembly.GetTypes(),
