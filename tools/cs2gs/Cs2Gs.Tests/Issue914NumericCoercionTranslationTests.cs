@@ -545,13 +545,12 @@ namespace Demo
     }
 
     /// <summary>
-    /// A C# constant `or` pattern on a nullable numeric (`b is 11 or 12`) lowers to
-    /// equality tests whose literals are retyped to the receiver's numeric type, so
-    /// the result type-checks under G#'s no-implicit-promotion rule (a bare
-    /// `b == 11` of `uint8?` vs `int32` is GS0129).
+    /// A C# constant <c>or</c> pattern on a nullable numeric property uses a
+    /// native G# pattern. The pattern binder types its constants against the
+    /// subject and evaluates the property once.
     /// </summary>
     [Fact]
-    public void ConstantOrPattern_NullableNumericReceiver_RetypesLiterals()
+    public void ConstantOrPattern_NullableNumericPropertyReceiver_UsesNativePattern()
     {
         string printed = TranslateUnit(@"
 #nullable enable
@@ -563,8 +562,8 @@ namespace Demo
         public bool M() => Mode is 11 or 12 or 13;
     }
 }");
-        Assert.Contains("Mode == (11 as uint8?)", printed);
-        Assert.Contains("Mode == (12 as uint8?)", printed);
+        Assert.Contains("Mode is 11 or 12 or 13", printed);
+        Assert.DoesNotContain("Mode ==", printed);
     }
 
     /// <summary>
