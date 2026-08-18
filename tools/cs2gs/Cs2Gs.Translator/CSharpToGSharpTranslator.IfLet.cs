@@ -322,6 +322,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // A statement-form `if let` has no guard clause. Nesting a residual
+            // or conjoined guard would require attaching the same C# else branch
+            // to both binding failure and guard failure; a leading prefix would
+            // add a third copy. Let the general pattern lowering keep one branch.
+            if (ifStatement.Else != null
+                && (prefix.Count > 0
+                    || (!directBinding && (residualPattern != null || guards.Count > 0))))
+            {
+                return false;
+            }
+
             // A guard that itself hoists a spill would need a statement seam
             // ahead of the `if`, but the spill may read the binding — which is
             // only in scope inside the `if let`. Leave those to the general path.
@@ -410,6 +421,7 @@ public sealed partial class CSharpToGSharpTranslator
                 elseBranch = this.TranslateElseStatement(ifStatement.Else.Statement);
             }
 
+            BlockStatement translatedThen = then;
             GStatement inner;
             if (directBinding)
             {
@@ -448,6 +460,14 @@ public sealed partial class CSharpToGSharpTranslator
             if (prefix.Count == 0)
             {
                 result = new[] { inner };
+                if (elseBranch != null)
+                {
+                    this.ReportPatternGuardControlTransferMismatch(
+                        ifStatement,
+                        result,
+                        new GStatement[] { translatedThen, elseBranch });
+                }
+
                 return true;
             }
 
@@ -467,6 +487,14 @@ public sealed partial class CSharpToGSharpTranslator
                     new BlockStatement(new[] { inner }),
                     elseBranch),
             };
+            if (elseBranch != null)
+            {
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    result,
+                    new GStatement[] { translatedThen, elseBranch });
+            }
+
             return true;
         }
 

@@ -678,6 +678,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             result = new GStatement[] { hoist, new IfStatement(guard, then, elseBranch) };
+            if (elseBranch != null)
+            {
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    result,
+                    new GStatement[] { then, elseBranch });
+            }
+
             return true;
         }
 
@@ -737,7 +745,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 thenStatements.AddRange(body.Statements);
             }
-            else
+            else if (elseBranch == null)
             {
                 GExpression guardExpression = null;
                 foreach (ExpressionSyntax guardClause in guards)
@@ -749,6 +757,44 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 thenStatements.Add(new IfStatement(guardExpression, body, elseBranch));
+            }
+            else
+            {
+                GExpression guardExpression = null;
+                foreach (ExpressionSyntax guardClause in guards)
+                {
+                    GExpression translated = this.TranslateExpression(guardClause);
+                    guardExpression = guardExpression == null
+                        ? translated
+                        : new BinaryExpression(guardExpression, "&&", translated);
+                }
+
+                string endLabel = $"__patternGuardEnd{ifStatement.SpanStart}";
+                List<GStatement> matchedBody = body.Statements.ToList();
+                matchedBody.Add(new GotoStatement(endLabel));
+                thenStatements.Add(new IfStatement(
+                    guardExpression,
+                    new BlockStatement(matchedBody)));
+
+                var guardedStatements = new List<GStatement>();
+                if (hoist != null)
+                {
+                    guardedStatements.Add(hoist);
+                }
+
+                guardedStatements.Add(binder);
+                guardedStatements.Add(new IfStatement(
+                    guard,
+                    new BlockStatement(thenStatements)));
+                guardedStatements.Add(elseBranch);
+                guardedStatements.Add(new LabeledStatement(
+                    endLabel,
+                    new BlockStatement(new List<GStatement>())));
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    guardedStatements,
+                    new GStatement[] { body, elseBranch });
+                return guardedStatements;
             }
 
             var statements = new List<GStatement>();
@@ -762,6 +808,14 @@ public sealed partial class CSharpToGSharpTranslator
                 guard,
                 new BlockStatement(thenStatements),
                 guards.Count == 0 ? elseBranch : null));
+            if (elseBranch != null)
+            {
+                this.ReportPatternGuardControlTransferMismatch(
+                    ifStatement,
+                    statements,
+                    new GStatement[] { body, elseBranch });
+            }
+
             return statements;
         }
 
