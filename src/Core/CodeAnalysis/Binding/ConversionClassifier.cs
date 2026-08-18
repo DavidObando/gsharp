@@ -621,6 +621,12 @@ internal sealed class ConversionClassifier
         }
 
         var conversion = Conversion.Classify(expression.Type, type);
+        if (!conversion.Exists
+            && allowExplicit
+            && Conversion.HasCheckedReferenceConversion(expression.Type, type))
+        {
+            conversion = Conversion.Explicit;
+        }
 
         // Issue #1183: C# §10.2.11 implicit constant expression conversion.
         // A *constant* integer expression (an integer literal, or unary +/-

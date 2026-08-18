@@ -109,8 +109,13 @@ public sealed class Conversion
     /// <param name="from">The source type.</param>
     /// <param name="to">The target type.</param>
     /// <param name="allowStructuralProjection">Whether structural projection is eligible.</param>
+    /// <param name="allowExplicitReference">Whether checked reference downcasts are eligible.</param>
     /// <returns>The classified conversion.</returns>
-    internal static Conversion ClassifyCore(TypeSymbol from, TypeSymbol to, bool allowStructuralProjection)
+    internal static Conversion ClassifyCore(
+        TypeSymbol from,
+        TypeSymbol to,
+        bool allowStructuralProjection,
+        bool allowExplicitReference = true)
     {
         // Inner generic nullability metadata does not change the outer CLR type's
         // conversion rules. Expose the symbolic generic/interface shape beneath
@@ -510,10 +515,20 @@ public sealed class Conversion
                 if (IsReferenceLikeTarget(fromUnderlying)
                     && IsReferenceLikeTarget(toUnderlying))
                 {
-                    var underlyingConversion = Classify(fromUnderlying, toUnderlying);
+                    var underlyingConversion = ClassifyCore(
+                        fromUnderlying,
+                        toUnderlying,
+                        allowStructuralProjection: false,
+                        allowExplicitReference);
                     if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
                     {
                         return Conversion.Implicit;
+                    }
+
+                    if (allowExplicitReference
+                        && HasCheckedReferenceConversion(fromUnderlying, toUnderlying))
+                    {
+                        return Conversion.Explicit;
                     }
                 }
 
@@ -585,12 +600,19 @@ public sealed class Conversion
                 var underlyingConversion = ClassifyCore(
                     Invariant.Required(from, "conversion classification has a source type"),
                     Invariant.Required(toNullable.UnderlyingType, "a nullable target has an underlying type"),
-                    allowStructuralProjection);
+                    allowStructuralProjection,
+                    allowExplicitReference);
                 if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
                 {
                     return underlyingConversion.IsStructuralProjection
                         ? Conversion.StructuralProjection
                         : Conversion.Implicit;
+                }
+
+                if (allowExplicitReference
+                    && HasCheckedReferenceConversion(from, toNullable.UnderlyingType))
+                {
+                    return Conversion.Explicit;
                 }
             }
         }
@@ -1214,7 +1236,9 @@ public sealed class Conversion
         if (from is SliceTypeSymbol
             && (to is SliceTypeSymbol or ArrayTypeSymbol || to?.ClrType?.IsArray == true))
         {
-            return Conversion.None;
+            return allowExplicitReference && HasCheckedReferenceConversion(from, to)
+                ? Conversion.Explicit
+                : Conversion.None;
         }
 
         // Imported CLR methods/properties can surface an SZ-array as a plain
@@ -1234,8 +1258,13 @@ public sealed class Conversion
                     Invariant.Required(to.ClrType, "an imported array target has a CLR representation").GetElementType()),
             };
 
-            return AreTypeArgumentsEquivalent(sourceElement, importedTargetElement)
-                ? Conversion.Implicit
+            if (AreTypeArgumentsEquivalent(sourceElement, importedTargetElement))
+            {
+                return Conversion.Implicit;
+            }
+
+            return allowExplicitReference && HasCheckedReferenceConversion(from, to)
+                ? Conversion.Explicit
                 : Conversion.None;
         }
 
@@ -1260,7 +1289,9 @@ public sealed class Conversion
                 && elementConversion.Exists
                 && elementConversion.IsImplicit
                     ? Conversion.Implicit
-                    : Conversion.None;
+                    : allowExplicitReference && HasCheckedReferenceConversion(from, to)
+                        ? Conversion.Explicit
+                        : Conversion.None;
         }
 
         if (from is RectangularArrayTypeSymbol { ClrType: null } symbolicRectangular
@@ -1356,6 +1387,18 @@ public sealed class Conversion
         // explicit unboxing cast — which must still see a genuine `S?` source
         // and classify it on its own terms. Every `S? -> U?` (nullable
         // target) case was already handled above and never reaches this arm.
+        if (allowExplicitReference
+            && from is NullableTypeSymbol nullableReferenceSource
+            && IsReferenceLikeTarget(nullableReferenceSource.UnderlyingType)
+            && to != null
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                nullableReferenceSource.UnderlyingType,
+                to)
+            && HasCheckedReferenceConversion(nullableReferenceSource, to))
+        {
+            return Conversion.Explicit;
+        }
+
         if (from is NullableTypeSymbol fromNullableUpcastSrc
             && IsReferenceLikeTarget(fromNullableUpcastSrc.UnderlyingType))
         {
@@ -1381,6 +1424,11 @@ public sealed class Conversion
             && ClrTypeUtilities.IsAssignableByName(to.ClrType, from.ClrType))
         {
             return Conversion.Implicit;
+        }
+
+        if (allowExplicitReference && HasCheckedReferenceConversion(from, to))
+        {
+            return Conversion.Explicit;
         }
 
         if (allowStructuralProjection && StructuralProjectionPlanner.CanProject(from, to))
@@ -1667,6 +1715,80 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// Returns whether <c>to(fromValue)</c> is a checked CLR reference cast.
+    /// The conversion preserves a null reference, returns the target reference
+    /// on success, and throws <see cref="InvalidCastException"/> for an
+    /// incompatible non-null runtime value.
+    /// </summary>
+    /// <param name="from">Static source type.</param>
+    /// <param name="to">Requested target type.</param>
+    /// <returns><see langword="true"/> for an explicit checked reference conversion.</returns>
+    internal static bool HasCheckedReferenceConversion(TypeSymbol? from, TypeSymbol? to)
+    {
+        var removesReferenceNullability =
+            from is NullableTypeSymbol nullableFrom
+            && IsReferenceLikeTarget(nullableFrom.UnderlyingType)
+            && to is not NullableTypeSymbol;
+        from = UnwrapReferenceNullable(from);
+        to = UnwrapReferenceNullable(to);
+        if (from == null
+            || to == null
+            || !IsReferenceLikeTarget(from)
+            || !IsReferenceLikeTarget(to))
+        {
+            return false;
+        }
+
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to))
+        {
+            return removesReferenceNullability;
+        }
+
+        // A checked downcast exists whenever the target widens back to the
+        // source. Disable this same explicit-reference fallback during the
+        // reverse probe so unrelated reference pairs cannot recurse forever.
+        if (ClassifyCore(
+                to,
+                from,
+                allowStructuralProjection: false,
+                allowExplicitReference: false).IsImplicit)
+        {
+            return true;
+        }
+
+        if (from.ClrType is { } fromClr
+            && to.ClrType is { } toClr
+            && !fromClr.IsValueType
+            && !toClr.IsValueType
+            && ClrTypeUtilities.IsAssignableByName(fromClr, toClr))
+        {
+            return true;
+        }
+
+        var fromInterface = IsInterfaceLikeType(from);
+        var toInterface = IsInterfaceLikeType(to);
+        if (fromInterface && toInterface)
+        {
+            return true;
+        }
+
+        // CLR permits a cross-cast between an interface and an open class.
+        // A sealed class is eligible only when it implements the interface,
+        // which the reverse implicit-conversion probe above already proved.
+        if (fromInterface && IsClassLikeReferenceType(to))
+        {
+            return !IsSealedReferenceType(to);
+        }
+
+        if (toInterface && IsClassLikeReferenceType(from))
+        {
+            return !IsSealedReferenceType(from);
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #2354 follow-up: true when a bare (non-<c>?</c>) <paramref
     /// name="type"/> should accept an implicit <c>nil -></c> conversion
     /// without requiring an explicit <c>T?</c> wrapper. Deliberately
@@ -1755,6 +1877,36 @@ public sealed class Conversion
         }
 
         return true;
+    }
+
+    private static TypeSymbol? UnwrapReferenceNullable(TypeSymbol? type)
+    {
+        while (type is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            type = annotated.BaseType;
+        }
+
+        while (type is NullableTypeSymbol nullable
+            && IsReferenceLikeTarget(nullable.UnderlyingType))
+        {
+            type = nullable.UnderlyingType;
+        }
+
+        return type;
+    }
+
+    private static bool IsClassLikeReferenceType(TypeSymbol type)
+        => type is StructSymbol { IsClass: true }
+            || type.ClrType is { IsClass: true };
+
+    private static bool IsSealedReferenceType(TypeSymbol type)
+    {
+        if (type is StructSymbol { IsClass: true } userClass)
+        {
+            return userClass.IsSealedHierarchy || !userClass.IsOpen;
+        }
+
+        return type.ClrType is { IsClass: true, IsSealed: true };
     }
 
     /// <summary>

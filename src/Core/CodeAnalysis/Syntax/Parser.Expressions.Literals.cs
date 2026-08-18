@@ -39,6 +39,61 @@ public partial class Parser
         return new CallExpressionSyntax(syntaxTree, identifier, questionToken, typeArgumentList: null, openParenthesisToken, arguments, closeParenthesisToken);
     }
 
+    // Issue #3421: canonical conversion calls also accept composite targets,
+    // notably slice/array casts emitted by cs2gs (`[]object(value)`).
+    private bool LooksLikeCompositeTypeConversionCall()
+    {
+        var elementOffset = 0;
+        while (Peek(elementOffset).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            elementOffset++;
+            while (Peek(elementOffset).Kind is SyntaxKind.NumberToken or SyntaxKind.CommaToken)
+            {
+                elementOffset++;
+            }
+
+            if (Peek(elementOffset).Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                return false;
+            }
+
+            elementOffset++;
+            if (Peek(elementOffset).Kind == SyntaxKind.QuestionToken)
+            {
+                elementOffset++;
+            }
+        }
+
+        // `unmanaged[CC] (P...) -> R` is a single function-pointer type.
+        // The generic-call scanner intentionally treats `unmanaged[CC]` as a
+        // named generic and would otherwise mistake its signature `(` for the
+        // operand of an array conversion call.
+        if (Peek(elementOffset).Kind == SyntaxKind.IdentifierToken
+            && Peek(elementOffset).Text == "unmanaged")
+        {
+            return false;
+        }
+
+        var offset = 0;
+        return TryScanTypeClause(ref offset, out var isComplex)
+            && isComplex
+            && Peek(offset).Kind == SyntaxKind.OpenParenthesisToken;
+    }
+
+    private ExpressionSyntax ParseCompositeTypeConversionCall()
+    {
+        var targetType = ParseTypeClause();
+        var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var arguments = ParseArguments();
+        var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new CallExpressionSyntax(
+            syntaxTree,
+            targetType,
+            openParenthesisToken,
+            arguments,
+            closeParenthesisToken);
+    }
+
     // Issue #522: when the token following a constructor call's `)` is `{`
     // and the brace contents look like an object initializer (`Identifier =`
     // or empty `}`), wrap the call in an ObjectCreationExpressionSyntax. We

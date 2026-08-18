@@ -1028,6 +1028,49 @@ internal sealed partial class ExpressionBinder
         var name = syntax.Identifier.Text;
         switch (name)
         {
+            case "cast":
+            {
+                if (syntax.TypeArgumentList == null
+                    || syntax.TypeArgumentList.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongTypeArgumentCount(
+                        syntax.TypeArgumentList?.Location ?? syntax.Identifier.Location,
+                        name,
+                        expectedCount: 1,
+                        actualCount: syntax.TypeArgumentList?.Arguments.Count ?? 0);
+                    result = new BoundErrorExpression(syntax);
+                    return true;
+                }
+
+                if (syntax.Arguments.Count != 1)
+                {
+                    Diagnostics.ReportWrongArgumentCount(
+                        syntax.Identifier.Location,
+                        name,
+                        expectedCount: 1,
+                        actualCount: syntax.Arguments.Count);
+                    result = new BoundErrorExpression(syntax);
+                    return true;
+                }
+
+                var targetType = bindTypeClause(syntax.TypeArgumentList.Arguments[0]);
+                if (targetType == null)
+                {
+                    result = new BoundErrorExpression(syntax);
+                    return true;
+                }
+
+                reportObsoleteUseIfApplicable(
+                    syntax.TypeArgumentList.Arguments[0].Location,
+                    targetType,
+                    targetType.Name);
+                result = conversions.BindConversion(
+                    syntax.Arguments[0],
+                    targetType,
+                    allowExplicit: true);
+                return true;
+            }
+
             case "len":
             case "cap":
             {
@@ -1263,6 +1306,28 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // Issue #3421: a nullable type-call target is unambiguously a checked
+        // conversion, never construction. Resolve imported generic targets
+        // here because ordinary name lookup does not materialize their closed
+        // CLR type.
+        if (syntax.NullableQuestionToken != null && syntax.Arguments.Count == 1)
+        {
+            TypeSymbol checkedTarget = TypeSymbol.FromClrType(resolvedClrType);
+            if (ImportedTypeSymbol.TryCreateSemanticAggregate(
+                    resolvedClrType,
+                    scope.References,
+                    out var nullableAggregate))
+            {
+                checkedTarget = nullableAggregate;
+            }
+
+            result = conversions.BindConversion(
+                syntax.Arguments[0],
+                NullableTypeSymbol.Get(checkedTarget),
+                allowExplicit: true);
+            return true;
+        }
+
         // Issue #2263: for an imported `data class` the CLR type carries a real
         // primary `.ctor`, so TryBindClrConstructorFromType below would succeed
         // and yield a plain ImportedTypeSymbol result — a DUAL identity, since
@@ -1327,6 +1392,7 @@ internal sealed partial class ExpressionBinder
                         syntax,
                         out result,
                         out var noApplicableSecondary,
+                        out var secondaryArguments,
                         resultTypeOverride: dataClassAggregate);
                     if (boundSecondary)
                     {
@@ -1337,7 +1403,12 @@ internal sealed partial class ExpressionBinder
                     }
 
                     return FinishClrConstructorBindingFailure(
-                        syntax, name, noApplicableSecondary, ref result);
+                        syntax,
+                        name,
+                        noApplicableSecondary,
+                        secondaryArguments,
+                        ref result,
+                        dataClassAggregate);
                 }
 
                 result = overloads.BindConstructorCallExpression(syntax, dataClassAggregate);
@@ -1349,6 +1420,7 @@ internal sealed partial class ExpressionBinder
                 syntax,
                 out result,
                 out var noApplicableOverload,
+                out var aggregateArguments,
                 resultTypeOverride: dataClassAggregate);
             if (bound)
             {
@@ -1359,7 +1431,12 @@ internal sealed partial class ExpressionBinder
             }
 
             return FinishClrConstructorBindingFailure(
-                syntax, name, noApplicableOverload, ref result);
+                syntax,
+                name,
+                noApplicableOverload,
+                aggregateArguments,
+                ref result,
+                dataClassAggregate);
         }
 
         if (TryBindClrConstructorFromType(
@@ -1367,6 +1444,7 @@ internal sealed partial class ExpressionBinder
                 syntax,
                 out result,
                 out var clrNoApplicableOverload,
+                out var clrArguments,
                 openGenericDefinition,
                 symbolicTypeArgs))
         {
@@ -1382,15 +1460,44 @@ internal sealed partial class ExpressionBinder
         }
 
         return FinishClrConstructorBindingFailure(
-            syntax, name, clrNoApplicableOverload, ref result);
+            syntax,
+            name,
+            clrNoApplicableOverload,
+            clrArguments,
+            ref result,
+            TypeSymbol.FromClrType(resolvedClrType));
     }
 
     private bool FinishClrConstructorBindingFailure(
         CallExpressionSyntax syntax,
         string typeName,
         bool noApplicableOverload,
-        [NotNullWhen(true)] ref BoundExpression? result)
+        ImmutableArray<BoundExpression> boundArguments,
+        [NotNullWhen(true)] ref BoundExpression? result,
+        TypeSymbol? conversionTarget = null)
     {
+        if (noApplicableOverload
+            && syntax.Arguments.Count == 1
+            && boundArguments.Length == 1
+            && conversionTarget != null)
+        {
+            if (syntax.NullableQuestionToken != null)
+            {
+                conversionTarget = NullableTypeSymbol.Get(conversionTarget);
+            }
+
+            var argument = boundArguments[0];
+            if (Conversion.HasCheckedReferenceConversion(argument.Type, conversionTarget))
+            {
+                result = conversions.BindConversion(
+                    syntax.Arguments[0].Location,
+                    argument,
+                    conversionTarget,
+                    allowExplicit: true);
+                return true;
+            }
+        }
+
         if (syntax.TypeArgumentList == null)
         {
             result = null;
@@ -1509,6 +1616,12 @@ internal sealed partial class ExpressionBinder
     /// supplied arguments. The caller reports this only after semantic-
     /// aggregate constructor fallback has also failed.
     /// </param>
+    /// <param name="boundArgumentsOnFailure">
+    /// Arguments already bound while testing constructor applicability.
+    /// Populated when <paramref name="noApplicableOverload"/> is true so
+    /// checked-reference fallback can reuse them without mutating binder state
+    /// a second time.
+    /// </param>
     /// <param name="openGenericDefinition">
     /// Issue #671: when <paramref name="clrType"/> was closed with a
     /// <see cref="object"/> placeholder for one or more G# user-defined type
@@ -1535,12 +1648,14 @@ internal sealed partial class ExpressionBinder
         CallExpressionSyntax syntax,
         [NotNullWhen(true)] out BoundExpression? result,
         out bool noApplicableOverload,
+        out ImmutableArray<BoundExpression> boundArgumentsOnFailure,
         System.Type? openGenericDefinition = null,
         ImmutableArray<TypeSymbol> symbolicTypeArgs = default,
         TypeSymbol? resultTypeOverride = null)
     {
         result = null;
         noApplicableOverload = false;
+        boundArgumentsOnFailure = default;
 
         if (clrType.IsAbstract || clrType.IsInterface)
         {
@@ -1775,6 +1890,7 @@ internal sealed partial class ExpressionBinder
             }
 
             noApplicableOverload = true;
+            boundArgumentsOnFailure = boundArguments.MoveToImmutable();
             return false;
         }
 
@@ -2231,9 +2347,15 @@ internal sealed partial class ExpressionBinder
             nestedType,
             syntax,
             out result,
-            out var noApplicableOverload);
+            out var noApplicableOverload,
+            out var boundArguments);
         return bound || FinishClrConstructorBindingFailure(
-            syntax, nestedType.Name, noApplicableOverload, ref result);
+            syntax,
+            nestedType.Name,
+            noApplicableOverload,
+            boundArguments,
+            ref result,
+            TypeSymbol.FromClrType(nestedType));
     }
 
     private sealed class SymbolicDelegateTarget

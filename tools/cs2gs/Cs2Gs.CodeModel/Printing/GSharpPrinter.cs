@@ -530,7 +530,9 @@ public static class GSharpPrinter
                 return RenderCollectionInitializer(collection, indent);
 
             case ConversionExpression conversion:
-                return $"{RenderType(conversion.TargetType)}({RenderExpression(conversion.Operand, indent)})";
+                return conversion.IsCheckedReferenceCast
+                    ? $"cast[{RenderType(conversion.TargetType)}]({RenderExpression(conversion.Operand, indent)})"
+                    : $"{RenderType(conversion.TargetType)}({RenderExpression(conversion.Operand, indent)})";
 
             case WithExpression with:
                 if (with.Updates.Count == 0)

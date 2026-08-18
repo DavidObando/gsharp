@@ -861,6 +861,14 @@ public partial class Parser
         // (`List[T]`) — cannot be a legal index expression, so it must be a
         // generic call site (`Box[int32?].Make`, `Box[[]int32].Make`,
         // `Box[List[int32]].Make`).
+        if (nextKind == SyntaxKind.QuestionToken
+            && Peek(pos + 1).Kind == SyntaxKind.OpenParenthesisToken
+            && Peek(pos).Position == Peek(pos - 1).Span.End
+            && Peek(pos + 1).Position == Peek(pos).Span.End)
+        {
+            return true;
+        }
+
         return nextKind == SyntaxKind.DotToken
             && (typeArgumentCount > 1 || sawComplexTypeArgument);
     }
@@ -1351,11 +1359,21 @@ public partial class Parser
             return new GenericNameExpressionSyntax(syntaxTree, identifier, typeArguments);
         }
 
+        var nullableQuestion = Current.Kind == SyntaxKind.QuestionToken
+            ? MatchToken(SyntaxKind.QuestionToken)
+            : null;
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var arguments = ParseArguments();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         arguments = MaybeAppendTrailingLambda(arguments);
-        return new CallExpressionSyntax(syntaxTree, identifier, typeArguments, openParen, arguments, closeParen);
+        return new CallExpressionSyntax(
+            syntaxTree,
+            identifier,
+            nullableQuestion,
+            typeArguments,
+            openParen,
+            arguments,
+            closeParen);
     }
 
     // Issue #479 / ADR-0117: builds the synthetic zero-argument constructor

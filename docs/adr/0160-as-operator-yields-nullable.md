@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-08-11
 - **Phase**: Phase 9 — language depth / null-handling ergonomics
-- **Related**: ADR-0001 (nullable reference types), ADR-0069 (smart-cast flow narrowing), ADR-0071 (`if let` / `guard let`), ADR-0141 (expression-tree lambda conversions), issue [#3349](https://github.com/DavidObando/gsharp/issues/3349), parent [#3347](https://github.com/DavidObando/gsharp/issues/3347)
+- **Related**: ADR-0001 (nullable reference types), ADR-0069 (smart-cast flow narrowing), ADR-0071 (`if let` / `guard let`), ADR-0141 (expression-tree lambda conversions), ADR-0167 (checked reference conversion calls), issue [#3349](https://github.com/DavidObando/gsharp/issues/3349), parent [#3347](https://github.com/DavidObando/gsharp/issues/3347)
 
 ## Context
 
@@ -50,6 +50,12 @@ lines in dotnet/roslyn and 186 per 100k in this repository.
 ## Decision
 
 **`x as T` has type `T?`.**
+
+ADR-0167 later added checked conversion calls plus the unambiguous
+constructor-independent reference-cast spelling `cast[T](x)` /
+`cast[T?](x)`. Checked reference casts preserve null and throw
+`InvalidCastException` for an incompatible non-null value; they do not change
+this ADR's testing-conversion contract.
 
 1. **Binder.** `BindAsExpression` wraps the bound target type in a
    `NullableTypeSymbol` unless it already is one, so `x as T` is `T?` and

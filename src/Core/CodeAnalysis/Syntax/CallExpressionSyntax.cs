@@ -121,11 +121,47 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
         CloseParenthesisToken = closeParenthesisToken;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CallExpressionSyntax"/>
+    /// class for a conversion call whose target is a composite type clause,
+    /// such as <c>[]object(value)</c>.
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="conversionTypeClause">The conversion target type.</param>
+    /// <param name="openParenthesisToken">The open parenthesis token.</param>
+    /// <param name="arguments">The arguments.</param>
+    /// <param name="closeParenthesisToken">The close parenthesis token.</param>
+    public CallExpressionSyntax(
+        SyntaxTree syntaxTree,
+        TypeClauseSyntax conversionTypeClause,
+        SyntaxToken openParenthesisToken,
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        SyntaxToken closeParenthesisToken)
+        : base(syntaxTree)
+    {
+        ConversionTypeClause = conversionTypeClause;
+        Identifier = new SyntaxToken(
+            syntaxTree,
+            SyntaxKind.IdentifierToken,
+            conversionTypeClause.Span.Start,
+            string.Empty,
+            null);
+        OpenParenthesisToken = openParenthesisToken;
+        Arguments = arguments;
+        CloseParenthesisToken = closeParenthesisToken;
+    }
+
     /// <summary>Gets the callee expression for an indirect invocation (issue #2185), or
     /// <see langword="null"/> for the ordinary identifier / member-access call forms. When
     /// non-<see langword="null"/> the call target is the value produced by evaluating this
     /// expression, which must have a function (or delegate) type.</summary>
     public ExpressionSyntax? Callee { get; }
+
+    /// <summary>
+    /// Gets the composite conversion target, or <see langword="null"/> for
+    /// named calls and indirect invocations.
+    /// </summary>
+    public TypeClauseSyntax? ConversionTypeClause { get; }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.CallExpression;

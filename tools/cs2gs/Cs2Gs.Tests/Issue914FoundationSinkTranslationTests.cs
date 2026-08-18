@@ -26,8 +26,8 @@ namespace Cs2Gs.Tests;
 /// receiver emits directly without a translator spill,</item>
 /// <item>a promoted-nullable function value subscribed to a CLR event must be
 /// forgiven with <c>!!</c> at the subscription sink,</item>
-/// <item>a CLR reference cast <c>(T)expr</c> must emit the <c>expr as T</c>
-/// downcast form, not the value-conversion call <c>T(expr)</c>.</item>
+/// <item>a CLR reference cast <c>(T)expr</c> emits the unambiguous checked
+/// cast <c>cast[T](expr)</c>.</item>
 /// </list>
 /// Every promotion is gated to oblivious compilations, so a nullable-enabled
 /// compilation stays byte-identical (unpromoted).
@@ -141,11 +141,9 @@ namespace Demo
     }
 
     [Fact]
-    public void ReferenceDowncast_EmitsAsForm_NotConversionCall()
+    public void ReferenceDowncast_EmitsCheckedConversionCall()
     {
-        // `(IEnumerable)o` is a CLR reference downcast: it must render the
-        // `o as IEnumerable` downcast form, never the value-conversion call
-        // `IEnumerable(o)` (which gsc rejects for a reference target).
+        // `(IEnumerable)o` is a CLR checked reference downcast.
         string printed = TranslateOblivious(@"
 using System.Collections;
 namespace Demo
@@ -159,16 +157,14 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("o as IEnumerable", printed);
-        Assert.DoesNotContain("IEnumerable(o", printed);
+        Assert.Contains("cast[IEnumerable](o)", printed);
+        Assert.DoesNotContain("o as IEnumerable", printed);
     }
 
     [Fact]
-    public void ReferenceDowncast_BetweenClasses_EmitsAsForm()
+    public void ReferenceDowncast_BetweenClasses_EmitsCheckedConversionCall()
     {
-        // A class-to-derived-class downcast is also a reference conversion and
-        // must use the `as` form rather than a constructor-shaped call, which
-        // would otherwise be parsed as instantiating the target type.
+        // A class-to-derived-class downcast uses the same canonical call form.
         string printed = TranslateOblivious(@"
 namespace Demo
 {
@@ -184,8 +180,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("as Dog", printed);
-        Assert.DoesNotContain("Dog(a", printed);
+        Assert.Contains("cast[Dog](a)", printed);
+        Assert.DoesNotContain("a as Dog", printed);
     }
 
     private static string TranslateOblivious(string source)

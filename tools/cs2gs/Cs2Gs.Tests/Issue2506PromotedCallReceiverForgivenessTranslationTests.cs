@@ -89,8 +89,7 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
                     return count;
                 }
             }
-            """,
-            "G# parses class conversion syntax here as a constructor call, so the cast-shape fixture cannot bind.");
+            """);
 
         Assert.Contains("Repro.Find()!!.Name", printed, StringComparison.Ordinal);
         Assert.Contains("Repro.Find()!!.Read()", printed, StringComparison.Ordinal);
@@ -104,7 +103,8 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
         Assert.Contains("FindGeneric[Item]()!!.Name", printed, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(printed, "Repro.FindFactory()!!().Name"));
         Assert.Contains("(Repro.Find())!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("((Repro.Find()!! as Item)!!).Name", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[Item](Repro.Find())", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(" as Item", printed, StringComparison.Ordinal);
         Assert.Contains(
             "(if condition { Repro.Find() } else { Repro.Always() })!!.Name",
             printed,
