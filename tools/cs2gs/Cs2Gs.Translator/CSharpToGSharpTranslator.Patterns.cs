@@ -624,7 +624,140 @@ public sealed partial class CSharpToGSharpTranslator
                 receiver = this.SpillOperand(receiver, isPattern.Expression);
             }
 
-            return this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression);
+            GExpression test = this.TranslatePatternTest(
+                receiver,
+                isPattern.Pattern,
+                receiverType,
+                isPattern.Expression);
+            return this.MaterializeFallbackPatternBindings(isPattern, receiver, test);
+        }
+
+        private GExpression MaterializeFallbackPatternBindings(
+            IsPatternExpressionSyntax isPattern,
+            GExpression receiver,
+            GExpression test)
+        {
+            // Reassigned binders need real writable locals. Bindings whose
+            // scrutinee moved into a short-circuit block need the same treatment
+            // so later conjuncts and selected branches do not reference a
+            // block-local spill.
+            bool crossesShortCircuitBoundary =
+                this.state.ShortCircuitSpillDeclarations != null;
+            List<ILocalSymbol> materializedBinders = this.EnumeratePatternBinders(isPattern.Pattern)
+                .Where(binder =>
+                    crossesShortCircuitBoundary
+                    || this.IsLocalReassigned(binder))
+                .ToList();
+            if (materializedBinders.Count == 0)
+            {
+                return test;
+            }
+
+            List<GStatement> declarations =
+                this.state.ShortCircuitSpillDeclarations
+                ?? this.state.PendingSpillPrologue;
+            if (declarations == null)
+            {
+                this.context.ReportUnsupported(
+                    isPattern,
+                    "a fallback pattern binder requiring materialized storage reached an expression without a declaration seam (issue #3419).");
+                return test;
+            }
+
+            StripTopLevelNegation(isPattern.Pattern, out bool negated);
+            var assignments = new List<GStatement>(materializedBinders.Count);
+            foreach (ILocalSymbol binder in materializedBinders)
+            {
+                if (!this.state.PatternBindings.TryGetValue(
+                        binder,
+                        out GExpression replacement))
+                {
+                    this.context.ReportUnsupported(
+                        isPattern.Pattern,
+                        $"fallback pattern binder '{binder.Name}' has no translated matched-value expression for materialized storage (issue #3419).");
+                    continue;
+                }
+
+                if (negated)
+                {
+                    replacement = this.BuildNegatedPatternBindingValue(
+                        binder,
+                        receiver,
+                        isPattern.Expression);
+                }
+
+                GTypeReference storageType = this.typeMapper.Map(
+                    binder.Type,
+                    this.context,
+                    isPattern.Pattern.GetLocation());
+                if (binder.Type.IsReferenceType)
+                {
+                    storageType = MakeNullable(storageType);
+                }
+
+                string name = SanitizeIdentifier(binder.Name);
+                var local = new IdentifierExpression(name);
+                declarations.Add(new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    name,
+                    storageType));
+                assignments.Add(new AssignmentStatement(local, replacement));
+                this.state.PatternBindings[binder] =
+                    binder.Type.IsReferenceType
+                        && binder.NullableAnnotation != NullableAnnotation.Annotated
+                            ? new NonNullAssertionExpression(local)
+                            : local;
+            }
+
+            if (assignments.Count == 0)
+            {
+                return test;
+            }
+
+            return new BinaryExpression(
+                test,
+                negated ? "||" : "&&",
+                new BlockExpression(
+                    assignments,
+                    LiteralExpression.Bool(!negated)));
+        }
+
+        private GExpression BuildNegatedPatternBindingValue(
+            ILocalSymbol binder,
+            GExpression receiver,
+            ExpressionSyntax receiverSyntax)
+        {
+            GTypeReference targetType = this.typeMapper.Map(
+                binder.Type,
+                this.context,
+                receiverSyntax.GetLocation());
+            if (binder.Type.IsValueType)
+            {
+                ITypeSymbol receiverType = this.context.GetTypeInfo(receiverSyntax).Type;
+                if (receiverType is INamedTypeSymbol nullableReceiver
+                    && nullableReceiver.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                    && nullableReceiver.TypeArguments.Length == 1
+                    && SymbolEqualityComparer.Default.Equals(
+                        nullableReceiver.TypeArguments[0],
+                        binder.Type))
+                {
+                    return new NonNullAssertionExpression(receiver);
+                }
+
+                return targetType is NamedTypeReference namedTarget
+                    ? new InvocationExpression(
+                        new IdentifierExpression(namedTarget.Name),
+                        new[] { receiver },
+                        namedTarget.TypeArguments)
+                    : new NonNullAssertionExpression(receiver);
+            }
+
+            return new NonNullAssertionExpression(
+                new ParenthesizedExpression(
+                    new BinaryExpression(
+                        receiver,
+                        "as",
+                        new TypeExpression(targetType))));
         }
 
         // See <see cref="TranslateIsPattern"/>: true when translating `pattern`
@@ -1866,10 +1999,25 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateCoalescingAssignmentAsExpression(assignment);
             }
 
-            return new AssignmentExpression(
+            GExpression result = new AssignmentExpression(
                 this.TranslateAssignmentTarget(assignment.Left),
                 this.TranslateAssignmentValue(assignment),
                 assignment.OperatorToken.Text);
+
+            // A materialized non-null reference binder uses nullable storage
+            // because its declaration precedes the guard. Its assignment result
+            // still has the binder's non-null C# type.
+            if (assignment.Left is IdentifierNameSyntax identifier
+                && this.context.GetSymbolInfo(identifier).Symbol is { } symbol
+                && this.state.PatternBindings.TryGetValue(
+                    symbol,
+                    out GExpression replacement)
+                && replacement is NonNullAssertionExpression)
+            {
+                result = new NonNullAssertionExpression(result);
+            }
+
+            return result;
         }
 
         private GExpression TranslateCoalescingAssignmentAsExpression(

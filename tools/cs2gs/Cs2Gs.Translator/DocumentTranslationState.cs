@@ -175,6 +175,17 @@ internal sealed class DocumentTranslationState
     // unrelated enclosing scope.
     public List<GStatement> PendingSpillPrologue { get; set; }
 
+    // A fallback pattern spill inside a conditionally evaluated short-circuit
+    // operand declares its reusable temp in the enclosing expression's seam,
+    // then assigns it inside the operand's block expression. This keeps the temp
+    // visible to later pattern-variable reads without evaluating the scrutinee
+    // before the guards that protect it.
+    public List<GStatement> ShortCircuitSpillDeclarations { get; set; }
+
+    // Outermost short-circuit operand currently redirecting fallback pattern
+    // spills. Nested lambdas/local functions must not reuse its declaration seam.
+    public SyntaxNode ShortCircuitSpillScope { get; set; }
+
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
     public int SpillCounter { get; set; }
 
