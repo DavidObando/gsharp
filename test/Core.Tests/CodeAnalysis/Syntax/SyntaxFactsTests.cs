@@ -44,7 +44,6 @@ public class SyntaxFactsTests
     [InlineData("unchecked", IdentifierNameContext.Invocation)]
     [InlineData("typeof", IdentifierNameContext.Invocation)]
     [InlineData("sizeof", IdentifierNameContext.Invocation)]
-    [InlineData("make", IdentifierNameContext.Invocation)]
     [InlineData("init", IdentifierNameContext.Invocation)]
     [InlineData("when", IdentifierNameContext.Pattern)]
     [InlineData("and", IdentifierNameContext.Pattern)]

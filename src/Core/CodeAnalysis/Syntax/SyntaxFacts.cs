@@ -282,7 +282,7 @@ public static class SyntaxFacts
         }
 
         if ((context & IdentifierNameContext.Invocation) != 0
-            && text is "make" or "typeof" or "sizeof" or "checked" or "unchecked" or "nameof" or "init")
+            && text is "typeof" or "sizeof" or "checked" or "unchecked" or "nameof" or "init")
         {
             return true;
         }

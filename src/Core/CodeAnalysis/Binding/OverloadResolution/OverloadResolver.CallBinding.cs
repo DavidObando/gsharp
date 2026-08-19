@@ -36,7 +36,7 @@ internal sealed partial class OverloadResolver
 
         foreach (var m in ClrTypeUtilities.SafeGetMethods(type, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public))
         {
-            if (string.Equals(m.Name, name, System.StringComparison.Ordinal))
+            if (ClrTypeUtilities.EmittedMemberNameMatches(m, name))
             {
                 return true;
             }

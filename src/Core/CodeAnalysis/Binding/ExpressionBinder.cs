@@ -2582,7 +2582,7 @@ internal sealed partial class ExpressionBinder
         // method group for delegate conversions / member access.
         foreach (var method in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(declaringType, flags))
         {
-            if (!string.Equals(method.Name, name, StringComparison.Ordinal))
+            if (!ClrTypeUtilities.EmittedMemberNameMatches(method, name))
             {
                 continue;
             }

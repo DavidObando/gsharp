@@ -11,6 +11,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -588,6 +589,44 @@ public static class ClrTypeUtilities
     /// <returns>The methods whose signatures load cleanly.</returns>
     public static MethodInfo[] SafeGetMethods(Type type, BindingFlags flags)
         => SafeEnumerate<MethodInfo>(type, flags, t => t.GetMethods(flags));
+
+    /// <summary>
+    /// Matches a G# emitted member spelling to its original CLR metadata name.
+    /// Exact CLR names win; sanitized names use the same collision-aware
+    /// normalization as cs2gs.
+    /// </summary>
+    /// <param name="member">The CLR member candidate.</param>
+    /// <param name="emittedName">The G# source spelling.</param>
+    /// <returns><c>true</c> when the names identify the same member.</returns>
+    public static bool EmittedMemberNameMatches(MemberInfo member, string emittedName)
+    {
+        if (string.Equals(member.Name, emittedName, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        Type? declaringType = member.DeclaringType;
+        if (declaringType is null)
+        {
+            return false;
+        }
+
+        const BindingFlags allMembers =
+            BindingFlags.Public | BindingFlags.NonPublic |
+            BindingFlags.Static | BindingFlags.Instance;
+        IEnumerable<string> scopeNames =
+            SafeGetProperties(declaringType, allMembers).Select(candidate => candidate.Name)
+                .Concat(SafeGetFields(declaringType, allMembers).Select(candidate => candidate.Name))
+                .Concat(SafeGetEvents(declaringType, allMembers).Select(candidate => candidate.Name))
+                .Concat(SafeGetMethods(declaringType, allMembers).Select(candidate => candidate.Name));
+        return string.Equals(
+            SyntaxFacts.GetEmittedIdentifier(
+                member.Name,
+                IdentifierNameContext.General,
+                scopeNames),
+            emittedName,
+            StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Looks up a single property by name tolerantly (issue #338). When the
@@ -1511,10 +1550,45 @@ public static class ClrTypeUtilities
             return null;
         }
 
+        TMember? FindCanonical()
+        {
+            for (Type? declaringType = type; declaringType != null; declaringType = declaringType.BaseType)
+            {
+                TMember? match = null;
+                foreach (TMember candidate in safeEnumerate(type, flags))
+                {
+                    if (!EmittedMemberNameMatches(candidate, name)
+                        || !AreSame(candidate.DeclaringType, declaringType))
+                    {
+                        continue;
+                    }
+
+                    if (match != null)
+                    {
+                        return null;
+                    }
+
+                    match = candidate;
+                }
+
+                if (match != null)
+                {
+                    return match;
+                }
+            }
+
+            return null;
+        }
+
         try
         {
             var member = directLookup(type, flags);
-            return member != null && CanLoadSignature(member) ? member : null;
+            if (member != null && CanLoadSignature(member))
+            {
+                return member;
+            }
+
+            return FindCanonical();
         }
         catch (AmbiguousMatchException)
         {
@@ -1523,7 +1597,7 @@ public static class ClrTypeUtilities
                 TMember? match = null;
                 foreach (var member in safeEnumerate(type, flags))
                 {
-                    if (!string.Equals(member.Name, name, StringComparison.Ordinal)
+                    if (!EmittedMemberNameMatches(member, name)
                         || !AreSame(member.DeclaringType, declaringType))
                     {
                         continue;
@@ -1550,15 +1624,7 @@ public static class ClrTypeUtilities
             // The direct lookup was poisoned by an unloadable member (the target
             // or a sibling reflected over during the search). Recover via the
             // guarded enumeration, which skips only the offending members.
-            foreach (var member in safeEnumerate(type, flags))
-            {
-                if (string.Equals(member.Name, name, StringComparison.Ordinal))
-                {
-                    return member;
-                }
-            }
-
-            return null;
+            return FindCanonical();
         }
     }
 

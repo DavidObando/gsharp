@@ -294,7 +294,7 @@ internal sealed class MemberLookup
             var result = new List<MethodInfo>();
             foreach (var m in selfMethods)
             {
-                if (string.Equals(m.Name, n, StringComparison.Ordinal))
+                if (ClrTypeUtilities.EmittedMemberNameMatches(m, n))
                 {
                     result.Add(m);
                 }
@@ -309,7 +309,7 @@ internal sealed class MemberLookup
                     current,
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    if (string.Equals(m.Name, n, StringComparison.Ordinal)
+                    if (ClrTypeUtilities.EmittedMemberNameMatches(m, n)
                         && !IsMethodHiddenByExisting(result, m))
                     {
                         result.Add(m);
@@ -323,7 +323,7 @@ internal sealed class MemberLookup
                     clrType.GetGenericTypeDefinition(),
                     BindingFlags.Public | BindingFlags.Instance))
                 {
-                    if (!string.Equals(openMethod.Name, n, StringComparison.Ordinal))
+                    if (!ClrTypeUtilities.EmittedMemberNameMatches(openMethod, n))
                     {
                         continue;
                     }
@@ -349,7 +349,7 @@ internal sealed class MemberLookup
             {
                 foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
                 {
-                    if (!string.Equals(m.Name, n, StringComparison.Ordinal))
+                    if (!ClrTypeUtilities.EmittedMemberNameMatches(m, n))
                     {
                         continue;
                     }
@@ -2669,7 +2669,7 @@ internal sealed class MemberLookup
 
         foreach (var method in methods)
         {
-            if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
+            if (!ClrTypeUtilities.EmittedMemberNameMatches(method, methodName))
             {
                 continue;
             }
@@ -3485,7 +3485,7 @@ internal sealed class MemberLookup
                          staticClassType,
                          BindingFlags.Static | BindingFlags.Public))
             {
-                if (string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                if (ClrTypeUtilities.EmittedMemberNameMatches(method, methodName))
                 {
                     statics.Add(method);
                 }
@@ -3550,7 +3550,7 @@ internal sealed class MemberLookup
 
             foreach (var method in methods)
             {
-                if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                if (!ClrTypeUtilities.EmittedMemberNameMatches(method, methodName))
                 {
                     continue;
                 }

@@ -152,7 +152,7 @@ internal sealed partial class ExpressionBinder
             foreach (var method in classType.GetMethods(
                          BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
             {
-                if (method.Name == methodName
+                if (ClrTypeUtilities.EmittedMemberNameMatches(method, methodName)
                     && method.IsGenericMethodDefinition
                     && method.GetGenericArguments().Length == explicitTypeArgs.Length)
                 {

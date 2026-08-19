@@ -254,7 +254,8 @@ public sealed class CSharpTypeMapper
             return;
         }
 
-        this.shortenedNamespaces.Add(ns.ToDisplayString());
+        this.shortenedNamespaces.Add(
+            this.nameAllocator?.GetNamespaceName(ns) ?? ns.ToDisplayString());
     }
 
     /// <summary>

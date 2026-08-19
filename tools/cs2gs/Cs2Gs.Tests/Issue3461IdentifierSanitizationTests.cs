@@ -248,7 +248,7 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("func sizeof_()", rendered, StringComparison.Ordinal);
         Assert.Contains("func unchecked_()", rendered, StringComparison.Ordinal);
         Assert.Contains("func init_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func make_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func make()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.nameof()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.checked()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.typeof()", rendered, StringComparison.Ordinal);
@@ -259,6 +259,213 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("func init_()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("func nameof_()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void InterfaceContract_CollisionUsesOneAllocatedNameAtRuntime()
+    {
+        string rendered = Render(
+            """
+            public interface IValue
+            {
+                int @type();
+            }
+
+            public sealed class Value : IValue
+            {
+                public int type_() => 100;
+
+                public int @type() => 7;
+            }
+
+            public static class Holder
+            {
+                public static int Run()
+                {
+                    IValue value = new Value();
+                    return value.@type() + new Value().type_();
+                }
+            }
+            """);
+
+        Assert.Equal(
+            2,
+            rendered.Split("func type__()", StringSplitOptions.None).Length - 1);
+        Assert.Contains("func type_()", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
+    public void OverrideContract_CollisionUsesOneAllocatedNameAtRuntime()
+    {
+        string rendered = Render(
+            """
+            public class Base
+            {
+                public virtual int @type() => 1;
+            }
+
+            public sealed class Derived : Base
+            {
+                public int type_() => 200;
+
+                public override int @type() => 9;
+            }
+
+            public static class Holder
+            {
+                public static int Run()
+                {
+                    Base value = new Derived();
+                    return value.@type() + new Derived().type_();
+                }
+            }
+            """);
+
+        Assert.Equal(
+            2,
+            rendered.Split("func type__()", StringSplitOptions.None).Length - 1);
+        Assert.Contains("func type_()", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(209, result.Value);
+    }
+
+    [Fact]
+    public void ConsumerBeforeRecord_UsesPrecomputedPrimaryParameterName()
+    {
+        IReadOnlyDictionary<string, string> rendered = RenderFiles(
+            ("Consumer.cs", """
+                public static class Holder
+                {
+                    public static int Read(R value) => value.@params;
+                }
+                """),
+            ("Record.cs", """
+                public record R
+                {
+                    public int @params { get; set; } = 7;
+                }
+                """));
+
+        Assert.Contains(".params_", rendered["Consumer.cs"], StringComparison.Ordinal);
+        Assert.Contains("data class R(params_", rendered["Record.cs"], StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered.Values.ToArray());
+    }
+
+    [Fact]
+    public void GenericBaseAndStackallocNames_AreAllocated()
+    {
+        string rendered = Render(
+            """
+            public class @base<T> { }
+            public class @stackalloc<T> { }
+
+            public static class CallHolder
+            {
+                private static T @base<T>(T value) => value;
+                private static T @stackalloc<T>(T value) => value;
+
+                public static int Run()
+                {
+                    return @base<int>(1) + @stackalloc<int>(2);
+                }
+            }
+
+            public static class CreateHolder
+            {
+                public static void Run()
+                {
+                    _ = new @base<int>();
+                    _ = new @stackalloc<int>();
+                }
+            }
+            """);
+
+        Assert.Contains("class base_", rendered, StringComparison.Ordinal);
+        Assert.Contains("class stackalloc_", rendered, StringComparison.Ordinal);
+        Assert.Contains("func base_[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("func stackalloc_[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("base_[int32](1)", rendered, StringComparison.Ordinal);
+        Assert.Contains("stackalloc_[int32](2)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void SourceExtensionNamespace_UsesAllocatedImport()
+    {
+        IReadOnlyDictionary<string, string> rendered = RenderFiles(
+            ("GlobalUsings.cs", "global using @class;"),
+            ("Extensions.cs", """
+                namespace @class;
+
+                public static class Extensions
+                {
+                    public static int CountLetters(this string value) => value.Length;
+                }
+                """),
+            ("Consumer.cs", """
+                namespace Consumer;
+
+                public static class Holder
+                {
+                    public static int Run() => "abc".CountLetters();
+                }
+                """));
+
+        Assert.Contains("package class_", rendered["Extensions.cs"], StringComparison.Ordinal);
+        Assert.Contains("import class_", rendered["Consumer.cs"], StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered.Values.ToArray());
+    }
+
+    [Fact]
+    public void ImportedClrMemberCollisionsAndMake_PreserveMetadataIdentityAtRuntime()
+    {
+        string fixtureAssembly = typeof(ImportedIdentifierFields).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixtureAssembly))
+            .ToArray();
+        string rendered = Render(
+            """
+            using Cs2Gs.Tests;
+
+            public static class Holder
+            {
+                public static int Run()
+                {
+                    var fields = new ImportedIdentifierFields();
+                    var properties = new ImportedIdentifierProperties();
+                    var methods = new ImportedIdentifierMethods();
+                    return fields.@type + fields.type_ +
+                        properties.@type + properties.type_ +
+                        methods.@type() + methods.type_() + methods.@make();
+                }
+            }
+            """,
+            references);
+
+        Assert.Contains("fields.type__", rendered, StringComparison.Ordinal);
+        Assert.Contains("fields.type_", rendered, StringComparison.Ordinal);
+        Assert.Contains("properties.type__", rendered, StringComparison.Ordinal);
+        Assert.Contains("methods.type__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("methods.make()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("methods.make_()", rendered, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
+        TranslationTestValidation.AssertBinds(resolver, rendered);
+        var result = EmittedOracle.Evaluate(
+            new[] { rendered + Environment.NewLine + "Holder.Run()" },
+            new EmittedOracleOptions { References = new[] { fixtureAssembly } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(54, result.Value);
     }
 
     [Fact]
@@ -588,4 +795,37 @@ public sealed class ReservedNamedAttribute : Attribute
 
     /// <summary>Gets or sets colliding legal-name data.</summary>
     public string type_ { get; set; }
+}
+
+/// <summary>Imported CLR field fixture with colliding names.</summary>
+public sealed class ImportedIdentifierFields
+{
+    /// <summary>Reserved-name field.</summary>
+    public int @type = 3;
+
+    /// <summary>Legal colliding field.</summary>
+    public int type_ = 5;
+}
+
+/// <summary>Imported CLR property fixture with colliding names.</summary>
+public sealed class ImportedIdentifierProperties
+{
+    /// <summary>Reserved-name property.</summary>
+    public int @type => 7;
+
+    /// <summary>Legal colliding property.</summary>
+    public int type_ => 11;
+}
+
+/// <summary>Imported CLR method fixture with colliding and contextual names.</summary>
+public sealed class ImportedIdentifierMethods
+{
+    /// <summary>Reserved-name method.</summary>
+    public int @type() => 13;
+
+    /// <summary>Legal colliding method.</summary>
+    public int type_() => 15;
+
+    /// <summary>Contextual method name legal after member access.</summary>
+    public int @make() => 0;
 }

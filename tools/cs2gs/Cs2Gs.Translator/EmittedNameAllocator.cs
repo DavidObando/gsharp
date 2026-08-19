@@ -25,7 +25,10 @@ internal sealed class EmittedNameAllocator
     private readonly Dictionary<ISymbol, string> emittedNames =
         new(SymbolEqualityComparer.Default);
 
-    private readonly Dictionary<ISymbol, GSharpIdentifierNameContext> additionalContexts =
+    private readonly Dictionary<ISymbol, GSharpIdentifierNameContext> precomputedContexts =
+        new(SymbolEqualityComparer.Default);
+
+    private readonly Dictionary<ISymbol, IReadOnlyCollection<ISymbol>> contractGroups =
         new(SymbolEqualityComparer.Default);
 
     private readonly Dictionary<ISymbol, IReadOnlyCollection<string>> methodScopeNames =
@@ -37,7 +40,9 @@ internal sealed class EmittedNameAllocator
     private EmittedNameAllocator(Compilation compilation)
     {
         this.compilation = compilation;
+        this.CollectContractGroups();
         this.CollectInvocationSensitiveSymbols();
+        this.CollectPrimaryParameterContexts();
     }
 
     public static EmittedNameAllocator For(Compilation compilation) =>
@@ -55,30 +60,29 @@ internal sealed class EmittedNameAllocator
         lock (this.gate)
         {
             symbol = Canonical(symbol);
-            if (additionalContext != GSharpIdentifierNameContext.General)
-            {
-                this.additionalContexts.TryGetValue(
-                    symbol,
-                    out GSharpIdentifierNameContext registered);
-                this.additionalContexts[symbol] = registered | additionalContext;
-            }
-
-            if (this.emittedNames.TryGetValue(symbol, out string existing)
-                && additionalContext == GSharpIdentifierNameContext.General)
+            if (this.emittedNames.TryGetValue(symbol, out string existing))
             {
                 return existing;
             }
 
-            this.additionalContexts.TryGetValue(
-                symbol,
-                out GSharpIdentifierNameContext registeredContext);
-            GSharpIdentifierNameContext context =
-                this.GetContext(symbol) | registeredContext | additionalContext;
+            IReadOnlyCollection<ISymbol> contract = this.GetContractGroup(symbol);
+            GSharpIdentifierNameContext context = additionalContext;
+            foreach (ISymbol member in contract)
+            {
+                this.precomputedContexts.TryGetValue(
+                    member,
+                    out GSharpIdentifierNameContext precomputed);
+                context |= this.GetContext(member) | precomputed;
+            }
+
             string emitted = GSharpSyntaxFacts.GetEmittedIdentifier(
-                symbol.Name,
+                SourceName(symbol),
                 context,
-                this.GetScopeNames(symbol));
-            this.emittedNames[symbol] = emitted;
+                contract.SelectMany(this.GetScopeNames).Distinct(StringComparer.Ordinal));
+            foreach (ISymbol member in contract)
+            {
+                this.emittedNames[member] = emitted;
+            }
 
             return emitted;
         }
@@ -114,9 +118,19 @@ internal sealed class EmittedNameAllocator
         symbol switch
         {
             IMethodSymbol method => method.OriginalDefinition,
+            IPropertySymbol property => property.OriginalDefinition,
+            IEventSymbol @event => @event.OriginalDefinition,
             INamedTypeSymbol type => type.OriginalDefinition,
             _ => symbol,
         };
+
+    private static string SourceName(ISymbol symbol)
+    {
+        int separator = symbol.Name.LastIndexOf('.');
+        return separator >= 0
+            ? symbol.Name.Substring(separator + 1)
+            : symbol.Name;
+    }
 
     private GSharpIdentifierNameContext GetContext(ISymbol symbol)
     {
@@ -144,7 +158,8 @@ internal sealed class EmittedNameAllocator
             _ => GSharpIdentifierNameContext.General,
         };
 
-        if (this.invocationSensitive.Contains(symbol))
+        if (!symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty
+            && this.invocationSensitive.Contains(symbol))
         {
             context |= GSharpIdentifierNameContext.Invocation;
         }
@@ -180,16 +195,16 @@ internal sealed class EmittedNameAllocator
             case INamespaceSymbol namespaceSymbol:
                 return namespaceSymbol.ContainingNamespace?
                     .GetMembers()
-                    .Select(candidate => candidate.Name)
+                    .Select(SourceName)
                     .ToArray()
                     ?? Array.Empty<string>();
 
             default:
                 return symbol.ContainingType?.GetMembers()
-                    .Select(candidate => candidate.Name)
+                    .Select(SourceName)
                     .ToArray()
                     ?? symbol.ContainingNamespace?.GetMembers()
-                        .Select(candidate => candidate.Name)
+                        .Select(SourceName)
                         .ToArray()
                     ?? Array.Empty<string>();
         }
@@ -252,6 +267,302 @@ internal sealed class EmittedNameAllocator
         return result;
     }
 
+    private IReadOnlyCollection<ISymbol> GetContractGroup(ISymbol symbol) =>
+        this.contractGroups.TryGetValue(symbol, out IReadOnlyCollection<ISymbol> group)
+            ? group
+            : new[] { symbol };
+
+    private void AddPrecomputedContext(
+        ISymbol symbol,
+        GSharpIdentifierNameContext context)
+    {
+        symbol = Canonical(symbol);
+        this.precomputedContexts.TryGetValue(
+            symbol,
+            out GSharpIdentifierNameContext existing);
+        this.precomputedContexts[symbol] = existing | context;
+    }
+
+    private void CollectContractGroups()
+    {
+        var parent = new Dictionary<ISymbol, ISymbol>(SymbolEqualityComparer.Default);
+
+        ISymbol Find(ISymbol symbol)
+        {
+            symbol = Canonical(symbol);
+            if (!parent.TryGetValue(symbol, out ISymbol current))
+            {
+                parent[symbol] = symbol;
+                return symbol;
+            }
+
+            if (!SymbolEqualityComparer.Default.Equals(current, symbol))
+            {
+                parent[symbol] = Find(current);
+            }
+
+            return parent[symbol];
+        }
+
+        void Union(ISymbol left, ISymbol right)
+        {
+            ISymbol leftRoot = Find(left);
+            ISymbol rightRoot = Find(right);
+            if (!SymbolEqualityComparer.Default.Equals(leftRoot, rightRoot))
+            {
+                parent[rightRoot] = leftRoot;
+            }
+        }
+
+        foreach (INamedTypeSymbol type in EnumerateSourceTypes(
+            this.compilation.Assembly.GlobalNamespace))
+        {
+            foreach (ISymbol member in type.GetMembers())
+            {
+                ISymbol overridden = member switch
+                {
+                    IMethodSymbol method => method.OverriddenMethod,
+                    IPropertySymbol property => property.OverriddenProperty,
+                    IEventSymbol @event => @event.OverriddenEvent,
+                    _ => null,
+                };
+                if (overridden != null)
+                {
+                    Union(member, overridden);
+                }
+
+                IEnumerable<ISymbol> explicitImplementations = member switch
+                {
+                    IMethodSymbol method => method.ExplicitInterfaceImplementations,
+                    IPropertySymbol property => property.ExplicitInterfaceImplementations,
+                    IEventSymbol @event => @event.ExplicitInterfaceImplementations,
+                    _ => Array.Empty<ISymbol>(),
+                };
+                foreach (ISymbol implemented in explicitImplementations)
+                {
+                    Union(member, implemented);
+                }
+            }
+
+            foreach (INamedTypeSymbol iface in type.AllInterfaces)
+            {
+                foreach (ISymbol interfaceMember in iface.GetMembers())
+                {
+                    ISymbol implementation =
+                        type.FindImplementationForInterfaceMember(interfaceMember);
+                    if (implementation != null)
+                    {
+                        Union(implementation, interfaceMember);
+                    }
+                }
+            }
+        }
+
+        var groups = new Dictionary<ISymbol, List<ISymbol>>(
+            SymbolEqualityComparer.Default);
+        foreach (ISymbol symbol in parent.Keys.ToArray())
+        {
+            ISymbol root = Find(symbol);
+            if (!groups.TryGetValue(root, out List<ISymbol> group))
+            {
+                group = new List<ISymbol>();
+                groups[root] = group;
+            }
+
+            group.Add(symbol);
+        }
+
+        foreach (List<ISymbol> group in groups.Values)
+        {
+            ISymbol[] members = group.ToArray();
+            foreach (ISymbol member in members)
+            {
+                this.contractGroups[member] = members;
+            }
+        }
+    }
+
+    private void CollectPrimaryParameterContexts()
+    {
+        foreach (Microsoft.CodeAnalysis.SyntaxTree tree in this.compilation.SyntaxTrees)
+        {
+            SemanticModel model = this.compilation.GetSemanticModel(tree);
+            foreach (RecordDeclarationSyntax record in tree.GetRoot()
+                .DescendantNodes()
+                .OfType<RecordDeclarationSyntax>())
+            {
+                if (record.ParameterList != null)
+                {
+                    continue;
+                }
+
+                List<ConstructorDeclarationSyntax> instanceConstructors = record.Members
+                    .OfType<ConstructorDeclarationSyntax>()
+                    .Where(constructor =>
+                        !constructor.Modifiers.Any(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword))
+                    .ToList();
+                if (instanceConstructors.Count > 0)
+                {
+                    if (instanceConstructors.Count == 1
+                        && model.GetDeclaredSymbol(record) is INamedTypeSymbol
+                            { IsValueType: true } recordStruct)
+                    {
+                        this.CollectRecordStructConstructorContexts(
+                            instanceConstructors[0],
+                            recordStruct,
+                            model);
+                    }
+
+                    continue;
+                }
+
+                var candidates = record.Members
+                    .OfType<PropertyDeclarationSyntax>()
+                    .Where(property =>
+                        !property.Modifiers.Any(
+                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword)
+                        && property.ExpressionBody == null
+                        && property.AccessorList != null
+                        && property.AccessorList.Accessors.All(accessor =>
+                            accessor.Body == null && accessor.ExpressionBody == null)
+                        && property.AccessorList.Accessors.Any(accessor =>
+                            accessor.IsKind(
+                                Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration)))
+                    .Select(property => (
+                        Syntax: property,
+                        Symbol: model.GetDeclaredSymbol(property) as IPropertySymbol))
+                    .Where(candidate => candidate.Symbol != null)
+                    .ToList();
+                if (candidates.Count == 0
+                    || candidates.Any(candidate =>
+                        this.GetContractGroup(Canonical(candidate.Symbol)).Count > 1))
+                {
+                    continue;
+                }
+
+                bool abort = false;
+                var parameters = new List<IPropertySymbol>();
+                foreach (var candidate in candidates)
+                {
+                    IPropertySymbol property = candidate.Symbol;
+                    if (property.IsRequired || property.SetMethod?.IsInitOnly == true)
+                    {
+                        continue;
+                    }
+
+                    bool nonConstantInitializer = candidate.Syntax.Initializer != null
+                        && !model.GetConstantValue(candidate.Syntax.Initializer.Value).HasValue;
+                    if (nonConstantInitializer)
+                    {
+                        if (property.ContainingType.IsValueType)
+                        {
+                            abort = true;
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    parameters.Add(property);
+                }
+
+                if (!abort)
+                {
+                    foreach (IPropertySymbol property in parameters)
+                    {
+                        this.AddPrecomputedContext(
+                            property,
+                            GSharpIdentifierNameContext.Parameter);
+                    }
+                }
+            }
+        }
+    }
+
+    private void CollectRecordStructConstructorContexts(
+        ConstructorDeclarationSyntax constructor,
+        INamedTypeSymbol containingType,
+        SemanticModel model)
+    {
+        if (constructor.Body == null
+            || constructor.Initializer != null
+            || model.GetDeclaredSymbol(constructor) is not IMethodSymbol constructorSymbol)
+        {
+            return;
+        }
+
+        var targets = new Dictionary<IParameterSymbol, ISymbol>(
+            SymbolEqualityComparer.Default);
+        foreach (StatementSyntax statement in constructor.Body.Statements)
+        {
+            if (statement is not ExpressionStatementSyntax { Expression: AssignmentExpressionSyntax assignment }
+                || !assignment.OperatorToken.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsToken)
+                || model.GetSymbolInfo(assignment.Left).Symbol is not ISymbol target
+                || target is not IFieldSymbol and not IPropertySymbol
+                || target.IsStatic
+                || !SymbolEqualityComparer.Default.Equals(
+                    target.ContainingType,
+                    containingType)
+                || assignment.Right is not IdentifierNameSyntax right
+                || model.GetSymbolInfo(right).Symbol is not IParameterSymbol parameter
+                || !SymbolEqualityComparer.Default.Equals(
+                    parameter.ContainingSymbol,
+                    constructorSymbol)
+                || !targets.TryAdd(parameter, target))
+            {
+                return;
+            }
+        }
+
+        if (constructorSymbol.Parameters.Any(parameter => !targets.ContainsKey(parameter)))
+        {
+            return;
+        }
+
+        foreach (ISymbol target in targets.Values)
+        {
+            this.AddPrecomputedContext(
+                target,
+                GSharpIdentifierNameContext.Parameter);
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateSourceTypes(
+        INamespaceSymbol namespaceSymbol)
+    {
+        foreach (INamedTypeSymbol type in namespaceSymbol.GetTypeMembers())
+        {
+            yield return type;
+            foreach (INamedTypeSymbol nested in EnumerateNestedTypes(type))
+            {
+                yield return nested;
+            }
+        }
+
+        foreach (INamespaceSymbol child in namespaceSymbol.GetNamespaceMembers())
+        {
+            foreach (INamedTypeSymbol type in EnumerateSourceTypes(child))
+            {
+                yield return type;
+            }
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateNestedTypes(
+        INamedTypeSymbol type)
+    {
+        foreach (INamedTypeSymbol nested in type.GetTypeMembers())
+        {
+            yield return nested;
+            foreach (INamedTypeSymbol deeper in EnumerateNestedTypes(nested))
+            {
+                yield return deeper;
+            }
+        }
+    }
+
     private void CollectInvocationSensitiveSymbols()
     {
         foreach (Microsoft.CodeAnalysis.SyntaxTree tree in this.compilation.SyntaxTrees)
@@ -261,32 +572,52 @@ internal sealed class EmittedNameAllocator
             foreach (InvocationExpressionSyntax invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
                 if (invocation.Expression is not SimpleNameSyntax simple
-                    || !GSharpSyntaxFacts.IsReservedIdentifier(
-                        simple.Identifier.ValueText,
-                        GSharpIdentifierNameContext.Invocation))
+                    || model.GetSymbolInfo(simple).Symbol is not { } symbol)
                 {
                     continue;
                 }
 
-                ISymbol symbol = model.GetSymbolInfo(simple).Symbol;
-                if (symbol != null)
+                if (GSharpSyntaxFacts.IsReservedIdentifier(
+                    simple.Identifier.ValueText,
+                    GSharpIdentifierNameContext.Invocation))
                 {
                     this.invocationSensitive.Add(Canonical(symbol));
+                }
+
+                if (simple is GenericNameSyntax
+                    && GSharpSyntaxFacts.IsReservedIdentifier(
+                        simple.Identifier.ValueText,
+                        GSharpIdentifierNameContext.Index))
+                {
+                    this.AddPrecomputedContext(
+                        symbol,
+                        GSharpIdentifierNameContext.Index);
                 }
             }
 
             foreach (ObjectCreationExpressionSyntax creation in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
             {
-                if (!GSharpSyntaxFacts.IsReservedIdentifier(
-                    RightmostIdentifier(creation.Type),
-                    GSharpIdentifierNameContext.Invocation))
+                if (model.GetSymbolInfo(creation).Symbol is not IMethodSymbol constructor)
                 {
                     continue;
                 }
 
-                if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol constructor)
+                string name = RightmostIdentifier(creation.Type);
+                if (GSharpSyntaxFacts.IsReservedIdentifier(
+                    name,
+                    GSharpIdentifierNameContext.Invocation))
                 {
                     this.invocationSensitive.Add(Canonical(constructor.ContainingType));
+                }
+
+                if (HasGenericRightmostName(creation.Type)
+                    && GSharpSyntaxFacts.IsReservedIdentifier(
+                        name,
+                        GSharpIdentifierNameContext.Index))
+                {
+                    this.AddPrecomputedContext(
+                        constructor.ContainingType,
+                        GSharpIdentifierNameContext.Index);
                 }
             }
 
@@ -299,6 +630,17 @@ internal sealed class EmittedNameAllocator
                 {
                     this.invocationSensitive.Add(Canonical(type));
                 }
+
+                if (model.GetTypeInfo(creation).Type is INamedTypeSymbol
+                        { IsGenericType: true } genericType
+                    && GSharpSyntaxFacts.IsReservedIdentifier(
+                        genericType.Name,
+                        GSharpIdentifierNameContext.Index))
+                {
+                    this.AddPrecomputedContext(
+                        genericType,
+                        GSharpIdentifierNameContext.Index);
+                }
             }
 
             foreach (ElementAccessExpressionSyntax access in root.DescendantNodes().OfType<ElementAccessExpressionSyntax>())
@@ -309,8 +651,9 @@ internal sealed class EmittedNameAllocator
                         GSharpIdentifierNameContext.Index)
                     && model.GetSymbolInfo(identifier).Symbol is { } symbol)
                 {
-                    this.additionalContexts[Canonical(symbol)] =
-                        GSharpIdentifierNameContext.Index;
+                    this.AddPrecomputedContext(
+                        symbol,
+                        GSharpIdentifierNameContext.Index);
                 }
             }
         }
@@ -323,5 +666,14 @@ internal sealed class EmittedNameAllocator
             QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
             AliasQualifiedNameSyntax alias => alias.Name.Identifier.ValueText,
             _ => type.ToString(),
+        };
+
+    private static bool HasGenericRightmostName(TypeSyntax type) =>
+        type switch
+        {
+            GenericNameSyntax => true,
+            QualifiedNameSyntax qualified => qualified.Right is GenericNameSyntax,
+            AliasQualifiedNameSyntax alias => alias.Name is GenericNameSyntax,
+            _ => false,
         };
 }
