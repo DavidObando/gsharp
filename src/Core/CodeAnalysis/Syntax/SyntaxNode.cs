@@ -107,6 +107,14 @@ public abstract class SyntaxNode
     public SyntaxTree SyntaxTree { get; }
 
     /// <summary>
+    /// Gets the parent node, or <see langword="null"/> for the root.
+    /// Backed by the tree's lazily built parent index (ADR-0169) — the
+    /// Roslyn <c>SyntaxNode.Parent</c> analogue analyzers rely on.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public SyntaxNode? Parent => SyntaxTree.GetParent(this);
+
+    /// <summary>
     /// Gets an enumeration of all the children of this syntax node.
     /// </summary>
     /// <returns>An <see cref="IEnumerable{SyntaxNode}"/> with the children of this syntax node.</returns>

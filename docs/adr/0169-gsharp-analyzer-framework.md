@@ -93,7 +93,9 @@ early `IOperation`.
   `GetDeclaredSymbol`, `GetSymbolInfo`, `GetTypeInfo`, and `GetBoundNode`,
   extracted from the language server's `SemanticLookup` (which now delegates to
   it). `Symbol` gains `DeclaringSyntaxNodes`.
-- A public `GSharpSyntaxWalker` over the cached reflective `GetChildren()`.
+- A public `GSharpSyntaxWalker` over the cached reflective `GetChildren()`,
+  and `SyntaxNode.Parent` (backed by a lazily built per-tree parent index) —
+  the Roslyn `Parent` idiom analyzers pattern-match with.
 
 ### Execution: `GSharpAnalyzerDriver`, in-process in `gsc`
 

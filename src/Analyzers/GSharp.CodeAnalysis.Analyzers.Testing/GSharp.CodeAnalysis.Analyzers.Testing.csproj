@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.CodeAnalysis.Analyzers.Testing</RootNamespace>
+    <AssemblyName>GSharp.CodeAnalysis.Analyzers.Testing</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\Core.csproj" />
+  </ItemGroup>
+
+</Project>
