@@ -340,6 +340,102 @@ public sealed class Issue3461IdentifierSanitizationTests
     }
 
     [Fact]
+    public void InheritedLegalName_ReservesDerivedIllegalAllocationAtRuntime()
+    {
+        string rendered = Render(
+            """
+            public class Base
+            {
+                public int type_() => 100;
+            }
+
+            public sealed class Derived : Base
+            {
+                public int @type() => 7;
+            }
+
+            public static class Holder
+            {
+                public static int Run()
+                {
+                    var value = new Derived();
+                    return value.@type() + value.type_();
+                }
+            }
+            """);
+
+        Assert.Contains("func type__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func type_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("value.type__()", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
+    public void RecordPrimaryParameter_SharesTypeMemberCollisionScope()
+    {
+        string rendered = Render(
+            """
+            public record R(int @params)
+            {
+                public int params_ => 100;
+            }
+
+            public static class Holder
+            {
+                public static int Run()
+                {
+                    var value = new R(7);
+                    return value.@params + value.params_;
+                }
+            }
+            """);
+
+        Assert.Contains("data class R(params__ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("prop params_", rendered, StringComparison.Ordinal);
+        Assert.Contains("value.params__", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
+    public void ClassPrimaryParameter_SharesTypeMemberCollisionScope()
+    {
+        string rendered = Render(
+            """
+            public class C(int @params)
+            {
+                public int params_ => 100;
+
+                public int Read() => @params + params_;
+            }
+
+            public static class Holder
+            {
+                public static int Run() => new C(7).Read();
+            }
+            """);
+
+        Assert.Contains("class C(params__ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("prop params_", rendered, StringComparison.Ordinal);
+        Assert.Contains("params__ + params_", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
     public void ConsumerBeforeRecord_UsesPrecomputedPrimaryParameterName()
     {
         IReadOnlyDictionary<string, string> rendered = RenderFiles(
@@ -466,6 +562,72 @@ public sealed class Issue3461IdentifierSanitizationTests
             new EmittedOracleOptions { References = new[] { fixtureAssembly } });
         Assert.Empty(result.Diagnostics);
         Assert.Equal(54, result.Value);
+    }
+
+    [Fact]
+    public void ImportedStaticContextualCalls_AreQualifiedAndRun()
+    {
+        string fixtureAssembly = typeof(ImportedContextualStatics).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixtureAssembly))
+            .ToArray();
+        string rendered = Render(
+            """
+            using static Cs2Gs.Tests.ImportedContextualStatics;
+
+            public static class Holder
+            {
+                public static int Run() =>
+                    @nameof() + @typeof() + @sizeof() + @checked() + @unchecked();
+            }
+            """,
+            references);
+
+        Assert.Contains("ImportedContextualStatics.nameof()", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.typeof()", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.sizeof()", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.checked()", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.unchecked()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("func nameof", rendered, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
+        TranslationTestValidation.AssertBinds(resolver, rendered);
+        var result = EmittedOracle.Evaluate(
+            new[] { rendered + Environment.NewLine + "Holder.Run()" },
+            new EmittedOracleOptions { References = new[] { fixtureAssembly } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(31, result.Value);
+    }
+
+    [Fact]
+    public void ImportedReservedNamespaceAndTypes_ResolveCanonicalMetadataNames()
+    {
+        string fixtureAssembly = typeof(@class.@type).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixtureAssembly))
+            .ToArray();
+        string rendered = Render(
+            """
+            using @class;
+
+            public static class Holder
+            {
+                public static int Run() => new @type().Value + new type_().Value;
+            }
+            """,
+            references);
+
+        Assert.Contains("import class__", rendered, StringComparison.Ordinal);
+        Assert.Contains("type__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("type_()", rendered, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
+        TranslationTestValidation.AssertBinds(resolver, rendered);
+        var result = EmittedOracle.Evaluate(
+            new[] { rendered + Environment.NewLine + "Holder.Run()" },
+            new EmittedOracleOptions { References = new[] { fixtureAssembly } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]
@@ -828,4 +990,23 @@ public sealed class ImportedIdentifierMethods
 
     /// <summary>Contextual method name legal after member access.</summary>
     public int @make() => 0;
+}
+
+/// <summary>Imported static contextual method fixture.</summary>
+public static class ImportedContextualStatics
+{
+    /// <summary>Returns one.</summary>
+    public static int @nameof() => 1;
+
+    /// <summary>Returns two.</summary>
+    public static int @typeof() => 2;
+
+    /// <summary>Returns four.</summary>
+    public static int @sizeof() => 4;
+
+    /// <summary>Returns eight.</summary>
+    public static int @checked() => 8;
+
+    /// <summary>Returns sixteen.</summary>
+    public static int @unchecked() => 16;
 }

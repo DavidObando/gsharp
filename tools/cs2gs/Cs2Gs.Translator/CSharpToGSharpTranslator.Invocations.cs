@@ -313,7 +313,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true, MethodKind: not MethodKind.LocalFunction } staticMethod &&
                 staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
-                !this.IsStaticUsingTarget(owner) &&
+                (!this.IsStaticUsingTarget(owner)
+                    || RequiresQualifiedImportedContextualCall(staticMethod)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 // A C# bare sibling static call (`Round(value, 2)`) carries an
@@ -359,6 +360,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new InvocationExpression(target, arguments, typeArguments);
         }
+
+        private static bool RequiresQualifiedImportedContextualCall(
+            IMethodSymbol method) =>
+            method.DeclaringSyntaxReferences.IsDefaultOrEmpty
+            && GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+                method.Name,
+                GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Invocation);
 
         private static bool TryGetExplicitExtensionReceiverArgument(
             IInvocationOperation invocation,

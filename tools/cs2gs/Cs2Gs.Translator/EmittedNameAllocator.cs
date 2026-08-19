@@ -106,9 +106,7 @@ internal sealed class EmittedNameAllocator
              current != null && !current.IsGlobalNamespace;
              current = current.ContainingNamespace)
         {
-            parts.Push(current.Locations.Any(location => location.IsInSource)
-                ? this.GetName(current)
-                : current.Name);
+            parts.Push(this.GetName(current));
         }
 
         return string.Join(".", parts);
@@ -173,7 +171,16 @@ internal sealed class EmittedNameAllocator
         {
             case IParameterSymbol parameter
                 when parameter.ContainingSymbol is IMethodSymbol method:
-                return method.Parameters.Select(candidate => candidate.Name).ToArray();
+                IEnumerable<string> parameterNames =
+                    method.Parameters.Select(candidate => candidate.Name);
+                if (IsPrimaryConstructorParameter(parameter)
+                    && parameter.ContainingType is { } primaryType)
+                {
+                    parameterNames = parameterNames.Concat(
+                        this.GetVisibleTypeMemberNames(primaryType));
+                }
+
+                return parameterNames.Distinct(StringComparer.Ordinal).ToArray();
 
             case ITypeParameterSymbol typeParameter
                 when typeParameter.ContainingSymbol is IMethodSymbol method:
@@ -200,15 +207,68 @@ internal sealed class EmittedNameAllocator
                     ?? Array.Empty<string>();
 
             default:
-                return symbol.ContainingType?.GetMembers()
-                    .Select(SourceName)
-                    .ToArray()
-                    ?? symbol.ContainingNamespace?.GetMembers()
+                return symbol.ContainingType is { } containingType
+                    ? this.GetVisibleTypeMemberNames(containingType)
+                    : symbol.ContainingNamespace?.GetMembers()
                         .Select(SourceName)
                         .ToArray()
                     ?? Array.Empty<string>();
         }
     }
+
+    private IReadOnlyCollection<string> GetVisibleTypeMemberNames(
+        INamedTypeSymbol type)
+    {
+        var names = new HashSet<string>(
+            type.GetMembers().Select(SourceName),
+            StringComparer.Ordinal);
+        for (INamedTypeSymbol current = type.BaseType;
+             current != null;
+             current = current.BaseType)
+        {
+            foreach (ISymbol member in current.GetMembers())
+            {
+                if (IsVisibleInheritedMember(member, type))
+                {
+                    names.Add(SourceName(member));
+                }
+            }
+        }
+
+        foreach (INamedTypeSymbol iface in type.AllInterfaces)
+        {
+            foreach (ISymbol member in iface.GetMembers())
+            {
+                names.Add(SourceName(member));
+            }
+        }
+
+        return names.ToArray();
+    }
+
+    private static bool IsVisibleInheritedMember(
+        ISymbol member,
+        INamedTypeSymbol derivedType) =>
+        member.DeclaredAccessibility switch
+        {
+            Accessibility.Public or Accessibility.Protected
+                or Accessibility.ProtectedOrInternal => true,
+            Accessibility.Internal or Accessibility.ProtectedAndInternal =>
+                SymbolEqualityComparer.Default.Equals(
+                    member.ContainingAssembly,
+                    derivedType.ContainingAssembly),
+            _ => false,
+        };
+
+    private static bool IsPrimaryConstructorParameter(IParameterSymbol parameter) =>
+        parameter.DeclaringSyntaxReferences.Any(reference =>
+            reference.GetSyntax() is ParameterSyntax
+            {
+                Parent: ParameterListSyntax
+                {
+                    Parent: TypeDeclarationSyntax,
+                },
+            });
 
     private IReadOnlyCollection<string> GetAliasScopeNames(IAliasSymbol alias)
     {
@@ -319,6 +379,19 @@ internal sealed class EmittedNameAllocator
         {
             foreach (ISymbol member in type.GetMembers())
             {
+                if (member is IPropertySymbol propertyMember)
+                {
+                    foreach (SyntaxReference reference in propertyMember.DeclaringSyntaxReferences)
+                    {
+                        if (reference.GetSyntax() is ParameterSyntax parameterSyntax
+                            && this.compilation.GetSemanticModel(reference.SyntaxTree)
+                                .GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameter)
+                        {
+                            Union(propertyMember, parameter);
+                        }
+                    }
+                }
+
                 ISymbol overridden = member switch
                 {
                     IMethodSymbol method => method.OverriddenMethod,
