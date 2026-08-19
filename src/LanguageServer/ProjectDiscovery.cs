@@ -85,70 +85,16 @@ public static class ProjectDiscovery
     /// <param name="rspPath">Absolute path to the response file.</param>
     /// <returns>Absolute reference paths; empty if the file cannot be read.</returns>
     internal static IReadOnlyList<string> ParseReferencesFromResponseFile(string rspPath)
-    {
-        string[] lines;
-        try
-        {
-            lines = File.ReadAllLines(rspPath);
-        }
-        catch (IOException)
-        {
-            return Array.Empty<string>();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Array.Empty<string>();
-        }
+        => ParseSwitchValuesFromResponseFile(rspPath, "r", "reference");
 
-        var refs = new List<string>(lines.Length);
-        foreach (var raw in lines)
-        {
-            var trimmed = raw?.Trim();
-            if (string.IsNullOrEmpty(trimmed))
-            {
-                continue;
-            }
-
-            // MSBuild on Windows may quote entire switch lines when values contain
-            // spaces (e.g. "/r:C:\Program Files\..."). Strip outer quotes first.
-            if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[trimmed.Length - 1] == '"')
-            {
-                trimmed = trimmed.Substring(1, trimmed.Length - 2);
-            }
-
-            if (!(trimmed[0] == '/' || trimmed[0] == '-'))
-            {
-                continue;
-            }
-
-            var body = trimmed.Substring(1);
-            var colon = body.IndexOf(':');
-            if (colon < 0)
-            {
-                continue;
-            }
-
-            var name = body.Substring(0, colon);
-            if (!string.Equals(name, "r", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(name, "reference", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var value = body.Substring(colon + 1).Trim();
-            if (value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"')
-            {
-                value = value.Substring(1, value.Length - 2);
-            }
-
-            if (value.Length > 0)
-            {
-                refs.Add(value);
-            }
-        }
-
-        return refs;
-    }
+    /// <summary>
+    /// Parses the <c>/gsanalyzer:</c> lines out of an MSBuild-emitted
+    /// response file — the project's G# analyzer set (ADR-0169).
+    /// </summary>
+    /// <param name="rspPath">Absolute path to the <c>.rsp</c> file.</param>
+    /// <returns>The analyzer assembly paths, in rsp order.</returns>
+    internal static IReadOnlyList<string> ParseGsAnalyzersFromResponseFile(string rspPath)
+        => ParseSwitchValuesFromResponseFile(rspPath, "gsanalyzer");
 
     /// <summary>
     /// Resolves the project's effective <c>AssemblyName</c>, which the SDK uses
@@ -507,5 +453,70 @@ public static class ProjectDiscovery
         return parts.Any(p =>
             string.Equals(p, "bin", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(p, "obj", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IReadOnlyList<string> ParseSwitchValuesFromResponseFile(string rspPath, params string[] switchNames)
+    {
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(rspPath);
+        }
+        catch (IOException)
+        {
+            return Array.Empty<string>();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+
+        var refs = new List<string>(lines.Length);
+        foreach (var raw in lines)
+        {
+            var trimmed = raw?.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                continue;
+            }
+
+            // MSBuild on Windows may quote entire switch lines when values contain
+            // spaces (e.g. "/r:C:\Program Files\..."). Strip outer quotes first.
+            if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[trimmed.Length - 1] == '"')
+            {
+                trimmed = trimmed.Substring(1, trimmed.Length - 2);
+            }
+
+            if (!(trimmed[0] == '/' || trimmed[0] == '-'))
+            {
+                continue;
+            }
+
+            var body = trimmed.Substring(1);
+            var colon = body.IndexOf(':');
+            if (colon < 0)
+            {
+                continue;
+            }
+
+            var name = body.Substring(0, colon);
+            if (!switchNames.Any(switchName => string.Equals(name, switchName, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var value = body.Substring(colon + 1).Trim();
+            if (value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"')
+            {
+                value = value.Substring(1, value.Length - 2);
+            }
+
+            if (value.Length > 0)
+            {
+                refs.Add(value);
+            }
+        }
+
+        return refs;
     }
 }

@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -139,6 +140,10 @@ public sealed class PropertySymbol : Symbol
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized properties.</summary>
     public PropertyDeclarationSyntax? Declaration { get; private set; }
+
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
 
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
     public FieldSymbol? BackingField { get; set; }

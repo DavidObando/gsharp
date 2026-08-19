@@ -72,7 +72,7 @@ internal static class AccessibilityChecker
     }
 
     /// <summary>
-    /// Issue #2044: walks <see cref="StructSymbol.ContainingType"/> to the
+    /// Issue #2044: walks <see cref="Symbol.ContainingType"/> to the
     /// outermost enclosing type, so nested types declared inside the same
     /// top-level type share `private` access to each other's members.
     /// </summary>

@@ -417,8 +417,17 @@ public class Program
                 GetTargetFrameworkMoniker(args.TargetFramework));
         }
 
-        // Apply /nowarn, /warnaserror filtering.
-        var effectiveDiagnostics = ApplySuppressPromote(result.Diagnostics, args);
+        // ADR-0169: run G# analyzers over the same compilation (BoundProgram
+        // is cached, so this does not re-bind) and merge their diagnostics
+        // into the post-hoc severity pass below.
+        IEnumerable<Diagnostic> mergedDiagnostics = result.Diagnostics;
+        if (args.GsAnalyzerPaths.Count > 0)
+        {
+            mergedDiagnostics = mergedDiagnostics.Concat(GSharp.Core.CodeAnalysis.Analyzers.GSharpAnalyzerHost.Run(compilation, args.GsAnalyzerPaths));
+        }
+
+        // Apply /gsdiag, /nowarn, /warnaserror filtering.
+        var effectiveDiagnostics = ApplySuppressPromote(mergedDiagnostics, args);
 
         // Always print diagnostics (errors and warnings).
         if (effectiveDiagnostics.Any())
@@ -505,7 +514,7 @@ public class Program
     }
 
     /// <summary>
-    /// Applies /nowarn, /warnaserror, /warnaserror+:, /warnaserror-: filtering to a diagnostic list.
+    /// Applies /gsdiag, /nowarn, /warnaserror, /warnaserror+:, /warnaserror-: filtering to a diagnostic list.
     /// Returns the filtered/promoted set.
     /// </summary>
     private static IReadOnlyList<Diagnostic> ApplySuppressPromote(
@@ -517,6 +526,26 @@ public class Program
         {
             var id = d.Id;
             var severity = d.Severity;
+
+            // /gsdiag:<ID>=<severity> overrides come first: "none" suppresses,
+            // and an explicit severity replaces the default (which can promote
+            // a Hidden diagnostic into visibility).
+            if (args.DiagnosticSeverityOverrides.TryGetValue(id, out var overrideSeverity))
+            {
+                if (overrideSeverity is null)
+                {
+                    continue;
+                }
+
+                severity = overrideSeverity.Value;
+            }
+
+            // Hidden diagnostics are never surfaced on the command line unless
+            // severity configuration promoted them above.
+            if (severity == DiagnosticSeverity.Hidden)
+            {
+                continue;
+            }
 
             // /nowarn suppresses warning-level diagnostics with the specified ID.
             if (severity == DiagnosticSeverity.Warning && args.NoWarnIds.Contains(id))
@@ -536,15 +565,7 @@ public class Program
                 severity = DiagnosticSeverity.Error;
             }
 
-            // If the severity changed, wrap in a new Diagnostic preserving everything else.
-            if (severity != d.Severity)
-            {
-                result.Add(new Diagnostic(d.Location, d.Id, severity, d.Message));
-            }
-            else
-            {
-                result.Add(d);
-            }
+            result.Add(d.WithSeverity(severity));
         }
 
         return result;
@@ -788,6 +809,8 @@ public class Program
                                         Embed a managed resource (alias: /res).
           /analyzer:<file>              Analyzer/generator assembly; runs gsgen before compiling (repeatable).
           /gsgentool:<file>             Override the resolved path to gsgen.dll (default: sibling of gsc.dll).
+          /gsanalyzer:<file>            G# diagnostic analyzer assembly, run in-process after binding (repeatable, ADR-0169).
+          /gsdiag:<ID>=<severity>       Per-diagnostic severity override: none, hidden, info, warning, or error (repeatable).
           /lib:<path>                   Accepted for csc compatibility (currently a no-op).
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
@@ -916,6 +939,49 @@ public class Program
                         }
 
                         result.AnalyzerPaths.Add(value);
+                        break;
+
+                    case "gsanalyzer":
+                        // ADR-0169: a G# diagnostic-analyzer assembly, loaded
+                        // in-process and run by GSharpAnalyzerDriver after
+                        // binding. Distinct from /analyzer:, which names a
+                        // Roslyn generator assembly for gsgen.
+                        if (string.IsNullOrEmpty(value))
+                        {
+                            throw new CommandLineException("/gsanalyzer requires a path: /gsanalyzer:<file>.");
+                        }
+
+                        result.GsAnalyzerPaths.Add(value);
+                        break;
+
+                    case "gsdiag":
+                        // ADR-0169: /gsdiag:GS0001=error;PROBE001=none — per-
+                        // diagnostic severity overrides applied in the same
+                        // post-hoc pass as /nowarn. "none" suppresses; other
+                        // values replace the severity (promoting Hidden
+                        // surfaces it).
+                        foreach (var pair in (value ?? string.Empty).Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        {
+                            var equalsIndex = pair.IndexOf('=');
+                            if (equalsIndex <= 0 || equalsIndex == pair.Length - 1)
+                            {
+                                throw new CommandLineException("/gsdiag requires <ID>=<none|hidden|info|warning|error> entries.");
+                            }
+
+                            var id = ParseIdList(pair[..equalsIndex]).Single();
+                            var severityText = pair[(equalsIndex + 1)..];
+                            DiagnosticSeverity? severity = severityText.ToLowerInvariant() switch
+                            {
+                                "none" => null,
+                                "hidden" => DiagnosticSeverity.Hidden,
+                                "info" => DiagnosticSeverity.Info,
+                                "warning" => DiagnosticSeverity.Warning,
+                                "error" => DiagnosticSeverity.Error,
+                                _ => throw new CommandLineException($"/gsdiag: unknown severity '{severityText}'; expected none, hidden, info, warning, or error."),
+                            };
+                            result.DiagnosticSeverityOverrides[id] = severity;
+                        }
+
                         break;
 
                     case "additionalfile":
@@ -1290,6 +1356,10 @@ public class Program
 
         /// <summary>Gets the analyzer/generator assembly paths (from /analyzer:&lt;path&gt;). Non-empty triggers a gsgen run (issue #2215).</summary>
         public List<string> AnalyzerPaths { get; } = new();
+
+        public List<string> GsAnalyzerPaths { get; } = new();
+
+        public Dictionary<string, DiagnosticSeverity?> DiagnosticSeverityOverrides { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Gets the raw additional-file specs (from /additionalfile:&lt;path[;key=value]&gt;) forwarded to gsgen (issue #2223).</summary>
         public List<string> AdditionalFiles { get; } = new();

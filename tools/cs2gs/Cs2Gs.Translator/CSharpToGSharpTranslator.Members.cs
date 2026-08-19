@@ -2590,7 +2590,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (fieldKeywordBackingName == null
                 && !isStatic
                 && node.Initializer != null
-                && (!IsGetOnlyAutoProperty(node) || symbol?.ContainingType?.IsRecord == true)
+                && (!IsGetOnlyAutoProperty(node)
+                    || symbol?.ContainingType?.IsRecord == true
+                    || symbol?.IsOverride == true)
                 && !IsNullOrSuppressedNull(node.Initializer.Value))
             {
                 fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
@@ -2632,6 +2634,23 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool isOverride = symbol != null && symbol.IsOverride;
+
+            // An override get-only auto-property with an initializer
+            // (`public override T P { get; } = init;`) cannot surface as
+            // `get; init;` — the base declares only a getter, so the init
+            // accessor has no override target and the property stops
+            // implementing the abstract getter. Lower it to the synthesized
+            // private backing field (seeded with the initializer above) plus a
+            // computed arrow reading it.
+            if (isOverride
+                && !isStatic
+                && node.Initializer != null
+                && IsGetOnlyAutoProperty(node)
+                && fieldKeywordBackingName != null)
+            {
+                arrowBody = new ReturnStatement(new IdentifierExpression(fieldKeywordBackingName));
+                accessors = new List<PropertyAccessor>();
+            }
 
             // Interface members are implicitly abstract; canonical G# interface
             // members carry no `open` modifier (ADR-0115 §B.6).

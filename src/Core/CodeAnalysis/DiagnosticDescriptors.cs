@@ -402,6 +402,11 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor PointerTypeCannotBeFieldType = new("GS9006", DiagnosticSeverity.Error, "Pointer type '{0}' cannot be used as a field type.");
     internal static readonly DiagnosticDescriptor DuplicateSharedBlock = new("GS9007", DiagnosticSeverity.Error, "A type may contain at most one 'shared' block.");
     internal static readonly DiagnosticDescriptor FixedPointerCannotEscape = new("GS9008", DiagnosticSeverity.Error, "Unmanaged pointer '{0}' from a `fixed` statement cannot be captured by a closure; the pin is released when the enclosing `fixed` block exits.");
+    internal static readonly DiagnosticDescriptor AnalyzerThrewException = new("GS9300", DiagnosticSeverity.Warning, "Analyzer '{0}' threw an exception of type '{1}' and was disabled for the remainder of the compilation: {2}");
+    internal static readonly DiagnosticDescriptor AnalyzerAssemblyLoadFailure = new("GS9301", DiagnosticSeverity.Error, "Analyzer assembly '{0}' could not be used: {1}");
+    internal static readonly DiagnosticDescriptor AnalyzerExceededTimeBudget = new("GS9302", DiagnosticSeverity.Info, "Analyzer '{0}' exceeded its time budget ({1} ms) and was disabled for subsequent runs in this host.");
+    internal static readonly DiagnosticDescriptor AnalyzerCoreVersionMismatch = new("GS9303", DiagnosticSeverity.Warning, "Analyzer assembly '{0}' was built against GSharp.Core '{1}' but the host is '{2}'; loading anyway.");
+    internal static readonly DiagnosticDescriptor AnalyzerUnsupportedDiagnosticId = new("GS9304", DiagnosticSeverity.Warning, "Analyzer '{0}' reported diagnostic '{1}', which is not declared in its SupportedDiagnostics; the diagnostic was suppressed.");
     internal static readonly DiagnosticDescriptor SourceGeneratorExecutionFailure = new("GS9996", DiagnosticSeverity.Error, "Source generator execution failed: {0}");
     internal static readonly DiagnosticDescriptor FatalCompilerIOError = new("GS9997", DiagnosticSeverity.Error, "Fatal compiler I/O error: {0}");
 }

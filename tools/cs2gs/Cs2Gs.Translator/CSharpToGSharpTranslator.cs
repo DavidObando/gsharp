@@ -105,6 +105,7 @@ public sealed partial class CSharpToGSharpTranslator
     private readonly HashSet<string> retainedFilePaths;
     private readonly string packageFilter;
     private readonly bool includeFileAttributes;
+    private readonly bool analyzerApiMode;
 
     // One registry per resolved G# package deduplicates declarations across
     // documents (#2292). Synthetic names themselves are derived from the full
@@ -154,14 +155,22 @@ public sealed partial class CSharpToGSharpTranslator
     /// partial parts (issue #2610); ordinary source translation leaves this
     /// <see langword="false"/>.
     /// </param>
+    /// <param name="analyzerApiMode">
+    /// ADR-0169 analyzer translation mode: Microsoft.CodeAnalysis usage is
+    /// rewritten to the G# analyzer API via <see cref="Analyzers.RoslynAnalyzerApiMap"/>.
+    /// Enabled by the pipeline when <see cref="Analyzers.AnalyzerProjectDetector"/>
+    /// recognizes an analyzer project.
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = true,
         bool markMergedTypePartial = false,
         IReadOnlyCollection<string> retainedFilePaths = null,
         string packageFilter = null,
         bool includeFileAttributes = true,
-        bool widenObliviousReferenceFields = false)
+        bool widenObliviousReferenceFields = false,
+        bool analyzerApiMode = false)
     {
+        this.analyzerApiMode = analyzerApiMode;
         this.preservePartialParts = preservePartialParts;
         this.markMergedTypePartial = markMergedTypePartial;
         this.widenObliviousReferenceFields = widenObliviousReferenceFields;
@@ -273,7 +282,10 @@ public sealed partial class CSharpToGSharpTranslator
             this.anonymousTypeRegistriesByPackage[registryKey] = anonymousTypeRegistry;
         }
 
-        var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry, nameAllocator);
+        var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry, nameAllocator)
+        {
+            AnalyzerApiMode = this.analyzerApiMode,
+        };
         typeMapper.ReserveImportAliases(imports);
         var visitor = new DeclarationVisitor(
             context,
@@ -1160,6 +1172,27 @@ public sealed partial class CSharpToGSharpTranslator
             // global::Foo.Bar` (G#'s import syntax has no alias-qualifier
             // form).
             string name = this.TranslateImportName(namespaceOrType, context, nameAllocator);
+
+            // ADR-0169 analyzer mode: Roslyn namespaces map onto the G#
+            // analyzer API's namespaces (several collapse onto one; the
+            // (name, alias) de-dup below absorbs the collision). A Roslyn
+            // namespace with no mapping is dropped with a gap record rather
+            // than passing through to a namespace gsc cannot resolve.
+            if (this.analyzerApiMode && Analyzers.RoslynAnalyzerApiMap.IsRoslynNamespace(name))
+            {
+                if (Analyzers.RoslynAnalyzerApiMap.TryMapNamespace(name, out string gsNamespace))
+                {
+                    name = gsNamespace;
+                }
+                else
+                {
+                    context.Report(new TranslationDiagnostic(
+                        "analyzer-api",
+                        $"Roslyn namespace '{name}' has no G# analyzer-API mapping (ADR-0169); the import was dropped.",
+                        directive.GetLocation()));
+                    continue;
+                }
+            }
 
             if (!directive.StaticKeyword.IsKind(SyntaxKind.None))
             {

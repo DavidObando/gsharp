@@ -25,4 +25,12 @@ public abstract class BoundExpression : BoundNode
     /// Gets the bound expression type.
     /// </summary>
     public abstract TypeSymbol Type { get; }
+
+    /// <summary>
+    /// Gets the compile-time constant value of this expression — the Roslyn
+    /// <c>ConstantValue</c> analogue (ADR-0169). <c>HasValue</c> is false
+    /// when the expression has no compile-time constant; a constant null
+    /// literal reports <c>HasValue</c> true with a null <c>Value</c>.
+    /// </summary>
+    public virtual OptionalValue ConstantValue => default;
 }

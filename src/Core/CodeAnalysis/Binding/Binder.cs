@@ -2315,6 +2315,21 @@ public sealed class Binder
             .AddRange(globalScope.AnonymousTypes)
             .AddRange(parentScope.GetAnonymousTypeCache().Symbols);
 
+        // ADR-0169: guarantee a syntax anchor on every dispatchable bound node
+        // the program exposes. Construction sites and the bind dispatchers
+        // anchor most nodes precisely; nodes synthesized during binding or
+        // per-member lowering inherit the nearest anchored ancestor here.
+        foreach (var (function, body) in functionBodies)
+        {
+            SyntaxAnchoringWalker.Anchor(body, function.Declaration);
+        }
+
+        // The synthesized top-level block has no syntax of its own; anchor it
+        // (and any synthesized statements inside it) at the first top-level
+        // statement that has one. A program with no top-level statements keeps
+        // the empty synthetic block unanchored — there is nothing to point at.
+        SyntaxAnchoringWalker.Anchor(statement, statement.Statements.FirstOrDefault(s => s.Syntax is not null)?.Syntax);
+
         return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, allStructs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
         {
             Imports = globalScope.GetCumulativeImports(),

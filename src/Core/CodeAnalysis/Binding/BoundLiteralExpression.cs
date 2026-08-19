@@ -49,6 +49,9 @@ public sealed class BoundLiteralExpression : BoundExpression
     /// </summary>
     public object? Value { get; }
 
+    /// <inheritdoc/>
+    public override OptionalValue ConstantValue => new(true, Value);
+
     private static TypeSymbol InferType(object? value)
     {
         if (value == null)

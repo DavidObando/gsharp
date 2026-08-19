@@ -82,8 +82,15 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the declaring syntax node.</summary>
     public InterfaceDeclarationSyntax Declaration { get; private set; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>Gets the package this interface lives in.</summary>
     public string PackageName { get; }
+
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => PackageName;
 
     /// <summary>Gets a value indicating whether this interface was declared <c>sealed</c> (Phase 3.B.5). All implementors must live in the same package; binder-enforced.</summary>
     public bool IsSealed => Declaration?.IsSealed ?? false;
@@ -207,12 +214,6 @@ public sealed class InterfaceSymbol : TypeSymbol
             ? SubstituteBaseClrInterfaces(Definition.BaseClrInterfaces)
             : baseClrInterfaces;
 
-    /// <summary>
-    /// Gets the enclosing user-defined type when this interface is a nested
-    /// type declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
-    /// </summary>
-    public TypeSymbol? ContainingType { get; private set; }
-
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3c / ADR-0020).</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
@@ -225,7 +226,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the original generic definition when this is a constructed instance; otherwise <c>this</c>.</summary>
     public InterfaceSymbol Definition { get; }
 
-    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910).</summary>
+    /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910).</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol containingType)
     {

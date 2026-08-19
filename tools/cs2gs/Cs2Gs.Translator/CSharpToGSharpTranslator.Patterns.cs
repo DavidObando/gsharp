@@ -237,6 +237,14 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslateSwitchExpression(switchExpression);
 
                 case ConditionalExpressionSyntax conditional:
+                    // ADR-0169 analyzer mode: the Roslyn location-picking
+                    // ternary lowers to G#'s Symbol.Location.
+                    if (this.InAnalyzerApiMode
+                        && this.TryTranslateAnalyzerLocationsTernary(conditional, out GExpression analyzerLocation))
+                    {
+                        return analyzerLocation;
+                    }
+
                     // A C# ternary `cond ? a : b` maps to the canonical G#
                     // value-position `if` expression `if cond { a } else { b }`
                     // (ADR-0064, sample IfExpression.gs; ADR-0115 §B).
@@ -252,6 +260,15 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslatePredefinedTypeExpression(predefinedType);
 
                 case ConditionalAccessExpressionSyntax conditionalAccess:
+                    // ADR-0169 analyzer mode: `namespaceSymbol?.ToDisplayString()`
+                    // collapses to the receiver — G#'s ContainingNamespace is
+                    // already the (nullable) display string.
+                    if (this.InAnalyzerApiMode
+                        && this.TryTranslateAnalyzerConditionalDisplay(conditionalAccess, out GExpression analyzerDisplay))
+                    {
+                        return analyzerDisplay;
+                    }
+
                     if (this.TryTranslateNullConditionalStaticExtensionHelper(
                             conditionalAccess,
                             out GExpression enumExtResult))

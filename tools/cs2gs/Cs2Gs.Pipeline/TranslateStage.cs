@@ -321,9 +321,16 @@ public sealed class TranslateStage : IMigrationStage
             List<string> retainedFilePaths = hasAnalyzerReferences
                 ? currentProject.Documents.Select(d => d.FilePath).ToList()
                 : null;
+
+            // ADR-0169: a project declaring Roslyn diagnostic analyzers is
+            // translated in analyzer-API mode — Microsoft.CodeAnalysis usage
+            // is rewritten to the G# analyzer API instead of passing through.
+            bool analyzerApiMode = Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
+                .IsAnalyzerProject(currentProject.Compilation);
             var translator = new CSharpToGSharpTranslator(
                 preservePartialParts: true,
-                retainedFilePaths: retainedFilePaths);
+                retainedFilePaths: retainedFilePaths,
+                analyzerApiMode: analyzerApiMode);
 
             PreserveGeneratedFriendAssemblyAnnotations(
                 context,
@@ -362,7 +369,8 @@ public sealed class TranslateStage : IMigrationStage
                             preservePartialParts: true,
                             retainedFilePaths: retainedFilePaths,
                             packageFilter: package,
-                            includeFileAttributes: unitIndex == 0);
+                            includeFileAttributes: unitIndex == 0,
+                            analyzerApiMode: analyzerApiMode);
                     string printed = GSharpPrinter.Print(
                         unitTranslator.TranslateDocument(document, translationContext));
 

@@ -95,6 +95,14 @@ public sealed class TranslationDiagnostic
     /// </summary>
     public UnsupportedRationale Rationale { get; set; }
 
+    /// <summary>
+    /// Gets or sets an explicit diagnostic id overriding the classification-
+    /// derived <c>CS2GS-GAP</c>/<c>CS2GS-UNSUPPORTED</c> pair — e.g.
+    /// <c>CS2GS-ANALYZER-SHAPE</c> for analyzer-mode adapted rewrites
+    /// (ADR-0169). Null keeps the classification-derived id.
+    /// </summary>
+    public string DiagnosticId { get; set; }
+
     /// <summary>Gets a value indicating whether this is an unsupported-construct record.</summary>
     public bool IsUnsupported => this.Severity == TranslationSeverity.Unsupported;
 

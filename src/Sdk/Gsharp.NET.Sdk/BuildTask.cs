@@ -114,6 +114,9 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the managed resources to embed.</summary>
     public ITaskItem[] Resources { get; set; } = Array.Empty<ITaskItem>();
 
+    /// <summary>Gets or sets the G# diagnostic-analyzer assemblies forwarded to gsc via /gsanalyzer: (ADR-0169).</summary>
+    public ITaskItem[] GsAnalyzers { get; set; } = Array.Empty<ITaskItem>();
+
     /// <summary>Gets or sets whether the task should return arguments without invoking gsc.</summary>
     public string? SkipCompilerExecution { get; set; }
 
@@ -232,6 +235,22 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         foreach (var r in this.References)
         {
             args.Add(QuoteIfNeeded($"/r:{r.ItemSpec}"));
+        }
+
+        foreach (var analyzer in this.GsAnalyzers)
+        {
+            args.Add(QuoteIfNeeded($"/gsanalyzer:{analyzer.ItemSpec}"));
+        }
+
+        // ADR-0169: lower .editorconfig dotnet_diagnostic.<ID>.severity entries
+        // to /gsdiag: switches so severity configuration works without gsc ever
+        // parsing editorconfig files. Sorted for a deterministic rsp.
+        if (!string.IsNullOrEmpty(this.BasePath))
+        {
+            foreach (var entry in EditorConfigSeverityReader.ReadSeverities(this.BasePath!).OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                args.Add($"/gsdiag:{entry.Key}={entry.Value}");
+            }
         }
 
         foreach (var resource in this.Resources)

@@ -45,8 +45,16 @@ public sealed class StructFieldDefsReadAnalyzer : DiagnosticAnalyzer
 
     private static bool IsStructFieldDefsAccess(ElementAccessExpressionSyntax elementAccess)
     {
-        return elementAccess.Expression is MemberAccessExpressionSyntax memberAccess
-            && memberAccess.Name.Identifier.ValueText == StructFieldDefsName;
+        // Qualified (`x.StructFieldDefs[f]`) and bare (`StructFieldDefs[f]`)
+        // reads are both direct reads. The bare form also keeps the migrated
+        // G# analyzer faithful: cs2gs normalizes `this.` away, so idiomatic
+        // G# reads are bare (ADR-0169 parity harness finding).
+        return elementAccess.Expression switch
+        {
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText == StructFieldDefsName,
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText == StructFieldDefsName,
+            _ => false,
+        };
     }
 
     private static bool IsAssignmentLeftSide(ExpressionSyntax expression)

@@ -84,6 +84,17 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         this.diagnostics.AddRange(diagnostics);
     }
 
+    /// <summary>
+    /// Adds an already-constructed diagnostic to the bag. This is the public
+    /// reporting entry point used by the analyzer framework (ADR-0169);
+    /// compiler-internal reports go through the typed partial methods.
+    /// </summary>
+    /// <param name="diagnostic">The diagnostic to add.</param>
+    public void Report(Diagnostic diagnostic)
+    {
+        diagnostics.Add(diagnostic);
+    }
+
     private void Report(TextLocation location, DiagnosticDescriptor descriptor, params object[] messageArguments)
     {
         Report(location, descriptor, descriptor.Severity, messageArguments);

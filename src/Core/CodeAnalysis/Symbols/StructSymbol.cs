@@ -280,8 +280,18 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the declaring syntax node.</summary>
     public StructDeclarationSyntax? Declaration { get; private set; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }
+
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => PackageName;
+
+    /// <inheritdoc/>
+    public override bool IsValueType => !IsClass;
 
     /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
     public bool IsData { get; }
@@ -651,20 +661,27 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
 
-    /// <summary>
-    /// Gets the enclosing user-defined type when this type is a nested type
-    /// declaration (ADR-0110 / issue #910), or <c>null</c> when this is a
-    /// top-level type. Populated by the binder; consumed by the emitter to
-    /// emit a CLR nested <c>TypeDef</c> with the corresponding
-    /// <c>NestedClass</c> row and nested accessibility.
-    /// </summary>
-    public TypeSymbol? ContainingType { get; private set; }
-
-    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
+    /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol containingType)
     {
         ContainingType = containingType;
+    }
+
+    /// <inheritdoc/>
+    public override System.Collections.Immutable.ImmutableArray<Symbol> GetMembers()
+    {
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<Symbol>();
+        builder.AddRange(Fields);
+        builder.AddRange(StaticFields);
+        builder.AddRange(ConstFields);
+        builder.AddRange(Properties);
+        builder.AddRange(StaticProperties);
+        builder.AddRange(Methods);
+        builder.AddRange(StaticMethods);
+        builder.AddRange(Events);
+        builder.AddRange(StaticEvents);
+        return builder.ToImmutable();
     }
 
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
