@@ -83,6 +83,7 @@ const sidebars: SidebarsConfig = {
     'tooling/gsc',
     'tooling/repl',
     'tooling/sdk-projects',
+    'tooling/analyzers',
     'tooling/cs2gs',
     'tooling/vscode',
     'tooling/lsp',
