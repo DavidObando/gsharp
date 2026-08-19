@@ -183,6 +183,9 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public PackageSymbol? Package { get; }
 
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => Package?.Name ?? base.ContainingNamespace;
+
     /// <summary>
     /// Gets the CLR visibility level for this function.
     /// </summary>

@@ -227,19 +227,30 @@ public sealed class GSharpAnalyzerDriver
         {
             yield return declaredStruct;
 
+            // ADR-0169: anchor member containment as symbols surface, so
+            // analyzers can walk ContainingType/ContainingNamespace the way
+            // Roslyn analyzers do (fill-once, like syntax anchoring).
             foreach (var field in declaredStruct.Fields.Concat(declaredStruct.StaticFields).Concat(declaredStruct.ConstFields))
             {
+                field.AnchorContainingType(declaredStruct);
                 yield return field;
             }
 
             foreach (var property in declaredStruct.Properties.Concat(declaredStruct.StaticProperties))
             {
+                property.AnchorContainingType(declaredStruct);
                 yield return property;
             }
 
             foreach (var declaredEvent in declaredStruct.Events.Concat(declaredStruct.StaticEvents))
             {
+                declaredEvent.AnchorContainingType(declaredStruct);
                 yield return declaredEvent;
+            }
+
+            foreach (var method in declaredStruct.Methods.Concat(declaredStruct.StaticMethods))
+            {
+                method.AnchorContainingType(declaredStruct);
             }
         }
     }

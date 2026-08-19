@@ -95,13 +95,18 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.IPropertySymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "PropertySymbol"),
         ["Microsoft.CodeAnalysis.IMethodSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FunctionSymbol"),
         ["Microsoft.CodeAnalysis.SymbolKind"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolKind"),
+        ["Microsoft.CodeAnalysis.SymbolEqualityComparer"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolEqualityComparer"),
+        ["Microsoft.CodeAnalysis.SyntaxReference"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "SyntaxNode",
+            "DeclaringSyntaxNodes holds SyntaxNodes directly; SyntaxReference locals become nodes and GetSyntax() calls are dropped."),
         ["Microsoft.CodeAnalysis.INamedTypeSymbol"] = new(
             "GSharp.Core.CodeAnalysis.Symbols",
             "TypeSymbol",
             "G# has no INamedTypeSymbol split; generic-instantiation idioms (ConstructedFrom, TypeArguments) need review against the concrete TypeSymbol subclass."),
 
         // Bound tree (the IOperation analogue).
-        ["Microsoft.CodeAnalysis.Operations.IOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundNode"),
+        ["Microsoft.CodeAnalysis.IOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundNode"),
         ["Microsoft.CodeAnalysis.Operations.IBinaryOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundBinaryExpression"),
         ["Microsoft.CodeAnalysis.Operations.IInvocationOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundCallExpression"),
         ["Microsoft.CodeAnalysis.Operations.IConversionOperation"] = new(
@@ -109,6 +114,16 @@ internal static class RoslynAnalyzerApiMap
             "BoundConversionExpression",
             "G# inserts different implicit conversions than C#; conversion-unwrap loops need review."),
         ["Microsoft.CodeAnalysis.OperationKind"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundNodeKind"),
+        ["Microsoft.CodeAnalysis.Operations.BinaryOperatorKind"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundBinaryOperatorKind"),
+        ["Microsoft.CodeAnalysis.ITypeSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "TypeSymbol"),
+        ["Microsoft.CodeAnalysis.SymbolDisplayFormat"] = new(
+            "GSharp.Core.CodeAnalysis.Symbols",
+            "DisplayFormat",
+            "G# collapses SymbolDisplayFormat options into the DisplayFormat enum; verify rendered-string comparisons."),
+        ["Microsoft.CodeAnalysis.INamespaceSymbol"] = new(
+            null,
+            "string",
+            "G# has no namespace symbol; ContainingNamespace is the display string directly, so ToDisplayString() calls on it are dropped."),
     };
 
     /// <summary>
@@ -130,6 +145,7 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.OperationKind", "Conversion")] = new(null, "ConversionExpression"),
         [("Microsoft.CodeAnalysis.SymbolKind", "Method")] = new(null, "Function"),
         [("Microsoft.CodeAnalysis.SymbolKind", "NamedType")] = new(null, "Type"),
+        [("Microsoft.CodeAnalysis.OperationKind", "TypeOf")] = new(null, "TypeOfExpression"),
     };
 
     /// <summary>
@@ -147,6 +163,11 @@ internal static class RoslynAnalyzerApiMap
             "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetLastToken()."),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax", "Expression")] = new(null, "LeftPart"),
         [("Microsoft.CodeAnalysis.SyntaxToken", "ValueText")] = new(null, "Text"),
+        [("Microsoft.CodeAnalysis.Operations.IConversionOperation", "Operand")] = new(null, "Expression"),
+        [("Microsoft.CodeAnalysis.Diagnostics.OperationAnalysisContext", "Operation")] = new(null, "BoundNode"),
+        [("Microsoft.CodeAnalysis.INamedTypeSymbol", "TypeArguments")] = new(null, "ConstructedTypeArguments"),
+        [("Microsoft.CodeAnalysis.SymbolDisplayFormat", "FullyQualifiedFormat")] = new(null, "FullyQualified"),
+        [("Microsoft.CodeAnalysis.SymbolDisplayFormat", "MinimallyQualifiedFormat")] = new(null, "Minimal"),
         [("Microsoft.CodeAnalysis.Diagnostics.AnalysisContext", "RegisterOperationAction")] = new(
             null,
             "RegisterBoundNodeAction",

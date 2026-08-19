@@ -47,6 +47,9 @@ public sealed class EnumSymbol : TypeSymbol
     /// <summary>Gets the package the enum lives in.</summary>
     public string PackageName { get; }
 
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => PackageName;
+
     /// <summary>Gets the declaring syntax node.</summary>
     public EnumDeclarationSyntax Declaration { get; }
 
@@ -58,12 +61,6 @@ public sealed class EnumSymbol : TypeSymbol
     public ImmutableArray<EnumMemberSymbol> Members => Definition != null && !ReferenceEquals(Definition, this)
         ? Definition.Members
         : members;
-
-    /// <summary>
-    /// Gets the enclosing user-defined type when this enum is a nested type
-    /// declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
-    /// </summary>
-    public TypeSymbol? ContainingType { get; private set; }
 
     /// <summary>
     /// Gets the open declaration represented by this symbol. Definitions point
@@ -85,7 +82,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// <summary>Gets the CLR underlying enum for values.</summary>
     public TypeSymbol UnderlyingType => TypeSymbol.Int32;
 
-    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910).</summary>
+    /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910).</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol? containingType)
     {

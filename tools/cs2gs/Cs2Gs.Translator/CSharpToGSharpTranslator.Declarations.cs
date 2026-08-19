@@ -735,6 +735,14 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                // An override get-only auto-property lowers to a backing field
+                // + computed arrow (see TranslateProperty); its initializer
+                // seeds the field, not a constructor assignment.
+                if (symbol is { IsOverride: true })
+                {
+                    continue;
+                }
+
                 result.Add((
                     SanitizeIdentifier(prop.Identifier.Text),
                     this.TranslateNullSeamExpression(prop.Initializer.Value)));

@@ -45,6 +45,9 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// </summary>
     public Type Type => Invariant.Required(ClrType, "an imported type always has a CLR representation");
 
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => Type.Namespace;
+
     /// <summary>
     /// Gets the open generic CLR definition this symbol was constructed from
     /// (e.g. <c>List&lt;&gt;</c>), or <c>null</c> when this is a plain imported

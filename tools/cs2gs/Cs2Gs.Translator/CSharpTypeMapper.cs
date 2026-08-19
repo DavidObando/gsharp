@@ -930,7 +930,11 @@ public sealed class CSharpTypeMapper
             string roslynName = $"{named.ContainingNamespace.ToDisplayString()}.{named.Name}";
             if (Analyzers.RoslynAnalyzerApiMap.TryMapType(roslynName, out Analyzers.RoslynAnalyzerApiMap.Entry mapped))
             {
-                this.shortenedNamespaces.Add(mapped.GsNamespace);
+                if (!string.IsNullOrEmpty(mapped.GsNamespace))
+                {
+                    this.shortenedNamespaces.Add(mapped.GsNamespace);
+                }
+
                 if (mapped.AdaptationNote != null)
                 {
                     context.Report(new TranslationDiagnostic(

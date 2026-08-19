@@ -46,6 +46,12 @@ public readonly struct BoundNodeAnalysisContext
     public FunctionSymbol? ContainingFunction { get; }
 
     /// <summary>
+    /// Gets the function whose body contains the node as a
+    /// <see cref="Symbol"/> — the Roslyn <c>ContainingSymbol</c> analogue.
+    /// </summary>
+    public Symbol? ContainingSymbol => ContainingFunction;
+
+    /// <summary>
     /// Gets the compilation being analyzed.
     /// </summary>
     public Compilation.Compilation Compilation { get; }

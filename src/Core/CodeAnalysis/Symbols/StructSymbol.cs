@@ -287,6 +287,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }
 
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => PackageName;
+
     /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
     public bool IsData { get; }
 
@@ -655,16 +658,7 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
 
-    /// <summary>
-    /// Gets the enclosing user-defined type when this type is a nested type
-    /// declaration (ADR-0110 / issue #910), or <c>null</c> when this is a
-    /// top-level type. Populated by the binder; consumed by the emitter to
-    /// emit a CLR nested <c>TypeDef</c> with the corresponding
-    /// <c>NestedClass</c> row and nested accessibility.
-    /// </summary>
-    public TypeSymbol? ContainingType { get; private set; }
-
-    /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
+    /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol containingType)
     {

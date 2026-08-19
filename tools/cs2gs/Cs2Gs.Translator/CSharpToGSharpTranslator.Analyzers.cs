@@ -81,6 +81,18 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryTranslateAnalyzerMemberAccess(MemberAccessExpressionSyntax member, out GExpression result)
         {
             result = null;
+            if (member.Name.Identifier.Text == "OperatorKind"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "OperatorKind" } operatorKind
+                && RoslynTypeMetadataName(operatorKind.ContainingType) == "Microsoft.CodeAnalysis.Operations.IBinaryOperation")
+            {
+                // IBinaryOperation.OperatorKind -> BoundBinaryExpression.Op.Kind.
+                result = new MemberAccessExpression(
+                    new MemberAccessExpression(this.TranslateExpression(member.Expression), "Op", isArrow: false),
+                    "Kind",
+                    isArrow: false);
+                return true;
+            }
+
             if (member.Name.Identifier.Text != "Identifier")
             {
                 return false;
@@ -122,6 +134,29 @@ public sealed partial class CSharpToGSharpTranslator
                     this.TranslateExpression(locationReceiver.Expression),
                     "Location",
                     isArrow: false);
+                return true;
+            }
+
+            if (method.Name == "GetSyntax"
+                && RoslynTypeMetadataName(method.ContainingType) == "Microsoft.CodeAnalysis.SyntaxReference"
+                && invocation.Expression is MemberAccessExpressionSyntax syntaxReferenceReceiver)
+            {
+                // SyntaxReference.GetSyntax() drops: DeclaringSyntaxNodes
+                // already holds the syntax nodes.
+                result = this.TranslateExpression(syntaxReferenceReceiver.Expression);
+                return true;
+            }
+
+            if (method.Name == "ToDisplayString"
+                && invocation.ArgumentList.Arguments.Count == 0
+                && RoslynTypeMetadataName(method.ContainingType) is "Microsoft.CodeAnalysis.INamespaceSymbol" or "Microsoft.CodeAnalysis.ISymbol"
+                && this.context.GetTypeInfo(invocation.Expression is MemberAccessExpressionSyntax r ? r.Expression : invocation.Expression).Type is INamedTypeSymbol receiverType
+                && RoslynTypeMetadataName(receiverType) == "Microsoft.CodeAnalysis.INamespaceSymbol"
+                && invocation.Expression is MemberAccessExpressionSyntax displayReceiver)
+            {
+                // INamespaceSymbol.ToDisplayString() drops: G#'s
+                // ContainingNamespace already is the display string.
+                result = this.TranslateExpression(displayReceiver.Expression);
                 return true;
             }
 

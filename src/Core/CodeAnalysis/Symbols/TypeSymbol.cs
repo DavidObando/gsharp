@@ -143,6 +143,41 @@ public class TypeSymbol : Symbol
     public Type? ClrType { get; }
 
     /// <summary>
+    /// Gets the type arguments this generic instantiation was constructed
+    /// with — the Roslyn <c>INamedTypeSymbol.TypeArguments</c> analogue
+    /// (ADR-0169; distinct from <see cref="ImportedTypeSymbol.TypeArguments"/>,
+    /// which carries only symbolic arguments). Empty for non-generic types.
+    /// </summary>
+    public virtual System.Collections.Immutable.ImmutableArray<TypeSymbol> ConstructedTypeArguments
+    {
+        get
+        {
+            if (ClrType is not { IsGenericType: true } generic)
+            {
+                return System.Collections.Immutable.ImmutableArray<TypeSymbol>.Empty;
+            }
+
+            var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<TypeSymbol>(generic.GenericTypeArguments.Length);
+            foreach (var argument in generic.GenericTypeArguments)
+            {
+                builder.Add(FromClrType(argument));
+            }
+
+            return builder.MoveToImmutable();
+        }
+    }
+
+    /// <summary>
+    /// Gets the open generic definition this instantiation was constructed
+    /// from, or this symbol itself for non-generic types — the Roslyn
+    /// <c>ConstructedFrom</c> analogue (ADR-0169).
+    /// </summary>
+    public virtual TypeSymbol ConstructedFrom
+        => ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } generic
+            ? FromClrType(generic.GetGenericTypeDefinition())
+            : this;
+
+    /// <summary>
     /// Maps a CLR <see cref="Type"/> to the corresponding built-in <see cref="TypeSymbol"/>,
     /// or wraps it in an <see cref="ImportedTypeSymbol"/> if it is not built-in.
     /// </summary>
