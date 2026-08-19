@@ -219,6 +219,77 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Rewrites the C# assignment-LHS idiom
+        /// (<c>X.Parent is AssignmentExpressionSyntax a &amp;&amp; a.Left == X</c>)
+        /// to the faithful G# form: an expression is a write target exactly
+        /// when its parent is one of the dedicated write nodes that embed it
+        /// (<c>MemberIndexAssignmentExpression</c>,
+        /// <c>CompoundIndexAssignmentExpression</c>,
+        /// <c>MemberFieldAssignmentExpression</c>). G#'s plain
+        /// <c>AssignmentExpression</c> targets an identifier token, so the
+        /// literal translation would be constantly false and, worse, miss the
+        /// embedded-target write forms (found by the ADR-0169 parity harness).
+        /// </summary>
+        private bool TryLowerAssignmentLeftConjunction(BinaryExpressionSyntax binary, out GExpression result)
+        {
+            result = null;
+            if (!binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalAndExpression)
+                || binary.Left is not IsPatternExpressionSyntax { Expression: { } parentExpression, Pattern: DeclarationPatternSyntax { Designation: SingleVariableDesignationSyntax designation } declarationPattern }
+                || binary.Right is not BinaryExpressionSyntax comparison
+                || !comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression))
+            {
+                return false;
+            }
+
+            if (this.context.GetTypeInfo(declarationPattern.Type).Type is not INamedTypeSymbol patternType
+                || RoslynTypeMetadataName(patternType) != "Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax")
+            {
+                return false;
+            }
+
+            bool ComparesDesignationLeft(ExpressionSyntax operand)
+                => operand is MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax receiver, Name.Identifier.Text: "Left" }
+                && receiver.Identifier.Text == designation.Identifier.Text;
+
+            if (!ComparesDesignationLeft(comparison.Left) && !ComparesDesignationLeft(comparison.Right))
+            {
+                return false;
+            }
+
+            const string adaptationNote =
+                "Assignment-LHS idiom rewritten to a write-node parent-kind check: in G#, index/member writes are dedicated "
+                + "Member/CompoundIndexAssignment and MemberFieldAssignment nodes that embed their target expression.";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                adaptationNote,
+                binary.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
+            GExpression parentKind = new MemberAccessExpression(
+                this.TranslateExpression(parentExpression),
+                "Kind",
+                isArrow: false);
+            GExpression Test(string kindName)
+                => new BinaryExpression(
+                    parentKind,
+                    "==",
+                    new MemberAccessExpression(new IdentifierExpression("SyntaxKind"), kindName, isArrow: false));
+
+            result = new BinaryExpression(
+                new BinaryExpression(
+                    Test("MemberIndexAssignmentExpression"),
+                    "||",
+                    Test("CompoundIndexAssignmentExpression")),
+                "||",
+                Test("MemberFieldAssignmentExpression"));
+            return true;
+        }
+
+        /// <summary>
         /// Lowers a comparison against a Roslyn member with no G# counterpart
         /// (currently <c>AssignmentExpressionSyntax.Left</c>) to a boolean
         /// constant, with a CS2GS-ANALYZER-SHAPE review warning. In G#, index

@@ -293,9 +293,16 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private GExpression TranslateBinaryExpression(BinaryExpressionSyntax binary)
         {
-            // ADR-0169 analyzer mode: comparisons against Roslyn members with
-            // no G# counterpart lower to a boolean constant with a
-            // CS2GS-ANALYZER-SHAPE review warning.
+            // ADR-0169 analyzer mode: the assignment-LHS conjunction idiom
+            // rewrites to a write-node parent-kind check; standalone
+            // comparisons against Roslyn members with no G# counterpart lower
+            // to a boolean constant. Both carry CS2GS-ANALYZER-SHAPE review
+            // warnings.
+            if (this.InAnalyzerApiMode && this.TryLowerAssignmentLeftConjunction(binary, out GExpression loweredConjunction))
+            {
+                return loweredConjunction;
+            }
+
             if (this.InAnalyzerApiMode && this.TryLowerAnalyzerComparison(binary, out GExpression loweredComparison))
             {
                 return loweredComparison;

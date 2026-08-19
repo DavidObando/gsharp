@@ -75,6 +75,7 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.CSharp.SyntaxKind"] = new("GSharp.Core.CodeAnalysis.Syntax", "SyntaxKind"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "ExpressionSyntax"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "IndexExpressionSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "NameExpressionSyntax"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "AccessorExpressionSyntax",
@@ -84,6 +85,21 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Syntax",
             "AssignmentExpressionSyntax",
             "G# simple assignment targets an identifier token, and index/member writes are distinct Index/MemberIndexAssignmentExpression nodes — assignment-LHS pattern checks are usually structural no-ops in G#."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "CallExpressionSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "ObjectCreationExpressionSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.IsPatternExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "IsExpressionSyntax",
+            "G# is-expressions carry ADR-0166 pattern shapes; designation and subpattern walks need review."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "VariableDeclarationSyntax",
+            "G# declarations are single-declarator; Variables-list walks collapse to the declaration itself."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.TypeSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "TypeClauseSyntax",
+            "G# type positions are type clauses; name-extraction helpers need review."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.GenericNameSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "GenericNameExpressionSyntax"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "FunctionDeclarationSyntax",
@@ -94,6 +110,7 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.IFieldSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FieldSymbol"),
         ["Microsoft.CodeAnalysis.IPropertySymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "PropertySymbol"),
         ["Microsoft.CodeAnalysis.IMethodSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FunctionSymbol"),
+        ["Microsoft.CodeAnalysis.IParameterSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "ParameterSymbol"),
         ["Microsoft.CodeAnalysis.SymbolKind"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolKind"),
         ["Microsoft.CodeAnalysis.SymbolEqualityComparer"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolEqualityComparer"),
         ["Microsoft.CodeAnalysis.IArrayTypeSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "ArrayTypeSymbol"),

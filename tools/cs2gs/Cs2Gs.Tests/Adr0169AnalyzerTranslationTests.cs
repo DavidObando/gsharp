@@ -89,7 +89,7 @@ public sealed class MiniAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
-    public void AssignmentLeftComparison_LowersToFalse_WithShapeWarning()
+    public void AssignmentLeftIdiom_RewritesToWriteNodeParentKindCheck()
     {
         var (printed, diagnostics) = TranslateAnalyzer(@"
 using Microsoft.CodeAnalysis;
@@ -121,10 +121,12 @@ public sealed class LeftCheckAnalyzer : DiagnosticAnalyzer
 }
 ");
 
-        Assert.Contains("false", printed, StringComparison.Ordinal);
+        Assert.Contains("SyntaxKind.MemberIndexAssignmentExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("SyntaxKind.CompoundIndexAssignmentExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("SyntaxKind.MemberFieldAssignmentExpression", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(".Left", printed, StringComparison.Ordinal);
         Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
-            && d.Message.Contains("lowered to 'false'", StringComparison.Ordinal));
+            && d.Message.Contains("write-node parent-kind check", StringComparison.Ordinal));
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
     }

@@ -7,9 +7,38 @@ against `GSharp.Core` with CS2GS-ANALYZER-SHAPE review warnings only
 (`Cs2Gs.Tests/Adr0169AnalyzerTranslationTests`). GSA0005 pattern-matches
 deeply C#-specific syntax shapes and is pinned by a ratchet asserting its
 translation stays LOUD (gap or binder failure, never silently wrong) until
-its reviewed adaptation lands. Remaining follow-ups: the test-snippet
-translator with marker provenance (§Test-harness) and the corpus-level
-`AnalyzerParityStage` (§Parity).
+its reviewed adaptation lands.
+
+The two verification follow-ups are implemented (2026-08-19, second pass):
+- **Parity harness** (`Cs2Gs.Tests/Adr0169AnalyzerParityTests`): the real
+  Roslyn GSA0001 over a C# corpus vs. the cs2gs-translated GSA0001 —
+  compiled by the real G# compiler and loaded through `GSharpAnalyzerHost` —
+  over the translated corpus, diffing on (id, per-file ordinal). It has
+  already earned its keep twice: it caught the member-access-only detection
+  gap (fixed by extending GSA0001 to bare reads) and the assignment-LHS
+  false-lowering being wrong for G#'s embedded-target write nodes (fixed by
+  the write-node parent-kind idiom).
+- **Snippet translator** (`SnippetTranslator`, in Cs2Gs.ProjectLoading):
+  translates marked C# test snippets to G# with `[|…|]` markers re-placed by
+  ordered exact-text match; unplaceable markers surface as
+  `CS2GS-ANALYZER-SNIPPET`. Re-placed markers denote expected-diagnostic
+  REGIONS (G# node spans differ), verified end-to-end in
+  `Adr0169SnippetTranslationTests`.
+
+### GSA0005 reviewed-adaptation inventory
+
+The ratchet keeps GSA0005 loud until a reviewed port lands. The remaining
+C#-specific surface (from the translation gap inventory):
+`BaseExpressionSyntax` (base-call detection → G# base-call node),
+`SwitchStatementSyntax`/`SwitchSectionSyntax`/`CasePatternSwitchLabelSyntax`
+(→ G# pattern-switch shape), `SubpatternSyntax`/`SingleVariableDesignationSyntax`
+(→ ADR-0166 pattern shapes), `PatternSyntax`, `ArgumentSyntax` (G# call
+arguments are bare expressions), and `MethodKind`. Beyond the API surface,
+the analyzer's semantics must be re-derived for G#: post-migration it
+inspects G#-shaped `BoundTreeRewriter` overrides, so the "rebuilds the node
+while reading fewer members" detection needs G# equivalents of its
+object-creation, base-delegation, and switch-section walks. This is exactly
+the plausible-but-wrong risk class the loud ratchet exists to prevent.
 Companion to [ADR-0169](adr/0169-gsharp-analyzer-framework.md), which defines
 the G#-side analyzer framework this document targets. First migration target:
 `src/Analyzers/InternalAnalyzers` (GSA0001–GSA0005) and its test project, which

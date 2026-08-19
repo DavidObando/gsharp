@@ -356,6 +356,12 @@
           "Microsoft.CodeAnalysis.CSharp": "[5.6.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
+      },
+      "GSharp.InternalAnalyzers": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
       }
     }
   }
