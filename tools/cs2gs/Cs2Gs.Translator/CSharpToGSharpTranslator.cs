@@ -503,7 +503,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (RequiresOwnerScopedExtension(method))
                 {
                     result.AddStaticHelper(methodDeclaration);
-                    if (CanEmitOwnerScopedReceiverCompanion(method))
+                    if (IsOwnerScopedCompanionShapeEligible(method))
                     {
                         result.AddReceiverCompanion(methodDeclaration);
                     }
@@ -637,52 +637,36 @@ public sealed partial class CSharpToGSharpTranslator
             HasPrivateNestedAggregate(original.ContainingType);
     }
 
-    private static bool CanEmitOwnerScopedReceiverCompanion(IMethodSymbol method)
+    private static bool IsOwnerScopedCompanionShapeEligible(IMethodSymbol method)
     {
         IMethodSymbol original = method?.ReducedFrom ?? method;
         if (original?.Parameters.Length is not > 0
             || original.DeclaredAccessibility == Accessibility.Private
+            || original.IsExtern
+            || !IsEffectivelyPublic(original.ContainingType)
             || original.Parameters[0].RefKind != RefKind.None
             || original.Parameters.Any(parameter => parameter.IsParams)
             || original.ReturnsByRef
-            || original.ReturnsByRefReadonly
-            || HasCrossContainerExtensionDuplicate(original))
+            || original.ReturnsByRefReadonly)
         {
             return false;
         }
 
-        return original.Parameters[0].Type is not INamedTypeSymbol receiver
-            || !HasReducedDeclarationCollision(receiver.OriginalDefinition, original);
+        return true;
     }
 
-    private static bool HasCrossContainerExtensionDuplicate(IMethodSymbol method)
+    private static bool IsEffectivelyPublic(INamedTypeSymbol type)
     {
-        IMethodSymbol original = method?.ReducedFrom ?? method;
-        if (original?.IsExtensionMethod != true || original.Parameters.Length == 0)
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
         {
-            return false;
-        }
-
-        foreach (INamedTypeSymbol type in original.ContainingNamespace.GetTypeMembers())
-        {
-            foreach (IMethodSymbol other in type.GetMembers(original.Name).OfType<IMethodSymbol>())
+            if (current.DeclaredAccessibility != Accessibility.Public
+                || current.IsFileLocal)
             {
-                IMethodSymbol otherOriginal = other.ReducedFrom ?? other;
-                if (otherOriginal.IsExtensionMethod
-                    && !SymbolEqualityComparer.Default.Equals(
-                        otherOriginal.ContainingType,
-                        original.ContainingType)
-                    && otherOriginal.Parameters.Length > 0
-                    && SignatureType(otherOriginal.Parameters[0].Type)
-                        == SignatureType(original.Parameters[0].Type)
-                    && HaveSameReducedSignature(original, otherOriginal))
-                {
-                    return true;
-                }
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     private static bool HasPrivateNestedAggregate(INamedTypeSymbol type)
@@ -710,7 +694,7 @@ public sealed partial class CSharpToGSharpTranslator
         IMethodSymbol original = method?.ReducedFrom ?? method;
         if (RequiresOwnerScopedExtension(original))
         {
-            return CanEmitOwnerScopedReceiverCompanion(original);
+            return IsOwnerScopedCompanionShapeEligible(original);
         }
 
         return TryGetOwnedExtensionReceiver(original, out INamedTypeSymbol receiver) &&
@@ -1357,10 +1341,6 @@ public sealed partial class CSharpToGSharpTranslator
             return !SymbolEqualityComparer.Default.Equals(original.ContainingAssembly, this.assembly) &&
                 IsReproducibleStaticHelper(original);
         }
-
-        public bool HasReceiverCompanion(MethodDeclarationSyntax method) =>
-            method != null &&
-            this.receiverCompanions.Contains((method.SyntaxTree, method.SpanStart, method.Span.Length));
 
         public bool HasReceiverCompanion(IMethodSymbol method)
         {

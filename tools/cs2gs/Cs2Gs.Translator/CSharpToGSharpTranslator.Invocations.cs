@@ -733,7 +733,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (this.ownedExtensions.HasReceiverCompanion(method) ||
+            if (this.HasReceiverCompanion(method) ||
                 !this.IsStaticExtensionHelper(method))
             {
                 return false;
@@ -741,6 +741,38 @@ public sealed partial class CSharpToGSharpTranslator
 
             IMethodSymbol original = method.ReducedFrom ?? method;
             ownerName = original.ContainingType?.Name is { } containingName ? SanitizeIdentifier(containingName) : null;
+            methodName = SanitizeIdentifier(original.Name);
+            return ownerName != null;
+        }
+
+        private bool TryGetStaticExtensionHelperForMethodGroup(
+            IMethodSymbol method,
+            out string ownerName,
+            out string methodName)
+        {
+            if (this.TryGetStaticExtensionHelper(
+                method,
+                out ownerName,
+                out methodName))
+            {
+                return true;
+            }
+
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (!this.HasReceiverCompanion(original)
+                || !this.IsStaticExtensionHelper(original)
+                || original?.ReturnType is not INamedTypeSymbol { Name: "Task" } task
+                || task.ContainingNamespace?.ToDisplayString()
+                    != "System.Threading.Tasks")
+            {
+                ownerName = null;
+                methodName = null;
+                return false;
+            }
+
+            ownerName = original.ContainingType?.Name is { } containingName
+                ? SanitizeIdentifier(containingName)
+                : null;
             methodName = SanitizeIdentifier(original.Name);
             return ownerName != null;
         }

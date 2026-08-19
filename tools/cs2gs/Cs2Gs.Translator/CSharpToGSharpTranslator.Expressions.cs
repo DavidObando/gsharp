@@ -399,8 +399,15 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.context.GetSymbolInfo(member).Symbol is IMethodSymbol { IsExtensionMethod: true } memberExtMethod)
             {
                 this.typeMapper.TrackExtensionMethodNamespace(memberExtMethod);
-                if (memberExtMethod.MethodKind == MethodKind.ReducedExtension &&
-                    this.TryGetStaticExtensionHelper(memberExtMethod, out string helperOwner, out string helperName))
+                bool isInvocationTarget =
+                    member.Parent is InvocationExpressionSyntax invocation
+                    && invocation.Expression == member;
+                if (memberExtMethod.MethodKind == MethodKind.ReducedExtension
+                    && !isInvocationTarget
+                    && this.TryGetStaticExtensionHelperForMethodGroup(
+                        memberExtMethod,
+                        out string helperOwner,
+                        out string helperName))
                 {
                     if (member.Parent is ArgumentSyntax nameOfArgument &&
                         IsNameOfArgument(nameOfArgument))

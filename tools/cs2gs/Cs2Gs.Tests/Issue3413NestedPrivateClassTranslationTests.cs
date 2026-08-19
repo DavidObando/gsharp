@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -47,6 +48,10 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     Console.WriteLine(35.AddCached());
                     Console.WriteLine(6.DelayIdentityAsync().GetAwaiter().GetResult());
                     7.DelayAsync().GetAwaiter().GetResult();
+                    Func<Task<int>> lengthAsync = "four".LengthAsync;
+                    Console.WriteLine(lengthAsync().GetAwaiter().GetResult());
+                    Func<Task> delayAsync = "later".DelayTextAsync;
+                    delayAsync().GetAwaiter().GetResult();
                     Console.WriteLine("async");
                 }
             }
@@ -78,6 +83,17 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                 }
 
                 public static async Task DelayAsync(this int value)
+                {
+                    await Task.Yield();
+                }
+
+                public static async Task<int> LengthAsync(this string value)
+                {
+                    await Task.Yield();
+                    return value.Length;
+                }
+
+                public static async Task DelayTextAsync(this string value)
                 {
                     await Task.Yield();
                 }
@@ -154,6 +170,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "AddCached");
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayIdentityAsync");
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayAsync");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "LengthAsync");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayTextAsync");
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Identity");
@@ -166,6 +184,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "DelayAsync");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "LengthAsync");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "DelayTextAsync");
 
         string rendered = GSharpPrinter.Print(unit);
         Assert.Contains("private class EntryHelper[T]", rendered, StringComparison.Ordinal);
@@ -326,6 +350,139 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
     }
 
     [Fact]
+    public void OwnerScopedCompanion_DeduplicatesCanonicalSiblingSignatures()
+    {
+        LoadedCSharpProject first = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("First.cs", """
+                    namespace Shared;
+
+                    public static class First
+                    {
+                        private sealed class Cache
+                        {
+                        }
+
+                        public static object Convert(this object value, dynamic argument) => argument;
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences(),
+            "Z.Dependency");
+        Assert.True(first.BoundWithoutErrors, string.Join(Environment.NewLine, first.ErrorDiagnostics));
+        using var firstImage = new MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult firstEmit =
+            first.Compilation.Emit(firstImage);
+        Assert.True(firstEmit.Success, string.Join(Environment.NewLine, firstEmit.Diagnostics));
+        MetadataReference firstReference =
+            MetadataReference.CreateFromImage(firstImage.ToArray());
+
+        LoadedCSharpProject second = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Second.cs", """
+                    namespace Shared;
+
+                    public static class Second
+                    {
+                        private sealed class Cache
+                        {
+                        }
+
+                        public static object Convert(this object value, object argument) => argument;
+                    }
+                    """),
+            },
+            CSharpProjectLoader.RuntimeReferences().Append(firstReference).ToList(),
+            "A.Dependent");
+        Assert.True(second.BoundWithoutErrors, string.Join(Environment.NewLine, second.ErrorDiagnostics));
+
+        string printedFirst = TranslateProject(
+            first,
+            new[] { first.Compilation });
+        string printedSecond = TranslateProject(
+            second,
+            new[] { first.Compilation, second.Compilation });
+        string combined = printedFirst + printedSecond;
+
+        Assert.Equal(
+            1,
+            CountOccurrences(combined, "func (value object) Convert(argument object) object"));
+        Assert.Contains(
+            "func (value object) Convert(argument object) object",
+            printedFirst,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "func (value object) Convert(argument object) object",
+            printedSecond,
+            StringComparison.Ordinal);
+        Assert.Contains("class First", combined, StringComparison.Ordinal);
+        Assert.Contains("class Second", combined, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printedFirst, printedSecond);
+    }
+
+    [Fact]
+    public void OwnerScopedCompanion_RejectsExternAndNonPublicOwners()
+    {
+        const string source = """
+            using System;
+            using System.Runtime.InteropServices;
+
+            namespace Issue3413
+            {
+                public static class Program
+                {
+                    public static void Main()
+                    {
+                        Console.WriteLine("a".InternalEcho());
+                        Console.WriteLine("b".FileEcho());
+                    }
+                }
+
+                internal static class InternalOwner
+                {
+                    private sealed class Cache
+                    {
+                    }
+
+                    public static string InternalEcho(this string value) => value;
+                }
+
+                file static class FileOwner
+                {
+                    private sealed class Cache
+                    {
+                    }
+
+                    public static string FileEcho(this string value) => value;
+                }
+
+                public static class NativeOwner
+                {
+                    private sealed class Cache
+                    {
+                    }
+
+                    [DllImport("libc")]
+                    public static extern int NativeAbs(this int value);
+                }
+            }
+            """;
+
+        (CompilationUnit unit, _) = Translate(source);
+        string rendered = GSharpPrinter.Print(unit);
+
+        Assert.DoesNotContain(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name is "InternalEcho" or "FileEcho" or "NativeAbs");
+        Assert.Contains("InternalOwner.InternalEcho(\"a\")", rendered, StringComparison.Ordinal);
+        Assert.Contains("FileOwner.FileEcho(\"b\")", rendered, StringComparison.Ordinal);
+        Assert.Contains("func NativeAbs(value int32) int32", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public async Task Pipeline_CompilesVerifiesRunsAndEmitsNestedPrivateGenericMetadata()
     {
         string compiler = FindCompiler();
@@ -350,7 +507,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), Source);
         string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
-        File.WriteAllText(goldenPath, "42\n1\n42\n6\nasync\n");
+        File.WriteAllText(goldenPath, "42\n1\n42\n6\n4\nasync\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var app = new CorpusApp(
@@ -391,6 +548,14 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("private class Cache[T]", translated, StringComparison.Ordinal);
         Assert.Contains("return await ExtensionOwner.DelayIdentityAsync", translated, StringComparison.Ordinal);
         Assert.Contains("await ExtensionOwner.DelayAsync", translated, StringComparison.Ordinal);
+        Assert.Contains(
+            "let lengthAsync async () -> int32 = () -> ExtensionOwner.LengthAsync(\"four\")",
+            translated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "let delayAsync async () -> void = () -> ExtensionOwner.DelayTextAsync(\"later\")",
+            translated,
+            StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);
         Assert.Contains("private open class Helper[TInner]", translated, StringComparison.Ordinal);
         Assert.True(
@@ -434,6 +599,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(
             extensionOwner,
             extensionOwner.GetMethod("DelayAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("LengthAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("DelayTextAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
 
         Type genericOwner = Assert.Single(
             assembly.GetTypes(),
@@ -556,6 +727,38 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         var document = new LoadedDocument(tree.FilePath, tree, model);
         var context = new TranslationContext(compilation, model, document.FilePath);
         return (new CSharpToGSharpTranslator().TranslateDocument(document, context), context);
+    }
+
+    private static string TranslateProject(
+        LoadedCSharpProject project,
+        IReadOnlyList<CSharpCompilation> siblings)
+    {
+        var translator = new CSharpToGSharpTranslator();
+        return string.Join(
+            Environment.NewLine,
+            project.Documents.Select(document =>
+            {
+                var context = new TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    siblings);
+                return GSharpPrinter.Print(
+                    translator.TranslateDocument(document, context));
+            }));
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        for (int index = text.IndexOf(value, StringComparison.Ordinal);
+            index >= 0;
+            index = text.IndexOf(value, index + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static bool IlVerifyToolAvailable()
