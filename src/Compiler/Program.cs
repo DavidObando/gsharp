@@ -518,6 +518,13 @@ public class Program
             var id = d.Id;
             var severity = d.Severity;
 
+            // Hidden diagnostics are never surfaced on the command line unless
+            // severity configuration (/gsdiag:) promoted them before this pass.
+            if (severity == DiagnosticSeverity.Hidden)
+            {
+                continue;
+            }
+
             // /nowarn suppresses warning-level diagnostics with the specified ID.
             if (severity == DiagnosticSeverity.Warning && args.NoWarnIds.Contains(id))
             {
@@ -536,15 +543,7 @@ public class Program
                 severity = DiagnosticSeverity.Error;
             }
 
-            // If the severity changed, wrap in a new Diagnostic preserving everything else.
-            if (severity != d.Severity)
-            {
-                result.Add(new Diagnostic(d.Location, d.Id, severity, d.Message));
-            }
-            else
-            {
-                result.Add(d);
-            }
+            result.Add(d.WithSeverity(severity));
         }
 
         return result;
