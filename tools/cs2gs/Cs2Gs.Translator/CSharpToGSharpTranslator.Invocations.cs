@@ -1825,8 +1825,8 @@ public sealed partial class CSharpToGSharpTranslator
                 // §B.11).
                 if (!hasCtorArgs
                     && (typeSymbol is ITypeParameterSymbol
-                        || (typeSymbol is INamedTypeSymbol initializedType
-                            && ShouldUseCompositeObjectInitializer(initializedType, initializer))))
+                        || (typeSymbol is INamedTypeSymbol
+                            && this.InvokesParameterlessConstructor(creationNode))))
                 {
                     return this.BuildObjectInitializerLiteral(initializer, type);
                 }
@@ -1842,7 +1842,10 @@ public sealed partial class CSharpToGSharpTranslator
                 // this: it lowers to a synthetic local, the assignments, then a
                 // trailing value, so it composes at any expression position —
                 // no hoisted-temp workaround is needed.
-                return this.BuildConstructionWithInitializerSuffix(initializer, type, arguments);
+                return this.BuildConstructionWithInitializerSuffix(
+                    initializer,
+                    type,
+                    this.MaterializeOmittedConstructorArguments(creationNode, arguments));
             }
 
             // A source-defined value aggregate (`struct` / `data struct`) has no
@@ -1865,32 +1868,54 @@ public sealed partial class CSharpToGSharpTranslator
             return BuildConstruction(type, arguments);
         }
 
-        private bool ShouldUseCompositeObjectInitializer(
-            INamedTypeSymbol initializedType,
-            InitializerExpressionSyntax initializer)
+        private bool InvokesParameterlessConstructor(
+            BaseObjectCreationExpressionSyntax creationNode)
         {
-            string assemblyName = initializedType.ContainingAssembly?.Name;
-            if (!initializedType.IsValueType
-                && assemblyName != null
-                && assemblyName != this.context.Compilation.AssemblyName
-                && this.context.RepositoryCompilations?.Any(
-                    compilation => compilation.AssemblyName == assemblyName) == true)
+            return this.context.GetSymbolInfo(creationNode).Symbol
+                is IMethodSymbol { Parameters.Length: 0 };
+        }
+
+        private IReadOnlyList<GExpression> MaterializeOmittedConstructorArguments(
+            BaseObjectCreationExpressionSyntax creationNode,
+            IReadOnlyList<GExpression> arguments)
+        {
+            if (arguments.Count != 0
+                || this.context.GetSymbolInfo(creationNode).Symbol is not IMethodSymbol constructor
+                || constructor.Parameters.Length == 0)
             {
-                return false;
+                return arguments;
             }
 
-            if (initializedType.IsValueType
-                || initializedType.Locations.Any(location => location.IsInSource)
-                || initializer.Expressions.OfType<AssignmentExpressionSyntax>()
-                    .Any(assignment => assignment.Right is InitializerExpressionSyntax))
+            var materialized = new List<GExpression>(constructor.Parameters.Length);
+            foreach (IParameterSymbol parameter in constructor.Parameters)
             {
-                return true;
+                if (parameter.IsParams && parameter.Type is IArrayTypeSymbol paramsArray)
+                {
+                    materialized.Add(new ArrayLiteralExpression(
+                        this.typeMapper.Map(
+                            paramsArray.ElementType,
+                            this.context,
+                            creationNode.GetLocation())));
+                    continue;
+                }
+
+                GTypeReference parameterType = this.typeMapper.Map(
+                    parameter.Type,
+                    this.context,
+                    creationNode.GetLocation());
+                GExpression defaultValue = this.BuildOptionalParameterDefault(
+                    parameter,
+                    parameterType,
+                    creationNode);
+                if (defaultValue == null)
+                {
+                    return arguments;
+                }
+
+                materialized.Add(defaultValue);
             }
 
-            return assemblyName != null
-                && assemblyName != "System.Private.CoreLib"
-                && !assemblyName.StartsWith("System.", StringComparison.Ordinal)
-                && !assemblyName.StartsWith("Microsoft.", StringComparison.Ordinal);
+            return materialized;
         }
 
         private bool TryBuildSourceStructConstructorFields(

@@ -1,0 +1,294 @@
+// <copyright file="Issue3460TranslatorTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Cs2Gs.CodeModel.Ast;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Translator;
+using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
+using Microsoft.CodeAnalysis;
+using Xunit;
+
+namespace Cs2Gs.Tests.Fixtures
+{
+    public sealed class Issue3460ImportedOptions
+    {
+        public Issue3460ImportedOptions()
+        {
+            Trace = (Trace * 10) + 1;
+        }
+
+        public Issue3460ImportedOptions(int marker)
+        {
+            Trace = (Trace * 10) + marker;
+        }
+
+        public static int Trace { get; set; }
+
+        public required string Required { get; init; }
+
+        public int InitOnly { get; init; }
+
+        public int Value { get; set; }
+
+        public Issue3460NestedOptions Nested { get; set; } = new();
+
+        public List<int> Values { get; } = new();
+    }
+
+    public sealed class Issue3460NestedOptions
+    {
+        public int Value { get; set; }
+    }
+
+    public sealed class Issue3460OptionalOptions
+    {
+        public Issue3460OptionalOptions(int marker = 7)
+        {
+            Marker = marker;
+        }
+
+        public int Marker { get; }
+
+        public int Value { get; init; }
+    }
+}
+
+namespace Cs2Gs.Tests
+{
+    public sealed class Issue3460TranslatorTests
+    {
+        [Fact]
+        public void ImportedClrObjectInitializer_UsesCanonicalCompositeLiteralAndBinds()
+        {
+            string printed = Translate("""
+                using System.Text.Json;
+                using System.Text.Json.Serialization;
+
+                public static class Obj
+                {
+                    public static JsonSerializerOptions Make() =>
+                        new JsonSerializerOptions
+                        {
+                            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                        };
+                }
+                """,
+                MetadataReference.CreateFromFile(
+                    typeof(System.Text.Json.JsonSerializerOptions).Assembly.Location));
+
+            Assert.Contains(
+                "JsonSerializerOptions{DefaultIgnoreCondition: JsonIgnoreCondition.WhenWritingNull}",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("JsonSerializerOptions(){", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void ImportedClrObjectInitializer_InArgumentPosition_Binds()
+        {
+            string printed = Translate("""
+                using System.Threading.Tasks;
+
+                public static class Obj
+                {
+                    private static int Read(ParallelOptions options) =>
+                        options.MaxDegreeOfParallelism;
+
+                    public static int Make() =>
+                        Read(new ParallelOptions { MaxDegreeOfParallelism = 4 });
+                }
+                """);
+
+            Assert.Contains(
+                "Read(ParallelOptions{MaxDegreeOfParallelism: 4})",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("ParallelOptions(){", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void ImportedParameterlessInitializer_PreservesOrderedMembersNestedInitializersAndRuntime()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    private static Issue3460ImportedOptions Capture(
+                        Issue3460ImportedOptions options) => options;
+
+                    private static int Mark(int digit)
+                    {
+                        Issue3460ImportedOptions.Trace =
+                            (Issue3460ImportedOptions.Trace * 10) + digit;
+                        return digit;
+                    }
+
+                    private static string MarkText(string value, int digit)
+                    {
+                        Mark(digit);
+                        return value;
+                    }
+
+                    public static int Run()
+                    {
+                        Issue3460ImportedOptions.Trace = 0;
+                        var options = Capture(
+                            new Issue3460ImportedOptions
+                            {
+                                Required = MarkText("ok", 2),
+                                InitOnly = Mark(3),
+                                Value = Mark(4),
+                                Nested = new Issue3460NestedOptions { Value = Mark(5) },
+                                Values = { Mark(6), Mark(7) },
+                            });
+                        return Issue3460ImportedOptions.Trace
+                            + options.Required.Length
+                            + options.InitOnly
+                            + options.Value
+                            + options.Nested.Value
+                            + options.Values[0]
+                            + options.Values[1];
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460ImportedOptions).Assembly.Location));
+
+            Assert.Contains("Issue3460ImportedOptions{", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Issue3460ImportedOptions(){", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460ImportedOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(1234594, result.Value);
+        }
+
+        [Fact]
+        public void ImportedConstructorArguments_RunBeforeOrderedMemberAssignments()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    private static int MarkArgument()
+                    {
+                        Issue3460ImportedOptions.Trace =
+                            (Issue3460ImportedOptions.Trace * 10) + 1;
+                        return 2;
+                    }
+
+                    private static int Mark(int digit)
+                    {
+                        Issue3460ImportedOptions.Trace =
+                            (Issue3460ImportedOptions.Trace * 10) + digit;
+                        return digit;
+                    }
+
+                    private static string MarkText(string value, int digit)
+                    {
+                        Mark(digit);
+                        return value;
+                    }
+
+                    public static int Run()
+                    {
+                        Issue3460ImportedOptions.Trace = 0;
+                        var options = new Issue3460ImportedOptions(MarkArgument())
+                        {
+                            Required = MarkText("ok", 3),
+                            InitOnly = Mark(4),
+                        };
+                        return Issue3460ImportedOptions.Trace + options.Required.Length;
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460ImportedOptions).Assembly.Location));
+
+            Assert.Contains(
+                "Issue3460ImportedOptions(Obj.MarkArgument())",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains("Required = Obj.MarkText(\"ok\", 3)", printed, StringComparison.Ordinal);
+            Assert.Contains("InitOnly = Obj.Mark(4)", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460ImportedOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(1236, result.Value);
+        }
+
+        [Fact]
+        public void ImportedOptionalConstructor_DefaultIsMaterializedBeforeInitializer()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    public static int Run()
+                    {
+                        var options = new Issue3460OptionalOptions { Value = 3 };
+                        return (options.Marker * 10) + options.Value;
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460OptionalOptions).Assembly.Location));
+
+            Assert.Contains(
+                "Issue3460OptionalOptions(7){Value = 3}",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("Issue3460OptionalOptions(){", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460OptionalOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(73, result.Value);
+        }
+
+        private static string Translate(
+            string source,
+            params MetadataReference[] additionalReferences)
+        {
+            IReadOnlyList<MetadataReference> references = additionalReferences.Length == 0
+                ? null
+                : CSharpProjectLoader.RuntimeReferences()
+                    .Concat(additionalReferences)
+                    .GroupBy(reference => reference.Display, StringComparer.Ordinal)
+                    .Select(group => group.First())
+                    .ToList();
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[] { ("Snippet.cs", source) },
+                references);
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippet should bind with no C# errors: "
+                    + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+            LoadedDocument document = Assert.Single(project.Documents);
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+            return GSharpPrinter.Print(unit);
+        }
+    }
+}
