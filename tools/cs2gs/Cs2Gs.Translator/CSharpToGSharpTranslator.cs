@@ -211,6 +211,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         string package = this.packageFilter ?? this.ResolvePackage(root, context);
 
+        // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
+        // static class normally become top-level G#. When the entry class owns a
+        // nested aggregate type, keep the class intact instead.
+        IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
+        INamedTypeSymbol entryType = entryPoint?.ContainingType;
+        bool preserveEntryType = entryType?.GetTypeMembers()
+            .Any(type => type.TypeKind != TypeKind.Delegate) == true;
+
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's
         // semantic model (`TranslationContext.UseSemanticModelFor`), so a short
@@ -229,7 +237,8 @@ public sealed partial class CSharpToGSharpTranslator
                 partialTypeParts,
                 ownedExtensions,
                 this.preservePartialParts,
-                this.packageFilter);
+                this.packageFilter,
+                preserveEntryType ? null : entryType);
         IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
             contributingTrees
                 .Where(tree => tree != root.SyntaxTree)
@@ -238,19 +247,6 @@ public sealed partial class CSharpToGSharpTranslator
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
-
-        // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
-        // static class normally become top-level G#. When the entry class owns a
-        // nested aggregate type, keep the class intact instead: G# supports class-scoped
-        // static Main, and flattening would discard the nested type's owner and
-        // private accessibility.
-        //
-        // Computed once here and threaded through so the visitor does not
-        // recompute it (`Compilation.GetEntryPoint` re-walks the compilation).
-        IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
-        INamedTypeSymbol entryType = entryPoint?.ContainingType;
-        bool preserveEntryType = entryType?.GetTypeMembers()
-            .Any(type => type.TypeKind != TypeKind.Delegate) == true;
 
         // Share the anonymous-type registry with every other
         // document already translated (by this same translator instance)
@@ -891,7 +887,8 @@ public sealed partial class CSharpToGSharpTranslator
         Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
         OwnedExtensionRegistry ownedExtensions,
         bool preservePartialParts,
-        string packageFilter)
+        string packageFilter,
+        INamedTypeSymbol flattenedEntryType)
     {
         var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>
         {
@@ -937,6 +934,15 @@ public sealed partial class CSharpToGSharpTranslator
             SemanticModel model = context.Compilation.GetSemanticModel(
                 declaration.SyntaxTree);
             INamedTypeSymbol type = model.GetDeclaredSymbol(declaration);
+            bool isFlattenedEntry = type != null
+                && SymbolEqualityComparer.Default.Equals(
+                    type.OriginalDefinition,
+                    flattenedEntryType?.OriginalDefinition);
+            if (isFlattenedEntry)
+            {
+                continue;
+            }
+
             bool attachOwnedExtensions = true;
             if (type != null
                 && partialTypeParts.TryGetValue(

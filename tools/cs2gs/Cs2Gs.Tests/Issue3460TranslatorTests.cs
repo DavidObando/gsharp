@@ -464,7 +464,9 @@ namespace Cs2Gs.Tests
                     """));
 
             Assert.Contains("import System.Threading", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("import System.Timers", printed, StringComparison.Ordinal);
+            Assert.True(
+                !printed.Contains("import System.Timers", StringComparison.Ordinal),
+                printed);
             Assert.Contains("typeof(Timer)", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("func Measure()", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
@@ -517,7 +519,9 @@ namespace Cs2Gs.Tests
                     """));
 
             Assert.Contains("import System.Threading", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("import System.Timers", printed, StringComparison.Ordinal);
+            Assert.True(
+                !printed.Contains("import System.Timers", StringComparison.Ordinal),
+                printed);
             Assert.Contains("class Root", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("class Carrier", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("func Measure()", printed, StringComparison.Ordinal);
@@ -525,6 +529,52 @@ namespace Cs2Gs.Tests
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
                 printed + Environment.NewLine + "Demo.Root.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal("System.Threading.Timer", result.Value);
+        }
+
+        [Fact]
+        public void ContributingDeclarationGraph_FlattenedEntrySkipsPartialSiblings()
+        {
+            string printed = TranslateEntryFile(
+                "A.Entry.cs",
+                ("A.Entry.cs", """
+                    using System.Threading;
+
+                    namespace Demo;
+
+                    public static partial class Program
+                    {
+                        public static string Probe() => typeof(Timer).FullName!;
+
+                        public static void Main()
+                        {
+                        }
+                    }
+                    """),
+                ("B.EntrySibling.cs", """
+                    using System.Timers;
+
+                    namespace Demo;
+
+                    public static partial class Program
+                    {
+                        public static int Unemitted() => 1;
+                    }
+                    """));
+
+            Assert.Contains("import System.Threading", printed, StringComparison.Ordinal);
+            Assert.True(
+                !printed.Contains("import System.Timers", StringComparison.Ordinal),
+                printed);
+            Assert.Contains("func Probe()", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("func Unemitted()", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("class Program", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Probe()");
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
             Assert.Equal("System.Threading.Timer", result.Value);
@@ -1055,7 +1105,33 @@ namespace Cs2Gs.Tests
             bool preservePartialParts,
             params (string Path, string Source)[] sources)
         {
-            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources);
+            return TranslateFileCore(
+                targetPath,
+                preservePartialParts,
+                OutputKind.DynamicallyLinkedLibrary,
+                sources);
+        }
+
+        private static string TranslateEntryFile(
+            string targetPath,
+            params (string Path, string Source)[] sources)
+        {
+            return TranslateFileCore(
+                targetPath,
+                preservePartialParts: false,
+                OutputKind.ConsoleApplication,
+                sources);
+        }
+
+        private static string TranslateFileCore(
+            string targetPath,
+            bool preservePartialParts,
+            OutputKind outputKind,
+            params (string Path, string Source)[] sources)
+        {
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                sources,
+                outputKind: outputKind);
             Assert.True(
                 project.BoundWithoutErrors,
                 "Snippets should bind with no C# errors: "
