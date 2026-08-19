@@ -426,6 +426,57 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ContributingDeclarationGraph_DoesNotFollowUnrelatedSameTreeExtensions()
+        {
+            string printed = TranslateFile(
+                "A.Primary.cs",
+                preservePartialParts: false,
+                ("A.Primary.cs", """
+                    namespace Demo;
+
+                    public partial class Root
+                    {
+                        public static string Run() =>
+                            typeof(System.Threading.Timer).FullName!;
+                    }
+                    """),
+                ("B.PartialAndUnrelated.cs", """
+                    namespace Demo;
+
+                    public partial class Root
+                    {
+                        public int Value;
+                    }
+
+                    public sealed class Unrelated
+                    {
+                    }
+                    """),
+                ("C.UnrelatedExtensions.cs", """
+                    using System.Timers;
+
+                    namespace Demo;
+
+                    public static class UnrelatedExtensions
+                    {
+                        public static int Measure(this Unrelated value) => 1;
+                    }
+                    """));
+
+            Assert.Contains("import System.Threading", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("import System.Timers", printed, StringComparison.Ordinal);
+            Assert.Contains("typeof(Timer)", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("func Measure()", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Demo.Root.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal("System.Threading.Timer", result.Value);
+        }
+
+        [Fact]
         public void ImportedParameterlessInitializer_PreservesOrderedMembersNestedInitializersAndRuntime()
         {
             string printed = Translate("""
