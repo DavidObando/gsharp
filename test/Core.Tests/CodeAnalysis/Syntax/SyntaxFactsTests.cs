@@ -21,6 +21,15 @@ public class SyntaxFactsTests
     }
 
     [Theory]
+    [InlineData("class", true)]
+    [InlineData("params", true)]
+    [InlineData("scoped", false)]
+    public void IsReservedIdentifier_ReturnsExpected(string text, bool expected)
+    {
+        Assert.Equal(expected, SyntaxFacts.IsReservedIdentifier(text));
+    }
+
+    [Theory]
     [InlineData(SyntaxKind.PlusToken, "+")]
     [InlineData(SyntaxKind.FuncKeyword, "func")]
     [InlineData(SyntaxKind.ColonEqualsToken, ":=")]

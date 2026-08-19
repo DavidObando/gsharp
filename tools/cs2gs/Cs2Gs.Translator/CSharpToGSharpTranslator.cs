@@ -1094,7 +1094,9 @@ public sealed partial class CSharpToGSharpTranslator
                 continue;
             }
 
-            string alias = directive.Alias?.Name.Identifier.Text;
+            string alias = directive.Alias is null
+                ? null
+                : SanitizeIdentifier(directive.Alias.Name.Identifier.Text);
 
             if (namespaceOrType is not NameSyntax)
             {
@@ -1236,20 +1238,6 @@ public sealed partial class CSharpToGSharpTranslator
         // UNQUALIFIED (gsc resolves it through `import X`), unlike a sibling
         // static, which is qualified through its owning type.
         private readonly HashSet<INamedTypeSymbol> staticUsingTargets;
-
-        // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
-        // A C# identifier that collides with one of these cannot be emitted bare; it
-        // is suffixed with `_` consistently at every declaration and reference site.
-        private static readonly HashSet<string> GSharpReservedWords = new HashSet<string>(System.StringComparer.Ordinal)
-        {
-            "as", "async", "await", "break", "case", "catch", "chan", "class", "const",
-            "continue", "default", "defer", "do", "else", "enum", "false", "fallthrough",
-            "finally", "for", "func", "go", "goto", "guard", "if", "import", "interface",
-            "internal", "is", "let", "lock", "map", "nil", "open", "operator", "override",
-            "package", "private", "protected", "public", "range", "return", "scope",
-            "sealed", "select", "sequence", "struct", "switch", "throw", "true", "try",
-            "type", "using", "var", "while",
-        };
 
         // gsc's ADR-0044 implicit numeric widening lattice (mirrors
         // Conversion.NumericWideningTargets), keyed on the C# SpecialType of the

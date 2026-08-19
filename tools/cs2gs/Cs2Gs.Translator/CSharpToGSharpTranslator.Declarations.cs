@@ -15,6 +15,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
+using GSharpSyntaxFacts = GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts;
 
 namespace Cs2Gs.Translator;
 
@@ -299,9 +300,8 @@ public sealed partial class CSharpToGSharpTranslator
             return (funcs, statements);
         }
 
-        // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
-        // A C# identifier that collides with one of these cannot be emitted bare; it
-        // is suffixed with `_` consistently at every declaration and reference site.
+        // G# keywords and parser-reserved declaration spellings come from the
+        // compiler's canonical SyntaxFacts source.
         // Internal (not private) so the outer <see cref="CSharpToGSharpTranslator"/>
         // forwarding method can expose it to <see cref="CSharpTypeMapper"/>, which
         // routes type-name references through this exact sanitizer too (issue
@@ -322,7 +322,8 @@ public sealed partial class CSharpToGSharpTranslator
                 name = name.Substring(1);
             }
 
-            return GSharpReservedWords.Contains(name) ? name + "_" : name;
+            string unsuffixed = name.TrimEnd('_');
+            return GSharpSyntaxFacts.IsReservedIdentifier(unsuffixed) ? name + "_" : name;
         }
 
         // Issue #2382: whether `localFunction` — declared among the top-level

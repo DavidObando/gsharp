@@ -1945,7 +1945,7 @@ public partial class Parser
         // skipping the keyword and continuing to parse the rest as a regular
         // parameter. This stops the user from hitting a cryptic "expected
         // identifier" error and points them at the canonical spelling.
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "params"
+        if (Current.Kind == SyntaxKind.IdentifierToken && SyntaxFacts.IsParamsKeyword(Current.Text)
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
             var paramsToken = NextToken();

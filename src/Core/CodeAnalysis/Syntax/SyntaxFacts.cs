@@ -242,6 +242,22 @@ public static class SyntaxFacts
     }
 
     /// <summary>
+    /// Determines whether a spelling cannot be emitted safely as an identifier
+    /// in every G# declaration position.
+    /// </summary>
+    /// <param name="text">The identifier spelling to inspect.</param>
+    /// <returns><c>true</c> for hard keywords and parser-reserved declaration spellings.</returns>
+    public static bool IsReservedIdentifier(string text) =>
+        GetKeywordKind(text) != SyntaxKind.IdentifierToken || IsParamsKeyword(text);
+
+    /// <summary>
+    /// Determines whether a spelling is the unsupported C# variadic modifier.
+    /// </summary>
+    /// <param name="text">The token spelling to inspect.</param>
+    /// <returns><c>true</c> for <c>params</c>.</returns>
+    public static bool IsParamsKeyword(string text) => text == "params";
+
+    /// <summary>
     /// Provides a list o all supported unary operators.
     /// </summary>
     /// <returns>An enumeration of sytax kinds that represent unary operators.</returns>

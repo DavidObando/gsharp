@@ -194,7 +194,7 @@ public sealed class CSharpTypeMapper
         };
         if (!string.IsNullOrEmpty(aliasTarget))
         {
-            this.synthesizedTypeAliases[alias.Name] = aliasTarget;
+            this.synthesizedTypeAliases[CSharpToGSharpTranslator.SanitizeIdentifier(alias.Name)] = aliasTarget;
         }
     }
 
