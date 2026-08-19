@@ -2102,6 +2102,37 @@ public sealed partial class CSharpToGSharpTranslator
             return symbol is IDiscardSymbol or null;
         }
 
+        private bool CanDropDiscardedExpression(ExpressionSyntax expression)
+        {
+            expression = Unwrap(expression);
+            switch (expression)
+            {
+                case LiteralExpressionSyntax:
+                case ThisExpressionSyntax:
+                case BaseExpressionSyntax:
+                case DefaultExpressionSyntax:
+                case TypeOfExpressionSyntax:
+                    return true;
+
+                case IdentifierNameSyntax identifier:
+                    return this.context.GetSymbolInfo(identifier).Symbol
+                        is ILocalSymbol { RefKind: RefKind.None }
+                        or IParameterSymbol { RefKind: RefKind.None }
+                        or IRangeVariableSymbol;
+
+                case PostfixUnaryExpressionSyntax suppressed
+                    when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return this.CanDropDiscardedExpression(suppressed.Operand);
+
+                case TupleExpressionSyntax tuple:
+                    return tuple.Arguments.All(argument =>
+                        this.CanDropDiscardedExpression(argument.Expression));
+
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>
         /// Translates an expression-statement that may expand into several G#
         /// statements: tuple declaration/deconstruction forms may expand, while
@@ -2117,10 +2148,32 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // C# statement-level discard `_ = e` (Roslyn parses the `_`
                     // target as an IdentifierNameSyntax). G# has no discard target
-                    // (`_ = e` → GS0125), so drop the assignment and emit just the
-                    // RHS as statement(s); `_ = a = b`, `_ = x ?? throw E`, and
-                    // `_ = await ...` flow through the RHS translation (issue #914).
-                    return this.TranslateExpressionStatements(assignment.Right);
+                    // (`_ = e` → GS0125). Drop only reads that cannot run code or
+                    // throw; otherwise G#'s native discard declaration evaluates
+                    // the RHS exactly once while keeping its value unbound.
+                    if (this.CanDropDiscardedExpression(assignment.Right))
+                    {
+                        return System.Array.Empty<GStatement>();
+                    }
+
+                    if ((assignment.Right is AssignmentExpressionSyntax or SwitchExpressionSyntax)
+                        || (assignment.Right is PrefixUnaryExpressionSyntax prefix
+                            && (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                                || prefix.IsKind(SyntaxKind.PreDecrementExpression)))
+                        || (assignment.Right is PostfixUnaryExpressionSyntax postfix
+                            && (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                                || postfix.IsKind(SyntaxKind.PostDecrementExpression))))
+                    {
+                        return this.TranslateExpressionStatements(assignment.Right);
+                    }
+
+                    return new[]
+                    {
+                        (GStatement)new LocalDeclarationStatement(
+                            BindingKind.Let,
+                            "_",
+                            initializer: this.TranslateExpression(assignment.Right)),
+                    };
                 }
 
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))
