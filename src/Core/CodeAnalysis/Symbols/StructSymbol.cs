@@ -290,6 +290,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <inheritdoc/>
     public override string? ContainingNamespace => PackageName;
 
+    /// <inheritdoc/>
+    public override bool IsValueType => !IsClass;
+
     /// <summary>Gets a value indicating whether this is a <c>data struct</c> declaration (ADR-0029).</summary>
     public bool IsData { get; }
 
@@ -663,6 +666,22 @@ public sealed class StructSymbol : TypeSymbol
     public void SetContainingType(TypeSymbol containingType)
     {
         ContainingType = containingType;
+    }
+
+    /// <inheritdoc/>
+    public override System.Collections.Immutable.ImmutableArray<Symbol> GetMembers()
+    {
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<Symbol>();
+        builder.AddRange(Fields);
+        builder.AddRange(StaticFields);
+        builder.AddRange(ConstFields);
+        builder.AddRange(Properties);
+        builder.AddRange(StaticProperties);
+        builder.AddRange(Methods);
+        builder.AddRange(StaticMethods);
+        builder.AddRange(Events);
+        builder.AddRange(StaticEvents);
+        return builder.ToImmutable();
     }
 
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>

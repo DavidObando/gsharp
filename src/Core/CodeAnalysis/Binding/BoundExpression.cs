@@ -27,11 +27,10 @@ public abstract class BoundExpression : BoundNode
     public abstract TypeSymbol Type { get; }
 
     /// <summary>
-    /// Gets the compile-time constant value of this expression, or
-    /// <see langword="null"/> when it has none — the (flattened) Roslyn
-    /// <c>ConstantValue</c> analogue (ADR-0169). Note a constant null literal
-    /// is indistinguishable from "no constant" here; check
-    /// <see cref="BoundNodeKind.LiteralExpression"/> for that case.
+    /// Gets the compile-time constant value of this expression — the Roslyn
+    /// <c>ConstantValue</c> analogue (ADR-0169). <c>HasValue</c> is false
+    /// when the expression has no compile-time constant; a constant null
+    /// literal reports <c>HasValue</c> true with a null <c>Value</c>.
     /// </summary>
-    public virtual object? ConstantValue => null;
+    public virtual OptionalValue ConstantValue => default;
 }

@@ -137,6 +137,67 @@ public abstract class SyntaxNode
     }
 
     /// <summary>
+    /// Enumerates the ancestors of this node, nearest first — the Roslyn
+    /// <c>Ancestors</c> analogue (ADR-0169).
+    /// </summary>
+    /// <returns>The ancestor nodes.</returns>
+    public IEnumerable<SyntaxNode> Ancestors()
+    {
+        for (var node = Parent; node is not null; node = node.Parent)
+        {
+            yield return node;
+        }
+    }
+
+    /// <summary>
+    /// Enumerates this node and its descendants in document order (tokens
+    /// excluded) — the Roslyn <c>DescendantNodesAndSelf</c> analogue
+    /// (ADR-0169).
+    /// </summary>
+    /// <returns>This node followed by its descendant nodes.</returns>
+    public IEnumerable<SyntaxNode> DescendantNodesAndSelf()
+    {
+        var pending = new Stack<SyntaxNode>();
+        pending.Push(this);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            yield return node;
+
+            // Push in reverse so children pop in GetChildren() order.
+            var children = new List<SyntaxNode>();
+            foreach (var child in node.GetChildren())
+            {
+                if (child is not SyntaxToken)
+                {
+                    children.Add(child);
+                }
+            }
+
+            for (var i = children.Count - 1; i >= 0; i--)
+            {
+                pending.Push(children[i]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enumerates the descendants of this node in document order (tokens
+    /// excluded) — the Roslyn <c>DescendantNodes</c> analogue (ADR-0169).
+    /// </summary>
+    /// <returns>The descendant nodes.</returns>
+    public IEnumerable<SyntaxNode> DescendantNodes()
+    {
+        foreach (var node in DescendantNodesAndSelf())
+        {
+            if (!ReferenceEquals(node, this))
+            {
+                yield return node;
+            }
+        }
+    }
+
+    /// <summary>
     /// Gets an enumeration of all the children of this syntax node.
     /// </summary>
     /// <returns>An <see cref="IEnumerable{SyntaxNode}"/> with the children of this syntax node.</returns>

@@ -96,6 +96,7 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.IMethodSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FunctionSymbol"),
         ["Microsoft.CodeAnalysis.SymbolKind"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolKind"),
         ["Microsoft.CodeAnalysis.SymbolEqualityComparer"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolEqualityComparer"),
+        ["Microsoft.CodeAnalysis.IArrayTypeSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "ArrayTypeSymbol"),
         ["Microsoft.CodeAnalysis.SyntaxReference"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "SyntaxNode",
@@ -106,9 +107,16 @@ internal static class RoslynAnalyzerApiMap
             "G# has no INamedTypeSymbol split; generic-instantiation idioms (ConstructedFrom, TypeArguments) need review against the concrete TypeSymbol subclass."),
 
         // Bound tree (the IOperation analogue).
-        ["Microsoft.CodeAnalysis.IOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundNode"),
+        ["Microsoft.CodeAnalysis.IOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundExpression",
+            "IOperation maps to BoundExpression (Type/ConstantValue live on expressions in G#); statement-level operation analyzers need review."),
         ["Microsoft.CodeAnalysis.Operations.IBinaryOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundBinaryExpression"),
         ["Microsoft.CodeAnalysis.Operations.IInvocationOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundCallExpression"),
+        ["Microsoft.CodeAnalysis.Operations.IArgumentOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundExpression",
+            "G# call arguments are the bound expressions directly; IArgumentOperation.Value accesses drop."),
         ["Microsoft.CodeAnalysis.Operations.IConversionOperation"] = new(
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundConversionExpression",
@@ -180,6 +188,10 @@ internal static class RoslynAnalyzerApiMap
             null,
             "DeclaringSyntaxNodes",
             "DeclaringSyntaxNodes holds SyntaxNodes directly; drop GetSyntax() calls."),
+        [("Microsoft.CodeAnalysis.ITypeSymbol", "SpecialType")] = new(
+            null,
+            null,
+            "G# has no SpecialType; comparisons rewrite to fully-qualified display-string checks, other uses fail the round-trip binder."),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax", "Left")] = new(
             null,
             null,

@@ -246,13 +246,14 @@ public sealed class SemanticModel
                     continue;
                 }
 
+                var getterProperty = property;
                 if (typeof(Symbol).IsAssignableFrom(property.PropertyType))
                 {
-                    symbolGetters.Add(property.GetValue);
+                    symbolGetters.Add(node => getterProperty.GetValue(node));
                 }
                 else if (typeof(BoundNode).IsAssignableFrom(property.PropertyType))
                 {
-                    boundGetters.Add(property.GetValue);
+                    boundGetters.Add(node => getterProperty.GetValue(node));
                 }
             }
 

@@ -75,6 +75,23 @@ public abstract class Symbol
     }
 
     /// <summary>
+    /// Gets a value indicating whether this symbol was synthesized by the
+    /// compiler rather than declared in source — the Roslyn
+    /// <c>IsImplicitlyDeclared</c> analogue (ADR-0169), approximated by G#'s
+    /// compiler-generated name convention (a leading <c>&lt;</c>).
+    /// </summary>
+    public virtual bool IsImplicitlyDeclared => Name.StartsWith("<", System.StringComparison.Ordinal);
+
+    /// <summary>
+    /// Gets the first declaration location, or a default (location-less)
+    /// <see cref="Text.TextLocation"/> for symbols with no source declaration.
+    /// The struct-friendly target for Roslyn's
+    /// <c>Locations.Length &gt; 0 ? Locations[0] : null</c> idiom (ADR-0169).
+    /// </summary>
+    public Text.TextLocation Location
+        => DeclaringSyntaxNodes is { IsEmpty: false } declarations ? declarations[0].Location : default;
+
+    /// <summary>
     /// Gets the type that declares this member, or <see langword="null"/> for
     /// top-level symbols — the Roslyn <c>ContainingType</c> analogue
     /// (ADR-0169). Populated fill-once when symbols surface through the
@@ -166,6 +183,9 @@ public abstract class Symbol
     /// <param name="containingType">The declaring type.</param>
     internal void AnchorContainingType(TypeSymbol containingType)
     {
-        ContainingType ??= containingType;
+        if (ContainingType is null)
+        {
+            ContainingType = containingType;
+        }
     }
 }

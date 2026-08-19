@@ -353,6 +353,85 @@ public static class DiagnosticDescriptors
         AssertBindsAgainstGsCore(printedByFile.Values.ToArray());
     }
 
+    [Theory]
+    [InlineData("StrongStaticReflectionCacheAnalyzer.cs")]
+    [InlineData("ReflectionTypeComparisonAnalyzer.cs")]
+    [InlineData("EmitCacheKeyRemapScopeAnalyzer.cs")]
+    public void RealAnalyzerSources_TranslateWithReviewWarningsOnly(string fileName)
+    {
+        string realSource = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers", fileName));
+        string descriptors = @"
+using Microsoft.CodeAnalysis;
+
+namespace GSharp.InternalAnalyzers;
+
+public static class DiagnosticDescriptors
+{
+    public static readonly DiagnosticDescriptor StructFieldDefsRead = new(
+        ""GSA0001"", ""T"", ""M"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+    public static readonly DiagnosticDescriptor ReflectionTypeReferenceComparison = new(
+        ""GSA0002"", ""T"", ""M"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+    public static readonly DiagnosticDescriptor StrongStaticReflectionCache = new(
+        ""GSA0003"", ""T"", ""M {0}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+    public static readonly DiagnosticDescriptor EmitCacheKeyMissingRemapScope = new(
+        ""GSA0004"", ""T"", ""M {0}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+}
+";
+
+        var (printedByFile, diagnostics) = TranslateAnalyzerProject(
+            (fileName, realSource),
+            ("DiagnosticDescriptors.cs", descriptors));
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printedByFile.Values.ToArray());
+    }
+
+    [Fact]
+    public void RealGsa0005Source_FailsLoudly_NeverSilently()
+    {
+        // GSA0005 pattern-matches deeply C#-specific syntax shapes (switch
+        // sections, subpatterns, designations); its migration requires the
+        // reviewed adaptation the design doc predicts. This ratchet pins the
+        // honest behavior: translation is LOUD — either a translation gap or
+        // a round-trip binder failure — never a silently wrong analyzer.
+        string realSource = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers", "RewriterClonePreservationAnalyzer.cs"));
+        string descriptors = @"
+using Microsoft.CodeAnalysis;
+
+namespace GSharp.InternalAnalyzers;
+
+public static class DiagnosticDescriptors
+{
+    public static readonly DiagnosticDescriptor RewriterCloneDropsMember = new(
+        ""GSA0005"", ""T"", ""M {0} {1} {2} {3}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+}
+";
+
+        var (printedByFile, diagnostics) = TranslateAnalyzerProject(
+            ("RewriterClonePreservationAnalyzer.cs", realSource),
+            ("DiagnosticDescriptors.cs", descriptors));
+
+        bool translationIsLoud = diagnostics.Any(d => d.Severity == TranslationSeverity.Unsupported);
+        if (!translationIsLoud)
+        {
+            var trees = printedByFile.Values
+                .Select(printed => GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+                    GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "gsa0005.gs")))
+                .ToArray();
+            using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
+                new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
+            var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees) { IsLibrary = true };
+            translationIsLoud = trees.Any(t => !t.Diagnostics.IsEmpty)
+                || compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).Any(d => d.IsError);
+        }
+
+        Assert.True(
+            translationIsLoud,
+            "GSA0005 translated AND bound cleanly — promote it into RealAnalyzerSources_TranslateWithReviewWarningsOnly and delete this ratchet.");
+    }
+
     [Fact]
     public void UnmappedRoslynApi_ReportsLoudGap()
     {
@@ -460,28 +539,9 @@ public static class NotAnAnalyzer
 
     private static LoadedCSharpProject LoadAnalyzerProject((string FileName, string Source)[] sources)
     {
-        MetadataReference[] references = new[]
-            {
-                typeof(object).Assembly,
-                typeof(System.Collections.Immutable.ImmutableArray).Assembly,
-                typeof(Microsoft.CodeAnalysis.Diagnostics.DiagnosticAnalyzer).Assembly,
-                typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation).Assembly,
-                typeof(Microsoft.CodeAnalysis.Compilation).Assembly,
-                typeof(System.Runtime.CompilerServices.RuntimeHelpers).Assembly,
-            }
-            .Select(assembly => assembly.Location)
-            .Distinct()
-            .Select(location => (MetadataReference)MetadataReference.CreateFromFile(location))
-            .Concat(new[]
-            {
-                (MetadataReference)MetadataReference.CreateFromFile(
-                    Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location), "System.Runtime.dll")),
-            })
-            .ToArray();
-
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            sources,
-            references);
+        // The test host's trusted platform assemblies include the restored
+        // Microsoft.CodeAnalysis packages, so the default reference set works.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources);
         Assert.True(
             project.BoundWithoutErrors,
             "Analyzer snippet should bind with no C# errors: "

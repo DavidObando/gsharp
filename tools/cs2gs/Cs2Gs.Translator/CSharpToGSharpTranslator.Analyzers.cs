@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.Translator.Analyzers;
@@ -93,6 +94,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (member.Name.Identifier.Text == "Value"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "Value" } argumentValue
+                && RoslynTypeMetadataName(argumentValue.ContainingType) == "Microsoft.CodeAnalysis.Operations.IArgumentOperation")
+            {
+                // IArgumentOperation.Value drops: G# call arguments are the
+                // bound expressions directly.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
             if (member.Name.Identifier.Text != "Identifier")
             {
                 return false;
@@ -164,6 +175,50 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Rewrites <c>namespaceSymbol?.ToDisplayString()</c> to the bare
+        /// receiver: G#'s <c>ContainingNamespace</c> is already the (nullable)
+        /// display string.
+        /// </summary>
+        private bool TryTranslateAnalyzerConditionalDisplay(ConditionalAccessExpressionSyntax conditionalAccess, out GExpression result)
+        {
+            result = null;
+            if (conditionalAccess.WhenNotNull is not InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax { Name.Identifier.Text: "ToDisplayString" }, ArgumentList.Arguments.Count: 0 }
+                || this.context.GetTypeInfo(conditionalAccess.Expression).Type is not INamedTypeSymbol receiverType
+                || RoslynTypeMetadataName(receiverType) != "Microsoft.CodeAnalysis.INamespaceSymbol")
+            {
+                return false;
+            }
+
+            result = this.TranslateExpression(conditionalAccess.Expression);
+            return true;
+        }
+
+        /// <summary>
+        /// Rewrites the Roslyn location-picking ternary
+        /// (<c>symbol.Locations.Length &gt; 0 ? symbol.Locations[0] : null</c>)
+        /// to G#'s <c>Symbol.Location</c>, which is a struct and cannot be
+        /// null-defaulted.
+        /// </summary>
+        private bool TryTranslateAnalyzerLocationsTernary(ConditionalExpressionSyntax conditional, out GExpression result)
+        {
+            result = null;
+            if (conditional.WhenFalse is not LiteralExpressionSyntax whenFalse
+                || !whenFalse.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression)
+                || conditional.WhenTrue is not ElementAccessExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "Locations" } locationsAccess }
+                || this.context.GetSymbolInfo(locationsAccess).Symbol is not IPropertySymbol { Name: "Locations" } locations
+                || !RoslynAnalyzerApiMap.IsRoslynNamespace(locations.ContainingType?.ContainingNamespace?.ToDisplayString()))
+            {
+                return false;
+            }
+
+            result = new MemberAccessExpression(
+                this.TranslateExpression(locationsAccess.Expression),
+                "Location",
+                isArrow: false);
+            return true;
+        }
+
+        /// <summary>
         /// Lowers a comparison against a Roslyn member with no G# counterpart
         /// (currently <c>AssignmentExpressionSyntax.Left</c>) to a boolean
         /// constant, with a CS2GS-ANALYZER-SHAPE review warning. In G#, index
@@ -178,6 +233,37 @@ public sealed partial class CSharpToGSharpTranslator
             if (!isEquals && !isNotEquals)
             {
                 return false;
+            }
+
+            // x.SpecialType ==/!= SpecialType.System_Y rewrites to a
+            // fully-qualified display-string comparison: G# has no SpecialType.
+            foreach ((ExpressionSyntax memberSide, ExpressionSyntax enumSide) in new[]
+                {
+                    (binary.Left, binary.Right),
+                    (binary.Right, binary.Left),
+                })
+            {
+                if (memberSide is not MemberAccessExpressionSyntax { Name.Identifier.Text: "SpecialType" } specialAccess
+                    || this.context.GetSymbolInfo(specialAccess).Symbol is not IPropertySymbol { Name: "SpecialType" } specialProperty
+                    || !RoslynAnalyzerApiMap.IsRoslynNamespace(specialProperty.ContainingType?.ContainingNamespace?.ToDisplayString())
+                    || enumSide is not MemberAccessExpressionSyntax { Name.Identifier.Text: { } specialName } enumAccess
+                    || !specialName.StartsWith("System_", System.StringComparison.Ordinal)
+                    || this.context.GetSymbolInfo(enumAccess).Symbol is not IFieldSymbol { ContainingType.Name: "SpecialType" })
+                {
+                    continue;
+                }
+
+                this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Symbols");
+                result = new BinaryExpression(
+                    new InvocationExpression(
+                        new MemberAccessExpression(this.TranslateExpression(specialAccess.Expression), "ToDisplayString", isArrow: false),
+                        new List<GExpression>
+                        {
+                            new MemberAccessExpression(new IdentifierExpression("DisplayFormat"), "FullyQualified", isArrow: false),
+                        }),
+                    isEquals ? "==" : "!=",
+                    LiteralExpression.String("global::" + specialName.Replace('_', '.')));
+                return true;
             }
 
             foreach (ExpressionSyntax operand in new[] { binary.Left, binary.Right })

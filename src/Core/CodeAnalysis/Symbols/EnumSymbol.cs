@@ -50,6 +50,9 @@ public sealed class EnumSymbol : TypeSymbol
     /// <inheritdoc/>
     public override string? ContainingNamespace => PackageName;
 
+    /// <inheritdoc/>
+    public override bool IsValueType => true;
+
     /// <summary>Gets the declaring syntax node.</summary>
     public EnumDeclarationSyntax Declaration { get; }
 

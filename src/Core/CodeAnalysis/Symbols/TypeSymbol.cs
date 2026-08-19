@@ -178,6 +178,46 @@ public class TypeSymbol : Symbol
             : this;
 
     /// <summary>
+    /// Gets a value indicating whether this type is a value type — the
+    /// Roslyn <c>IsValueType</c> analogue (ADR-0169).
+    /// </summary>
+    public virtual bool IsValueType => ClrType?.IsValueType ?? false;
+
+    /// <summary>
+    /// Gets a value indicating whether this is a tuple type — the Roslyn
+    /// <c>IsTupleType</c> analogue (ADR-0169).
+    /// </summary>
+    public virtual bool IsTupleType => false;
+
+    /// <summary>
+    /// Gets the positional tuple elements as field symbols
+    /// (<c>Item1..ItemN</c>) — the Roslyn <c>TupleElements</c> analogue
+    /// (ADR-0169). Empty for non-tuple types.
+    /// </summary>
+    public virtual ImmutableArray<FieldSymbol> TupleElements => ImmutableArray<FieldSymbol>.Empty;
+
+    /// <summary>
+    /// Gets the members declared on this type — the Roslyn
+    /// <c>GetMembers()</c> analogue (ADR-0169). Empty by default; user-defined
+    /// aggregates surface their fields, properties, methods, and events.
+    /// </summary>
+    /// <returns>The declared members.</returns>
+    public virtual ImmutableArray<Symbol> GetMembers() => ImmutableArray<Symbol>.Empty;
+
+    /// <summary>
+    /// Renders CLR-backed types the way Roslyn's fully-qualified format does
+    /// — <c>global::Ns.Name&lt;T1, T2&gt;</c> with type-parameter names on
+    /// open definitions — so string comparisons in migrated analyzers (e.g.
+    /// against <c>"global::System.Collections.Generic.Dictionary&lt;TKey, TValue&gt;"</c>)
+    /// carry over verbatim (ADR-0169). Non-CLR-backed types fall back to the
+    /// base rendering.
+    /// </summary>
+    /// <param name="format">The rendering format.</param>
+    /// <returns>The rendered type name.</returns>
+    public override string ToDisplayString(DisplayFormat format)
+        => ClrType is { } clrType ? RenderClrType(clrType, format) : base.ToDisplayString(format);
+
+    /// <summary>
     /// Maps a CLR <see cref="Type"/> to the corresponding built-in <see cref="TypeSymbol"/>,
     /// or wraps it in an <see cref="ImportedTypeSymbol"/> if it is not built-in.
     /// </summary>
@@ -1191,5 +1231,38 @@ public class TypeSymbol : Symbol
 
         return arguments.Length != 8
             || TryCollectTupleElements(arguments[7], elementTypes, allowSingleElementRest: true);
+    }
+
+    private static string RenderClrType(Type type, DisplayFormat format)
+    {
+        if (type.IsGenericParameter)
+        {
+            return type.Name;
+        }
+
+        var name = type.Name;
+        var backtick = name.IndexOf('`');
+        if (backtick >= 0)
+        {
+            name = name.Substring(0, backtick);
+        }
+
+        var qualified = format == DisplayFormat.FullyQualified && type.Namespace is { Length: > 0 } ns
+            ? $"global::{ns}.{name}"
+            : name;
+
+        if (type.IsGenericType)
+        {
+            var arguments = type.GetGenericArguments();
+            var rendered = new string[arguments.Length];
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                rendered[i] = RenderClrType(arguments[i], format);
+            }
+
+            qualified += "<" + string.Join(", ", rendered) + ">";
+        }
+
+        return qualified;
     }
 }

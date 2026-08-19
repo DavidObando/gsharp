@@ -50,7 +50,7 @@ public sealed class BoundLiteralExpression : BoundExpression
     public object? Value { get; }
 
     /// <inheritdoc/>
-    public override object? ConstantValue => Value;
+    public override OptionalValue ConstantValue => new(true, Value);
 
     private static TypeSymbol InferType(object? value)
     {

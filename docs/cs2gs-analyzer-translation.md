@@ -1,6 +1,15 @@
 # cs2gs: translating Roslyn analyzer projects to G# analyzers
 
-Status: design (implementation tracked as follow-up to ADR-0169).
+Status: implemented through the map/idiom layer (2026-08-19). The real
+GSA0001, GSA0002, GSA0003, and GSA0004 sources translate mechanically —
+attribute swap, imports, kind/type/member maps, idiom rewrites — and bind
+against `GSharp.Core` with CS2GS-ANALYZER-SHAPE review warnings only
+(`Cs2Gs.Tests/Adr0169AnalyzerTranslationTests`). GSA0005 pattern-matches
+deeply C#-specific syntax shapes and is pinned by a ratchet asserting its
+translation stays LOUD (gap or binder failure, never silently wrong) until
+its reviewed adaptation lands. Remaining follow-ups: the test-snippet
+translator with marker provenance (§Test-harness) and the corpus-level
+`AnalyzerParityStage` (§Parity).
 Companion to [ADR-0169](adr/0169-gsharp-analyzer-framework.md), which defines
 the G#-side analyzer framework this document targets. First migration target:
 `src/Analyzers/InternalAnalyzers` (GSA0001–GSA0005) and its test project, which
