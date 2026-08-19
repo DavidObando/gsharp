@@ -72,7 +72,7 @@ namespace Demo
     }
 
     [Fact]
-    public void CheckedCastOfObliviousExternalResult_PreservesNull()
+    public void Issue3422_CheckedCastOfObliviousExternalResult_PreservesNull()
     {
         string printed = TranslateObliviousWithObliviousLibrary(@"
 namespace Demo
@@ -88,6 +88,13 @@ namespace Demo
 
         Assert.Contains("cast[string](ext.Combine(\"hello\"))", printed);
         Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        TranslationTestValidation.AssertBinds(
+            printed,
+            """
+            class ExtLib {
+                func Combine(separator string) string -> separator
+            }
+            """);
     }
 
     [Fact]
