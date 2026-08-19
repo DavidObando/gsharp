@@ -36,6 +36,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int doubledAssertions = 0;
         int assertedParenthesizedReceivers = 0;
+        int assertions = 0;
         foreach (LoadedDocument document in project.Documents)
         {
             var context = new TranslationContext(
@@ -46,10 +47,256 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
                 translator.TranslateDocument(document, context));
             doubledAssertions += CountOccurrences(printed, "!!!!");
             assertedParenthesizedReceivers += CountOccurrences(printed, ")!!.");
+            assertions += CountOccurrences(printed, "!!");
         }
 
         Assert.Equal(0, doubledAssertions);
-        Assert.Equal(9, assertedParenthesizedReceivers);
+        Assert.InRange(assertedParenthesizedReceivers, 0, 8);
+        Assert.InRange(assertions, 0, 6079);
+    }
+
+    [Fact]
+    public void InferredNonNullBindings_DoNotGainAssertions()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                private static void Consume(List<string> values, string text)
+                {
+                }
+
+                public static int Measure(string? input, object value, bool flag)
+                {
+                    var fresh = new List<string>();
+                    var fallback = input ?? "fallback";
+                    var concatenated = "prefix:" + fallback;
+                    var selected = flag ? concatenated : "other";
+                    var narrowed = (string)value;
+
+                    fresh.Add(fallback);
+                    Consume(fresh, concatenated);
+                    return fresh.Count
+                        + fallback.Length
+                        + concatenated.Length
+                        + selected.Length
+                        + narrowed.Length;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("fresh!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("fallback!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("concatenated!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("selected!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("narrowed!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("(\"prefix:\" + fallback)!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cast[string](value)!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonIteratorForEachElements_DoNotGainAssertions()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                public static int Measure(IEnumerable<string> values)
+                {
+                    var total = 0;
+                    foreach (var value in values)
+                    {
+                        total += value.Length;
+                    }
+
+                    return total;
+                }
+            }
+            """);
+
+        Assert.Contains("for value in values", printed, StringComparison.Ordinal);
+        Assert.Contains("total += value.Length", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("value!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StaticExtensionMethodGroup_KeepsCapturedNonNullReceiver()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public sealed class Item
+            {
+            }
+
+            public static class C
+            {
+                public static int Remove(List<Item> values)
+                {
+                    var removed = values.ToArray();
+                    return values.RemoveAll(removed.Contains);
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "Enumerable.Contains[Item](removed, __arg0)",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Enumerable.Contains[Item](__arg0)",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlowProvenCheckedCast_ForgivesNullableOperandNotCastResult()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System;
+            using System.Diagnostics.CodeAnalysis;
+            using System.Reflection;
+
+            public static class C
+            {
+                private static bool TryResolve([NotNullWhen(true)] out MethodInfo? method)
+                {
+                    method = typeof(string).GetMethod("ToString", Type.EmptyTypes);
+                    return method is not null;
+                }
+
+                public static MethodBase Resolve()
+                {
+                    if (!TryResolve(out var method))
+                    {
+                        throw new InvalidOperationException();
+                    }
+
+                    return (MethodBase)method;
+                }
+            }
+            """);
+
+        Assert.Contains("cast[MethodBase](method!!)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cast[MethodBase](method)!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoopCarriedNullableLocal_KeepsRequiredAssertions()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System;
+
+            public static class C
+            {
+                private static void Consume(Type type)
+                {
+                }
+
+                public static void Walk(Type? type, int count)
+                {
+                    if (type is null)
+                    {
+                        return;
+                    }
+
+                    while (count-- > 0)
+                    {
+                        Consume(type);
+                        type = type.BaseType ?? typeof(object);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("C.Consume(type_!!)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IteratorForeachAndYield_KeepRequiredGenericTypeAssertions()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                public static IEnumerable<string> NonNullValues(IEnumerable<string?>? values)
+                {
+                    if (values is null)
+                    {
+                        yield break;
+                    }
+
+                    foreach (var value in values)
+                    {
+                        if (value is not null)
+                        {
+                            yield return value;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("for value in values!!", printed, StringComparison.Ordinal);
+        Assert.Contains("yield value!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SyntheticAssertionRatchet_PreservesOnlyRequiredNullableForgiveness()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                private static string? Maybe() => null;
+
+                public static int Measure(bool clear)
+                {
+                    string? explicitlyNullable = "text";
+                    List<string>? mutable = new List<string>();
+                    if (clear)
+                    {
+                        mutable = null;
+                    }
+
+                    return Maybe()!.Length
+                        + explicitlyNullable!.Length
+                        + mutable!.Count;
+                }
+            }
+            """);
+
+        Assert.Equal(1, CountOccurrences(printed, ")!!."));
+        Assert.Equal(0, CountOccurrences(printed, "!!!!"));
+        Assert.Contains("C.Maybe()!!.Length", printed, StringComparison.Ordinal);
+        Assert.Contains("explicitlyNullable!!.Length", printed, StringComparison.Ordinal);
+        Assert.Contains("mutable!!.Count", printed, StringComparison.Ordinal);
     }
 
     [Fact]

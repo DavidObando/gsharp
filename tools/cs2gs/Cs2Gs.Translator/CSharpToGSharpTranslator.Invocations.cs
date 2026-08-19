@@ -1393,7 +1393,18 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol invoke)
         {
             var parameters = new List<Parameter>(invoke.Parameters.Length);
-            var arguments = new List<GExpression>(invoke.Parameters.Length);
+            var arguments = new List<GExpression>(invoke.Parameters.Length + 1);
+            if (expression is MemberAccessExpressionSyntax extensionMember
+                && method.IsStatic
+                && method.IsExtensionMethod
+                && method.Parameters.Length == invoke.Parameters.Length + 1)
+            {
+                GExpression receiver = this.CaptureMethodGroupReceiver(
+                    this.TranslateReceiverWithNullForgiveness(extensionMember.Expression),
+                    extensionMember.Expression);
+                arguments.Add(PassStaticExtensionHelperReceiver(receiver, method));
+            }
+
             for (int index = 0; index < invoke.Parameters.Length; index++)
             {
                 IParameterSymbol invokeParameter = invoke.Parameters[index];
@@ -2788,6 +2799,13 @@ public sealed partial class CSharpToGSharpTranslator
                 sourceSymbol == null || targetSymbol == null
                     ? default
                     : this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol);
+            if (cast.Type is not NullableTypeSyntax
+                && this.CastUsesCheckedReferenceConversion(cast)
+                && this.IsFlowNarrowedAnnotatedReference(cast.Expression))
+            {
+                operand = EnsureNonNullAssertion(operand);
+            }
+
             if (conversion.IsBoxing)
             {
                 GTypeReference boxingTargetType = cast.Type is NullableTypeSyntax
@@ -2822,19 +2840,29 @@ public sealed partial class CSharpToGSharpTranslator
                 && !targetType.IsNullable
                     ? MakeNullable(targetType)
                     : targetType;
-            bool isCheckedReferenceCast = conversion.IsReference
-                || (conversion.IsIdentity
-                    && sourceSymbol is { IsReferenceType: true }
-                    && targetSymbol is { IsReferenceType: true })
-                || (conversion.IsExplicit
-                    && sourceSymbol is ITypeParameterSymbol
-                    && targetSymbol is { TypeKind: TypeKind.Interface })
-                || (sourceSymbol is { TypeKind: TypeKind.Dynamic }
-                    && targetSymbol is { IsReferenceType: true });
             return new ConversionExpression(
                 conversionTargetType,
                 operand,
-                isCheckedReferenceCast);
+                this.CastUsesCheckedReferenceConversion(cast));
+        }
+
+        private bool CastUsesCheckedReferenceConversion(CastExpressionSyntax cast)
+        {
+            ITypeSymbol target = this.context.GetTypeInfo(cast.Type).Type;
+            ITypeSymbol source = this.context.GetTypeInfo(cast.Expression).Type;
+            Microsoft.CodeAnalysis.CSharp.Conversion conversion =
+                source == null || target == null
+                    ? default
+                    : this.context.Compilation.ClassifyConversion(source, target);
+            return conversion.IsReference
+                || (conversion.IsIdentity
+                    && source is { IsReferenceType: true }
+                    && target is { IsReferenceType: true })
+                || (conversion.IsExplicit
+                    && source is ITypeParameterSymbol
+                    && target is { TypeKind: TypeKind.Interface })
+                || (source is { TypeKind: TypeKind.Dynamic }
+                    && target is { IsReferenceType: true });
         }
 
         private GExpression TranslateWith(WithExpressionSyntax with)

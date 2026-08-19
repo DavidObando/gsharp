@@ -1138,7 +1138,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return new[] { (GStatement)new GotoStatement(IteratorExitLabelName(target)) };
             }
 
-            return new[] { (GStatement)new YieldStatement(this.TranslateValueWithNullForgiveness(node.Expression)) };
+            GExpression value = this.TranslateValueWithNullForgiveness(node.Expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(node.Expression);
+            ITypeSymbol declaredType = this.GetDeclaredValueType(node.Expression);
+            if (declaredType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                && typeInfo.ConvertedType is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated }
+                && this.context.GetSymbolInfo(node.Expression).Symbol is ILocalSymbol yieldedLocal
+                && yieldedLocal.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is ForEachStatementSyntax)
+                && typeInfo.Nullability.FlowState == NullableFlowState.NotNull)
+            {
+                // Preserve the non-null iterator element type through lowering;
+                // ordinary locals need no assertion at this seam.
+                value = EnsureNonNullAssertion(value);
+            }
+
+            return new[] { (GStatement)new YieldStatement(value) };
         }
 
         private static SyntaxNode GetBreakTarget(YieldStatementSyntax node)
