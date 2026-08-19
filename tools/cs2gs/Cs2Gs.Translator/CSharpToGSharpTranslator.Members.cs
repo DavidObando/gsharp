@@ -1516,6 +1516,7 @@ public sealed partial class CSharpToGSharpTranslator
                     (GTypeReference)new NamedTypeReference(
                         SanitizeIdentifier(parameter.Name)))
                 .ToList();
+
             var call = new InvocationExpression(
                 new MemberAccessExpression(
                     new IdentifierExpression(
@@ -1523,13 +1524,18 @@ public sealed partial class CSharpToGSharpTranslator
                     SanitizeIdentifier(original.Name)),
                 arguments,
                 typeArguments);
-            GExpression forwarded = original.IsAsync
-                && original.ReturnType is INamedTypeSymbol { Name: "Task" } task
-                && task.ContainingNamespace?.ToDisplayString()
+            INamedTypeSymbol asyncEnvelope = original.IsAsync
+                && original.ReturnType is INamedTypeSymbol taskLike
+                && taskLike.Name is "Task" or "ValueTask"
+                && taskLike.ContainingNamespace?.ToDisplayString()
                     == "System.Threading.Tasks"
-                    ? new AwaitExpression(call)
-                    : call;
+                    ? taskLike
+                    : null;
+            GExpression forwarded = asyncEnvelope != null
+                ? new AwaitExpression(call)
+                : call;
             GStatement statement = returnType == null
+                || asyncEnvelope is { IsGenericType: false }
                 ? new ExpressionStatement(forwarded)
                 : new ReturnStatement(forwarded);
             return new BlockStatement(new[] { statement });
@@ -1569,6 +1575,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 identity,
             };
+
             // A referenced project wins over its dependent: the dependency can
             // emit without knowing reverse dependents exist, while the dependent
             // sees the dependency through SiblingCompilations. Assembly + doc ID
@@ -1626,11 +1633,13 @@ public sealed partial class CSharpToGSharpTranslator
         {
             string extensionSignature =
                 this.CanonicalReducedSignature(extension, parameterOffset: 1);
+            string emittedName = SanitizeIdentifier(extension.Name);
             for (INamedTypeSymbol current = receiver; current != null; current = current.BaseType)
             {
-                foreach (IMethodSymbol method in current.GetMembers(extension.Name).OfType<IMethodSymbol>())
+                foreach (IMethodSymbol method in current.GetMembers().OfType<IMethodSymbol>())
                 {
                     if (!method.IsStatic
+                        && SanitizeIdentifier(method.Name) == emittedName
                         && this.CanonicalReducedSignature(method, parameterOffset: 0)
                             == extensionSignature)
                     {
@@ -1647,13 +1656,15 @@ public sealed partial class CSharpToGSharpTranslator
         {
             string namespaceName = method.ContainingNamespace?.ToDisplayString()
                 ?? string.Empty;
+            string emittedName = SanitizeIdentifier(method.Name);
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (INamedTypeSymbol type in method.ContainingNamespace.GetTypeMembers())
             {
-                foreach (IMethodSymbol candidate in type.GetMembers(method.Name).OfType<IMethodSymbol>())
+                foreach (IMethodSymbol candidate in type.GetMembers().OfType<IMethodSymbol>())
                 {
                     if (candidate.IsExtensionMethod
+                        && SanitizeIdentifier(candidate.Name) == emittedName
                         && seen.Add(ExtensionMethodIdentity(candidate)))
                     {
                         yield return candidate;
@@ -1674,10 +1685,11 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (INamedTypeSymbol type in package.GetTypeMembers())
                 {
                     foreach (IMethodSymbol candidate in type
-                        .GetMembers(method.Name)
+                        .GetMembers()
                         .OfType<IMethodSymbol>())
                     {
                         if (candidate.IsExtensionMethod
+                            && SanitizeIdentifier(candidate.Name) == emittedName
                             && seen.Add(ExtensionMethodIdentity(candidate)))
                         {
                             yield return candidate;
@@ -1746,7 +1758,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var parts = new List<string>
             {
-                method.Name,
+                SanitizeIdentifier(method.Name),
                 method.TypeParameters.Length.ToString(CultureInfo.InvariantCulture),
             };
             for (int index = parameterOffset; index < method.Parameters.Length; index++)
