@@ -91,7 +91,7 @@ public class ResxDesignerGeneratorTests
     }
 
     [Fact]
-    public void Generate_TypedResource_UsesGetObjectWithAsCast()
+    public void Generate_TypedResource_UsesCheckedCast()
     {
         var document = ResxDocument.Parse(SampleResx);
         var options = new ResxDesignerOptions("Oahu.Core.Properties", "Resources", "Oahu.Core.Properties.Resources", isPublic: false);
@@ -99,7 +99,9 @@ public class ResxDesignerGeneratorTests
         string source = ResxDesignerGenerator.Generate(document, options);
 
         Assert.Contains("prop SampleBytes []uint8 {", source);
-        Assert.Contains("ResourceManager.GetObject(\"SampleBytes\", resourceCulture) as []uint8", source);
+        Assert.Contains(
+            "cast[[]uint8](ResourceManager.GetObject(\"SampleBytes\", resourceCulture))",
+            source);
     }
 
     [Fact]

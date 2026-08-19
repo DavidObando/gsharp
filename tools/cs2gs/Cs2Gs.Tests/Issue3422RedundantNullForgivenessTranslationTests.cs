@@ -3,7 +3,9 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -11,6 +13,7 @@ using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -36,6 +39,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int doubledAssertions = 0;
         int assertedParenthesizedReceivers = 0;
+        int assertedAsConversions = 0;
         foreach (LoadedDocument document in project.Documents)
         {
             var context = new TranslationContext(
@@ -46,10 +50,16 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
                 translator.TranslateDocument(document, context));
             doubledAssertions += CountOccurrences(printed, "!!!!");
             assertedParenthesizedReceivers += CountOccurrences(printed, ")!!.");
+            var tree = SyntaxTree.Parse(printed);
+            Assert.Empty(tree.Diagnostics);
+            assertedAsConversions += Descendants(tree.Root)
+                .OfType<UnaryExpressionSyntax>()
+                .Count(IsAssertedAsConversion);
         }
 
         Assert.Equal(0, doubledAssertions);
         Assert.Equal(9, assertedParenthesizedReceivers);
+        Assert.Equal(0, assertedAsConversions);
     }
 
     [Fact]
@@ -318,5 +328,33 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         }
 
         return count;
+    }
+
+    private static bool IsAssertedAsConversion(UnaryExpressionSyntax unary)
+    {
+        if (unary.OperatorToken.Kind != SyntaxKind.BangBangToken)
+        {
+            return false;
+        }
+
+        ExpressionSyntax operand = unary.Operand;
+        while (operand is ParenthesizedExpressionSyntax parenthesized)
+        {
+            operand = parenthesized.Expression;
+        }
+
+        return operand is AsExpressionSyntax;
+    }
+
+    private static IEnumerable<SyntaxNode> Descendants(SyntaxNode node)
+    {
+        yield return node;
+        foreach (SyntaxNode child in node.GetChildren())
+        {
+            foreach (SyntaxNode descendant in Descendants(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 }

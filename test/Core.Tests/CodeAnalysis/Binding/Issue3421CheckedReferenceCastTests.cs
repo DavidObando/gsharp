@@ -175,6 +175,37 @@ public sealed class Issue3421CheckedReferenceCastTests
     }
 
     [Fact]
+    public void UnambiguousCastBoxesValueTypesToInterfaces()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            interface IValue3421 {
+                func Read() int32;
+            }
+
+            struct Value3421 : IValue3421 {
+                func Read() int32 -> 7
+            }
+
+            Console.WriteLine(cast[IValue3421](Value3421{}).Read())
+            Console.WriteLine(cast[IValue3421?](Value3421{})!!.Read())
+            Console.WriteLine(cast[IValue3421](default(Value3421?)) == nil)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "7",
+                "7",
+                "True") + Environment.NewLine,
+            result.Output);
+        Assert.Equal(string.Empty, result.ErrorOutput);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public void FailedClrConstructorFallbackBindsCaptureArgumentOnce()
     {
         var tree = SyntaxTree.Parse(SourceText.From("""
