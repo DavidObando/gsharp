@@ -39,6 +39,13 @@ public class ProjectState
     private DateTime referenceSourceMtimeUtc = DateTime.MinValue;
     private ReferenceResolver? cachedResolver;
     private IReadOnlyList<string>? resolverReferences;
+    private DateTime gsAnalyzerSourceMtimeUtc = DateTime.MinValue;
+
+    private System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> cachedGsAnalyzers =
+        System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer>.Empty;
+
+    private System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Diagnostic> gsAnalyzerLoadDiagnostics =
+        System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Diagnostic>.Empty;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ProjectState"/> class.
@@ -348,6 +355,50 @@ public class ProjectState
                 : new Compilation(trees);
             snapshotCompilation.BodyCache = bodyCache;
             return snapshotCompilation;
+        }
+    }
+
+    /// <summary>
+    /// Gets the project's G# analyzer set (ADR-0169), parsed from the same
+    /// MSBuild-emitted <c>.rsp</c> the references come from
+    /// (<c>/gsanalyzer:</c> lines) and re-loaded only when the rsp changes.
+    /// Analyzer instances are cached so registration and load costs are paid
+    /// once per build, not per keystroke.
+    /// </summary>
+    /// <param name="loadDiagnostics">GS9301/GS9303 diagnostics produced while loading the current set.</param>
+    /// <returns>The loaded analyzers, possibly empty.</returns>
+    public System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer> GetGsAnalyzers(
+        out System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Diagnostic> loadDiagnostics)
+    {
+        lock (compilationLock)
+        {
+            var rspPath = referenceSourcePath;
+            if (string.IsNullOrEmpty(rspPath) || !File.Exists(rspPath))
+            {
+                loadDiagnostics = System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Diagnostic>.Empty;
+                return System.Collections.Immutable.ImmutableArray<Core.CodeAnalysis.Analyzers.GSharpDiagnosticAnalyzer>.Empty;
+            }
+
+            DateTime mtime;
+            try
+            {
+                mtime = File.GetLastWriteTimeUtc(rspPath);
+            }
+            catch (IOException)
+            {
+                loadDiagnostics = gsAnalyzerLoadDiagnostics;
+                return cachedGsAnalyzers;
+            }
+
+            if (mtime != gsAnalyzerSourceMtimeUtc)
+            {
+                var paths = ProjectDiscovery.ParseGsAnalyzersFromResponseFile(rspPath);
+                cachedGsAnalyzers = Core.CodeAnalysis.Analyzers.GSharpAnalyzerHost.Load(paths, out gsAnalyzerLoadDiagnostics);
+                gsAnalyzerSourceMtimeUtc = mtime;
+            }
+
+            loadDiagnostics = gsAnalyzerLoadDiagnostics;
+            return cachedGsAnalyzers;
         }
     }
 

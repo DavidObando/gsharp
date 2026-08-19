@@ -21,6 +21,10 @@
     <ProjectReference Include="..\Cs2Gs.Pipeline\Cs2Gs.Pipeline.csproj" />
     <ProjectReference Include="..\Cs2Gs.Report\Cs2Gs.Report.csproj" />
     <ProjectReference Include="..\Cs2Gs.Cli\Cs2Gs.Cli.csproj" />
+    <!-- ADR-0169: the analyzer-parity tests run the real Roslyn GSA analyzers
+         as a library (not as a build-time analyzer) to diff their diagnostics
+         against the cs2gs-translated G# analyzers'. -->
+    <ProjectReference Include="..\..\..\src\Analyzers\InternalAnalyzers\InternalAnalyzers.csproj" />
 
     <!-- Issue #1912 review follow-up: the e2e tests shell out to the built
          gsc.dll (see Issue1912ExplicitEnumValueTranslationTests.FindCompiler)

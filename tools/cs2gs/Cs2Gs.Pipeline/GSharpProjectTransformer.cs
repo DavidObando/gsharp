@@ -73,6 +73,8 @@ internal static class GSharpProjectTransformer
         RewriteOutputType(document);
         RewriteCompileItems(document);
         RewriteCSharpMetadata(document);
+        RewriteAnalyzerProject(document);
+        RewriteAnalyzerConsumerReferences(document);
 
         return document;
     }
@@ -186,6 +188,88 @@ internal static class GSharpProjectTransformer
                 element.Name.LocalName.Equals("DependentUpon", StringComparison.OrdinalIgnoreCase)))
         {
             metadata.Value = RewriteCSharpSpecs(metadata.Value);
+        }
+    }
+
+    // ADR-0169 (docs/cs2gs-analyzer-translation.md §Project transform): a
+    // Roslyn analyzer project — recognized by its Microsoft.CodeAnalysis
+    // compiler package or EnforceExtendedAnalyzerRules — becomes a G# analyzer
+    // project: it retargets netstandard2.0 to $(NetCoreAppTargetFramework)'s
+    // value (the in-proc gsc host is net10; the VS/old-host rationale for
+    // netstandard2.0 does not exist for G#), drops the Roslyn compiler
+    // packages and Roslyn-analyzer-authoring properties, and references the
+    // G# analyzer API via the GsharpAnalyzerApiProject property the migration
+    // host supplies.
+    private static void RewriteAnalyzerProject(XDocument document)
+    {
+        bool isAnalyzerProject =
+            ElementsNamed(document, "PackageReference").Any(reference =>
+                AttributeNamed(reference, "Include")?.Value?.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase) == true)
+            || ElementsNamed(document, "EnforceExtendedAnalyzerRules").Any();
+        if (!isAnalyzerProject)
+        {
+            return;
+        }
+
+        foreach (XElement targetFramework in ElementsNamed(document, "TargetFramework"))
+        {
+            if (targetFramework.Value.Trim().StartsWith("netstandard", StringComparison.OrdinalIgnoreCase))
+            {
+                targetFramework.Value = "net10.0";
+            }
+        }
+
+        foreach (XElement stale in ElementsNamed(document, "EnforceExtendedAnalyzerRules").ToList())
+        {
+            stale.Remove();
+        }
+
+        foreach (XElement reference in ElementsNamed(document, "PackageReference").ToList())
+        {
+            if (AttributeNamed(reference, "Include")?.Value?.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                reference.Remove();
+            }
+        }
+
+        foreach (XElement noWarn in ElementsNamed(document, "NoWarn").ToList())
+        {
+            string[] kept = noWarn.Value
+                .Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(id => !id.StartsWith("RS", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (kept.Length == 0)
+            {
+                noWarn.Remove();
+            }
+            else
+            {
+                noWarn.Value = string.Join(";", kept);
+            }
+        }
+
+        var itemGroup = new XElement(
+            "ItemGroup",
+            new XElement(
+                "ProjectReference",
+                new XAttribute("Include", "$(GsharpAnalyzerApiProject)"),
+                new XAttribute("Condition", " '$(GsharpAnalyzerApiProject)' != '' ")));
+        document.Root.Add(itemGroup);
+    }
+
+    // ADR-0169: a consumer wiring an analyzer project via
+    // OutputItemType="Analyzer" (Roslyn's item) is rewritten to the G# SDK's
+    // GsharpCodeAnalyzer item, which BuildTask forwards to gsc /gsanalyzer:.
+    private static void RewriteAnalyzerConsumerReferences(XDocument document)
+    {
+        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference"))
+        {
+            XAttribute outputItemType = AttributeNamed(projectReference, "OutputItemType");
+            if (outputItemType is not null
+                && string.Equals(outputItemType.Value.Trim(), "Analyzer", StringComparison.OrdinalIgnoreCase))
+            {
+                outputItemType.Value = "GsharpCodeAnalyzer";
+            }
         }
     }
 

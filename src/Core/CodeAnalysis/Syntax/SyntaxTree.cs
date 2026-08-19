@@ -15,6 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public class SyntaxTree
 {
     private Dictionary<SyntaxNode, string>? documentationTable;
+    private Dictionary<SyntaxNode, SyntaxNode>? parents;
     private CompilationUnitSyntax? root;
 
     private SyntaxTree(SourceText text)
@@ -151,6 +152,28 @@ public class SyntaxTree
     }
 
     /// <summary>
+    /// Returns the parent of <paramref name="node"/> within this tree, or
+    /// <see langword="null"/> for the root (ADR-0169: backs
+    /// <see cref="SyntaxNode.Parent"/>). The parent index is built lazily on
+    /// first use with one <see cref="SyntaxNode.GetChildren"/> walk and cached
+    /// for the tree's lifetime; trees are immutable, so it never invalidates.
+    /// </summary>
+    /// <param name="node">A node belonging to this tree.</param>
+    /// <returns>The parent node, or null for the root.</returns>
+    public SyntaxNode? GetParent(SyntaxNode node)
+    {
+        var index = parents;
+        if (index is null)
+        {
+            index = BuildParentIndex();
+            System.Threading.Interlocked.CompareExchange(ref parents, index, null);
+            index = parents;
+        }
+
+        return index.TryGetValue(node, out var parent) ? parent : null;
+    }
+
+    /// <summary>
     /// Gets the attached documentation text for a declaration node, or <see langword="null"/>
     /// when no documentation block is associated (ADR-0057 §7).
     /// </summary>
@@ -174,5 +197,23 @@ public class SyntaxTree
         this.root = root;
         Diagnostics = diagnostics;
         DocumentationTokens = documentationTokens;
+    }
+
+    private Dictionary<SyntaxNode, SyntaxNode> BuildParentIndex()
+    {
+        var index = new Dictionary<SyntaxNode, SyntaxNode>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<SyntaxNode>();
+        pending.Push(Root);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            foreach (var child in current.GetChildren())
+            {
+                index[child] = current;
+                pending.Push(child);
+            }
+        }
+
+        return index;
     }
 }

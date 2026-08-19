@@ -20,6 +20,13 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class DocumentSyncHandler
 {
+    /// <summary>
+    /// Per-analyzer wall-clock budget for a language-server analysis run
+    /// (ADR-0169). An analyzer exceeding it is disabled for the run and
+    /// reports GS9302; batch compilation (gsc) runs unbudgeted.
+    /// </summary>
+    internal const int AnalyzerTimeBudgetMilliseconds = 1000;
+
     public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding)
     {
         return ComputeDiagnostics(text, skipBinding, project: null, filePath: null, workspace: null);
@@ -149,6 +156,38 @@ public static class DocumentSyncHandler
                 }
 
                 diagnostics.Add(BuildDiagnostic(d.Id, d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text, ToLspSeverity(d.Severity)));
+            }
+
+            // ADR-0169: run the project's G# analyzers in this (debounced,
+            // bind-inclusive) phase, budgeted per analyzer so a slow analyzer
+            // is disabled (GS9302) instead of holding up interactive
+            // diagnostics. Location-less host diagnostics (e.g. GS9301 load
+            // failures) surface on every open document of the project.
+            if (useProject && project is not null)
+            {
+                var analyzers = project.GetGsAnalyzers(out var analyzerLoadDiagnostics);
+                if (analyzers.Length > 0 || analyzerLoadDiagnostics.Length > 0)
+                {
+                    var produced = Core.CodeAnalysis.Analyzers.GSharpAnalyzerDriver.Run(
+                        compilation,
+                        analyzers,
+                        new Core.CodeAnalysis.Analyzers.AnalyzerOptions { TimeBudgetMilliseconds = AnalyzerTimeBudgetMilliseconds });
+
+                    foreach (var d in analyzerLoadDiagnostics.Concat(produced))
+                    {
+                        if (d.Severity == Core.CodeAnalysis.DiagnosticSeverity.Hidden)
+                        {
+                            continue;
+                        }
+
+                        if (d.Location.Text is not null && d.Location.Text != syntaxTree.Text)
+                        {
+                            continue;
+                        }
+
+                        diagnostics.Add(BuildDiagnostic(d.Id, d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text, ToLspSeverity(d.Severity)));
+                    }
+                }
             }
         }
 

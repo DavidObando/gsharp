@@ -40,6 +40,14 @@ public sealed partial class CSharpToGSharpTranslator
                 this.typeMapper.TrackExtensionMethodNamespace(invocationExtMethod);
             }
 
+            // ADR-0169 analyzer mode: Roslyn methods whose G# counterpart is
+            // not a same-shaped method (e.g. GetLocation() -> .Location).
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerInvocation(invocation, out GExpression analyzerIdiom))
+            {
+                return analyzerIdiom;
+            }
+
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
                     { MethodKind: MethodKind.LocalFunction } recursiveLocal
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(

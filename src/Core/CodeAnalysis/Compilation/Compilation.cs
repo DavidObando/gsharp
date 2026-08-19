@@ -25,6 +25,7 @@ namespace GSharp.Core.CodeAnalysis.Compilation;
 /// </summary>
 public class Compilation
 {
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SyntaxTree, SemanticModel> semanticModels = new();
     private BoundGlobalScope? globalScope;
     private BoundProgram? boundProgram;
     private ImmutableHashSet<string> preprocessorSymbols = ImmutableHashSet<string>.Empty;
@@ -268,6 +269,24 @@ public class Compilation
 
             return boundProgram;
         }
+    }
+
+    /// <summary>
+    /// Returns a <see cref="SemanticModel"/> answering semantic queries for
+    /// <paramref name="syntaxTree"/> (ADR-0169). Models are cached per tree;
+    /// the first query forces <see cref="BoundProgram"/> and builds a lazy
+    /// syntax→bound index, so repeated queries are dictionary lookups.
+    /// </summary>
+    /// <param name="syntaxTree">A tree belonging to this compilation.</param>
+    /// <returns>The semantic model for the tree.</returns>
+    public SemanticModel GetSemanticModel(SyntaxTree syntaxTree)
+    {
+        if (!SyntaxTrees.Contains(syntaxTree))
+        {
+            throw new ArgumentException("The syntax tree is not part of this compilation.", nameof(syntaxTree));
+        }
+
+        return semanticModels.GetValue(syntaxTree, tree => new SemanticModel(this, tree));
     }
 
     /// <summary>

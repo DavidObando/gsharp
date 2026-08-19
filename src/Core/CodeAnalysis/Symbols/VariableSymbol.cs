@@ -52,6 +52,10 @@ public abstract class VariableSymbol : Symbol
     /// </summary>
     public SyntaxNode? DeclaringSyntax { get; }
 
+    /// <inheritdoc/>
+    public override System.Collections.Immutable.ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        DeclaringSyntax is { } declaration ? System.Collections.Immutable.ImmutableArray.Create(declaration) : System.Collections.Immutable.ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>
     /// Gets or sets a value indicating whether this read-only variable's
     /// initializer was proven non-null from its bound expression.

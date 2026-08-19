@@ -107,6 +107,97 @@ public abstract class SyntaxNode
     public SyntaxTree SyntaxTree { get; }
 
     /// <summary>
+    /// Gets the parent node, or <see langword="null"/> for the root.
+    /// Backed by the tree's lazily built parent index (ADR-0169) — the
+    /// Roslyn <c>SyntaxNode.Parent</c> analogue analyzers rely on.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public SyntaxNode? Parent => SyntaxTree.GetParent(this);
+
+    /// <summary>
+    /// Returns this node or its nearest ancestor of type
+    /// <typeparamref name="T"/>, or <see langword="null"/> when none exists —
+    /// the Roslyn <c>FirstAncestorOrSelf</c> analogue analyzers rely on
+    /// (ADR-0169).
+    /// </summary>
+    /// <typeparam name="T">The node type to find.</typeparam>
+    /// <returns>The nearest matching node, or null.</returns>
+    public T? FirstAncestorOrSelf<T>()
+        where T : SyntaxNode
+    {
+        for (var node = this; node is not null; node = node.Parent)
+        {
+            if (node is T match)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Enumerates the ancestors of this node, nearest first — the Roslyn
+    /// <c>Ancestors</c> analogue (ADR-0169).
+    /// </summary>
+    /// <returns>The ancestor nodes.</returns>
+    public IEnumerable<SyntaxNode> Ancestors()
+    {
+        for (var node = Parent; node is not null; node = node.Parent)
+        {
+            yield return node;
+        }
+    }
+
+    /// <summary>
+    /// Enumerates this node and its descendants in document order (tokens
+    /// excluded) — the Roslyn <c>DescendantNodesAndSelf</c> analogue
+    /// (ADR-0169).
+    /// </summary>
+    /// <returns>This node followed by its descendant nodes.</returns>
+    public IEnumerable<SyntaxNode> DescendantNodesAndSelf()
+    {
+        var pending = new Stack<SyntaxNode>();
+        pending.Push(this);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            yield return node;
+
+            // Push in reverse so children pop in GetChildren() order.
+            var children = new List<SyntaxNode>();
+            foreach (var child in node.GetChildren())
+            {
+                if (child is not SyntaxToken)
+                {
+                    children.Add(child);
+                }
+            }
+
+            for (var i = children.Count - 1; i >= 0; i--)
+            {
+                pending.Push(children[i]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enumerates the descendants of this node in document order (tokens
+    /// excluded) — the Roslyn <c>DescendantNodes</c> analogue (ADR-0169).
+    /// </summary>
+    /// <returns>The descendant nodes.</returns>
+    public IEnumerable<SyntaxNode> DescendantNodes()
+    {
+        foreach (var node in DescendantNodesAndSelf())
+        {
+            if (!ReferenceEquals(node, this))
+            {
+                yield return node;
+            }
+        }
+    }
+
+    /// <summary>
     /// Gets an enumeration of all the children of this syntax node.
     /// </summary>
     /// <returns>An <see cref="IEnumerable{SyntaxNode}"/> with the children of this syntax node.</returns>

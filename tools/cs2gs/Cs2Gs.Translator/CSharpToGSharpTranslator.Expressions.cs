@@ -379,6 +379,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateMemberAccess(MemberAccessExpressionSyntax member)
         {
+            // ADR-0169 analyzer mode: idioms that need more than a member
+            // rename (e.g. name.Identifier -> expr.GetLastToken()).
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerMemberAccess(member, out GExpression analyzerIdiom))
+            {
+                return analyzerIdiom;
+            }
+
             // C# permits namespace-qualified type expressions without importing
             // their namespace, including relative qualification from the current
             // namespace. G# resolves expression receivers as values/types, not as
@@ -593,6 +601,14 @@ public sealed partial class CSharpToGSharpTranslator
             // synthesized `data class` whose primary-constructor parameters
             // preserve real member names — no rewrite needed; `x.A` stays
             // `x.A` on the G# side, exactly like the C# anonymous-type property.
+            if (this.InAnalyzerApiMode)
+            {
+                // ADR-0169 analyzer mode: rename Roslyn API members (enum
+                // values and instance members) to their G# analyzer-API
+                // spellings.
+                memberName = this.MapAnalyzerMemberName(member, memberName);
+            }
+
             return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
         }
 

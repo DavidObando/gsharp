@@ -265,6 +265,19 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
     {
+        // ADR-0169: guarantee the dispatch-level anchor (see the canBeVoid
+        // overload for the BoundErrorExpression exemption rationale).
+        var result = BindExpressionWithTargetTypeCore(syntax, targetType);
+        if (result is not BoundErrorExpression)
+        {
+            result.AnchorSyntax(syntax);
+        }
+
+        return result;
+    }
+
+    private BoundExpression BindExpressionWithTargetTypeCore(ExpressionSyntax syntax, TypeSymbol targetType)
+    {
         // Issue #3355: parentheses do not erase the expected type of a
         // general block expression or its trailing value.
         if (syntax is ParenthesizedExpressionSyntax parenthesized)
@@ -399,6 +412,17 @@ internal sealed partial class ExpressionBinder
         {
             Diagnostics.ReportExpressionMustHaveValue(syntax.Location);
             return new BoundErrorExpression(null);
+        }
+
+        // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
+        // analyzer queries can resolve this expression by its syntax. Error
+        // expressions are exempt: a BoundErrorExpression's null-vs-non-null
+        // Syntax is the binder's defer-and-rebind sentinel (e.g. target-typed
+        // lambda/conditional retry), so stamping one would trigger spurious
+        // re-binds and duplicated diagnostics.
+        if (result is not BoundErrorExpression)
+        {
+            result.AnchorSyntax(syntax);
         }
 
         return result;
@@ -593,7 +617,7 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
                 syntax.IdentifierToken.Location,
                 name);
-            return new BoundErrorExpression(syntax);
+            return new BoundErrorExpression(null);
         }
 
         var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: true, suppressUndefinedVariable: true);
@@ -602,7 +626,7 @@ internal sealed partial class ExpressionBinder
             if (binderCtx.InConstructorInitializer
                 && scope.TryLookupSymbol(name) is ImplicitFieldVariableSymbol or ImplicitPropertyVariableSymbol)
             {
-                return new BoundErrorExpression(syntax);
+                return new BoundErrorExpression(null);
             }
 
             if (binderCtx.InConstructorInitializer
@@ -611,7 +635,7 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
                     syntax.IdentifierToken.Location,
                     name);
-                return new BoundErrorExpression(syntax);
+                return new BoundErrorExpression(null);
             }
 
             // Issue #324: a bare identifier naming a free (package-level)
@@ -665,7 +689,7 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
                     syntax.IdentifierToken.Location,
                     name);
-                return new BoundErrorExpression(syntax);
+                return new BoundErrorExpression(null);
             }
 
             // Not a method group: surface the suppressed diagnostics.
@@ -2685,7 +2709,7 @@ internal sealed partial class ExpressionBinder
         var targetType = bindTypeClause(syntax.TypeClause);
         if (targetType == null || targetType == TypeSymbol.Error)
         {
-            return new BoundErrorExpression(syntax);
+            return new BoundErrorExpression(null);
         }
 
         // Per C# §11.11.10: the `as` operator requires that the target type be
@@ -2694,7 +2718,7 @@ internal sealed partial class ExpressionBinder
         if (targetType is not NullableTypeSymbol && IsNonNullableValueType(targetType))
         {
             Diagnostics.ReportAsRequiresReferenceOrNullableType(syntax.Location, targetType.Name);
-            return new BoundErrorExpression(syntax);
+            return new BoundErrorExpression(null);
         }
 
         // Issue #3349: `as` is a TESTING conversion — it yields nil when the test

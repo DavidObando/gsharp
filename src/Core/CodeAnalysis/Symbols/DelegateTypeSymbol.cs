@@ -75,6 +75,10 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     /// <summary>Gets the declaring syntax node.</summary>
     public DelegateDeclarationSyntax Declaration { get; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>
     /// Gets the delegate's generic type parameters (issue #1503, ADR-0059
     /// follow-up). A non-generic named delegate carries an empty array; a

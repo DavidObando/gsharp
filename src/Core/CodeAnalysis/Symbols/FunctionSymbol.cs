@@ -173,11 +173,18 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public FunctionDeclarationSyntax? Declaration { get; private set; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>
     /// Gets the package this function belongs to. <c>null</c> for built-in
     /// functions, which are not scoped to a user package.
     /// </summary>
     public PackageSymbol? Package { get; }
+
+    /// <inheritdoc/>
+    public override string? ContainingNamespace => Package?.Name ?? base.ContainingNamespace;
 
     /// <summary>
     /// Gets the CLR visibility level for this function.
