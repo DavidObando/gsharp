@@ -623,17 +623,21 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
         {
             GExpression translated = this.TranslateExpression(recv);
+            bool iteratorForeachReceiverRequiresAssertion =
+                this.IteratorForeachReceiverRequiresAssertion(recv);
 
-            if (this.GSharpExpressionIsStaticallyNonNull(recv, translated))
+            if (!iteratorForeachReceiverRequiresAssertion
+                && this.GSharpExpressionIsStaticallyNonNull(recv, translated))
             {
                 return ParenthesizeIfBareNumericLiteral(translated);
             }
 
-            if (!this.IsActivePatternBinding(recv)
+            if (iteratorForeachReceiverRequiresAssertion
+                || (!this.IsActivePatternBinding(recv)
                 && !this.IsWithinExpressionTreeLambda(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
-                    || this.NullableReferenceValueMayBeNull(recv)))
+                    || this.NullableReferenceValueMayBeNull(recv))))
             {
                 translated = EnsureNonNullAssertion(translated);
             }
@@ -656,6 +660,38 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return ParenthesizeIfBareNumericLiteral(translated);
+        }
+
+        private bool IteratorForeachReceiverRequiresAssertion(ExpressionSyntax recv)
+        {
+            ExpressionSyntax unwrapped = recv;
+            while (unwrapped is ParenthesizedExpressionSyntax parenthesized)
+            {
+                unwrapped = parenthesized.Expression;
+            }
+
+            if (unwrapped is not IdentifierNameSyntax
+                || this.context.GetSymbolInfo(unwrapped).Symbol is not
+                    (ILocalSymbol or IParameterSymbol)
+                || this.GetDeclaredValueType(unwrapped) is not { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                || !this.IsGSharpFlowNarrowedLocal(unwrapped))
+            {
+                return false;
+            }
+
+            ForEachStatementSyntax forEach = unwrapped.Ancestors()
+                .OfType<ForEachStatementSyntax>()
+                .FirstOrDefault(loop => loop.Expression.Span.Contains(unwrapped.Span));
+            SyntaxNode body = this.state.CurrentBodyScope
+                ?? unwrapped.Ancestors().FirstOrDefault(node =>
+                    node is BaseMethodDeclarationSyntax
+                        or AccessorDeclarationSyntax
+                        or LocalFunctionStatementSyntax);
+
+            // G# iterator lowering needs the local smart-cast made explicit at
+            // the foreach source so the generated generic enumerator stays typed.
+            return forEach != null
+                && body?.DescendantNodes().OfType<YieldStatementSyntax>().Any() == true;
         }
 
         // ADR-0160: true when `recv` names a local whose declaration initializer is a
@@ -956,13 +992,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return translated;
             }
 
-            TypeInfo valueTypeInfo = this.context.GetTypeInfo(value);
-            ITypeSymbol declaredValueType = this.GetDeclaredValueType(value);
             bool flowNarrowedAnnotatedValue =
-                valueTypeInfo.Nullability.FlowState == NullableFlowState.NotNull
-                && (valueTypeInfo.Nullability.Annotation == NullableAnnotation.Annotated
-                    || valueTypeInfo.Type?.NullableAnnotation == NullableAnnotation.Annotated
-                    || declaredValueType?.NullableAnnotation == NullableAnnotation.Annotated);
+                this.IsFlowNarrowedAnnotatedReference(value);
             bool flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(value)
                 || flowNarrowedAnnotatedValue;
             if (!flowRequiresAssertion
@@ -1033,9 +1064,34 @@ public sealed partial class CSharpToGSharpTranslator
 
             switch (unwrapped)
             {
+                case LiteralExpressionSyntax literal:
+                    return !literal.IsKind(SyntaxKind.NullLiteralExpression)
+                        && !literal.IsKind(SyntaxKind.DefaultLiteralExpression);
+
+                case ObjectCreationExpressionSyntax:
+                case ImplicitObjectCreationExpressionSyntax:
+                case ArrayCreationExpressionSyntax:
+                case ImplicitArrayCreationExpressionSyntax:
+                case AnonymousObjectCreationExpressionSyntax:
+                case InterpolatedStringExpressionSyntax:
+                case TypeOfExpressionSyntax:
+                case ThrowExpressionSyntax:
+                    return true;
+
                 case PostfixUnaryExpressionSyntax suppression
                     when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                     return !IsNullOrSuppressedNull(suppression.Operand);
+
+                case BinaryExpressionSyntax concatenation
+                    when concatenation.IsKind(SyntaxKind.AddExpression)
+                        && this.context.GetTypeInfo(concatenation).Type?.SpecialType
+                            == SpecialType.System_String:
+                    return true;
+
+                case CastExpressionSyntax cast
+                    when cast.Type is not NullableTypeSyntax
+                        && this.CastUsesCheckedReferenceConversion(cast):
+                    return true;
 
                 case ConditionalExpressionSyntax conditional:
                     GExpression conditionalValue = UnwrapTranslatedValue(translated);
@@ -1085,7 +1141,7 @@ public sealed partial class CSharpToGSharpTranslator
                         : this.GSharpExpressionIsStaticallyNonNull(binary.Right);
 
                 case AssignmentExpressionSyntax assignment:
-                    if (this.PatternLocalUsesNullableStorage(assignment.Left))
+                    if (!this.AssignmentResultHasNonNullStaticType(assignment))
                     {
                         return false;
                     }
@@ -1102,6 +1158,21 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            if (symbol is ILocalSymbol inferredLocal)
+            {
+                if (this.TryGetInferredLocalStaticNonNull(
+                    inferredLocal,
+                    out bool initializerIsNonNull))
+                {
+                    return initializerIsNonNull;
+                }
+
+                if (this.ForEachBindingInfersNonNullElement(inferredLocal))
+                {
+                    return true;
+                }
+            }
+
             ITypeSymbol type = symbol switch
             {
                 IFieldSymbol field => field.Type,
@@ -1121,6 +1192,79 @@ public sealed partial class CSharpToGSharpTranslator
                 && !this.IsImportedObliviousNullableMember(symbol)
                 && !this.LocalInitializedFromImportedObliviousNullable(symbol)
                 && (symbol == null || !this.ShouldPromoteToNullableReference(symbol));
+        }
+
+        private bool TryGetInferredLocalStaticNonNull(
+            ILocalSymbol local,
+            out bool isNonNull)
+        {
+            isNonNull = false;
+            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is not VariableDeclaratorSyntax
+                    {
+                        Initializer.Value: { } initializer,
+                        Parent: VariableDeclarationSyntax declaration,
+                    })
+            {
+                return false;
+            }
+
+            if (declaration.Type.IsVar)
+            {
+                if (this.ShouldPromoteToNullableReference(local)
+                    || (IsAnnotatedNullableReference(local.Type)
+                        && this.IsUsedAsNullable(local, this.GetNullabilityScope(local))))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                ITypeSymbol naturalType = this.context.GetTypeInfo(initializer).Type;
+                if (IsAnnotatedNullableReference(local.Type)
+                    || naturalType == null
+                    || !SymbolEqualityComparer.Default.Equals(local.Type, naturalType)
+                    || this.ShouldPromoteToNullableReference(local))
+                {
+                    return false;
+                }
+            }
+
+            isNonNull = this.GSharpExpressionIsStaticallyNonNull(initializer);
+            return true;
+        }
+
+        private bool ForEachBindingInfersNonNullElement(ILocalSymbol local)
+        {
+            SyntaxNode body = this.state.CurrentBodyScope;
+
+            // Iterator lowering preserves the source collection's nullable
+            // element annotation, so yield seams handle their own proof here.
+            if (body?.DescendantNodes().OfType<YieldStatementSyntax>().Any() == true)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is not ForEachStatementSyntax forEach
+                    || !SymbolEqualityComparer.Default.Equals(
+                        this.context.GetDeclaredSymbol(forEach),
+                        local))
+                {
+                    continue;
+                }
+
+                ITypeSymbol elementType = this.context.SemanticModel
+                    .GetForEachStatementInfo(forEach)
+                    .ElementType;
+                return elementType is { IsValueType: true }
+                    ? elementType.OriginalDefinition?.SpecialType
+                        != SpecialType.System_Nullable_T
+                    : elementType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.NotAnnotated };
+            }
+
+            return false;
         }
 
         private bool PatternLocalUsesNullableStorage(ExpressionSyntax expression)
@@ -1225,7 +1369,8 @@ public sealed partial class CSharpToGSharpTranslator
                             whenTrue,
                             includeWhenClauseRegion: false)
                         .Any(region => region.Span.Contains(expression.Span))
-                    || this.SymbolIsWrittenBetween(symbol, isPattern, expression, scope))
+                    || this.SymbolIsWrittenBetween(symbol, isPattern, expression, scope)
+                    || this.HasLoopCarriedWrite(expression, symbol, scope, isPattern))
                 {
                     continue;
                 }
@@ -1248,12 +1393,71 @@ public sealed partial class CSharpToGSharpTranslator
                             whenTrue,
                             includeWhenClauseRegion: false)
                         .Any(region => region.Span.Contains(expression.Span))
-                    || this.SymbolIsWrittenBetween(symbol, nullCheck, expression, scope))
+                    || this.SymbolIsWrittenBetween(symbol, nullCheck, expression, scope)
+                    || this.HasLoopCarriedWrite(expression, symbol, scope, nullCheck))
                 {
                     continue;
                 }
 
                 return true;
+            }
+
+            return false;
+        }
+
+        private bool AssignmentResultHasNonNullStaticType(
+            AssignmentExpressionSyntax assignment)
+        {
+            if (this.PatternLocalUsesNullableStorage(assignment.Left))
+            {
+                return false;
+            }
+
+            ISymbol target = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ITypeSymbol targetType = target switch
+            {
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => this.context.GetTypeInfo(assignment.Left).Type,
+            };
+            if (targetType is { IsReferenceType: true })
+            {
+                return this.TargetWillRemainNonNullableReference(
+                    targetType,
+                    target);
+            }
+
+            return targetType != null
+                && targetType.OriginalDefinition?.SpecialType
+                    != SpecialType.System_Nullable_T;
+        }
+
+        private bool HasLoopCarriedWrite(
+            ExpressionSyntax use,
+            ISymbol symbol,
+            SyntaxNode scope,
+            SyntaxNode narrowingGuard)
+        {
+            for (SyntaxNode node = use.Parent; node != null && node != scope; node = node.Parent)
+            {
+                if (node is WhileStatementSyntax
+                    or DoStatementSyntax
+                    or ForStatementSyntax
+                    or ForEachStatementSyntax
+                    or ForEachVariableStatementSyntax)
+                {
+                    // A guard outside a loop is not re-evaluated after a write in
+                    // the loop body, so it cannot prove later iterations non-null.
+                    bool hasWrite = node.DescendantNodes().Any(candidate =>
+                        !ReferenceEquals(candidate, use)
+                        && this.SyntaxNodeWritesSymbol(candidate, symbol));
+                    if (hasWrite && !node.Span.Contains(narrowingGuard.Span))
+                    {
+                        return true;
+                    }
+                }
             }
 
             return false;
@@ -1304,6 +1508,16 @@ public sealed partial class CSharpToGSharpTranslator
                 IPropertySymbol property => property.Type,
                 _ => null,
             };
+
+        private bool IsFlowNarrowedAnnotatedReference(ExpressionSyntax value)
+        {
+            TypeInfo typeInfo = this.context.GetTypeInfo(value);
+            ITypeSymbol declaredType = this.GetDeclaredValueType(value);
+            return typeInfo.Nullability.FlowState == NullableFlowState.NotNull
+                && (typeInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                    || typeInfo.Type?.NullableAnnotation == NullableAnnotation.Annotated
+                    || declaredType?.NullableAnnotation == NullableAnnotation.Annotated);
+        }
 
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {
@@ -1512,7 +1726,8 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax recv,
             bool isDereferenceReceiver = false)
         {
-            if (this.IsActivePatternBinding(recv)
+            if (this.GSharpExpressionIsStaticallyNonNull(recv)
+                || this.IsActivePatternBinding(recv)
                 || this.IsGSharpFlowNarrowedLocal(recv))
             {
                 return false;

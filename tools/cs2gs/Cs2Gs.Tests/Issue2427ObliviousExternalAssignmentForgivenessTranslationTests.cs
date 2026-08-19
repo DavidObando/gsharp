@@ -62,12 +62,39 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("path = (pathStub + ext)!!.AsUncIfLong()!!", printed);
+        Assert.Contains("path = (pathStub + ext).AsUncIfLong()!!", printed);
+        Assert.DoesNotContain("(pathStub + ext)!!", printed);
 
         // Parity: the assignment absorbs the SAME single forgiveness a
         // direct return would need — the later `return path` must not need
         // (or get) a second one.
         Assert.DoesNotContain("return path!!", printed);
+    }
+
+    [Fact]
+    public void Issue3422_CheckedCastOfObliviousExternalResult_PreservesNull()
+    {
+        string printed = TranslateObliviousWithObliviousLibrary(@"
+namespace Demo
+{
+    public class C
+    {
+        public string Cast(ExtLib ext)
+        {
+            return (string)ext.Combine(""hello"");
+        }
+    }
+}");
+
+        Assert.Contains("cast[string](ext.Combine(\"hello\"))", printed);
+        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
+        TranslationTestValidation.AssertBinds(
+            printed,
+            """
+            class ExtLib {
+                func Combine(separator string) string -> separator
+            }
+            """);
     }
 
     [Fact]
