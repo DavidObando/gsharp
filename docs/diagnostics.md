@@ -303,6 +303,21 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 |----|----------|-------------|-----------------|
 | GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. Add the missing package/project reference (the SDK passes `@(ReferencePathWithRefAssemblies)`, MSBuild's full transitive closure, so this normally only appears with a hand-rolled `/r:` set). Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
 
+### Analyzer host diagnostics (GS9300–GS9319, reserved)
+
+The GS9300–GS9319 block is reserved for the G# analyzer framework host
+([ADR-0169](adr/0169-gsharp-analyzer-framework.md)): `gsc` loading and running
+`GSharpDiagnosticAnalyzer` assemblies passed via `/gsanalyzer:`. (The adjacent
+GS92xx block belongs to the gsgen source-generator host.)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS9300 | Warning | An analyzer threw an exception; it is disabled for the remainder of the compilation. The message names the analyzer type and the exception. (Roslyn AD0001 parity.) |
+| GS9301 | Error | An analyzer assembly passed via `/gsanalyzer:` failed to load or contains no analyzers. |
+| GS9302 | Info | An analyzer exceeded its time budget in an interactive host (language server) and was disabled for subsequent runs. |
+| GS9303 | Warning | An analyzer was built against a different `GSharp.Core` version than the host; the load is attempted anyway. |
+| GS9304 | Warning | An analyzer reported a diagnostic whose ID is not declared in its `SupportedDiagnostics`; the diagnostic is suppressed. |
+
 ### Internal diagnostics (GS9996–GS9999)
 
 These diagnostics indicate a fatal compiler or runtime execution failure. If you encounter them, please file an issue.
