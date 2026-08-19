@@ -127,10 +127,10 @@ namespace Demo
     }
 }");
 
-        // `nameof` requires a name reference; `nameof(text!!)` would be rejected
-        // (GS0190), so the null-forgiveness pass must skip nameof arguments.
-        Assert.Contains("nameof(text)", printed);
-        Assert.DoesNotContain("nameof(text!!)", printed);
+        // cs2gs constant-folds C# nameof before identifier allocation or
+        // null-forgiveness can change its source-level string value.
+        Assert.Contains("\"text\"", printed);
+        Assert.DoesNotContain("nameof(", printed);
     }
 
     private static string TranslateUnit(string source)

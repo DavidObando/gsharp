@@ -501,7 +501,7 @@ public sealed partial class CSharpToGSharpTranslator
                             if (sub.NameColon != null)
                             {
                                 directRoots.Add(this.EmittedName(
-                                    this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                    this.GetPatternMemberSymbol(sub.NameColon.Name),
                                     this.GetSubpatternMemberName(sub)));
                                 continue;
                             }
@@ -705,7 +705,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     fields.Add(new PropertyPatternField(
                         this.EmittedName(
-                            this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                            this.GetPatternMemberSymbol(sub.NameColon.Name),
                             this.GetSubpatternMemberName(sub)),
                         this.BuildNativePattern(sub.Pattern, binders)));
                     continue;

@@ -124,6 +124,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return new IdentifierExpression("__underscore");
             }
 
+            if (identifier.Identifier.ValueText == "_"
+                && this.context.GetSymbolInfo(identifier).Symbol is null)
+            {
+                return new IdentifierExpression("_");
+            }
+
             return new IdentifierExpression(this.EmittedName(identifier, identifier.Identifier));
         }
 
@@ -589,6 +595,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 IFieldSymbol positional = field.CorrespondingTupleField ?? field;
                 memberName = positional.Name;
+                memberSymbol = positional;
             }
 
             // Issue #2282 (was #2224): an anonymous-typed value (`new { A = 1,

@@ -328,10 +328,41 @@ public sealed partial class CSharpToGSharpTranslator
         private string EmittedName(
             ISymbol symbol,
             string fallbackName,
-            GSharpIdentifierNameContext context = GSharpIdentifierNameContext.General) =>
-            symbol is null
-                ? this.nameAllocator.GetName(fallbackName, context)
-                : this.nameAllocator.GetName(symbol, context);
+            GSharpIdentifierNameContext context = GSharpIdentifierNameContext.General)
+        {
+            if (symbol is null)
+            {
+                return this.nameAllocator.GetName(fallbackName, context);
+            }
+
+            if (symbol is IDiscardSymbol)
+            {
+                return fallbackName;
+            }
+
+            bool isExplicitInterfaceMember = symbol switch
+            {
+                IMethodSymbol method => !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                IPropertySymbol property => !property.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                IEventSymbol @event => !@event.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                _ => false,
+            };
+            if (!isExplicitInterfaceMember)
+            {
+                return this.nameAllocator.GetName(symbol, context);
+            }
+
+            IEnumerable<string> siblingNames = symbol.ContainingType?
+                .GetMembers()
+                .Select(member =>
+                {
+                    int separator = member.Name.LastIndexOf('.');
+                    return separator >= 0
+                        ? member.Name.Substring(separator + 1)
+                        : member.Name;
+                });
+            return this.nameAllocator.GetName(fallbackName, context, siblingNames);
+        }
 
         private string EmittedName(
             SyntaxNode node,

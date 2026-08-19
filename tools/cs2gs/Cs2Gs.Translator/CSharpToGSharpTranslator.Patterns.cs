@@ -284,9 +284,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // — a silent-wrong `?.` read.
                     string bindingMemberName = this.GetPatternMemberName(memberBinding.Name);
                     string emittedBindingMemberName = this.EmittedName(
-                        this.context.GetSymbolInfo(memberBinding).Symbol,
+                        this.GetPatternMemberSymbol(memberBinding),
                         bindingMemberName);
-                    if (this.context.GetSymbolInfo(memberBinding).Symbol is IPropertySymbol extBindingProperty
+                    if (this.GetPatternMemberSymbol(memberBinding) is IPropertySymbol extBindingProperty
                         && !extBindingProperty.IsStatic
                         && TryGetExtensionBlockOwner(extBindingProperty, out _))
                     {
@@ -1287,7 +1287,7 @@ public sealed partial class CSharpToGSharpTranslator
                         GExpression memberAccess = new MemberAccessExpression(
                             memberReceiver,
                             this.EmittedName(
-                                this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                this.GetPatternMemberSymbol(sub.NameColon.Name),
                                 memberName));
                         ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
                         memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
@@ -1335,7 +1335,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     ISymbol memberSymbol = sub.NameColon != null
-                        ? this.context.GetSymbolInfo(sub.NameColon.Name).Symbol
+                        ? this.GetPatternMemberSymbol(sub.NameColon.Name)
                         : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
                             .GetMembers(memberName)
                             .FirstOrDefault();
@@ -1427,6 +1427,14 @@ public sealed partial class CSharpToGSharpTranslator
             return name.Identifier.ValueText;
         }
 
+        private ISymbol GetPatternMemberSymbol(SyntaxNode node)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(node).Symbol;
+            return symbol is IFieldSymbol { ContainingType.IsTupleType: true } tupleField
+                ? tupleField.CorrespondingTupleField ?? tupleField
+                : symbol;
+        }
+
         // Splits an extended property subpattern's dotted member path
         // (`Start.X`, `A.B.C`, ...) into its leaf-to-root identifier chain
         // (`["Start", "X"]`, `["A", "B", "C"]`), using each bound member's
@@ -1440,14 +1448,14 @@ public sealed partial class CSharpToGSharpTranslator
             while (current is MemberAccessExpressionSyntax memberAccess)
             {
                 names.Insert(0, this.EmittedName(
-                    this.context.GetSymbolInfo(memberAccess).Symbol,
+                    this.GetPatternMemberSymbol(memberAccess),
                     this.GetPatternMemberName(memberAccess.Name)));
                 current = memberAccess.Expression;
             }
 
             string rootName = current is SimpleNameSyntax simpleName
                 ? this.EmittedName(
-                    this.context.GetSymbolInfo(simpleName).Symbol,
+                    this.GetPatternMemberSymbol(simpleName),
                     this.GetPatternMemberName(simpleName))
                 : current.ToString();
             names.Insert(0, rootName);

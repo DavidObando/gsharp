@@ -1607,7 +1607,7 @@ public sealed partial class CSharpToGSharpTranslator
                         {
                             string rawFieldName = this.GetSubpatternMemberName(sub);
                             string fieldName = this.EmittedName(
-                                this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                this.GetPatternMemberSymbol(sub.NameColon.Name),
                                 rawFieldName);
                             fields.Add(new PropertyPatternField(
                                 fieldName,
@@ -1729,7 +1729,7 @@ public sealed partial class CSharpToGSharpTranslator
                         }
 
                         ISymbol memberSymbol = sub.NameColon != null
-                            ? this.context.GetSymbolInfo(sub.NameColon.Name).Symbol
+                            ? this.GetPatternMemberSymbol(sub.NameColon.Name)
                             : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
                                 .GetMembers(memberName)
                                 .FirstOrDefault();
@@ -1779,7 +1779,7 @@ public sealed partial class CSharpToGSharpTranslator
                         ? new List<string>
                         {
                             this.EmittedName(
-                                this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                this.GetPatternMemberSymbol(sub.NameColon.Name),
                                 this.GetSubpatternMemberName(sub)),
                         }
                         : sub.ExpressionColon != null
@@ -1854,7 +1854,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     ISymbol memberSymbol = sub.NameColon != null
-                        ? this.context.GetSymbolInfo(sub.NameColon.Name).Symbol
+                        ? this.GetPatternMemberSymbol(sub.NameColon.Name)
                         : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
                             .GetMembers(memberName)
                             .FirstOrDefault();
