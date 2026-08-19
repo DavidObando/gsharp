@@ -254,6 +254,16 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #3421 review follow-up: C# permits an explicit conversion from
+        // any type parameter to any interface. The runtime boxes the generic
+        // value, then checks the boxed reference against the interface. The
+        // constraint-proven implicit case returned above; this arm covers the
+        // otherwise-unconstrained checked cast.
+        if (from is TypeParameterSymbol && IsInterfaceLikeType(to))
+        {
+            return Conversion.Explicit;
+        }
+
         // Issue #1540: a generic type parameter `T` is ALWAYS implicitly
         // convertible to a GENUINE `object` slot — a boxing conversion for a
         // value `T`, a reference conversion for a reference `T`, and `box !!T`

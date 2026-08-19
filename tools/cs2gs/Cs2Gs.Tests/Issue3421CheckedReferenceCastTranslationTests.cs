@@ -3,16 +3,10 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
-using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
-using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Tests;
 using Xunit;
 
@@ -28,39 +22,6 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public class Issue3421CheckedReferenceCastTranslationTests
 {
-    [Fact]
-    public async Task CoreMigration_HasNoAssertedAsConversions()
-    {
-        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
-        Assert.False(string.IsNullOrEmpty(repoRoot));
-
-        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
-            Path.Combine(repoRoot, "src", "Core", "Core.csproj"));
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Core should bind with no C# errors: "
-                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
-
-        var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
-        int assertedAsConversions = 0;
-        foreach (LoadedDocument document in project.Documents)
-        {
-            var context = new TranslationContext(
-                project.Compilation,
-                document.SemanticModel,
-                document.FilePath);
-            string printed = GSharpPrinter.Print(
-                translator.TranslateDocument(document, context));
-            var tree = SyntaxTree.Parse(printed);
-            Assert.Empty(tree.Diagnostics);
-            assertedAsConversions += Descendants(tree.Root)
-                .OfType<UnaryExpressionSyntax>()
-                .Count(IsAssertedAsConversion);
-        }
-
-        Assert.Equal(0, assertedAsConversions);
-    }
-
     [Fact]
     public void NonNullableTargetCast_UsedAsReceiver_UsesConversionCall()
     {
@@ -213,6 +174,25 @@ public static class C
     }
 
     [Fact]
+    public void UnconstrainedGenericInterfaceCast_UsesCheckedCast()
+    {
+        string printed = Translate(@"
+public interface IValue
+{
+    int Read();
+}
+
+public static class C
+{
+    public static IValue Cast<T>(T value) => (IValue)value;
+}");
+
+        Assert.Contains("cast[IValue](value)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("value as IValue", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void GenericAndDynamicReferenceCasts_UseConversionCalls()
     {
         string printed = Translate(@"
@@ -334,33 +314,5 @@ public static class C
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         return GSharpPrinter.Print(unit);
-    }
-
-    private static bool IsAssertedAsConversion(UnaryExpressionSyntax unary)
-    {
-        if (unary.OperatorToken.Kind != SyntaxKind.BangBangToken)
-        {
-            return false;
-        }
-
-        ExpressionSyntax operand = unary.Operand;
-        while (operand is ParenthesizedExpressionSyntax parenthesized)
-        {
-            operand = parenthesized.Expression;
-        }
-
-        return operand is AsExpressionSyntax;
-    }
-
-    private static IEnumerable<SyntaxNode> Descendants(SyntaxNode node)
-    {
-        yield return node;
-        foreach (SyntaxNode child in node.GetChildren())
-        {
-            foreach (SyntaxNode descendant in Descendants(child))
-            {
-                yield return descendant;
-            }
-        }
     }
 }

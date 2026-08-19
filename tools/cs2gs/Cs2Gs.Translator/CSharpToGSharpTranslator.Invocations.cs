@@ -2826,6 +2826,9 @@ public sealed partial class CSharpToGSharpTranslator
                 || (conversion.IsIdentity
                     && sourceSymbol is { IsReferenceType: true }
                     && targetSymbol is { IsReferenceType: true })
+                || (conversion.IsExplicit
+                    && sourceSymbol is ITypeParameterSymbol
+                    && targetSymbol is { TypeKind: TypeKind.Interface })
                 || (sourceSymbol is { TypeKind: TypeKind.Dynamic }
                     && targetSymbol is { IsReferenceType: true });
             return new ConversionExpression(
