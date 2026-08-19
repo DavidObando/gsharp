@@ -264,6 +264,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry);
+        typeMapper.ReserveImportAliases(imports);
         var visitor = new DeclarationVisitor(
             context,
             typeMapper,

@@ -99,6 +99,9 @@ public sealed class CSharpTypeMapper
     private readonly Dictionary<string, string> synthesizedTypeAliases =
         new(System.StringComparer.Ordinal);
 
+    private readonly Dictionary<string, HashSet<string>> reservedTypeAliases =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared type simple
     /// names (built lazily on first use), used to decide whether a source nested
@@ -443,6 +446,29 @@ public sealed class CSharpTypeMapper
         this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
 
     /// <summary>
+    /// Reserves aliases already present in the final translated import set.
+    /// </summary>
+    /// <param name="imports">Imports collected from the active and merged source trees.</param>
+    internal void ReserveImportAliases(IEnumerable<ImportDirective> imports)
+    {
+        foreach (ImportDirective import in imports)
+        {
+            if (import.Alias == null)
+            {
+                continue;
+            }
+
+            if (!this.reservedTypeAliases.TryGetValue(import.Alias, out var targets))
+            {
+                targets = new HashSet<string>(System.StringComparer.Ordinal);
+                this.reservedTypeAliases.Add(import.Alias, targets);
+            }
+
+            targets.Add(import.Name);
+        }
+    }
+
+    /// <summary>
     /// Maps an exact inferred contract while qualifying metadata homonyms
     /// reachable through the current file's imports.
     /// </summary>
@@ -479,17 +505,21 @@ public sealed class CSharpTypeMapper
             }
         }
 
+        foreach (var reservedAlias in this.reservedTypeAliases)
+        {
+            if (reservedAlias.Value.Count == 1
+                && reservedAlias.Value.Contains(target))
+            {
+                return reservedAlias.Key;
+            }
+        }
+
         this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
         var reserved = new HashSet<string>(
             this.synthesizedTypeAliases.Keys,
             System.StringComparer.Ordinal);
+        reserved.UnionWith(this.reservedTypeAliases.Keys);
         reserved.UnionWith(this.sourceSimpleNameCounts.Keys);
-        reserved.UnionWith(
-            context.SemanticModel.SyntaxTree.GetRoot()
-                .DescendantNodes()
-                .OfType<UsingDirectiveSyntax>()
-                .Where(directive => directive.Alias != null)
-                .Select(directive => directive.Alias.Name.Identifier.ValueText));
 
         string baseAlias = $"__cs2gs_{target.Replace('.', '_')}";
         string alias = baseAlias;

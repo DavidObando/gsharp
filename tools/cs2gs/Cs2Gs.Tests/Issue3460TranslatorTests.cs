@@ -281,6 +281,95 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void SystemObjectAlias_ReservesPartialSiblingImports()
+        {
+            string printed = TranslateFile(
+                "A.Primary.cs",
+                preservePartialParts: false,
+                ("A.Primary.cs", """
+                    namespace Demo;
+
+                    public partial class PartialOwner
+                    {
+                        public static string Run() =>
+                            new object { }.GetType().FullName!;
+                    }
+                    """),
+                ("B.Partial.cs", """
+                    using __cs2gs_System_Object = System.Text.StringBuilder;
+
+                    namespace Demo;
+
+                    public partial class PartialOwner
+                    {
+                        public int Value;
+                    }
+                    """));
+
+            Assert.Contains(
+                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "import __cs2gs_System_Object_2 = System.Object",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains("__cs2gs_System_Object_2()", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Demo.PartialOwner.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal("System.Object", result.Value);
+        }
+
+        [Fact]
+        public void SystemObjectAlias_ReservesOwnedExtensionImports()
+        {
+            string printed = TranslateFile(
+                "A.Host.cs",
+                preservePartialParts: true,
+                ("A.Host.cs", """
+                    namespace Demo;
+
+                    public sealed class Host
+                    {
+                        public static string Run() =>
+                            new object { }.GetType().FullName!;
+                    }
+                    """),
+                ("B.Extensions.cs", """
+                    using __cs2gs_System_Object = System.Text.StringBuilder;
+
+                    namespace Demo;
+
+                    public static class HostExtensions
+                    {
+                        public static int Measure(this Host host) => 1;
+                    }
+                    """));
+
+            Assert.Contains(
+                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "import __cs2gs_System_Object_2 = System.Object",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains("__cs2gs_System_Object_2()", printed, StringComparison.Ordinal);
+            Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Demo.Host.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal("System.Object", result.Value);
+        }
+
+        [Fact]
         public void ImportedParameterlessInitializer_PreservesOrderedMembersNestedInitializersAndRuntime()
         {
             string printed = Translate("""
@@ -798,6 +887,29 @@ namespace Cs2Gs.Tests
                 document.FilePath);
             CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
             return (GSharpPrinter.Print(unit), context);
+        }
+
+        private static string TranslateFile(
+            string targetPath,
+            bool preservePartialParts,
+            params (string Path, string Source)[] sources)
+        {
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources);
+            Assert.True(
+                project.BoundWithoutErrors,
+                "Snippets should bind with no C# errors: "
+                    + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+            LoadedDocument document = project.Documents.Single(candidate =>
+                candidate.FilePath.EndsWith(targetPath, StringComparison.Ordinal));
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            CompilationUnit unit = new CSharpToGSharpTranslator(
+                preservePartialParts: preservePartialParts)
+                .TranslateDocument(document, context);
+            return GSharpPrinter.Print(unit);
         }
     }
 }
