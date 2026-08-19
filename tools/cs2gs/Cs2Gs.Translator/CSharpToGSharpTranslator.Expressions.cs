@@ -112,6 +112,11 @@ public sealed partial class CSharpToGSharpTranslator
             // Task.FromResult, Console.WriteLine, ...) does not pass through
             // type-syntax translation. Map it here so SDK implicit/global
             // usings still contribute the namespace import required by G#.
+            if (this.context.SemanticModel.GetAliasInfo(identifier) is IAliasSymbol alias)
+            {
+                return new IdentifierExpression(this.EmittedName(alias, alias.Name));
+            }
+
             if (this.context.SemanticModel.GetAliasInfo(identifier) is null &&
                 this.context.GetSymbolInfo(identifier).Symbol is INamedTypeSymbol type)
             {
@@ -550,7 +555,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
 
             GExpression target;
-            if (this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
+            if (this.context.SemanticModel.GetAliasInfo(member.Expression) is null
+                && this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
                 { IsGenericType: true } receiverNamedType)
             {
                 // A qualified generic type is a MemberAccessExpressionSyntax;

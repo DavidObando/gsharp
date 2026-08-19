@@ -1336,7 +1336,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                     ISymbol memberSymbol = sub.NameColon != null
                         ? this.GetPatternMemberSymbol(sub.NameColon.Name)
-                        : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
+                        : (recursive.Type != null
+                            ? this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol
+                            : receiverType as INamedTypeSymbol)?
                             .GetMembers(memberName)
                             .FirstOrDefault();
                     GExpression memberAccess = new MemberAccessExpression(

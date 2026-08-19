@@ -1730,7 +1730,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                         ISymbol memberSymbol = sub.NameColon != null
                             ? this.GetPatternMemberSymbol(sub.NameColon.Name)
-                            : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
+                            : (recursive.Type != null
+                                ? this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol
+                                : null)?
                                 .GetMembers(memberName)
                                 .FirstOrDefault();
                         string emittedMemberName = this.EmittedName(memberSymbol, memberName);
@@ -1855,7 +1857,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                     ISymbol memberSymbol = sub.NameColon != null
                         ? this.GetPatternMemberSymbol(sub.NameColon.Name)
-                        : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
+                        : (recursive.Type != null
+                            ? this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol
+                            : null)?
                             .GetMembers(memberName)
                             .FirstOrDefault();
                     GExpression memberAccess = new MemberAccessExpression(
