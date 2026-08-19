@@ -25,7 +25,9 @@ public sealed class Issue3347RemainingSpillInventoryTests
     /// Issue #3423 ratchet. Regenerated from <c>be857f02c4</c>, Core started
     /// with 16 <c>__castN</c> occurrences (8 block conversions), 22
     /// <c>__deconN</c> occurrences (11 temp names), and 17 <c>__using</c>
-    /// declarations. All three families are now retired from Core output.
+    /// declarations. Those families and issue #3347's <c>__spillN</c>
+    /// declarations are now retired from Core output; the companion translator
+    /// project ratchet below protects its independently verified zero-spill output.
     /// </summary>
     [Fact]
     public async Task CoreMigration_RemainingSynthesizedNameFamiliesStayRetired()
@@ -41,6 +43,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int castCount = 0;
         int deconstructionCount = 0;
+        int spillCount = 0;
         int usingCount = 0;
         foreach (LoadedDocument document in project.Documents)
         {
@@ -52,12 +55,46 @@ public sealed class Issue3347RemainingSpillInventoryTests
                 translator.TranslateDocument(document, context));
             castCount += CountOccurrences(printed, "__cast");
             deconstructionCount += CountOccurrences(printed, "__decon");
+            spillCount += CountOccurrences(printed, "let __spill");
             usingCount += CountOccurrences(printed, "__using");
         }
 
         Assert.Equal(0, castCount);
         Assert.Equal(0, deconstructionCount);
+        Assert.Equal(0, spillCount);
         Assert.Equal(0, usingCount);
+    }
+
+    [Fact]
+    public async Task TranslatorMigration_SpillFamilyStaysRetired()
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(
+            Path.Combine(
+                repoRoot,
+                "tools",
+                "cs2gs",
+                "Cs2Gs.Translator",
+                "Cs2Gs.Translator.csproj"));
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Translator should bind with no C# errors: "
+                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
+        int spillCount = 0;
+        foreach (LoadedDocument document in project.Documents)
+        {
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            string printed = GSharpPrinter.Print(
+                translator.TranslateDocument(document, context));
+            spillCount += CountOccurrences(printed, "let __spill");
+        }
+
+        Assert.Equal(0, spillCount);
     }
 
     [Fact]
@@ -246,6 +283,74 @@ public sealed class Issue3347RemainingSpillInventoryTests
         Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
         Assert.Contains("C.GetItem() is { X: var x, Y: > 0 } && x > 0", printed, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
+    }
+
+    [Fact]
+    public void MutableNestedGuardBinder_UsesNativeMatchThenAuthorNamedStorage()
+    {
+        string printed = Translate(
+            """
+            using Microsoft.CodeAnalysis;
+            using Microsoft.CodeAnalysis.CSharp.Syntax;
+            using System.Linq;
+
+            public static class C
+            {
+                public static bool IsAsLocal(ILocalSymbol local)
+                {
+                    if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                        is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                    {
+                        return false;
+                    }
+
+                    while (initializer is ParenthesizedExpressionSyntax parenthesized)
+                    {
+                        initializer = parenthesized.Expression;
+                    }
+
+                    return initializer is BinaryExpressionSyntax;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
+        Assert.Contains("initializerMatch", printed, StringComparison.Ordinal);
+        Assert.Contains("var initializer ExpressionSyntax = initializerMatch", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullabilityOnlyMethodGroupDifference_UsesDirectMemberReference()
+    {
+        string printed = Translate(
+            """
+            using System;
+            using System.Diagnostics.CodeAnalysis;
+
+            public sealed class Mapper
+            {
+                [return: NotNullIfNotNull(nameof(value))]
+                public string? Map(string? value) => value;
+            }
+
+            public sealed class Holder
+            {
+                public Mapper Mapper { get; } = new Mapper();
+            }
+
+            public static class C
+            {
+                private static string Apply(string value, Func<string, string> map) => map(value);
+
+                public static string Run(Holder holder, string value) =>
+                    Apply(value, holder.Mapper.Map);
+            }
+            """);
+
+        Assert.Contains("C.Apply(value, holder.Mapper.Map)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
     }
 
     [Fact]

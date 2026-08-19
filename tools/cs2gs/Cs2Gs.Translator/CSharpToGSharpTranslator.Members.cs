@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
@@ -71,8 +72,9 @@ public sealed partial class CSharpToGSharpTranslator
                         yield return (methodMember, methodIsStatic);
                     }
 
-                    if (ownedExtensionTarget is null &&
-                        this.ownedExtensions.HasReceiverCompanion(method))
+                    if (ownedExtensionTarget is null
+                        && this.context.GetDeclaredSymbol(method) is IMethodSymbol companionSymbol
+                        && this.HasReceiverCompanion(companionSymbol))
                     {
                         (GMember companion, bool companionIsStatic) = this.TranslateMethod(
                             method,
@@ -1334,9 +1336,22 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
             BlockStatement body;
-            body = hasBody
-                ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
-                : null;
+            if (hasBody
+                && forceExtensionReceiver
+                && RequiresOwnerScopedExtension(symbol))
+            {
+                body = this.BuildOwnerScopedExtensionCompanionBody(
+                    symbol,
+                    receiver,
+                    parameters,
+                    returnType);
+            }
+            else
+            {
+                body = hasBody
+                    ? this.TranslateBody(node, $"method '{node.Identifier.Text}'")
+                    : null;
+            }
 
             if (body != null && ownedExtensionSelf != null)
             {
@@ -1472,6 +1487,334 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && symbol.ReturnsByRef);
 
             return (method, isStatic);
+        }
+
+        private BlockStatement BuildOwnerScopedExtensionCompanionBody(
+            IMethodSymbol method,
+            Receiver receiver,
+            IReadOnlyList<Parameter> parameters,
+            GTypeReference returnType)
+        {
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            var arguments = new List<GExpression>(parameters.Count + 1)
+            {
+                new IdentifierExpression(receiver.Name),
+            };
+            for (int index = 0; index < parameters.Count; index++)
+            {
+                GExpression argument = new IdentifierExpression(parameters[index].Name);
+                if (original.Parameters[index + 1].RefKind is RefKind.Ref or RefKind.Out)
+                {
+                    argument = new UnaryExpression("&", argument);
+                }
+
+                arguments.Add(argument);
+            }
+
+            IReadOnlyList<GTypeReference> typeArguments = original.TypeParameters
+                .Select(parameter =>
+                    (GTypeReference)new NamedTypeReference(
+                        SanitizeIdentifier(parameter.Name)))
+                .ToList();
+
+            var call = new InvocationExpression(
+                new MemberAccessExpression(
+                    new IdentifierExpression(
+                        SanitizeIdentifier(original.ContainingType.Name)),
+                    SanitizeIdentifier(original.Name)),
+                arguments,
+                typeArguments);
+            INamedTypeSymbol asyncEnvelope = original.IsAsync
+                && original.ReturnType is INamedTypeSymbol taskLike
+                && taskLike.Name is "Task" or "ValueTask"
+                && taskLike.ContainingNamespace?.ToDisplayString()
+                    == "System.Threading.Tasks"
+                    ? taskLike
+                    : null;
+            GExpression forwarded = asyncEnvelope != null
+                ? new AwaitExpression(call)
+                : call;
+            GStatement statement = returnType == null
+                || asyncEnvelope is { IsGenericType: false }
+                ? new ExpressionStatement(forwarded)
+                : new ReturnStatement(forwarded);
+            return new BlockStatement(new[] { statement });
+        }
+
+        private bool HasReceiverCompanion(IMethodSymbol method)
+        {
+            if (!this.ownedExtensions.HasReceiverCompanion(method))
+            {
+                return false;
+            }
+
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            return !RequiresOwnerScopedExtension(original)
+                || this.CanEmitOwnerScopedReceiverCompanion(original);
+        }
+
+        private bool CanEmitOwnerScopedReceiverCompanion(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            if (!IsOwnerScopedCompanionShapeEligible(original))
+            {
+                return false;
+            }
+
+            if (original.Parameters[0].Type is INamedTypeSymbol receiver
+                && this.HasCanonicalReducedDeclarationCollision(
+                    receiver.OriginalDefinition,
+                    original))
+            {
+                return false;
+            }
+
+            string signature = this.CanonicalExtensionSignature(original);
+            string identity = ExtensionMethodIdentity(original);
+            var ownerCandidates = new HashSet<string>(StringComparer.Ordinal)
+            {
+                identity,
+            };
+
+            // A referenced project wins over its dependent: the dependency can
+            // emit without knowing reverse dependents exist, while the dependent
+            // sees the dependency through SiblingCompilations. Assembly + doc ID
+            // deduplicates that source method's metadata copy.
+            foreach (IMethodSymbol candidate in this.EnumerateKnownExtensionMethods(original))
+            {
+                IMethodSymbol candidateOriginal = candidate.ReducedFrom ?? candidate;
+                string candidateIdentity = ExtensionMethodIdentity(candidateOriginal);
+                if (candidateIdentity == identity
+                    || this.CanonicalExtensionSignature(candidateOriginal) != signature)
+                {
+                    continue;
+                }
+
+                if (!RequiresOwnerScopedExtension(candidateOriginal))
+                {
+                    return false;
+                }
+
+                if (IsOwnerScopedCompanionShapeEligible(candidateOriginal))
+                {
+                    if (CompilationReferencesAssembly(
+                        this.context.Compilation,
+                        candidateOriginal.ContainingAssembly))
+                    {
+                        return false;
+                    }
+
+                    CSharpCompilation candidateCompilation =
+                        this.KnownCompilations().FirstOrDefault(compilation =>
+                            SameAssembly(
+                                compilation.Assembly,
+                                candidateOriginal.ContainingAssembly));
+                    if (candidateCompilation != null
+                        && CompilationReferencesAssembly(
+                            candidateCompilation,
+                            this.context.Compilation.Assembly))
+                    {
+                        continue;
+                    }
+
+                    ownerCandidates.Add(candidateIdentity);
+                }
+            }
+
+            return string.Equals(
+                identity,
+                ownerCandidates.Min(StringComparer.Ordinal),
+                StringComparison.Ordinal);
+        }
+
+        private bool HasCanonicalReducedDeclarationCollision(
+            INamedTypeSymbol receiver,
+            IMethodSymbol extension)
+        {
+            string extensionSignature =
+                this.CanonicalReducedSignature(extension, parameterOffset: 1);
+            string emittedName = SanitizeIdentifier(extension.Name);
+            for (INamedTypeSymbol current = receiver; current != null; current = current.BaseType)
+            {
+                foreach (IMethodSymbol method in current.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (!method.IsStatic
+                        && SanitizeIdentifier(method.Name) == emittedName
+                        && this.CanonicalReducedSignature(method, parameterOffset: 0)
+                            == extensionSignature)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private IEnumerable<IMethodSymbol> EnumerateKnownExtensionMethods(
+            IMethodSymbol method)
+        {
+            string namespaceName = method.ContainingNamespace?.ToDisplayString()
+                ?? string.Empty;
+            string emittedName = SanitizeIdentifier(method.Name);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (INamedTypeSymbol type in method.ContainingNamespace.GetTypeMembers())
+            {
+                foreach (IMethodSymbol candidate in type.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (candidate.IsExtensionMethod
+                        && SanitizeIdentifier(candidate.Name) == emittedName
+                        && seen.Add(ExtensionMethodIdentity(candidate)))
+                    {
+                        yield return candidate;
+                    }
+                }
+            }
+
+            foreach (CSharpCompilation compilation in this.KnownCompilations())
+            {
+                INamespaceSymbol package = FindNamespace(
+                    compilation.Assembly.GlobalNamespace,
+                    namespaceName);
+                if (package == null)
+                {
+                    continue;
+                }
+
+                foreach (INamedTypeSymbol type in package.GetTypeMembers())
+                {
+                    foreach (IMethodSymbol candidate in type
+                        .GetMembers()
+                        .OfType<IMethodSymbol>())
+                    {
+                        if (candidate.IsExtensionMethod
+                            && SanitizeIdentifier(candidate.Name) == emittedName
+                            && seen.Add(ExtensionMethodIdentity(candidate)))
+                        {
+                            yield return candidate;
+                        }
+                    }
+                }
+            }
+        }
+
+        private IEnumerable<CSharpCompilation> KnownCompilations() =>
+            new[] { this.context.Compilation }
+                .Concat(this.context.SiblingCompilations
+                    ?? Array.Empty<CSharpCompilation>())
+                .Concat(this.context.RepositoryCompilations
+                    ?? Array.Empty<CSharpCompilation>())
+                .Distinct();
+
+        private static bool CompilationReferencesAssembly(
+            CSharpCompilation compilation,
+            IAssemblySymbol assembly) =>
+            compilation != null
+            && assembly != null
+            && compilation.References.Any(reference =>
+                compilation.GetAssemblyOrModuleSymbol(reference)
+                    is IAssemblySymbol referenced
+                && SameAssembly(referenced, assembly));
+
+        private static bool SameAssembly(
+            IAssemblySymbol left,
+            IAssemblySymbol right) =>
+            left != null
+            && right != null
+            && string.Equals(
+                left.Identity.GetDisplayName(),
+                right.Identity.GetDisplayName(),
+                StringComparison.Ordinal);
+
+        private static INamespaceSymbol FindNamespace(
+            INamespaceSymbol root,
+            string namespaceName)
+        {
+            INamespaceSymbol current = root;
+            foreach (string segment in namespaceName.Split(
+                '.',
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = current?.GetNamespaceMembers()
+                    .FirstOrDefault(candidate => candidate.Name == segment);
+                if (current == null)
+                {
+                    return null;
+                }
+            }
+
+            return current;
+        }
+
+        private string CanonicalExtensionSignature(IMethodSymbol method) =>
+            this.CanonicalEmittedType(method.Parameters[0].Type, method)
+            + "|"
+            + this.CanonicalReducedSignature(method, parameterOffset: 1);
+
+        private string CanonicalReducedSignature(
+            IMethodSymbol method,
+            int parameterOffset)
+        {
+            var parts = new List<string>
+            {
+                SanitizeIdentifier(method.Name),
+                method.TypeParameters.Length.ToString(CultureInfo.InvariantCulture),
+            };
+            for (int index = parameterOffset; index < method.Parameters.Length; index++)
+            {
+                IParameterSymbol parameter = method.Parameters[index];
+                parts.Add(
+                    parameter.RefKind.ToString()
+                    + ":"
+                    + (parameter.IsParams ? "params:" : string.Empty)
+                    + this.CanonicalEmittedType(parameter.Type, method));
+            }
+
+            return string.Join("|", parts);
+        }
+
+        private string CanonicalEmittedType(
+            ITypeSymbol type,
+            IMethodSymbol method)
+        {
+            // Collision probing must not add imports or unsupported diagnostics
+            // to the real translation (e.g. an Index-typed unrelated overload).
+            var signatureContext = new TranslationContext(
+                this.context.Compilation,
+                this.context.SemanticModel,
+                this.context.FilePath,
+                this.context.SiblingCompilations,
+                this.context.RepositoryCompilations);
+            var signatureMapper = new CSharpTypeMapper(
+                new AnonymousTypeRegistry());
+            GTypeReference mapped = signatureMapper.Map(
+                type,
+                signatureContext,
+                Location.None);
+            string rendered = GSharpPrinter.RenderTypeReference(mapped)
+                .Replace("?", string.Empty, StringComparison.Ordinal);
+            foreach (ITypeParameterSymbol parameter in method.TypeParameters)
+            {
+                string name = Regex.Escape(SanitizeIdentifier(parameter.Name));
+                rendered = Regex.Replace(
+                    rendered,
+                    $@"(?<![\p{{L}}\p{{N}}_]){name}(?![\p{{L}}\p{{N}}_])",
+                    "!" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture));
+            }
+
+            return rendered;
+        }
+
+        private static string ExtensionMethodIdentity(IMethodSymbol method)
+        {
+            IMethodSymbol original = method?.ReducedFrom ?? method;
+            string declarationId =
+                DocumentationCommentId.CreateDeclarationId(original)
+                ?? original.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            return original.ContainingAssembly?.Identity.GetDisplayName()
+                + "|"
+                + declarationId;
         }
 
         private bool IsStaticExtensionHelper(IMethodSymbol method)

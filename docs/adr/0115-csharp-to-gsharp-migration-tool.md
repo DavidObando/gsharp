@@ -159,9 +159,19 @@ C# **extension methods** (`static R M(this T self, …)`) translate to `func (se
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
-ordinary static methods in that owner's `shared` block. Translated call sites
-use `Owner.M(receiver, …)`, including calls from sibling migrated projects.
-Lifting those bodies to top-level receiver funcs would move them onto the
+ordinary static methods in that owner's `shared` block. A forwarding
+receiver-clause companion keeps reduced calls, null-conditional calls, and
+method groups in member form when the source method is accessible and the
+effectively-public owner would not collide with an instance or package-wide
+sibling extension after both signatures map to canonical G# types. Sibling
+project scans use source compilations and deduplicate their metadata copies.
+Async invocation companions await the retained `Task`/`Task<T>` helper so
+their own `async func` keeps G#'s unwrapped return convention; Task-shaped
+method groups keep the static-helper lambda because their delegate contract
+still exposes the Task envelope. Explicitly qualified calls still use
+`Owner.M(receiver, …)`. Private, extern, or effectively non-public owner
+methods keep the static-helper form exclusively.
+Lifting the original bodies to top-level receiver funcs would move them onto the
 synthetic `<Program>` type, which cannot legally access the retained private
 nested type or members whose signatures contain it.
 

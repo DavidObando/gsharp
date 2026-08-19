@@ -737,7 +737,9 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.GetDeclaredSymbol(single) is ILocalSymbol local)
             {
                 binders.Add(local);
-                return SanitizeIdentifier(single.Identifier.Text);
+                return this.state.NativePatternVariableAliases.TryGetValue(local, out string alias)
+                    ? alias
+                    : SanitizeIdentifier(single.Identifier.Text);
             }
 
             return "_";

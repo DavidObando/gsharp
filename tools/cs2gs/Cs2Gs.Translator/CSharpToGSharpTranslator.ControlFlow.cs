@@ -1167,6 +1167,54 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            if (this.IsNativelyExpressiblePattern(positivePattern, topLevel: true)
+                && binder.Type is { TypeKind: not TypeKind.Error, IsRefLikeType: false }
+                && !CSharpTypeMapper.IsSystemIndexOrRange(binder.Type))
+            {
+                string mutableName = SanitizeIdentifier(designation.Identifier.Text);
+                string matchName = FreshPatternMatchName(
+                    mutableName,
+                    this.state.CurrentBodyScope ?? ifStatement);
+                this.state.NativePatternVariableAliases[binder] = matchName;
+                GPattern nativePattern;
+                try
+                {
+                    nativePattern = this.BuildNativePattern(
+                        positivePattern,
+                        new List<ILocalSymbol>());
+                }
+                finally
+                {
+                    this.state.NativePatternVariableAliases.Remove(binder);
+                }
+
+                statements.Add(new IfStatement(
+                    Negate(new PatternTestExpression(receiver, nativePattern)),
+                    then));
+
+                GTypeReference mutableType = this.typeMapper.Map(
+                    binder.Type,
+                    this.context,
+                    designation.GetLocation());
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    mutableName,
+                    mutableType,
+                    new IdentifierExpression(matchName)));
+                this.state.PatternBindings[binder] =
+                    new IdentifierExpression(mutableName);
+
+                for (var i = patternIndex + 1; i < terms.Count; i++)
+                {
+                    statements.Add(new IfStatement(
+                        this.TranslateExpression(terms[i]),
+                        then));
+                }
+
+                result = statements;
+                return true;
+            }
+
             if (!IsTrivialOperand(receiver))
             {
                 string spillName = $"__spill{this.state.SpillCounter++}";
@@ -1457,6 +1505,25 @@ public sealed partial class CSharpToGSharpTranslator
                     StatementAlwaysExits(block.Statements[block.Statements.Count - 1]),
                 _ => false,
             };
+
+        private static string FreshPatternMatchName(
+            string localName,
+            SyntaxNode scope)
+        {
+            var used = new HashSet<string>(
+                scope.DescendantTokens()
+                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
+                    .Select(token => token.ValueText),
+                System.StringComparer.Ordinal);
+            string stem = localName + "Match";
+            string candidate = stem;
+            for (int suffix = 2; used.Contains(candidate); suffix++)
+            {
+                candidate = stem + suffix;
+            }
+
+            return candidate;
+        }
 
         // Returns a nullable (`T?`) copy of a type reference, preserving the
         // concrete reference kind (named/array/pointer/tuple). Used when hoisting a

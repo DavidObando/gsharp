@@ -503,6 +503,11 @@ public sealed partial class CSharpToGSharpTranslator
                 if (RequiresOwnerScopedExtension(method))
                 {
                     result.AddStaticHelper(methodDeclaration);
+                    if (IsOwnerScopedCompanionShapeEligible(method))
+                    {
+                        result.AddReceiverCompanion(methodDeclaration);
+                    }
+
                     continue;
                 }
 
@@ -632,6 +637,38 @@ public sealed partial class CSharpToGSharpTranslator
             HasPrivateNestedAggregate(original.ContainingType);
     }
 
+    private static bool IsOwnerScopedCompanionShapeEligible(IMethodSymbol method)
+    {
+        IMethodSymbol original = method?.ReducedFrom ?? method;
+        if (original?.Parameters.Length is not > 0
+            || original.DeclaredAccessibility == Accessibility.Private
+            || original.IsExtern
+            || !IsEffectivelyPublic(original.ContainingType)
+            || original.Parameters[0].RefKind != RefKind.None
+            || original.Parameters.Any(parameter => parameter.IsParams)
+            || original.ReturnsByRef
+            || original.ReturnsByRefReadonly)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsEffectivelyPublic(INamedTypeSymbol type)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+        {
+            if (current.DeclaredAccessibility != Accessibility.Public
+                || current.IsFileLocal)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool HasPrivateNestedAggregate(INamedTypeSymbol type)
     {
         if (type == null)
@@ -655,6 +692,11 @@ public sealed partial class CSharpToGSharpTranslator
     private static bool IsReproducibleReceiverCompanion(IMethodSymbol method)
     {
         IMethodSymbol original = method?.ReducedFrom ?? method;
+        if (RequiresOwnerScopedExtension(original))
+        {
+            return IsOwnerScopedCompanionShapeEligible(original);
+        }
+
         return TryGetOwnedExtensionReceiver(original, out INamedTypeSymbol receiver) &&
             original.Parameters[0].RefKind == RefKind.None &&
             HasCrossContainerOwnedExtensionOverload(receiver, original) &&
@@ -1299,10 +1341,6 @@ public sealed partial class CSharpToGSharpTranslator
             return !SymbolEqualityComparer.Default.Equals(original.ContainingAssembly, this.assembly) &&
                 IsReproducibleStaticHelper(original);
         }
-
-        public bool HasReceiverCompanion(MethodDeclarationSyntax method) =>
-            method != null &&
-            this.receiverCompanions.Contains((method.SyntaxTree, method.SpanStart, method.Span.Length));
 
         public bool HasReceiverCompanion(IMethodSymbol method)
         {

@@ -595,9 +595,11 @@ and cs2gs migrations each pass translation, compilation, ILVerify, and
 pipeline parity with those source shapes restored.
 
 Extension-bearing owners with private nested aggregates also keep extension
-bodies in-owner as static helpers; translated receiver calls are rewritten to
-those helpers across sibling projects. This preserves private nested access
-without widening the nested type. The pinned Oahu gate passes all 15 projects,
+bodies in-owner as static helpers. Forwarding receiver companions preserve
+member-form calls across sibling projects when accessibility and overload
+collisions permit, using canonical emitted signatures and deduplicated source /
+metadata views, without moving those bodies or widening the nested type.
+The pinned Oahu gate passes all 15 projects,
 including the former `MethodAccess` and `FieldAccess` ILVerify failures.
 
 ## Pinned code-exploder continuation (#3395)
