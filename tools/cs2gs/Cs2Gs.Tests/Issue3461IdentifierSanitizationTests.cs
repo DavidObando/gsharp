@@ -436,6 +436,77 @@ public sealed class Issue3461IdentifierSanitizationTests
     }
 
     [Fact]
+    public void LexicalNames_ReserveVisibleInstanceAndStaticMembers()
+    {
+        string rendered = Render(
+            """
+            public sealed class InstanceNames
+            {
+                public int params_ = 100;
+
+                public int type_ => 200;
+
+                public int Run(int @params)
+                {
+                    int @type = 7;
+                    return @params + this.params_ + @type + this.type_;
+                }
+            }
+
+            public static class StaticNames
+            {
+                public static int params_ = 1000;
+
+                public static int Run(int @params) => @params + params_;
+            }
+
+            public static class Holder
+            {
+                public static int Run() =>
+                    new InstanceNames().Run(3) + StaticNames.Run(5);
+            }
+            """);
+
+        Assert.Contains("Run(params__ int32)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let type__ = 7", rendered, StringComparison.Ordinal);
+        Assert.Contains("params__ + this.params_", rendered, StringComparison.Ordinal);
+        Assert.Contains("type__ + this.type_", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1315, result.Value);
+    }
+
+    [Fact]
+    public void MethodTypeParameters_ReserveContainingTypeParameters()
+    {
+        string rendered = Render(
+            """
+            public sealed class C<type_>
+            {
+                public @type Echo<@type>(type_ outer, @type inner) => inner;
+            }
+
+            public static class Holder
+            {
+                public static string Run() => new C<int>().Echo<string>(1, "ok");
+            }
+            """);
+
+        Assert.Contains("class C[type_]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](1, \"ok\")", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
     public void ConsumerBeforeRecord_UsesPrecomputedPrimaryParameterName()
     {
         IReadOnlyDictionary<string, string> rendered = RenderFiles(
@@ -578,7 +649,8 @@ public sealed class Issue3461IdentifierSanitizationTests
             public static class Holder
             {
                 public static int Run() =>
-                    @nameof() + @typeof() + @sizeof() + @checked() + @unchecked();
+                    @nameof() + @typeof() + @sizeof() + @checked() + @unchecked() +
+                    @base<int>(1) + @stackalloc<int>(2) + @nameof<int>(4);
             }
             """,
             references);
@@ -588,6 +660,9 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("ImportedContextualStatics.sizeof()", rendered, StringComparison.Ordinal);
         Assert.Contains("ImportedContextualStatics.checked()", rendered, StringComparison.Ordinal);
         Assert.Contains("ImportedContextualStatics.unchecked()", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.base[int32](1)", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.stackalloc[int32](2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStatics.nameof[int32](4)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("func nameof", rendered, StringComparison.Ordinal);
 
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
@@ -596,7 +671,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             new[] { rendered + Environment.NewLine + "Holder.Run()" },
             new EmittedOracleOptions { References = new[] { fixtureAssembly } });
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(31, result.Value);
+        Assert.Equal(38, result.Value);
     }
 
     [Fact]
@@ -1009,4 +1084,13 @@ public static class ImportedContextualStatics
 
     /// <summary>Returns sixteen.</summary>
     public static int @unchecked() => 16;
+
+    /// <summary>Returns generic value.</summary>
+    public static T @base<T>(T value) => value;
+
+    /// <summary>Returns generic value.</summary>
+    public static T @stackalloc<T>(T value) => value;
+
+    /// <summary>Returns generic value.</summary>
+    public static T @nameof<T>(T value) => value;
 }

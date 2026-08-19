@@ -173,22 +173,21 @@ internal sealed class EmittedNameAllocator
                 when parameter.ContainingSymbol is IMethodSymbol method:
                 IEnumerable<string> parameterNames =
                     method.Parameters.Select(candidate => candidate.Name);
-                if (IsPrimaryConstructorParameter(parameter)
-                    && parameter.ContainingType is { } primaryType)
+                if (parameter.ContainingType is { } parameterType)
                 {
                     parameterNames = parameterNames.Concat(
-                        this.GetVisibleTypeMemberNames(primaryType));
+                        this.GetVisibleTypeMemberNames(parameterType));
                 }
 
                 return parameterNames.Distinct(StringComparer.Ordinal).ToArray();
 
             case ITypeParameterSymbol typeParameter
                 when typeParameter.ContainingSymbol is IMethodSymbol method:
-                return method.TypeParameters.Select(candidate => candidate.Name).ToArray();
+                return this.GetVisibleTypeParameterNames(method).ToArray();
 
             case ITypeParameterSymbol typeParameter
                 when typeParameter.ContainingSymbol is INamedTypeSymbol type:
-                return type.TypeParameters.Select(candidate => candidate.Name).ToArray();
+                return this.GetVisibleTypeParameterNames(type).ToArray();
 
             case ILocalSymbol:
             case IRangeVariableSymbol:
@@ -256,19 +255,34 @@ internal sealed class EmittedNameAllocator
             Accessibility.Internal or Accessibility.ProtectedAndInternal =>
                 SymbolEqualityComparer.Default.Equals(
                     member.ContainingAssembly,
-                    derivedType.ContainingAssembly),
+                    derivedType.ContainingAssembly)
+                || member.ContainingAssembly?.GivesAccessTo(
+                    derivedType.ContainingAssembly) == true,
             _ => false,
         };
 
-    private static bool IsPrimaryConstructorParameter(IParameterSymbol parameter) =>
-        parameter.DeclaringSyntaxReferences.Any(reference =>
-            reference.GetSyntax() is ParameterSyntax
+    private IEnumerable<string> GetVisibleTypeParameterNames(ISymbol symbol)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        for (ISymbol current = symbol;
+             current != null;
+             current = current.ContainingSymbol)
+        {
+            switch (current)
             {
-                Parent: ParameterListSyntax
-                {
-                    Parent: TypeDeclarationSyntax,
-                },
-            });
+                case IMethodSymbol method:
+                    names.UnionWith(
+                        method.TypeParameters.Select(parameter => parameter.Name));
+                    break;
+                case INamedTypeSymbol type:
+                    names.UnionWith(
+                        type.TypeParameters.Select(parameter => parameter.Name));
+                    break;
+            }
+        }
+
+        return names;
+    }
 
     private IReadOnlyCollection<string> GetAliasScopeNames(IAliasSymbol alias)
     {
@@ -302,6 +316,11 @@ internal sealed class EmittedNameAllocator
         var names = new HashSet<string>(
             method.Parameters.Select(parameter => parameter.Name),
             StringComparer.Ordinal);
+        if (method.ContainingType is { } containingType)
+        {
+            names.UnionWith(this.GetVisibleTypeMemberNames(containingType));
+        }
+
         foreach (SyntaxReference reference in method.DeclaringSyntaxReferences)
         {
             Microsoft.CodeAnalysis.SyntaxNode root = reference.GetSyntax();
@@ -658,6 +677,7 @@ internal sealed class EmittedNameAllocator
                 }
 
                 if (simple is GenericNameSyntax
+                    && !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty
                     && GSharpSyntaxFacts.IsReservedIdentifier(
                         simple.Identifier.ValueText,
                         GSharpIdentifierNameContext.Index))

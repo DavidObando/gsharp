@@ -280,9 +280,28 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (invocation.Expression is GenericNameSyntax generic)
             {
-                target = new IdentifierExpression(this.EmittedName(
-                    this.context.GetSymbolInfo(invocation).Symbol,
-                    generic.Identifier.ValueText));
+                ISymbol genericSymbol = this.context.GetSymbolInfo(invocation).Symbol;
+                if (genericSymbol is IMethodSymbol
+                    { IsStatic: true, ContainingType: { TypeKind: TypeKind.Class or TypeKind.Struct } genericOwner } genericMethod
+                    && RequiresQualifiedImportedContextualCall(
+                        genericMethod,
+                        includeGenericPrefix: true))
+                {
+                    target = new MemberAccessExpression(
+                        this.StaticQualifierReceiver(
+                            genericOwner,
+                            generic.GetLocation()),
+                        this.EmittedName(
+                            genericMethod,
+                            generic.Identifier.ValueText));
+                }
+                else
+                {
+                    target = new IdentifierExpression(this.EmittedName(
+                        genericSymbol,
+                        generic.Identifier.ValueText));
+                }
+
                 typeArguments = this.MapTypeArguments(generic);
             }
             else if (invocation.Expression is MemberAccessExpressionSyntax member
@@ -362,11 +381,25 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static bool RequiresQualifiedImportedContextualCall(
-            IMethodSymbol method) =>
-            method.DeclaringSyntaxReferences.IsDefaultOrEmpty
-            && GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+            IMethodSymbol method,
+            bool includeGenericPrefix = false)
+        {
+            if (!method.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            var context =
+                GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Invocation;
+            if (includeGenericPrefix)
+            {
+                context |= GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Index;
+            }
+
+            return GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
                 method.Name,
-                GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Invocation);
+                context);
+        }
 
         private static bool TryGetExplicitExtensionReceiverArgument(
             IInvocationOperation invocation,
