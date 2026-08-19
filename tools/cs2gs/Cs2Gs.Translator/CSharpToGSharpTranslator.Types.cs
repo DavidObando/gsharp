@@ -470,9 +470,9 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
-            var arguments = creation.ArgumentList == null
-                ? new List<GExpression>()
-                : this.TranslateCallArguments(creation, creation.ArgumentList.Arguments);
+            var arguments = this.TranslateCallArguments(
+                creation,
+                creation.ArgumentList?.Arguments ?? default);
 
             return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
         }

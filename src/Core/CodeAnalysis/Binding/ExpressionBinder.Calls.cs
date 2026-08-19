@@ -797,6 +797,18 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        if (propRead.Type is NullableTypeSymbol nullableMember
+            && Conversion.IsReferenceLikeTarget(nullableMember.UnderlyingType))
+        {
+            var nullAssertion = BoundUnaryOperator.Bind(
+                SyntaxKind.BangBangToken,
+                nullableMember);
+            propRead = new BoundUnaryExpression(
+                braced,
+                Invariant.Required(nullAssertion, "a null assertion always binds"),
+                propRead);
+        }
+
         var nestedObjectAssignments = ImmutableArray.CreateBuilder<AssignmentExpressionSyntax?>(braced.Elements.Count);
         var hasNonIndexedElement = false;
         var hasSpreadElement = false;

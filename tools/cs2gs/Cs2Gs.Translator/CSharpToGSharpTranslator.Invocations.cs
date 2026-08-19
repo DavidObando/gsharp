@@ -1040,11 +1040,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // gaps that same declaration (issue #1901 follow-up), and a half-
                 // translated callee with no working caller is what we're guarding
                 // against here — so both sides need to stay consistent. A callee from
-                // a REFERENCED assembly (e.g. BCL `Task.WhenAll(params ReadOnlySpan<Task>)`)
-                // is never translated as a declaration in the first place, so there is
-                // nothing to stay consistent with; fall back to the pre-#1901 ordinary
-                // argument translation silently, exactly as it worked before this PR.
-                if (targetMethod?.DeclaringSyntaxReferences.IsEmpty == false)
+                // a REFERENCED method (e.g. BCL
+                // `Task.WhenAll(params ReadOnlySpan<Task>)`) is never translated
+                // as a declaration, so ordinary calls retain the pre-#1901
+                // fallback. Object creation must still gap: dropping its implicit
+                // params-collection argument invents a nonexistent zero-arg
+                // constructor.
+                if (targetMethod?.DeclaringSyntaxReferences.IsEmpty == false
+                    || callSyntax is BaseObjectCreationExpressionSyntax)
                 {
                     this.context.ReportUnsupported(
                         callSyntax,
@@ -1056,6 +1059,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             var translatedArguments = arguments.Take(paramsOrdinal).Select(a => this.TranslateArgument(a)).ToList();
 
+            _ = this.typeMapper.Map(
+                paramsCollectionArg.Parameter.Type,
+                this.context,
+                callSyntax.GetLocation());
             ITypeSymbol paramsElementType = ((INamedTypeSymbol)paramsCollectionArg.Parameter.Type).TypeArguments[0];
             GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callSyntax.GetLocation());
 
@@ -1705,9 +1712,9 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(creation.Type.ToString());
 
-            var arguments = creation.ArgumentList == null
-                ? new List<GExpression>()
-                : this.TranslateCallArguments(creation, creation.ArgumentList.Arguments);
+            var arguments = this.TranslateCallArguments(
+                creation,
+                creation.ArgumentList?.Arguments ?? default);
 
             // A C# delegate creation `new SomeDelegate(target)` wraps a method
             // group, lambda, or another delegate in a named delegate type. G# has
@@ -1819,6 +1826,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (initializer != null && initializer.IsKind(SyntaxKind.ObjectInitializerExpression))
             {
+                if (typeSymbol?.SpecialType == SpecialType.System_Object
+                    && initializer.Expressions.Count == 0)
+                {
+                    return BuildConstruction(type, arguments);
+                }
+
                 // An object initializer `new T { Field = value, ... }` with NO
                 // constructor argument list maps to the canonical G# struct
                 // literal `T{Field: value, ...}` (spec §Struct literals; ADR-0115
@@ -1826,6 +1839,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (!hasCtorArgs
                     && (typeSymbol is ITypeParameterSymbol
                         || (typeSymbol is INamedTypeSymbol
+                            && typeSymbol.SpecialType != SpecialType.System_Object
                             && this.InvokesParameterlessConstructor(creationNode))))
                 {
                     return this.BuildObjectInitializerLiteral(initializer, type);
@@ -1912,7 +1926,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return arguments;
                 }
 
-                materialized.Add(defaultValue);
+                materialized.Add(this.CoerceOperandTo(defaultValue, parameter.Type));
             }
 
             return materialized;
@@ -2184,13 +2198,14 @@ public sealed partial class CSharpToGSharpTranslator
         /// (<c>new object()</c>, <c>new string(' ', n)</c>, target-typed <c>new()</c>)
         /// must spell a callable CLR type name instead — otherwise gsc reports
         /// GS0130 ("Function 'string' doesn't exist"). Most aliases use a
-        /// qualified name; <c>string</c> uses imported <c>String</c> because
-        /// namespace-qualified constructor expressions are not bindable.
+        /// qualified name; <c>object</c>/<c>string</c> use imported
+        /// <c>Object</c>/<c>String</c> because namespace-qualified constructor
+        /// expressions are not bindable.
         /// Non-keyword type names are returned unchanged.
         /// </summary>
         private static string ConstructionCalleeName(string typeName) => typeName switch
         {
-            "object" => "System.Object",
+            "object" => "Object",
             "string" => "String",
             "bool" => "System.Boolean",
             "char" => "System.Char",
