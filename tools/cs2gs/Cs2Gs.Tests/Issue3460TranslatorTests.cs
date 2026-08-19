@@ -370,6 +370,62 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void SystemObjectAlias_ReservesTransitivePartialOwnedExtensionImports()
+        {
+            string printed = TranslateFile(
+                "A.Primary.cs",
+                preservePartialParts: false,
+                ("A.Primary.cs", """
+                    namespace Demo;
+
+                    public partial class Outer
+                    {
+                        public static string Run() =>
+                            new object { }.GetType().FullName!;
+                    }
+                    """),
+                ("B.Partial.cs", """
+                    namespace Demo;
+
+                    public partial class Outer
+                    {
+                        public sealed class Nested
+                        {
+                        }
+                    }
+                    """),
+                ("C.Extensions.cs", """
+                    using __cs2gs_System_Object = System.Text.StringBuilder;
+
+                    namespace Demo;
+
+                    public static class NestedExtensions
+                    {
+                        public static int Measure(this Outer.Nested value) => 1;
+                    }
+                    """));
+
+            Assert.Contains(
+                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "import __cs2gs_System_Object_2 = System.Object",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains("__cs2gs_System_Object_2()", printed, StringComparison.Ordinal);
+            Assert.Contains("class Nested", printed, StringComparison.Ordinal);
+            Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Demo.Outer.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal("System.Object", result.Value);
+        }
+
+        [Fact]
         public void ImportedParameterlessInitializer_PreservesOrderedMembersNestedInitializersAndRuntime()
         {
             string printed = Translate("""

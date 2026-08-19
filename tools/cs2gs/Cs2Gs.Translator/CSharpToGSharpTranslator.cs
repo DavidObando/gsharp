@@ -222,12 +222,17 @@ public sealed partial class CSharpToGSharpTranslator
         // ADR-0145 preserve mode: each part is a standalone declaration, so it
         // must NOT pull in sibling parts' `using` directives — its own imports
         // are all it needs (there is no cross-part member merge to resolve).
+        HashSet<Microsoft.CodeAnalysis.SyntaxTree> contributingTrees =
+            CollectContributingTrees(
+                root,
+                context,
+                partialTypeParts,
+                ownedExtensions,
+                this.preservePartialParts);
         IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
-            this.preservePartialParts
-                ? Enumerable.Empty<Microsoft.CodeAnalysis.SyntaxTree>()
-                : CollectExtraUsingTrees(root, partialTypeParts);
-        extraUsingTrees = extraUsingTrees.Concat(
-            CollectOwnedExtensionUsingTrees(root, context, ownedExtensions));
+            contributingTrees
+                .Where(tree => tree != root.SyntaxTree)
+                .OrderBy(tree => tree.FilePath, StringComparer.Ordinal);
         IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
@@ -873,55 +878,64 @@ public sealed partial class CSharpToGSharpTranslator
         return result;
     }
 
-    // Issue #1910 (gap 3): for every partial type whose PRIMARY part lives in
-    // `root`, collect the distinct `SyntaxTree`s of its OTHER (non-primary)
-    // parts. Those trees' `using` directives are unioned into `root`'s import
-    // block by `TranslateImports`, because merged-in member bodies from those
-    // parts are translated under their own file's semantic model and may rely
-    // on a `using` that only exists there.
-    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectExtraUsingTrees(
-        CompilationUnitSyntax root,
-        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
-    {
-        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
-        foreach (List<TypeDeclarationSyntax> parts in partialTypeParts.Values)
-        {
-            if (parts[0].SyntaxTree != root.SyntaxTree)
-            {
-                continue;
-            }
-
-            foreach (TypeDeclarationSyntax part in parts.Skip(1))
-            {
-                if (part.SyntaxTree != root.SyntaxTree)
-                {
-                    trees.Add(part.SyntaxTree);
-                }
-            }
-        }
-
-        return trees;
-    }
-
-    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectOwnedExtensionUsingTrees(
+    // Builds the cycle-safe closure of source trees whose declarations or
+    // owned extension methods are emitted into the root document. Imports and
+    // alias reservation consume this same set.
+    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectContributingTrees(
         CompilationUnitSyntax root,
         TranslationContext context,
-        OwnedExtensionRegistry ownedExtensions)
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
+        OwnedExtensionRegistry ownedExtensions,
+        bool preservePartialParts)
     {
-        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
-        foreach (TypeDeclarationSyntax declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>
         {
-            if (context.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type ||
-                !ownedExtensions.TryGetMethods(type, out IReadOnlyList<MethodDeclarationSyntax> methods))
+            root.SyntaxTree,
+        };
+        var pending = new Queue<Microsoft.CodeAnalysis.SyntaxTree>();
+        pending.Enqueue(root.SyntaxTree);
+        while (pending.Count > 0)
+        {
+            Microsoft.CodeAnalysis.SyntaxTree tree = pending.Dequeue();
+            if (!preservePartialParts)
             {
-                continue;
+                foreach (List<TypeDeclarationSyntax> parts in partialTypeParts.Values)
+                {
+                    if (parts[0].SyntaxTree != tree)
+                    {
+                        continue;
+                    }
+
+                    foreach (TypeDeclarationSyntax part in parts.Skip(1))
+                    {
+                        if (trees.Add(part.SyntaxTree))
+                        {
+                            pending.Enqueue(part.SyntaxTree);
+                        }
+                    }
+                }
             }
 
-            foreach (MethodDeclarationSyntax method in methods)
+            CompilationUnitSyntax treeRoot = (CompilationUnitSyntax)tree.GetRoot();
+            SemanticModel model = context.Compilation.GetSemanticModel(tree);
+            foreach (TypeDeclarationSyntax declaration in treeRoot
+                .DescendantNodes()
+                .OfType<TypeDeclarationSyntax>())
             {
-                if (method.SyntaxTree != root.SyntaxTree)
+                if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type
+                    || !ownedExtensions.TryGetMethods(
+                        type,
+                        out IReadOnlyList<MethodDeclarationSyntax> methods))
                 {
-                    trees.Add(method.SyntaxTree);
+                    continue;
+                }
+
+                foreach (MethodDeclarationSyntax method in methods)
+                {
+                    if (trees.Add(method.SyntaxTree))
+                    {
+                        pending.Enqueue(method.SyntaxTree);
+                    }
                 }
             }
         }
