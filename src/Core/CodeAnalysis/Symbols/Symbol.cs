@@ -42,6 +42,14 @@ public abstract class Symbol
     public ImmutableArray<BoundAttribute> Attributes { get; private set; } = ImmutableArray<BoundAttribute>.Empty;
 
     /// <summary>
+    /// Gets the syntax nodes that declare this symbol in source, or empty for
+    /// symbols with no source declaration (imported CLR symbols, synthesized
+    /// symbols). The analyzer framework's counterpart to Roslyn's
+    /// <c>DeclaringSyntaxReferences</c> (ADR-0169).
+    /// </summary>
+    public virtual ImmutableArray<Syntax.SyntaxNode> DeclaringSyntaxNodes => ImmutableArray<Syntax.SyntaxNode>.Empty;
+
+    /// <summary>
     /// Writes the symbol to the specified text writer.
     /// </summary>
     /// <param name="writer">The writer to write the symbol to.</param>

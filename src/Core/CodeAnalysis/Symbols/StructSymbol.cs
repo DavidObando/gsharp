@@ -280,6 +280,10 @@ public sealed class StructSymbol : TypeSymbol
     /// <summary>Gets the declaring syntax node.</summary>
     public StructDeclarationSyntax? Declaration { get; private set; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }
 

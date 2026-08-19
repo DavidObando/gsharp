@@ -82,6 +82,10 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <summary>Gets the declaring syntax node.</summary>
     public InterfaceDeclarationSyntax Declaration { get; private set; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>Gets the package this interface lives in.</summary>
     public string PackageName { get; }
 

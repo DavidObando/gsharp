@@ -312,9 +312,9 @@ GS92xx block belongs to the gsgen source-generator host.)
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS9300 | Warning | An analyzer threw an exception; it is disabled for the remainder of the compilation. The message names the analyzer type and the exception. (Roslyn AD0001 parity.) |
+| GS9300 | Warning | An analyzer threw an exception; it is disabled for the remainder of the compilation. The message names the analyzer type and the exception. |
 | GS9301 | Error | An analyzer assembly passed via `/gsanalyzer:` failed to load or contains no analyzers. |
-| GS9302 | Info | An analyzer exceeded its time budget in an interactive host (language server) and was disabled for subsequent runs. |
+| GS9302 | Info | An analyzer exceeded its time budget in an interactive host and was disabled for subsequent runs. |
 | GS9303 | Warning | An analyzer was built against a different `GSharp.Core` version than the host; the load is attempted anyway. |
 | GS9304 | Warning | An analyzer reported a diagnostic whose ID is not declared in its `SupportedDiagnostics`; the diagnostic is suppressed. |
 

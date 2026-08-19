@@ -50,6 +50,10 @@ public sealed class EnumSymbol : TypeSymbol
     /// <summary>Gets the declaring syntax node.</summary>
     public EnumDeclarationSyntax Declaration { get; }
 
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
+        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+
     /// <summary>Gets the enum members in declaration order.</summary>
     public ImmutableArray<EnumMemberSymbol> Members => Definition != null && !ReferenceEquals(Definition, this)
         ? Definition.Members
