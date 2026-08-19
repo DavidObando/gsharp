@@ -54,6 +54,10 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                     delayAsync().GetAwaiter().GetResult();
                     Console.WriteLine(9.ValueAsync().AsTask().GetAwaiter().GetResult());
                     10.ValueNoteAsync().AsTask().GetAwaiter().GetResult();
+                    Func<ValueTask<int>> valueLengthAsync = "five".ValueLengthAsync;
+                    Console.WriteLine(valueLengthAsync().AsTask().GetAwaiter().GetResult());
+                    Func<ValueTask> valueDelayAsync = "later".ValueDelayAsync;
+                    valueDelayAsync().AsTask().GetAwaiter().GetResult();
                     Console.WriteLine("async");
                 }
             }
@@ -107,6 +111,17 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
                 }
 
                 public static async ValueTask ValueNoteAsync(this int value)
+                {
+                    await Task.Yield();
+                }
+
+                public static async ValueTask<int> ValueLengthAsync(this string value)
+                {
+                    await Task.Yield();
+                    return value.Length;
+                }
+
+                public static async ValueTask ValueDelayAsync(this string value)
                 {
                     await Task.Yield();
                 }
@@ -187,6 +202,8 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "DelayTextAsync");
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueAsync");
         Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueNoteAsync");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueLengthAsync");
+        Assert.Contains(extensionShared.Members.OfType<MethodDeclaration>(), method => method.Name == "ValueDelayAsync");
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Identity");
@@ -211,6 +228,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "ValueNoteAsync");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "ValueLengthAsync");
+        Assert.Contains(
+            unit.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "ValueDelayAsync");
 
         string rendered = GSharpPrinter.Print(unit);
         Assert.Contains("private class EntryHelper[T]", rendered, StringComparison.Ordinal);
@@ -539,7 +562,7 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), Source);
         string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
-        File.WriteAllText(goldenPath, "42\n1\n42\n6\n4\n9\nasync\n");
+        File.WriteAllText(goldenPath, "42\n1\n42\n6\n4\n9\n4\nasync\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var app = new CorpusApp(
@@ -604,6 +627,14 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             "await ExtensionOwner.ValueNoteAsync(value)",
             translated,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "let valueLengthAsync () -> ValueTask[int32] = () -> ExtensionOwner.ValueLengthAsync(\"five\")",
+            translated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "let valueDelayAsync () -> ValueTask = () -> ExtensionOwner.ValueDelayAsync(\"later\")",
+            translated,
+            StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);
         Assert.Contains("private open class Helper[TInner]", translated, StringComparison.Ordinal);
         Assert.True(
@@ -659,6 +690,12 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Equal(
             extensionOwner,
             extensionOwner.GetMethod("ValueNoteAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("ValueLengthAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
+        Assert.Equal(
+            extensionOwner,
+            extensionOwner.GetMethod("ValueDelayAsync", BindingFlags.Public | BindingFlags.Static)!.DeclaringType);
 
         Type genericOwner = Assert.Single(
             assembly.GetTypes(),

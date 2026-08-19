@@ -761,8 +761,9 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol original = method?.ReducedFrom ?? method;
             if (!this.HasReceiverCompanion(original)
                 || !this.IsStaticExtensionHelper(original)
-                || original?.ReturnType is not INamedTypeSymbol { Name: "Task" } task
-                || task.ContainingNamespace?.ToDisplayString()
+                || original?.ReturnType is not INamedTypeSymbol taskLike
+                || taskLike.Name is not ("Task" or "ValueTask")
+                || taskLike.ContainingNamespace?.ToDisplayString()
                     != "System.Threading.Tasks")
             {
                 ownerName = null;
