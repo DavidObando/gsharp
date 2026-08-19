@@ -423,7 +423,7 @@ public class Program
         IEnumerable<Diagnostic> mergedDiagnostics = result.Diagnostics;
         if (args.GsAnalyzerPaths.Count > 0)
         {
-            mergedDiagnostics = mergedDiagnostics.Concat(AnalyzerHost.Run(compilation, args.GsAnalyzerPaths));
+            mergedDiagnostics = mergedDiagnostics.Concat(GSharp.Core.CodeAnalysis.Analyzers.GSharpAnalyzerHost.Run(compilation, args.GsAnalyzerPaths));
         }
 
         // Apply /gsdiag, /nowarn, /warnaserror filtering.

@@ -242,6 +242,17 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             args.Add(QuoteIfNeeded($"/gsanalyzer:{analyzer.ItemSpec}"));
         }
 
+        // ADR-0169: lower .editorconfig dotnet_diagnostic.<ID>.severity entries
+        // to /gsdiag: switches so severity configuration works without gsc ever
+        // parsing editorconfig files. Sorted for a deterministic rsp.
+        if (!string.IsNullOrEmpty(this.BasePath))
+        {
+            foreach (var entry in EditorConfigSeverityReader.ReadSeverities(this.BasePath!).OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                args.Add($"/gsdiag:{entry.Key}={entry.Value}");
+            }
+        }
+
         foreach (var resource in this.Resources)
         {
             var name = resource.GetMetadata("LogicalName");
