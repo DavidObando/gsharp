@@ -183,11 +183,17 @@ internal sealed class EmittedNameAllocator
 
             case ITypeParameterSymbol typeParameter
                 when typeParameter.ContainingSymbol is IMethodSymbol method:
-                return this.GetVisibleTypeParameterNames(method).ToArray();
+                return this.GetVisibleTypeParameterNames(method)
+                    .Concat(this.GetLexicallyVisibleTypeNames(typeParameter))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
 
             case ITypeParameterSymbol typeParameter
                 when typeParameter.ContainingSymbol is INamedTypeSymbol type:
-                return this.GetVisibleTypeParameterNames(type).ToArray();
+                return this.GetVisibleTypeParameterNames(type)
+                    .Concat(this.GetLexicallyVisibleTypeNames(typeParameter))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
 
             case ILocalSymbol:
             case IRangeVariableSymbol:
@@ -303,6 +309,32 @@ internal sealed class EmittedNameAllocator
                     {
                         names.Add(SourceName(nested));
                     }
+                }
+            }
+        }
+
+        return names;
+    }
+
+    private IEnumerable<string> GetLexicallyVisibleTypeNames(
+        ITypeParameterSymbol typeParameter)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (SyntaxReference reference in typeParameter.DeclaringSyntaxReferences)
+        {
+            SemanticModel model = this.compilation.GetSemanticModel(reference.SyntaxTree);
+            foreach (ISymbol symbol in model.LookupNamespacesAndTypes(
+                reference.Span.Start))
+            {
+                switch (symbol)
+                {
+                    case INamedTypeSymbol type:
+                        names.Add(SourceName(type));
+                        break;
+                    case IAliasSymbol alias
+                        when alias.Target is INamedTypeSymbol:
+                        names.Add(alias.Name);
+                        break;
                 }
             }
         }

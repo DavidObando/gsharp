@@ -26,3 +26,11 @@ namespace class_
     {
     }
 }
+
+namespace ImportedVisible
+{
+    /// <summary>Imported namespace-visible type used by generic scope tests.</summary>
+    public sealed class type_
+    {
+    }
+}

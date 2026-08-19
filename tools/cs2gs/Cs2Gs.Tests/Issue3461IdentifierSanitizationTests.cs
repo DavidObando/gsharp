@@ -537,6 +537,103 @@ public sealed class Issue3461IdentifierSanitizationTests
     }
 
     [Fact]
+    public void MethodTypeParameters_ReserveSameNamespaceTypes()
+    {
+        string rendered = Render(
+            """
+            namespace Demo;
+
+            public sealed class type_ { }
+
+            public sealed class C
+            {
+                public @type Echo<@type>(type_ outer, @type inner) => inner;
+            }
+
+            public static class Holder
+            {
+                public static string Run() =>
+                    new C().Echo<string>(new type_(), "ok");
+            }
+            """);
+
+        Assert.Contains("class type_", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](type_(), \"ok\")", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
+    public void MethodTypeParameters_ReserveUsingAliases()
+    {
+        string rendered = Render(
+            """
+            using type_ = System.String;
+
+            public sealed class C
+            {
+                public @type Echo<@type>(type_ outer, @type inner) => inner;
+            }
+
+            public static class Holder
+            {
+                public static string Run() =>
+                    new C().Echo<string>("outer", "ok");
+            }
+            """);
+
+        Assert.Contains("Echo[type__](outer string, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](\"outer\", \"ok\")", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
+    public void MethodTypeParameters_ReserveImportedNamespaceTypes()
+    {
+        string fixtureAssembly = typeof(ImportedVisible.type_).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixtureAssembly))
+            .ToArray();
+        string rendered = Render(
+            """
+            using ImportedVisible;
+
+            public sealed class C
+            {
+                public @type Echo<@type>(type_ outer, @type inner) => inner;
+            }
+
+            public static class Holder
+            {
+                public static string Run() =>
+                    new C().Echo<string>(new type_(), "ok");
+            }
+            """,
+            references);
+
+        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](type_(), \"ok\")", rendered, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
+        TranslationTestValidation.AssertBinds(resolver, rendered);
+        var result = EmittedOracle.Evaluate(
+            new[] { rendered + Environment.NewLine + "Holder.Run()" },
+            new EmittedOracleOptions { References = new[] { fixtureAssembly } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
     public void ConsumerBeforeRecord_UsesPrecomputedPrimaryParameterName()
     {
         IReadOnlyDictionary<string, string> rendered = RenderFiles(
