@@ -127,6 +127,7 @@ public sealed class ReferenceResolver : IDisposable
     // suffix for open generics — exactly the spellings Assembly.GetType accepts
     // and the binder already constructs (e.g. "Ns.Type`1").
     private readonly Lazy<Dictionary<string, Type>> typeNameIndex;
+    private readonly Lazy<Dictionary<string, string>> emittedTypeNameIndex;
 
     // ADR-0107 (cold-start cache): an optional, externally-supplied
     // full-name -> declaring-assembly-index map that stands in for the eager
@@ -185,6 +186,12 @@ public sealed class ReferenceResolver : IDisposable
         this.runtimeContext = runtimeContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies);
+        this.emittedTypeNameIndex = new Lazy<Dictionary<string, string>>(
+            () => BuildEmittedTypeNameIndex(
+                this.warmNameIndex is { } warm
+                    ? (IEnumerable<string>)warm.Keys
+                    : this.typeNameIndex.Value.Keys),
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     private sealed class NotFoundSentinel
@@ -1193,7 +1200,6 @@ public sealed class ReferenceResolver : IDisposable
 
             if (TryFindRawTypeName(
                     fullName,
-                    warmNameIndex.Keys,
                     out string? rawWarmName)
                 && warmNameIndex.TryGetValue(rawWarmName, out assemblyIndex)
                 && TryMaterializeWarmType(rawWarmName, assemblyIndex, out warm))
@@ -1216,7 +1222,6 @@ public sealed class ReferenceResolver : IDisposable
 
         if (TryFindRawTypeName(
                 fullName,
-                typeNameIndex.Value.Keys,
                 out string? rawName)
             && typeNameIndex.Value.TryGetValue(rawName, out indexed))
         {
@@ -1229,29 +1234,29 @@ public sealed class ReferenceResolver : IDisposable
         return false;
     }
 
-    private static bool TryFindRawTypeName(
+    private bool TryFindRawTypeName(
         string emittedName,
-        IEnumerable<string> rawNames,
         [NotNullWhen(true)] out string? rawName)
+    {
+        return this.emittedTypeNameIndex.Value.TryGetValue(
+            emittedName,
+            out rawName);
+    }
+
+    private static Dictionary<string, string> BuildEmittedTypeNameIndex(
+        IEnumerable<string> rawNames)
     {
         string[] names = rawNames.ToArray();
         Dictionary<string, HashSet<string>> scopes = BuildTypeNameScopes(names);
+        var index = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (string candidate in names)
         {
             string canonical = CanonicalTypeName(candidate, scopes);
-            if (string.Equals(canonical, emittedName, StringComparison.Ordinal)
-                || string.Equals(
-                    canonical.Replace('+', '.'),
-                    emittedName,
-                    StringComparison.Ordinal))
-            {
-                rawName = candidate;
-                return true;
-            }
+            index.TryAdd(canonical, candidate);
+            index.TryAdd(canonical.Replace('+', '.'), candidate);
         }
 
-        rawName = null;
-        return false;
+        return index;
     }
 
     private static Dictionary<string, HashSet<string>> BuildTypeNameScopes(
