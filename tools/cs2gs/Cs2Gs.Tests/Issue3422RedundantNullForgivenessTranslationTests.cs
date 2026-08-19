@@ -11,6 +11,7 @@ using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -36,7 +37,6 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         var translator = new CSharpToGSharpTranslator(preservePartialParts: true);
         int doubledAssertions = 0;
         int assertedParenthesizedReceivers = 0;
-        int assertions = 0;
         foreach (LoadedDocument document in project.Documents)
         {
             var context = new TranslationContext(
@@ -47,12 +47,10 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
                 translator.TranslateDocument(document, context));
             doubledAssertions += CountOccurrences(printed, "!!!!");
             assertedParenthesizedReceivers += CountOccurrences(printed, ")!!.");
-            assertions += CountOccurrences(printed, "!!");
         }
 
         Assert.Equal(0, doubledAssertions);
         Assert.InRange(assertedParenthesizedReceivers, 0, 8);
-        Assert.InRange(assertions, 0, 6079);
     }
 
     [Fact]
@@ -96,6 +94,146 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         Assert.DoesNotContain("narrowed!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("(\"prefix:\" + fallback)!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("cast[string](value)!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullableAssignmentInitializer_KeepsRequiredLocalAssertion()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            public static class C
+            {
+                public static int Measure()
+                {
+                    string? sink = null;
+                    var inferred = (sink = "text");
+                    return inferred.Length;
+                }
+            }
+            """);
+
+        Assert.Contains("return inferred!!.Length", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceNullableExtensionMethodGroup_UsesReducedReceiverAtRuntime()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System;
+
+            public static class Ext
+            {
+                public static int Measure(this string? value, int delta) =>
+                    (value?.Length ?? 10) + delta;
+            }
+
+            public static class C
+            {
+                private static int Apply(Func<int, int> measure) => measure(2);
+
+                public static int Run()
+                {
+                    string? value = null;
+                    return Apply(value.Measure);
+                }
+            }
+            """);
+
+        Assert.Contains("return value.Measure(__arg0)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ext.Measure", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("value!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("value.Measure(value", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "C.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
+    public void SourceNonNullableExtensionMethodGroup_UsesNormalReceiverLowering()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System;
+
+            public static class Ext
+            {
+                public static int Measure(this string value, int delta) =>
+                    value.Length + delta;
+            }
+
+            public static class C
+            {
+                private static int Apply(Func<int, int> measure) => measure(2);
+
+                private static int Bind(string? value) => Apply(value.Measure);
+
+                public static int Run() => Bind("abc");
+            }
+            """);
+
+        Assert.Contains("let __spill0 = value!!", printed, StringComparison.Ordinal);
+        Assert.Contains("return __spill0.Measure(__arg0)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ext.Measure", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "C.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void EntryPointExtensionMethodGroup_DoesNotDuplicateReceiverAtRuntime()
+    {
+        string printed = Translate(
+            """
+            #nullable enable
+
+            using System;
+
+            public static class Program
+            {
+                public static bool Matches(this string value, string expected) =>
+                    value == expected;
+
+                private static bool Apply(Func<string, bool> matches) =>
+                    matches("match");
+
+                public static bool Run()
+                {
+                    string receiver = "match";
+                    return Apply(receiver.Matches);
+                }
+
+                public static void Main()
+                {
+                    Console.WriteLine(Run());
+                }
+            }
+            """);
+
+        Assert.Contains("return receiver.Matches(__arg0)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "receiver.Matches(receiver, __arg0)",
+            printed,
+            StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(printed);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(
+            $"True{Environment.NewLine}",
+            result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]

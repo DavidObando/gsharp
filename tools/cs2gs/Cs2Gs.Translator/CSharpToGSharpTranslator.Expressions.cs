@@ -1141,7 +1141,7 @@ public sealed partial class CSharpToGSharpTranslator
                         : this.GSharpExpressionIsStaticallyNonNull(binary.Right);
 
                 case AssignmentExpressionSyntax assignment:
-                    if (this.PatternLocalUsesNullableStorage(assignment.Left))
+                    if (!this.AssignmentResultHasNonNullStaticType(assignment))
                     {
                         return false;
                     }
@@ -1158,11 +1158,19 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-            if (symbol is ILocalSymbol inferredLocal
-                && (this.LocalBindingInfersStaticallyNonNullInitializer(inferredLocal)
-                    || this.ForEachBindingInfersNonNullElement(inferredLocal)))
+            if (symbol is ILocalSymbol inferredLocal)
             {
-                return true;
+                if (this.TryGetInferredLocalStaticNonNull(
+                    inferredLocal,
+                    out bool initializerIsNonNull))
+                {
+                    return initializerIsNonNull;
+                }
+
+                if (this.ForEachBindingInfersNonNullElement(inferredLocal))
+                {
+                    return true;
+                }
             }
 
             ITypeSymbol type = symbol switch
@@ -1186,10 +1194,12 @@ public sealed partial class CSharpToGSharpTranslator
                 && (symbol == null || !this.ShouldPromoteToNullableReference(symbol));
         }
 
-        private bool LocalBindingInfersStaticallyNonNullInitializer(ILocalSymbol local)
+        private bool TryGetInferredLocalStaticNonNull(
+            ILocalSymbol local,
+            out bool isNonNull)
         {
-            if (this.IsLocalReassigned(local)
-                || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            isNonNull = false;
+            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                     is not VariableDeclaratorSyntax
                     {
                         Initializer.Value: { } initializer,
@@ -1220,7 +1230,8 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return this.GSharpExpressionIsStaticallyNonNull(initializer);
+            isNonNull = this.GSharpExpressionIsStaticallyNonNull(initializer);
+            return true;
         }
 
         private bool ForEachBindingInfersNonNullElement(ILocalSymbol local)
@@ -1392,6 +1403,35 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        private bool AssignmentResultHasNonNullStaticType(
+            AssignmentExpressionSyntax assignment)
+        {
+            if (this.PatternLocalUsesNullableStorage(assignment.Left))
+            {
+                return false;
+            }
+
+            ISymbol target = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ITypeSymbol targetType = target switch
+            {
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => this.context.GetTypeInfo(assignment.Left).Type,
+            };
+            if (targetType is { IsReferenceType: true })
+            {
+                return this.TargetWillRemainNonNullableReference(
+                    targetType,
+                    target);
+            }
+
+            return targetType != null
+                && targetType.OriginalDefinition?.SpecialType
+                    != SpecialType.System_Nullable_T;
         }
 
         private bool HasLoopCarriedWrite(

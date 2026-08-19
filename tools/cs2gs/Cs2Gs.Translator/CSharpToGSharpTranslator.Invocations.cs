@@ -1394,15 +1394,62 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var parameters = new List<Parameter>(invoke.Parameters.Length);
             var arguments = new List<GExpression>(invoke.Parameters.Length + 1);
+            GExpression target = null;
+            IMethodSymbol original = method.ReducedFrom ?? method;
             if (expression is MemberAccessExpressionSyntax extensionMember
-                && method.IsStatic
-                && method.IsExtensionMethod
-                && method.Parameters.Length == invoke.Parameters.Length + 1)
+                && original.IsExtensionMethod
+                && this.context.GetSymbolInfo(extensionMember.Expression).Symbol
+                    is not INamedTypeSymbol
+                && (method.MethodKind == MethodKind.ReducedExtension
+                    || original.Parameters.Length == invoke.Parameters.Length + 1))
             {
-                GExpression receiver = this.CaptureMethodGroupReceiver(
-                    this.TranslateReceiverWithNullForgiveness(extensionMember.Expression),
-                    extensionMember.Expression);
-                arguments.Add(PassStaticExtensionHelperReceiver(receiver, method));
+                // Target the emitted G# shape: migrated source extensions use
+                // receiver syntax unless only a static helper survives.
+                bool sourceDefined = !original.DeclaringSyntaxReferences.IsDefaultOrEmpty
+                    || this.KnownCompilations().Any(compilation =>
+                        SameAssembly(
+                            compilation.Assembly,
+                            original.ContainingAssembly));
+                bool useStaticHelper = this.TryGetStaticExtensionHelper(
+                    original,
+                    out string helperOwner,
+                    out string helperName)
+                    || !sourceDefined;
+                GExpression receiver;
+                if (useStaticHelper)
+                {
+                    receiver = this.ForgiveNullableReferenceValue(
+                        extensionMember.Expression,
+                        this.TranslateExpression(extensionMember.Expression),
+                        original.Parameters[0].Type,
+                        original.Parameters[0],
+                        includePromotedValue: true);
+                    receiver = this.CaptureMethodGroupReceiver(
+                        receiver,
+                        extensionMember.Expression);
+                    arguments.Add(PassStaticExtensionHelperReceiver(receiver, original));
+                    target = new MemberAccessExpression(
+                        helperOwner != null
+                            ? new IdentifierExpression(helperOwner)
+                            : this.StaticQualifierReceiver(
+                                original.ContainingType,
+                                expression.GetLocation()),
+                        helperName ?? SanitizeIdentifier(original.Name));
+                }
+                else
+                {
+                    GExpression translatedReceiver =
+                        this.MemberBindsToNullableThisExtension(extensionMember)
+                            ? this.TranslateExpression(extensionMember.Expression)
+                            : this.TranslateReceiverWithNullForgiveness(
+                                extensionMember.Expression);
+                    receiver = this.CaptureMethodGroupReceiver(
+                        translatedReceiver,
+                        extensionMember.Expression);
+                    target = new MemberAccessExpression(
+                        receiver,
+                        SanitizeIdentifier(original.Name));
+                }
             }
 
             for (int index = 0; index < invoke.Parameters.Length; index++)
@@ -1428,7 +1475,7 @@ public sealed partial class CSharpToGSharpTranslator
                 arguments.Add(forwarded);
             }
 
-            GExpression target = this.TranslateMethodGroupInvocationTarget(
+            target ??= this.TranslateMethodGroupInvocationTarget(
                 expression,
                 method);
             IReadOnlyList<GTypeReference> typeArguments = method.IsGenericMethod
