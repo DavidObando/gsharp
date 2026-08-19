@@ -105,7 +105,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, identifier.GetLocation()),
-                    SanitizeIdentifier(identifier.Identifier.Text));
+                    this.EmittedName(staticMember, identifier.Identifier.ValueText));
             }
 
             // A bare type used as an expression receiver (Path.Combine,
@@ -124,7 +124,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return new IdentifierExpression("__underscore");
             }
 
-            return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
+            return new IdentifierExpression(this.EmittedName(identifier, identifier.Identifier));
         }
 
         private static bool IsDirectWrite(IdentifierNameSyntax identifier) =>
@@ -449,7 +449,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // source type elsewhere in the compilation.
                     return new MemberAccessExpression(
                         this.StaticQualifierReceiver(extOwner, member.GetLocation()),
-                        SanitizeIdentifier(member.Name.Identifier.Text));
+                        this.EmittedName(extSymbol, member.Name.Identifier.ValueText));
                 }
 
                 if (extSymbol is IPropertySymbol)
@@ -467,7 +467,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         return new MemberAccessExpression(
                             this.TranslateExpression(member.Expression),
-                            SanitizeIdentifier(member.Name.Identifier.Text));
+                            this.EmittedName(extSymbol, member.Name.Identifier.ValueText));
                     }
 
                     // An instance extension property has no receiver-clause form
@@ -476,7 +476,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // a bare property read becomes a zero-argument call.
                     GExpression extReceiver = this.TranslateReceiverWithNullForgiveness(member.Expression);
                     return new InvocationExpression(
-                        new MemberAccessExpression(extReceiver, SanitizeIdentifier(member.Name.Identifier.Text)),
+                        new MemberAccessExpression(
+                            extReceiver,
+                            this.EmittedName(extSymbol, member.Name.Identifier.ValueText)),
                         new List<GExpression>(),
                         null);
                 }
@@ -557,7 +559,8 @@ public sealed partial class CSharpToGSharpTranslator
                     : this.TranslateReceiverWithNullForgiveness(member.Expression);
             }
 
-            string memberName = member.Name.Identifier.Text;
+            string memberName = member.Name.Identifier.ValueText;
+            ISymbol memberSymbol = this.context.GetSymbolInfo(member).Symbol;
 
             // Issue #1905: C# pointer member access (`p->X`) and plain member
             // access (`p.X`) both parse as MemberAccessExpressionSyntax,
@@ -581,7 +584,7 @@ public sealed partial class CSharpToGSharpTranslator
             // positional and carry no element names (ADR-0115 §B.4). The default
             // `.ItemN` access already resolves; only named-element access needs the
             // rewrite, detected via the bound tuple-element field symbol.
-            if (this.context.GetSymbolInfo(member).Symbol is IFieldSymbol field &&
+            if (memberSymbol is IFieldSymbol field &&
                 field.ContainingType is { IsTupleType: true })
             {
                 IFieldSymbol positional = field.CorrespondingTupleField ?? field;
@@ -593,7 +596,10 @@ public sealed partial class CSharpToGSharpTranslator
             // synthesized `data class` whose primary-constructor parameters
             // preserve real member names — no rewrite needed; `x.A` stays
             // `x.A` on the G# side, exactly like the C# anonymous-type property.
-            return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
+            return new MemberAccessExpression(
+                target,
+                this.EmittedName(memberSymbol, memberName),
+                isArrow);
         }
 
         /// <summary>

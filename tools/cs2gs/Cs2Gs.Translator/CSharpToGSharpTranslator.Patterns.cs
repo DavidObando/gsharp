@@ -52,7 +52,9 @@ public sealed partial class CSharpToGSharpTranslator
                         return new TypeExpression(typeRef);
                     }
 
-                    return new IdentifierExpression(SanitizeIdentifier(generic.Identifier.Text));
+                    return new IdentifierExpression(this.EmittedName(
+                        this.context.GetSymbolInfo(generic).Symbol,
+                        generic.Identifier.ValueText));
 
                 case ThisExpressionSyntax:
                     return new ThisExpression();
@@ -281,6 +283,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // print emits a bare property-style access on a func member
                     // — a silent-wrong `?.` read.
                     string bindingMemberName = this.GetPatternMemberName(memberBinding.Name);
+                    string emittedBindingMemberName = this.EmittedName(
+                        this.context.GetSymbolInfo(memberBinding).Symbol,
+                        bindingMemberName);
                     if (this.context.GetSymbolInfo(memberBinding).Symbol is IPropertySymbol extBindingProperty
                         && !extBindingProperty.IsStatic
                         && TryGetExtensionBlockOwner(extBindingProperty, out _))
@@ -289,7 +294,7 @@ public sealed partial class CSharpToGSharpTranslator
                             new MemberAccessExpression(
                                 this.state.ConditionalReceiverReplacement ??
                                     new ConditionalReceiverExpression(),
-                                SanitizeIdentifier(bindingMemberName)),
+                                emittedBindingMemberName),
                             new List<GExpression>(),
                             null);
                     }
@@ -300,7 +305,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return new MemberAccessExpression(
                         this.state.ConditionalReceiverReplacement ??
                             new ConditionalReceiverExpression(),
-                        SanitizeIdentifier(bindingMemberName));
+                        emittedBindingMemberName);
 
                 case ElementBindingExpressionSyntax elementBinding:
                     GExpression bindingReceiver =
@@ -345,7 +350,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case AliasQualifiedNameSyntax aliasQualified:
                     // `global::System` → drop the `global::` alias and keep the name.
-                    return new IdentifierExpression(aliasQualified.Name.Identifier.Text);
+                    return new IdentifierExpression(this.EmittedName(
+                        aliasQualified.Name,
+                        aliasQualified.Name.Identifier));
 
                 case AssignmentExpressionSyntax nestedAssignment:
                     // A value-position deconstruction assignment may already have
@@ -700,7 +707,7 @@ public sealed partial class CSharpToGSharpTranslator
                     storageType = MakeNullable(storageType);
                 }
 
-                string name = SanitizeIdentifier(binder.Name);
+                string name = this.EmittedName(binder, binder.Name);
                 var local = new IdentifierExpression(name);
                 declarations.Add(new LocalDeclarationStatement(
                     BindingKind.Var,
@@ -1277,7 +1284,11 @@ public sealed partial class CSharpToGSharpTranslator
                     if (sub.NameColon != null)
                     {
                         string memberName = this.GetSubpatternMemberName(sub);
-                        GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
+                        GExpression memberAccess = new MemberAccessExpression(
+                            memberReceiver,
+                            this.EmittedName(
+                                this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                memberName));
                         ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
                         memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
                     }
@@ -1316,14 +1327,21 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
+                    string memberName = sub.NameColon?.Name.Identifier.ValueText ?? memberNames?[i];
                     if (memberName == null)
                     {
                         this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
                         continue;
                     }
 
-                    GExpression memberAccess = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(memberName));
+                    ISymbol memberSymbol = sub.NameColon != null
+                        ? this.context.GetSymbolInfo(sub.NameColon.Name).Symbol
+                        : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
+                            .GetMembers(memberName)
+                            .FirstOrDefault();
+                    GExpression memberAccess = new MemberAccessExpression(
+                        memberReceiver,
+                        this.EmittedName(memberSymbol, memberName));
                     GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
@@ -1406,12 +1424,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return (tupleField.CorrespondingTupleField ?? tupleField).Name;
             }
 
-            return name.Identifier.Text;
+            return name.Identifier.ValueText;
         }
 
         // Splits an extended property subpattern's dotted member path
         // (`Start.X`, `A.B.C`, ...) into its leaf-to-root identifier chain
-        // (`["Start", "X"]`, `["A", "B", "C"]`), unsanitized. Shared by the
+        // (`["Start", "X"]`, `["A", "B", "C"]`), using each bound member's
+        // allocated emitted name. Shared by the
         // is-form guard builder (<see cref="TranslateExtendedPropertyMemberTest"/>)
         // and the switch-arm nested-field builder (<see cref="ExtendedPropertyFieldTree"/>).
         private List<string> SplitMemberPath(ExpressionSyntax memberPath)
@@ -1420,12 +1439,16 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax current = memberPath;
             while (current is MemberAccessExpressionSyntax memberAccess)
             {
-                names.Insert(0, this.GetPatternMemberName(memberAccess.Name));
+                names.Insert(0, this.EmittedName(
+                    this.context.GetSymbolInfo(memberAccess).Symbol,
+                    this.GetPatternMemberName(memberAccess.Name)));
                 current = memberAccess.Expression;
             }
 
             string rootName = current is SimpleNameSyntax simpleName
-                ? this.GetPatternMemberName(simpleName)
+                ? this.EmittedName(
+                    this.context.GetSymbolInfo(simpleName).Symbol,
+                    this.GetPatternMemberName(simpleName))
                 : current.ToString();
             names.Insert(0, rootName);
             return names;
@@ -1475,7 +1498,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression guard = null;
             for (int i = 0; i < names.Count - 1; i++)
             {
-                memberReceiver = new MemberAccessExpression(memberReceiver, SanitizeIdentifier(names[i]));
+                memberReceiver = new MemberAccessExpression(memberReceiver, names[i]);
 
                 ITypeSymbol declaredType = this.ResolveDeclaredReceiverType(
                     this.context.GetTypeInfo(intermediateExprs[i]).Type, intermediateExprs[i]);
@@ -1486,7 +1509,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            string leafName = SanitizeIdentifier(names[^1]);
+            string leafName = names[^1];
             GExpression finalMemberAccess = new MemberAccessExpression(memberReceiver, leafName);
             ITypeSymbol leafType = this.context.GetTypeInfo(memberPath).Type;
             GExpression leafTest = this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true);

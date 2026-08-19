@@ -217,7 +217,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 results.Add(new LocalDeclarationStatement(
                     binding,
-                    SanitizeIdentifier(declarator.Identifier.Text),
+                    this.EmittedName(declarator, declarator.Identifier),
                     type,
                     initializer,
                     isUsing: isUsing,
@@ -249,7 +249,7 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                string name = SanitizeIdentifier(declarator.Identifier.Text);
+                string name = this.EmittedName(localSymbol, declarator.Identifier.ValueText);
 
                 GExpression initializer = declarator.Initializer?.Value is RefExpressionSyntax refInit
                     ? this.TranslateRefExpression(refInit)
@@ -892,7 +892,9 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateOutVarDesignation(SingleVariableDesignationSyntax single)
         {
             this.ReportIfIndexOrRangeTypedDesignation(single);
-            return new OutArgumentExpression("out var", SanitizeIdentifier(single.Identifier.Text));
+            return new OutArgumentExpression(
+                "out var",
+                this.EmittedName(single, single.Identifier));
         }
 
         // Issue #1967: an Index/Range-typed LINQ query range variable
@@ -1391,7 +1393,7 @@ public sealed partial class CSharpToGSharpTranslator
             // prologue); the label is attached to the FIRST emitted statement
             // only — C# source has no way to target a position mid-expansion,
             // so this is a faithful mapping.
-            string label = SanitizeIdentifier(labeledStatement.Identifier.Text);
+            string label = this.EmittedName(labeledStatement, labeledStatement.Identifier);
             List<GStatement> inner = this.TranslateStatement(labeledStatement.Statement).ToList();
             if (inner.Count == 0)
             {
@@ -1428,7 +1430,8 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     // Plain `goto label;` — Expression is the label name as an
                     // IdentifierNameSyntax (verified against Roslyn 4.14).
-                    string label = SanitizeIdentifier(((IdentifierNameSyntax)gotoStatement.Expression).Identifier.Text);
+                    var labelName = (IdentifierNameSyntax)gotoStatement.Expression;
+                    string label = this.EmittedName(labelName, labelName.Identifier);
                     return new[] { (GStatement)new GotoStatement(label) };
             }
         }
@@ -1571,7 +1574,9 @@ public sealed partial class CSharpToGSharpTranslator
                     exceptionType = typeSymbol != null
                         ? this.typeMapper.Map(typeSymbol, this.context, catchClause.Declaration.Type.GetLocation())
                         : new NamedTypeReference(catchClause.Declaration.Type.ToString());
-                    variableName = SanitizeIdentifier(catchClause.Declaration.Identifier.Text);
+                    variableName = this.EmittedName(
+                        catchClause.Declaration,
+                        catchClause.Declaration.Identifier);
                     if (string.IsNullOrEmpty(variableName))
                     {
                         // `catch (Exception)` with no binding: synthesize one so the
@@ -1681,8 +1686,8 @@ public sealed partial class CSharpToGSharpTranslator
                 GTypeReference clauseType = typeSymbol != null
                     ? this.typeMapper.Map(typeSymbol, this.context, clause.GetLocation())
                     : new NamedTypeReference("Exception");
-                string originalName = clause.Declaration != null && !string.IsNullOrEmpty(clause.Declaration.Identifier.Text)
-                    ? SanitizeIdentifier(clause.Declaration.Identifier.Text)
+                string originalName = clause.Declaration != null && !string.IsNullOrEmpty(clause.Declaration.Identifier.ValueText)
+                    ? this.EmittedName(clause.Declaration, clause.Declaration.Identifier)
                     : sharedBinder;
 
                 string previousCatch = this.state.CurrentCatchVariable;
@@ -2036,7 +2041,8 @@ public sealed partial class CSharpToGSharpTranslator
                     receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
                 {
                     GExpression qualifiedReceiver = new MemberAccessExpression(
-                        new ThisExpression(), SanitizeIdentifier(receiverId.Identifier.Text));
+                        new ThisExpression(),
+                        this.EmittedName(receiverId, receiverId.Identifier));
 
                     if (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
                         this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))
@@ -2045,7 +2051,8 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     return new MemberAccessExpression(
-                        qualifiedReceiver, SanitizeIdentifier(member.Name.Identifier.Text));
+                        qualifiedReceiver,
+                        this.EmittedName(member, member.Name.Identifier));
                 }
 
                 if (this.ReceiverNeedsNullForgiveness(member.Expression, isDereferenceReceiver: true) ||
@@ -2056,7 +2063,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     return new MemberAccessExpression(
                         EnsureNonNullAssertion(this.TranslateExpression(member.Expression)),
-                        SanitizeIdentifier(member.Name.Identifier.Text));
+                        this.EmittedName(member, member.Name.Identifier));
                 }
             }
 

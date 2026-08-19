@@ -142,7 +142,7 @@ namespace Corpus.Issue1884
 }
 ");
 
-        // `goto` is a G# reserved word (see GSharpReservedWords), so the C#
+        // `goto` is a G# reserved word (see SyntaxFacts), so the C#
         // verbatim label `@goto` must be suffixed to a valid G# identifier at
         // both its declaration and every reference.
         Assert.Contains("goto_:", rendered, StringComparison.Ordinal);

@@ -120,7 +120,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            string name = SanitizeIdentifier(designation.Identifier.Text);
+            string name = this.EmittedName(designation, designation.Identifier);
             GExpression residualGuard = null;
             if (residualPattern != null
                 && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
@@ -358,7 +358,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            string name = SanitizeIdentifier(designation.Identifier.Text);
+            string name = this.EmittedName(designation, designation.Identifier);
             GExpression residualGuard = null;
             if (residualPattern != null
                 && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
@@ -588,7 +588,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            string name = SanitizeIdentifier(designation.Identifier.Text);
+            string name = this.EmittedName(designation, designation.Identifier);
             GExpression residualGuard = null;
             if (residualPattern != null
                 && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))
@@ -704,7 +704,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            string name = SanitizeIdentifier(designation.Identifier.Text);
+            string name = this.EmittedName(designation, designation.Identifier);
             GExpression residualGuard = null;
             if (residualPattern != null
                 && !this.TryTranslateIfLetResidualPattern(residualPattern, name, out residualGuard))

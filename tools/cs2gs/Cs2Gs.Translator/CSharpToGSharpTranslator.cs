@@ -15,6 +15,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
+using IdentifierNameContext = GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext;
 
 namespace Cs2Gs.Translator;
 
@@ -209,7 +210,10 @@ public sealed partial class CSharpToGSharpTranslator
         OwnedExtensionRegistry ownedExtensions =
             GetOrCollectOwnedExtensions(context.Compilation).Filter(this.retainedFilePaths);
 
-        string package = this.packageFilter ?? this.ResolvePackage(root, context);
+        EmittedNameAllocator nameAllocator = EmittedNameAllocator.For(context.Compilation);
+        string package = this.packageFilter is null
+            ? this.ResolvePackage(root, context, nameAllocator)
+            : this.ResolvePackageName(this.packageFilter, context, nameAllocator);
 
         // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
         // static class normally become top-level G#. When the entry class owns a
@@ -243,7 +247,11 @@ public sealed partial class CSharpToGSharpTranslator
             contributingTrees
                 .Where(tree => tree != root.SyntaxTree)
                 .OrderBy(tree => tree.FilePath, StringComparer.Ordinal);
-        IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
+        IReadOnlyList<ImportDirective> imports = this.TranslateImports(
+            root,
+            extraUsingTrees,
+            context,
+            nameAllocator);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
@@ -265,7 +273,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.anonymousTypeRegistriesByPackage[registryKey] = anonymousTypeRegistry;
         }
 
-        var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry);
+        var typeMapper = new CSharpTypeMapper(anonymousTypeRegistry, nameAllocator);
         typeMapper.ReserveImportAliases(imports);
         var visitor = new DeclarationVisitor(
             context,
@@ -275,6 +283,7 @@ public sealed partial class CSharpToGSharpTranslator
             preserveEntryType ? null : entryPoint,
             partialTypeParts,
             ownedExtensions,
+            nameAllocator,
             this.preservePartialParts,
             this.markMergedTypePartial,
             this.widenObliviousReferenceFields);
@@ -409,14 +418,6 @@ public sealed partial class CSharpToGSharpTranslator
             .Select(symbol => symbol.ContainingNamespace.ToDisplayString())
             .Distinct(StringComparer.Ordinal)
             .ToList();
-
-    // Forwards to the canonical identifier sanitizer implemented on the nested
-    // declaration visitor, so callers outside the visitor (e.g.
-    // <see cref="CSharpTypeMapper"/>) can route type-name references through the
-    // exact same sanitizer used at every declaration and reference site inside
-    // the visitor, keeping declared and referenced names in agreement (issue
-    // #1734).
-    internal static string SanitizeIdentifier(string name) => DeclarationVisitor.SanitizeIdentifier(name);
 
     private static IEnumerable<MemberDeclarationSyntax> EnumerateTopLevelDeclarations(CompilationUnitSyntax root)
     {
@@ -1032,7 +1033,10 @@ public sealed partial class CSharpToGSharpTranslator
         }
     }
 
-    private string ResolvePackage(CompilationUnitSyntax root, TranslationContext context)
+    private string ResolvePackage(
+        CompilationUnitSyntax root,
+        TranslationContext context,
+        EmittedNameAllocator nameAllocator)
     {
         List<(string Name, Location Location)> namespaces = EnumerateTopLevelDeclarations(root)
             .Select(member => (
@@ -1040,7 +1044,7 @@ public sealed partial class CSharpToGSharpTranslator
                 Location: member.GetLocation()))
             .Where(item => item.Symbol?.ContainingNamespace is { IsGlobalNamespace: false })
             .Select(item => (
-                item.Symbol.ContainingNamespace.ToDisplayString(),
+                nameAllocator.GetNamespaceName(item.Symbol.ContainingNamespace),
                 item.Location))
             .ToList();
 
@@ -1063,10 +1067,30 @@ public sealed partial class CSharpToGSharpTranslator
         return dominant;
     }
 
+    private string ResolvePackageName(
+        string packageName,
+        TranslationContext context,
+        EmittedNameAllocator nameAllocator)
+    {
+        INamespaceSymbol current = context.Compilation.GlobalNamespace;
+        foreach (string segment in packageName.Split('.'))
+        {
+            current = current.GetNamespaceMembers()
+                .FirstOrDefault(candidate => candidate.Name == segment);
+            if (current == null)
+            {
+                return packageName;
+            }
+        }
+
+        return nameAllocator.GetNamespaceName(current);
+    }
+
     private IReadOnlyList<ImportDirective> TranslateImports(
         CompilationUnitSyntax root,
         IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees,
-        TranslationContext context)
+        TranslationContext context,
+        EmittedNameAllocator nameAllocator)
     {
         var imports = new List<ImportDirective>();
         var seen = new HashSet<(string Name, string Alias)>();
@@ -1082,6 +1106,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         foreach (UsingDirectiveSyntax directive in usings)
         {
+            using IDisposable modelScope = context.UseSemanticModelFor(directive.SyntaxTree);
+
             // C# 12 alias-any-type directives (`using X = (int, string);`,
             // arrays, pointers, nullable value types, ...) put a non-name
             // TypeSyntax where a plain dotted name used to be the only option;
@@ -1096,7 +1122,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             string alias = directive.Alias is null
                 ? null
-                : SanitizeIdentifier(directive.Alias.Name.Identifier.Text);
+                : nameAllocator.GetName(
+                    context.GetDeclaredSymbol(directive),
+                    IdentifierNameContext.Type)
+                    ?? nameAllocator.GetName(
+                        directive.Alias.Name.Identifier.ValueText,
+                        IdentifierNameContext.Type);
 
             if (namespaceOrType is not NameSyntax)
             {
@@ -1128,7 +1159,7 @@ public sealed partial class CSharpToGSharpTranslator
             // become `import Foo.Bar`, not the unparseable `import
             // global::Foo.Bar` (G#'s import syntax has no alias-qualifier
             // form).
-            string name = CSharpTypeMapper.StripGlobalPrefix(namespaceOrType.ToString());
+            string name = this.TranslateImportName(namespaceOrType, context, nameAllocator);
 
             if (!directive.StaticKeyword.IsKind(SyntaxKind.None))
             {
@@ -1158,6 +1189,38 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         return imports;
+    }
+
+    private string TranslateImportName(
+        TypeSyntax namespaceOrType,
+        TranslationContext context,
+        EmittedNameAllocator nameAllocator)
+    {
+        ISymbol symbol = context.GetSymbolInfo(namespaceOrType).Symbol;
+        return symbol switch
+        {
+            INamespaceSymbol ns => nameAllocator.GetNamespaceName(ns),
+            INamedTypeSymbol type => this.QualifiedImportTypeName(type, nameAllocator),
+            _ => CSharpTypeMapper.StripGlobalPrefix(namespaceOrType.ToString()),
+        };
+    }
+
+    private string QualifiedImportTypeName(
+        INamedTypeSymbol type,
+        EmittedNameAllocator nameAllocator)
+    {
+        var typeParts = new Stack<string>();
+        INamedTypeSymbol outermost = type;
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+        {
+            typeParts.Push(nameAllocator.GetName(current));
+            outermost = current;
+        }
+
+        string typeName = string.Join(".", typeParts);
+        return outermost.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? $"{nameAllocator.GetNamespaceName(ns)}.{typeName}"
+            : typeName;
     }
 
     /// <summary>
@@ -1219,6 +1282,7 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #2821: same-package source extension methods are emitted as
         // members of their owned receiver type, not as top-level receiver funcs.
         private readonly OwnedExtensionRegistry ownedExtensions;
+        private readonly EmittedNameAllocator nameAllocator;
 
         // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
         // part is emitted as its own standalone G# `partial` declaration (using
@@ -1285,6 +1349,7 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol entryPoint,
             Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
             OwnedExtensionRegistry ownedExtensions,
+            EmittedNameAllocator nameAllocator,
             bool preservePartialParts = false,
             bool markMergedTypePartial = false,
             bool widenObliviousReferenceFields = false)
@@ -1295,6 +1360,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
             this.ownedExtensions = ownedExtensions ?? new OwnedExtensionRegistry(context.Compilation.Assembly);
+            this.nameAllocator = nameAllocator ?? EmittedNameAllocator.For(context.Compilation);
             this.preservePartialParts = preservePartialParts;
             this.markMergedTypePartial = markMergedTypePartial;
             this.widenObliviousReferenceFields = widenObliviousReferenceFields;

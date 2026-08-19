@@ -15,6 +15,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
+using GSharpIdentifierNameContext = GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext;
 
 namespace Cs2Gs.Translator;
 
@@ -334,7 +335,12 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference type = parameter.Type != null
                 ? this.MapTypeSyntax(parameter.Type)
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
-            return new Parameter(SanitizeIdentifier(parameter.Identifier.Text), type);
+            return new Parameter(
+                this.EmittedName(
+                    parameter,
+                    parameter.Identifier,
+                    GSharpIdentifierNameContext.Parameter),
+                type);
         }
 
         // `typeof(IEnumerable<>)` over an unbound generic has no bound symbol for
@@ -383,13 +389,13 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case GenericNameSyntax simple:
                     generic = simple;
-                    name = simple.Identifier.Text;
+                    name = simple.Identifier.ValueText;
                     break;
                 case QualifiedNameSyntax { Right: GenericNameSyntax right } qualified:
                     generic = right;
                     name = qualified.Left.ToString().Replace("global::", string.Empty, StringComparison.Ordinal)
                         + "."
-                        + right.Identifier.Text;
+                        + right.Identifier.ValueText;
                     break;
                 default:
                     return false;
@@ -661,7 +667,7 @@ public sealed partial class CSharpToGSharpTranslator
             foreach ((ILocalSymbol symbol, _) in mutableBindings)
             {
                 this.state.PatternBindings[symbol] =
-                    new IdentifierExpression(SanitizeIdentifier(symbol.Name));
+                    new IdentifierExpression(this.EmittedName(symbol, symbol.Name));
             }
         }
 
@@ -702,7 +708,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 declarations.Add(new LocalDeclarationStatement(
                     BindingKind.Var,
-                    SanitizeIdentifier(symbol.Name),
+                    this.EmittedName(symbol, symbol.Name),
                     this.typeMapper.Map(symbol.Type, this.context, pattern.GetLocation()),
                     initializer: matchedValue));
             }
@@ -1218,7 +1224,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new RawStatement("// unsupported: foreach variable deconstruction");
         }
 
-        private static void CollectForEachVariableNames(ExpressionSyntax variable, List<string> names)
+        private void CollectForEachVariableNames(ExpressionSyntax variable, List<string> names)
         {
             switch (variable)
             {
@@ -1235,17 +1241,17 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case IdentifierNameSyntax identifier:
-                    names.Add(SanitizeIdentifier(identifier.Identifier.Text));
+                    names.Add(this.EmittedName(identifier, identifier.Identifier));
                     break;
             }
         }
 
-        private static void CollectDesignationNames(VariableDesignationSyntax designation, List<string> names)
+        private void CollectDesignationNames(VariableDesignationSyntax designation, List<string> names)
         {
             switch (designation)
             {
                 case SingleVariableDesignationSyntax single:
-                    names.Add(SanitizeIdentifier(single.Identifier.Text));
+                    names.Add(this.EmittedName(single, single.Identifier));
                     break;
 
                 case DiscardDesignationSyntax:
@@ -1319,7 +1325,7 @@ public sealed partial class CSharpToGSharpTranslator
                 case DeclarationPatternSyntax declaration
                     when declaration.Designation is SingleVariableDesignationSyntax variable:
                     return new TypePattern(
-                        SanitizeIdentifier(variable.Identifier.Text),
+                        this.EmittedName(variable, variable.Identifier),
                         this.MapTypeSyntax(declaration.Type));
 
                 case DeclarationPatternSyntax declaration
@@ -1360,7 +1366,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     return new VarPattern(
                         varPattern.Designation is SingleVariableDesignationSyntax varVariable
-                            ? SanitizeIdentifier(varVariable.Identifier.Text)
+                            ? this.EmittedName(varVariable, varVariable.Identifier)
                             : "_");
 
                 case RecursivePatternSyntax { Type: { } type } recursive
@@ -1443,7 +1449,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         bindings.Add((
                             binder,
-                            new IdentifierExpression(SanitizeIdentifier(binder.Name))));
+                            new IdentifierExpression(this.EmittedName(binder, binder.Name))));
                     }
 
                     return native;
@@ -1547,7 +1553,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return new SlicePattern(captureName);
                     }
 
-                    return new SlicePattern(SanitizeIdentifier(variable.Identifier.Text));
+                    return new SlicePattern(this.EmittedName(variable, variable.Identifier));
 
                 case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
                     return new SlicePattern(designator: null);
@@ -1560,7 +1566,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // G#'s slice capture designator is always typed as the
                     // slice's own `[]T`, so the (redundant) C# declared type is
                     // dropped — same bind-only treatment as the `var` capture above.
-                    return new SlicePattern(SanitizeIdentifier(declVariable.Identifier.Text));
+                    return new SlicePattern(this.EmittedName(declVariable, declVariable.Identifier));
 
                 default:
                     GExpression sliceValue = BuildSliceExpression(receiver, prefixCount, suffixCount);
@@ -1599,7 +1605,10 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         if (sub.NameColon != null)
                         {
-                            string fieldName = SanitizeIdentifier(this.GetSubpatternMemberName(sub));
+                            string rawFieldName = this.GetSubpatternMemberName(sub);
+                            string fieldName = this.EmittedName(
+                                this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                rawFieldName);
                             fields.Add(new PropertyPatternField(
                                 fieldName,
                                 this.TranslatePattern(
@@ -1633,7 +1642,7 @@ public sealed partial class CSharpToGSharpTranslator
                             // root's position at its FIRST occurrence so field
                             // order still matches the source.
                             List<string> names = SplitMemberPath(sub.ExpressionColon.Expression);
-                            string rootName = SanitizeIdentifier(names[0]);
+                            string rootName = names[0];
                             if (!extendedFieldTrees.TryGetValue(rootName, out ExtendedPropertyFieldTree tree))
                             {
                                 tree = new ExtendedPropertyFieldTree();
@@ -1712,18 +1721,24 @@ public sealed partial class CSharpToGSharpTranslator
                             continue;
                         }
 
-                        string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
+                        string memberName = sub.NameColon?.Name.Identifier.ValueText ?? memberNames?[i];
                         if (memberName == null)
                         {
                             this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
                             continue;
                         }
 
+                        ISymbol memberSymbol = sub.NameColon != null
+                            ? this.context.GetSymbolInfo(sub.NameColon.Name).Symbol
+                            : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
+                                .GetMembers(memberName)
+                                .FirstOrDefault();
+                        string emittedMemberName = this.EmittedName(memberSymbol, memberName);
                         fields.Add(new PropertyPatternField(
-                            SanitizeIdentifier(memberName),
+                            emittedMemberName,
                             this.TranslatePattern(
                                 sub.Pattern,
-                                new MemberAccessExpression(receiver, SanitizeIdentifier(memberName)),
+                                new MemberAccessExpression(receiver, emittedMemberName),
                                 bindings,
                                 usedDesignators,
                                 guards,
@@ -1744,7 +1759,7 @@ public sealed partial class CSharpToGSharpTranslator
             // name so a keyword-colliding designator agrees with its references
             // (issue #1734).
             string designator = recursive.Designation is SingleVariableDesignationSyntax named
-                ? SanitizeIdentifier(named.Identifier.Text)
+                ? this.EmittedName(named, named.Identifier)
                 : SanitizeIdentifier(LowerCamel(GetRightmostTypeName(recursive.Type)));
 
             // Issue #1839 (N3): two typed recursive subpatterns within the SAME
@@ -1761,7 +1776,12 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                 {
                     List<string> memberPath = sub.NameColon != null
-                        ? new List<string> { this.GetSubpatternMemberName(sub) }
+                        ? new List<string>
+                        {
+                            this.EmittedName(
+                                this.context.GetSymbolInfo(sub.NameColon.Name).Symbol,
+                                this.GetSubpatternMemberName(sub)),
+                        }
                         : sub.ExpressionColon != null
                             ? SplitMemberPath(sub.ExpressionColon.Expression)
                             : null;
@@ -1778,7 +1798,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         memberAccess = new MemberAccessExpression(
                             memberAccess,
-                            SanitizeIdentifier(memberName));
+                            memberName);
                     }
 
                     this.AddTypedSubpatternTest(
@@ -1824,7 +1844,7 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    string memberName = sub.NameColon?.Name.Identifier.Text ?? memberNames?[i];
+                    string memberName = sub.NameColon?.Name.Identifier.ValueText ?? memberNames?[i];
                     if (memberName == null)
                     {
                         this.context.ReportUnsupported(
@@ -1833,8 +1853,14 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
+                    ISymbol memberSymbol = sub.NameColon != null
+                        ? this.context.GetSymbolInfo(sub.NameColon.Name).Symbol
+                        : (this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol)?
+                            .GetMembers(memberName)
+                            .FirstOrDefault();
                     GExpression memberAccess = new MemberAccessExpression(
-                        new IdentifierExpression(designator), SanitizeIdentifier(memberName));
+                        new IdentifierExpression(designator),
+                        this.EmittedName(memberSymbol, memberName));
                     this.AddTypedSubpatternTest(
                         sub.Pattern,
                         memberAccess,
@@ -1939,7 +1965,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || rootPattern.DescendantNodesAndSelf()
                     .OfType<SingleVariableDesignationSyntax>()
                     .Any(designation =>
-                        SanitizeIdentifier(designation.Identifier.Text) == candidate));
+                        this.EmittedName(designation, designation.Identifier) == candidate));
 
             usedDesignators.Add(candidate);
             return candidate;
@@ -1971,7 +1997,7 @@ public sealed partial class CSharpToGSharpTranslator
                 case AliasQualifiedNameSyntax aliasQualified:
                     return GetRightmostTypeName(aliasQualified.Name);
                 case SimpleNameSyntax simple:
-                    return simple.Identifier.Text;
+                    return simple.Identifier.ValueText;
                 case PredefinedTypeSyntax predefined:
                     ITypeSymbol predefinedSymbol = this.context.GetTypeInfo(predefined).Type;
                     return predefinedSymbol?.Name ?? predefined.Keyword.Text;
@@ -2007,7 +2033,10 @@ public sealed partial class CSharpToGSharpTranslator
             // grows it. G# has no anonymous types to carry more than one variable
             // through a lambda, so scope.Count > 1 is threaded as a positional
             // tuple (see <see cref="BuildScopeParameter"/>).
-            var scope = new List<(string Name, GTypeReference Type)> { (from.Identifier.Text, rangeType) };
+            var scope = new List<(string Name, GTypeReference Type, ISymbol Symbol)>
+            {
+                (from.Identifier.ValueText, rangeType, this.context.GetDeclaredSymbol(from)),
+            };
 
             // Issue #1998: track the enclosing query node so a scope that grows
             // past G#'s tuple arity cap (see <see cref="BuildScopeParameter"/>)
@@ -2071,7 +2100,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression LowerQueryBody(
             QueryBodySyntax body,
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current)
         {
             foreach (QueryClauseSyntax clause in body.Clauses)
@@ -2139,7 +2168,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // An identity projection (`select n`) after another clause is a
                     // no-op the C# compiler elides; keep it only when it transforms.
                     if (scope.Count == 1 && select.Expression is IdentifierNameSyntax id
-                        && id.Identifier.Text == scope[0].Name && body.Clauses.Count > 0)
+                        && id.Identifier.ValueText == scope[0].Name && body.Clauses.Count > 0)
                     {
                         break;
                     }
@@ -2171,9 +2200,12 @@ public sealed partial class CSharpToGSharpTranslator
             if (body.Continuation != null)
             {
                 this.ReportIfIndexOrRangeTypedRangeVariable(body.Continuation, body.Continuation.Identifier, resultTypeSymbol);
-                var continuationScope = new List<(string Name, GTypeReference Type)>
+                var continuationScope = new List<(string Name, GTypeReference Type, ISymbol Symbol)>
                 {
-                    (SanitizeIdentifier(body.Continuation.Identifier.Text), resultType),
+                    (
+                        body.Continuation.Identifier.ValueText,
+                        resultType,
+                        this.context.GetDeclaredSymbol(body.Continuation)),
                 };
                 current = this.LowerQueryBody(body.Continuation.Body, continuationScope, current);
             }
@@ -2187,7 +2219,7 @@ public sealed partial class CSharpToGSharpTranslator
         // positional tuple carries the widened scope forward.
         private GExpression LowerLetClause(
             LetClauseSyntax let,
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current)
         {
             var prologue = new List<GStatement>();
@@ -2203,7 +2235,8 @@ public sealed partial class CSharpToGSharpTranslator
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
             List<GExpression> elements = scope
-                .Select(v => (GExpression)new IdentifierExpression(SanitizeIdentifier(v.Name)))
+                .Select(v => (GExpression)new IdentifierExpression(
+                    this.EmittedName(v.Symbol, v.Name)))
                 .ToList();
             elements.Add(letValue);
             prologue.Add(new ReturnStatement(new TupleLiteralExpression(elements)));
@@ -2213,7 +2246,10 @@ public sealed partial class CSharpToGSharpTranslator
                 new MemberAccessExpression(current, "Select"),
                 new List<GExpression> { lambda });
 
-            scope.Add((let.Identifier.Text, letType));
+            scope.Add((
+                let.Identifier.ValueText,
+                letType,
+                this.context.GetDeclaredSymbol(let)));
             return current;
         }
 
@@ -2224,13 +2260,16 @@ public sealed partial class CSharpToGSharpTranslator
         // as `let` above.
         private GExpression LowerAdditionalFromClause(
             FromClauseSyntax from,
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current)
         {
             LambdaExpression collectionSelector = this.BuildScopeLambda(scope, from.Expression);
             this.ReportIfIndexOrRangeTypedRangeVariable(from, from.Identifier, from.Type, from.Expression);
             GTypeReference newVarType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
-            (string Name, GTypeReference Type) newVar = (from.Identifier.Text, newVarType);
+            (string Name, GTypeReference Type, ISymbol Symbol) newVar = (
+                from.Identifier.ValueText,
+                newVarType,
+                this.context.GetDeclaredSymbol(from));
             LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, newVar);
 
             current = new InvocationExpression(
@@ -2247,17 +2286,21 @@ public sealed partial class CSharpToGSharpTranslator
         // scope by `g : IEnumerable<TInner>` instead of the bare inner variable.
         private GExpression LowerJoinClause(
             JoinClauseSyntax join,
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current)
         {
             GExpression inner = this.TranslateExpression(join.InExpression);
             this.ReportIfIndexOrRangeTypedRangeVariable(join, join.Identifier, join.Type, join.InExpression);
             GTypeReference innerVarType = this.ResolveRangeVariableType(join.Type, join.InExpression, join);
-            var innerVar = (Name: join.Identifier.Text, Type: innerVarType);
+            var innerVar = (
+                Name: join.Identifier.ValueText,
+                Type: innerVarType,
+                Symbol: this.context.GetDeclaredSymbol(join));
 
             LambdaExpression outerKeySelector = this.BuildScopeLambda(scope, join.LeftExpression);
             LambdaExpression innerKeySelector = this.BuildScopeLambda(
-                new List<(string Name, GTypeReference Type)> { innerVar }, join.RightExpression);
+                new List<(string Name, GTypeReference Type, ISymbol Symbol)> { innerVar },
+                join.RightExpression);
 
             if (join.Into == null)
             {
@@ -2277,8 +2320,9 @@ public sealed partial class CSharpToGSharpTranslator
             // `into g` is always `IEnumerable<TInner>` (spec §12.19.3.8) — never
             // Index/Range itself — so no loud-gap check applies here.
             var groupVar = (
-                Name: join.Into.Identifier.Text,
-                Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }));
+                Name: join.Into.Identifier.ValueText,
+                Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }),
+                Symbol: this.context.GetDeclaredSymbol(join.Into));
             LambdaExpression groupResultSelector = this.BuildTransparentResultSelector(scope, groupVar);
             current = new InvocationExpression(
                 new MemberAccessExpression(current, "GroupJoin"),
@@ -2294,7 +2338,7 @@ public sealed partial class CSharpToGSharpTranslator
         // element type becomes `IGrouping<TKey, TElement>`.
         private GExpression LowerGroupClause(
             GroupClauseSyntax group,
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current,
             out GTypeReference resultType)
         {
@@ -2305,7 +2349,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool isIdentity = scope.Count == 1
                 && group.GroupExpression is IdentifierNameSyntax id
-                && id.Identifier.Text == scope[0].Name;
+                && id.Identifier.ValueText == scope[0].Name;
 
             var args = new List<GExpression> { keySelector };
             GTypeReference elementType;
@@ -2329,7 +2373,7 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression QueryCall(
             GExpression receiver,
             string method,
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             ExpressionSyntax lambdaBody)
         {
             LambdaExpression lambda = this.BuildScopeLambda(scope, lambdaBody);
@@ -2344,7 +2388,7 @@ public sealed partial class CSharpToGSharpTranslator
         // back into the individual range-variable names `body` refers to (see
         // <see cref="BuildScopeParameter"/>).
         private LambdaExpression BuildScopeLambda(
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             ExpressionSyntax lambdaBody)
         {
             var prologue = new List<GStatement>();
@@ -2383,17 +2427,21 @@ public sealed partial class CSharpToGSharpTranslator
         // the left-hand (current) scope, one for the newly introduced variable,
         // returning the widened scope as a positional tuple.
         private LambdaExpression BuildTransparentResultSelector(
-            List<(string Name, GTypeReference Type)> leftScope,
-            (string Name, GTypeReference Type) rightVar)
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> leftScope,
+            (string Name, GTypeReference Type, ISymbol Symbol) rightVar)
         {
             var prologue = new List<GStatement>();
             Parameter leftParam = this.BuildScopeParameter(leftScope, prologue);
-            var rightParam = new Parameter(SanitizeIdentifier(rightVar.Name), rightVar.Type);
+            var rightParam = new Parameter(
+                this.EmittedName(rightVar.Symbol, rightVar.Name),
+                rightVar.Type);
 
             List<GExpression> elements = leftScope
-                .Select(v => (GExpression)new IdentifierExpression(SanitizeIdentifier(v.Name)))
+                .Select(v => (GExpression)new IdentifierExpression(
+                    this.EmittedName(v.Symbol, v.Name)))
                 .ToList();
-            elements.Add(new IdentifierExpression(SanitizeIdentifier(rightVar.Name)));
+            elements.Add(new IdentifierExpression(
+                this.EmittedName(rightVar.Symbol, rightVar.Name)));
             prologue.Add(new ReturnStatement(new TupleLiteralExpression(elements)));
 
             return new LambdaExpression(
@@ -2408,12 +2456,14 @@ public sealed partial class CSharpToGSharpTranslator
         // still refer to each range variable by its own name (issue #1902 — G#
         // has no anonymous types to bind the C# spec's transparent identifier to).
         private Parameter BuildScopeParameter(
-            List<(string Name, GTypeReference Type)> scope,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             List<GStatement> prologue)
         {
             if (scope.Count == 1)
             {
-                return new Parameter(SanitizeIdentifier(scope[0].Name), scope[0].Type);
+                return new Parameter(
+                    this.EmittedName(scope[0].Symbol, scope[0].Name),
+                    scope[0].Type);
             }
 
             // Issue #1998: G#'s tuple family (mirroring the BCL's `ValueTuple`)
@@ -2453,7 +2503,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             prologue.Add(new TupleDeconstructionStatement(
                 BindingKind.Let,
-                scope.Select(v => SanitizeIdentifier(v.Name)).ToList(),
+                scope.Select(v => this.EmittedName(v.Symbol, v.Name)).ToList(),
                 new IdentifierExpression(tupleParamName)));
             return new Parameter(tupleParamName, new TupleTypeReference(scope.Select(v => v.Type).ToList()));
         }

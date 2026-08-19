@@ -331,6 +331,42 @@ KeywordNamedParameterFixture.Combine(type_: ""cat"", value: 2)
     }
 
     [Fact]
+    public void ImportedClrParamsParameter_CollisionUsesCanonicalNames()
+    {
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { typeof(KeywordNamedParameterFixture).Assembly.Location });
+        var tree = SyntaxTree.Parse(SourceText.From(@"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+KeywordNamedParameterFixture.CombineParams(params__: ""left"", params_: ""right"")
+"));
+        var compilation = new Compilation(resolver, tree);
+        var diagnostics = compilation.GlobalScope.Diagnostics
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .ToImmutableArray();
+
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
+    public void ImportedClrConstructorParamsParameter_CollisionUsesCanonicalNames()
+    {
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { typeof(KeywordNamedParameterFixture).Assembly.Location });
+        var tree = SyntaxTree.Parse(SourceText.From(@"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+KeywordNamedConstructorFixture(params__: ""left"", params_: ""right"")
+"));
+        var compilation = new Compilation(resolver, tree);
+        var diagnostics = compilation.GlobalScope.Diagnostics
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .ToImmutableArray();
+
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+    }
+
+    [Fact]
     public void ImportedClrGenericMethod_NamedLambdaArguments_InferAndBind()
     {
         using var resolver = ReferenceResolver.WithReferences(
@@ -393,6 +429,19 @@ public static class KeywordNamedParameterFixture
 {
     /// <summary>Combines the supplied values.</summary>
     public static string Combine(string type, int value) => $"{type}:{value}";
+
+    /// <summary>Combines colliding source parameter names.</summary>
+    public static string CombineParams(string @params, string params_) =>
+        @params + params_;
+}
+
+/// <summary>CLR constructor fixture with colliding source parameter names.</summary>
+public sealed class KeywordNamedConstructorFixture
+{
+    /// <summary>Initializes a new instance.</summary>
+    public KeywordNamedConstructorFixture(string @params, string params_)
+    {
+    }
 }
 
 /// <summary>CLR builder fixture for generic named-lambda calls.</summary>

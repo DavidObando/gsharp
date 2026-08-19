@@ -711,7 +711,7 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    string name = SanitizeIdentifier(single.Identifier.Text);
+                    string name = this.EmittedName(single, single.Identifier);
                     if (name == "_")
                     {
                         targets.Add(new IdentifierExpression(name));
@@ -935,7 +935,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (designation is SingleVariableDesignationSyntax single)
             {
                 this.ReportIfIndexOrRangeTypedDesignation(single);
-                string name = SanitizeIdentifier(single.Identifier.Text);
+                string name = this.EmittedName(single, single.Identifier);
                 ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
                 statements.Add(new LocalDeclarationStatement(
                     local != null && this.IsLocalReassigned(local)
@@ -992,7 +992,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     collected.Add(designation switch
                     {
-                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
+                        SingleVariableDesignationSyntax single => this.EmittedName(single, single.Identifier),
                         _ => "_",
                     });
 
@@ -1023,7 +1023,7 @@ public sealed partial class CSharpToGSharpTranslator
                     var declaration = (DeclarationExpressionSyntax)argument.Expression;
                     collected.Add(declaration.Designation switch
                     {
-                        SingleVariableDesignationSyntax single => SanitizeIdentifier(single.Identifier.Text),
+                        SingleVariableDesignationSyntax single => this.EmittedName(single, single.Identifier),
                         _ => "_",
                     });
 
@@ -1189,7 +1189,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression value;
             if (argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword
                 && argument.Expression is not DeclarationExpressionSyntax
-                && argument.Expression is not IdentifierNameSyntax { Identifier.Text: "_" })
+                && argument.Expression is not IdentifierNameSyntax { Identifier.ValueText: "_" })
             {
                 // Keep address-of outermost so gsc's ref/out call binder sees
                 // the expected argument shape: `&{ spills; lvalue }`.
@@ -1207,7 +1207,9 @@ public sealed partial class CSharpToGSharpTranslator
             return argument.NameColon == null || !preserveName
                 ? value
                 : new NamedArgumentExpression(
-                    SanitizeIdentifier(argument.NameColon.Name.Identifier.Text),
+                    this.EmittedName(
+                        this.context.GetSymbolInfo(argument.NameColon.Name).Symbol,
+                        argument.NameColon.Name.Identifier.ValueText),
                     value);
         }
 
@@ -1363,7 +1365,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     liftedParameters.Add(new Parameter(
-                        SanitizeIdentifier(capture.Symbol.Name),
+                        this.EmittedName(capture.Symbol, capture.Symbol.Name),
                         this.typeMapper.Map(
                             captureType,
                             this.context,
@@ -1554,7 +1556,7 @@ public sealed partial class CSharpToGSharpTranslator
             // function literal (which has no name to hang `[T]` off) — see
             // `let Name[T, U] = func (...) ... { ... }` in G#.
             var typeParameters = localFunction.TypeParameterList?.Parameters
-                .Select(tp => SanitizeIdentifier(tp.Identifier.Text))
+                .Select(tp => this.EmittedName(tp, tp.Identifier))
                 .ToList();
 
             // Issue #3399: this local participates in a recursive/mutually
@@ -1595,7 +1597,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new GStatement[]
             {
-                new LocalFunctionStatement(SanitizeIdentifier(localFunction.Identifier.Text), lambda, typeParameters),
+                new LocalFunctionStatement(
+                    this.EmittedName(localSymbol, localFunction.Identifier.ValueText),
+                    lambda,
+                    typeParameters),
             };
         }
 

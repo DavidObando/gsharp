@@ -895,6 +895,22 @@ public partial class Parser
     {
         if (!IsTupleElementSelectorToken(Current, includesDot: false))
         {
+            // Contextual operators (`nameof`, `typeof`, `checked`, ...) are only
+            // operators at expression roots. After `.`/`?.` they are ordinary
+            // CLR/source member names and must not steal the call grammar.
+            if (Current.Kind == SyntaxKind.IdentifierToken
+                && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+            {
+                return ParseCallExpression();
+            }
+
+            if (Current.Kind == SyntaxKind.IdentifierToken
+                && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+                && LooksLikeGenericCallSite(1))
+            {
+                return ParseGenericCallExpression();
+            }
+
             return ParseNameOrCallExpression(stopBeforeIndirectInvocation: true);
         }
 

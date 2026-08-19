@@ -159,7 +159,7 @@ public sealed partial class CSharpToGSharpTranslator
                         yield return (
                             new FieldDeclaration(
                                 BindingKind.Let,
-                                SanitizeIdentifier(property.Identifier.Text),
+                                this.EmittedName(propertySymbol, property.Identifier.ValueText),
                                 bodyFieldType,
                                 bodyFieldInit,
                                 Visibility.Public),
@@ -400,7 +400,8 @@ public sealed partial class CSharpToGSharpTranslator
                 constructionArguments.Add(matchTimeout);
             }
 
-            string cacheName = "__generatedRegex_" + SanitizeIdentifier(node.Identifier.Text);
+            string emittedMethodName = this.EmittedName(symbol, node.Identifier.ValueText);
+            string cacheName = "__generatedRegex_" + emittedMethodName;
             var occupiedNames = new HashSet<string>(
                 symbol.ContainingType.GetMembers().Select(member => member.Name),
                 StringComparer.Ordinal);
@@ -420,7 +421,7 @@ public sealed partial class CSharpToGSharpTranslator
                 .Where(mapped => !IsGeneratedRegexAttributeName(mapped.Name))
                 .ToList();
             method = new MethodDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                emittedMethodName,
                 returnType: regexType,
                 visibility: MapVisibility(symbol, this.context, node),
                 attributes: attributes,
@@ -688,7 +689,7 @@ public sealed partial class CSharpToGSharpTranslator
             // `s` as the receiver for its instance members (and may still declare
             // static members that simply ignore it).
             bool hasNamedReceiver = receiverParameter != null && !receiverParameter.Identifier.IsMissing
-                && receiverParameter.Identifier.Text.Length > 0;
+                && receiverParameter.Identifier.ValueText.Length > 0;
 
             Receiver receiver = null;
             if (hasNamedReceiver)
@@ -699,7 +700,7 @@ public sealed partial class CSharpToGSharpTranslator
                     : this.MapTypeSyntax(receiverParameter.Type);
 
                 receiver = new Receiver(
-                    SanitizeIdentifier(receiverParameter.Identifier.Text),
+                    this.EmittedName(receiverSymbol, receiverParameter.Identifier.ValueText),
                     receiverType,
                     isExplicitExtension: RequiresExplicitExtensionReceiver(
                         receiverSymbol?.Type,
@@ -799,7 +800,7 @@ public sealed partial class CSharpToGSharpTranslator
                 : null;
 
             var method = new MethodDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 new List<Parameter>(),
                 returnType,
                 body,
@@ -829,7 +830,7 @@ public sealed partial class CSharpToGSharpTranslator
                     : this.MapTypeSyntax(node.Declaration.Type);
 
                 var declaration = new EventDeclaration(
-                    SanitizeIdentifier(declarator.Identifier.Text),
+                    this.EmittedName(symbol, declarator.Identifier.ValueText),
                     type,
                     MapVisibility(symbol, this.context, node),
                     this.MapAttributes(node.AttributeLists),
@@ -946,7 +947,7 @@ public sealed partial class CSharpToGSharpTranslator
                 : MapVisibility(symbol, this.context, node);
 
             var declaration = new EventDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 type,
                 eventVisibility,
                 this.MapAttributes(node.AttributeLists),
@@ -976,8 +977,8 @@ public sealed partial class CSharpToGSharpTranslator
             List<TypeParameter> typeParameters = this.MapTypeParameters(symbol);
             bool isNested = symbol?.ContainingType != null;
             string name = isNested
-                ? CSharpTypeMapper.LiftedNestedDelegateName(symbol)
-                : SanitizeIdentifier(node.Identifier.Text);
+                ? this.typeMapper.LiftedNestedDelegateName(symbol, this.context)
+                : this.EmittedName(symbol, node.Identifier.ValueText);
             Visibility visibility = MapVisibility(symbol, this.context, node);
             if (isNested)
             {
@@ -1045,7 +1046,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 // T2: a field that became a primary-constructor parameter is no
                 // longer a standalone member (the parameter declares the field).
-                if (lift.FieldsAsPrimaryParameters.Contains(declarator.Identifier.Text))
+                if (lift.FieldsAsPrimaryParameters.Contains(declarator.Identifier.ValueText))
                 {
                     continue;
                 }
@@ -1084,7 +1085,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // constructor assignment independent of the constructor parameters
                 // (lifted out of the dropped `init`) or from a C# field initializer.
                 GExpression initializer = null;
-                if (lift.FieldInitializers.TryGetValue(declarator.Identifier.Text, out GExpression lifted))
+                if (lift.FieldInitializers.TryGetValue(declarator.Identifier.ValueText, out GExpression lifted))
                 {
                     initializer = lifted;
                 }
@@ -1137,7 +1138,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 var declaration = new FieldDeclaration(
                     binding,
-                    SanitizeIdentifier(declarator.Identifier.Text),
+                    this.EmittedName(symbol, declarator.Identifier.ValueText),
                     type,
                     initializer: initializer,
                     visibility: MapVisibility(symbol, this.context, field),
@@ -1322,7 +1323,7 @@ public sealed partial class CSharpToGSharpTranslator
                     GTypeReference receiverType = this.typeMapper.Map(self.Type, this.context, node.GetLocation());
                     receiverType = this.PromoteIfUsedAsNullable(receiverType, self);
                     receiver = new Receiver(
-                        SanitizeIdentifier(self.Name),
+                        this.EmittedName(self, self.Name),
                         receiverType,
                         isExplicitExtension: RequiresExplicitExtensionReceiver(symbol));
                     skipFirstParameter = true;
@@ -1359,7 +1360,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     new LocalDeclarationStatement(
                         BindingKind.Var,
-                        SanitizeIdentifier(ownedExtensionSelf.Name),
+                        this.EmittedName(ownedExtensionSelf, ownedExtensionSelf.Name),
                         initializer: new ThisExpression()),
                 };
                 statements.AddRange(body.Statements);
@@ -1401,7 +1402,7 @@ public sealed partial class CSharpToGSharpTranslator
                 string instanceBodyName = null;
                 if (!symbol.IsStatic && symbol.ContainingType.TypeKind == TypeKind.Class)
                 {
-                    instanceBodyName = "__asyncVoid_" + SanitizeIdentifier(symbol.Name);
+                    instanceBodyName = "__asyncVoid_" + this.EmittedName(symbol, symbol.Name);
                     while (symbol.ContainingType.GetMembers(instanceBodyName).Length > 0)
                     {
                         instanceBodyName += "_";
@@ -1471,7 +1472,7 @@ public sealed partial class CSharpToGSharpTranslator
                 : MapVisibility(symbol, this.context, node);
 
             var method = new MethodDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 parameters: parameters,
                 returnType: returnType,
                 body: body,
@@ -1514,14 +1515,14 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<GTypeReference> typeArguments = original.TypeParameters
                 .Select(parameter =>
                     (GTypeReference)new NamedTypeReference(
-                        SanitizeIdentifier(parameter.Name)))
+                        this.EmittedName(parameter, parameter.Name)))
                 .ToList();
 
             var call = new InvocationExpression(
                 new MemberAccessExpression(
                     new IdentifierExpression(
-                        SanitizeIdentifier(original.ContainingType.Name)),
-                    SanitizeIdentifier(original.Name)),
+                        this.EmittedName(original.ContainingType, original.ContainingType.Name)),
+                    this.EmittedName(original, original.Name)),
                 arguments,
                 typeArguments);
             INamedTypeSymbol asyncEnvelope = original.IsAsync
@@ -1633,13 +1634,13 @@ public sealed partial class CSharpToGSharpTranslator
         {
             string extensionSignature =
                 this.CanonicalReducedSignature(extension, parameterOffset: 1);
-            string emittedName = SanitizeIdentifier(extension.Name);
+            string emittedName = this.EmittedName(extension, extension.Name);
             for (INamedTypeSymbol current = receiver; current != null; current = current.BaseType)
             {
                 foreach (IMethodSymbol method in current.GetMembers().OfType<IMethodSymbol>())
                 {
                     if (!method.IsStatic
-                        && SanitizeIdentifier(method.Name) == emittedName
+                        && this.EmittedName(method, method.Name) == emittedName
                         && this.CanonicalReducedSignature(method, parameterOffset: 0)
                             == extensionSignature)
                     {
@@ -1656,7 +1657,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             string namespaceName = method.ContainingNamespace?.ToDisplayString()
                 ?? string.Empty;
-            string emittedName = SanitizeIdentifier(method.Name);
+            string emittedName = this.EmittedName(method, method.Name);
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (INamedTypeSymbol type in method.ContainingNamespace.GetTypeMembers())
@@ -1664,7 +1665,7 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (IMethodSymbol candidate in type.GetMembers().OfType<IMethodSymbol>())
                 {
                     if (candidate.IsExtensionMethod
-                        && SanitizeIdentifier(candidate.Name) == emittedName
+                        && this.EmittedName(candidate, candidate.Name) == emittedName
                         && seen.Add(ExtensionMethodIdentity(candidate)))
                     {
                         yield return candidate;
@@ -1689,7 +1690,7 @@ public sealed partial class CSharpToGSharpTranslator
                         .OfType<IMethodSymbol>())
                     {
                         if (candidate.IsExtensionMethod
-                            && SanitizeIdentifier(candidate.Name) == emittedName
+                            && this.EmittedName(candidate, candidate.Name) == emittedName
                             && seen.Add(ExtensionMethodIdentity(candidate)))
                         {
                             yield return candidate;
@@ -1758,7 +1759,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var parts = new List<string>
             {
-                SanitizeIdentifier(method.Name),
+                this.EmittedName(method, method.Name),
                 method.TypeParameters.Length.ToString(CultureInfo.InvariantCulture),
             };
             for (int index = parameterOffset; index < method.Parameters.Length; index++)
@@ -1787,7 +1788,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.SiblingCompilations,
                 this.context.RepositoryCompilations);
             var signatureMapper = new CSharpTypeMapper(
-                new AnonymousTypeRegistry());
+                new AnonymousTypeRegistry(),
+                this.nameAllocator);
             GTypeReference mapped = signatureMapper.Map(
                 type,
                 signatureContext,
@@ -1796,7 +1798,7 @@ public sealed partial class CSharpToGSharpTranslator
                 .Replace("?", string.Empty, StringComparison.Ordinal);
             foreach (ITypeParameterSymbol parameter in method.TypeParameters)
             {
-                string name = Regex.Escape(SanitizeIdentifier(parameter.Name));
+                string name = Regex.Escape(this.EmittedName(parameter, parameter.Name));
                 rendered = Regex.Replace(
                     rendered,
                     $@"(?<![\p{{L}}\p{{N}}_]){name}(?![\p{{L}}\p{{N}}_])",
@@ -2469,7 +2471,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             property = new PropertyDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 type,
                 propertyAccessors,
                 visibility: MapVisibility(symbol, this.context, node),
@@ -2650,7 +2652,7 @@ public sealed partial class CSharpToGSharpTranslator
                 : MapVisibility(symbol, this.context, node);
 
             var property = new PropertyDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 type,
                 accessors: accessors,
                 visibility: explicitInterfacePropertyVisibility,

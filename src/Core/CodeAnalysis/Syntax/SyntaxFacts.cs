@@ -242,13 +242,96 @@ public static class SyntaxFacts
     }
 
     /// <summary>
-    /// Determines whether a spelling cannot be emitted safely as an identifier
-    /// in every G# declaration position.
+    /// Determines whether a spelling is a hard G# keyword.
     /// </summary>
     /// <param name="text">The identifier spelling to inspect.</param>
-    /// <returns><c>true</c> for hard keywords and parser-reserved declaration spellings.</returns>
+    /// <returns><c>true</c> for hard keywords.</returns>
     public static bool IsReservedIdentifier(string text) =>
-        GetKeywordKind(text) != SyntaxKind.IdentifierToken || IsParamsKeyword(text);
+        IsReservedIdentifier(text, IdentifierNameContext.General);
+
+    /// <summary>
+    /// Determines whether a spelling is consumed by the grammar in a specific
+    /// identifier context.
+    /// </summary>
+    /// <param name="text">The identifier spelling to inspect.</param>
+    /// <param name="context">The emitted grammar contexts where the name is used.</param>
+    /// <returns><c>true</c> when the spelling must be changed.</returns>
+    public static bool IsReservedIdentifier(string text, IdentifierNameContext context)
+    {
+        if (GetKeywordKind(text) != SyntaxKind.IdentifierToken)
+        {
+            return true;
+        }
+
+        if ((context & IdentifierNameContext.Parameter) != 0
+            && text is "params" or "scoped" or "ref" or "out" or "in")
+        {
+            return true;
+        }
+
+        if ((context & IdentifierNameContext.Local) != 0
+            && text is "scoped" or "ref")
+        {
+            return true;
+        }
+
+        if ((context & IdentifierNameContext.TypeParameter) != 0
+            && text is "in" or "out")
+        {
+            return true;
+        }
+
+        if ((context & IdentifierNameContext.Invocation) != 0
+            && text is "make" or "typeof" or "sizeof" or "checked" or "unchecked" or "nameof" or "init")
+        {
+            return true;
+        }
+
+        if ((context & IdentifierNameContext.Pattern) != 0
+            && text is "and" or "or" or "when")
+        {
+            return true;
+        }
+
+        if ((context & IdentifierNameContext.Index) != 0
+            && text is "stackalloc" or "base")
+        {
+            return true;
+        }
+
+        return (context & IdentifierNameContext.Type) != 0
+            && text is "event" or "prop" or "init" or "convenience" or "shared" or "delegate" or "unmanaged";
+    }
+
+    /// <summary>
+    /// Produces a grammar-safe emitted spelling while preserving every legal
+    /// source name in the same scope.
+    /// </summary>
+    /// <param name="name">The source identifier value.</param>
+    /// <param name="context">The emitted grammar contexts where the name is used.</param>
+    /// <param name="scopeNames">Source names occupying the same emitted scope.</param>
+    /// <returns>The unchanged legal name, or a collision-free suffixed spelling.</returns>
+    public static string GetEmittedIdentifier(
+        string name,
+        IdentifierNameContext context,
+        IEnumerable<string>? scopeNames = null)
+    {
+        if (string.IsNullOrEmpty(name) || !IsReservedIdentifier(name, context))
+        {
+            return name;
+        }
+
+        HashSet<string>? occupied = scopeNames is null
+            ? null
+            : new HashSet<string>(scopeNames, StringComparer.Ordinal);
+        string candidate = name + "_";
+        while (occupied?.Contains(candidate) == true)
+        {
+            candidate += "_";
+        }
+
+        return candidate;
+    }
 
     /// <summary>
     /// Determines whether a spelling is the unsupported C# variadic modifier.

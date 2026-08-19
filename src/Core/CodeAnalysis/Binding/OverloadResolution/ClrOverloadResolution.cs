@@ -3133,11 +3133,16 @@ internal static class ClrOverloadResolution
 
     private static bool ParameterNameMatches(
         string? parameterName,
-        string argumentName) =>
-        string.Equals(parameterName, argumentName, StringComparison.Ordinal) ||
-        (parameterName is not null
-            && SyntaxFacts.GetKeywordKind(parameterName) != SyntaxKind.IdentifierToken &&
-            string.Equals(parameterName + "_", argumentName, StringComparison.Ordinal));
+        string argumentName,
+        ParameterInfo[] parameters) =>
+        parameterName is not null
+        && string.Equals(
+            SyntaxFacts.GetEmittedIdentifier(
+                parameterName,
+                IdentifierNameContext.Parameter,
+                parameters.Select(parameter => parameter.Name ?? string.Empty)),
+            argumentName,
+            StringComparison.Ordinal);
 
     /// <summary>
     /// Issue #343: returns the index of the parameter whose name matches
@@ -3148,7 +3153,7 @@ internal static class ClrOverloadResolution
     {
         for (var i = 0; i < parameters.Length; i++)
         {
-            if (ParameterNameMatches(parameters[i].Name, name))
+            if (ParameterNameMatches(parameters[i].Name, name, parameters))
             {
                 return i;
             }

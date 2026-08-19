@@ -73,6 +73,7 @@ public sealed class CSharpTypeMapper
     /// </para>
     /// </summary>
     private readonly AnonymousTypeRegistry anonymousTypeRegistry;
+    private readonly EmittedNameAllocator nameAllocator;
 
     /// <summary>
     /// Issue #2282: the synthesized anonymous-type <c>data class</c>
@@ -148,8 +149,16 @@ public sealed class CSharpTypeMapper
     /// The package-scoped registry of already-synthesized anonymous-type shapes.
     /// </param>
     public CSharpTypeMapper(AnonymousTypeRegistry anonymousTypeRegistry)
+        : this(anonymousTypeRegistry, nameAllocator: null)
+    {
+    }
+
+    internal CSharpTypeMapper(
+        AnonymousTypeRegistry anonymousTypeRegistry,
+        EmittedNameAllocator nameAllocator)
     {
         this.anonymousTypeRegistry = anonymousTypeRegistry ?? new AnonymousTypeRegistry();
+        this.nameAllocator = nameAllocator;
     }
 
     /// <summary>
@@ -187,14 +196,18 @@ public sealed class CSharpTypeMapper
 
         string aliasTarget = alias?.Target switch
         {
-            INamespaceSymbol ns when !ns.IsGlobalNamespace => ns.ToDisplayString(),
-            INamedTypeSymbol type => StripGlobalPrefix(
-                type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),
+            INamespaceSymbol ns when !ns.IsGlobalNamespace =>
+                this.nameAllocator?.GetNamespaceName(ns) ?? ns.ToDisplayString(),
+            INamedTypeSymbol type => this.QualifiedAliasTarget(type),
             _ => null,
         };
         if (!string.IsNullOrEmpty(aliasTarget))
         {
-            this.synthesizedTypeAliases[CSharpToGSharpTranslator.SanitizeIdentifier(alias.Name)] = aliasTarget;
+            string aliasName = this.nameAllocator?.GetName(alias)
+                ?? GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
+                    alias.Name,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Type);
+            this.synthesizedTypeAliases[aliasName] = aliasTarget;
         }
     }
 
@@ -493,9 +506,9 @@ public sealed class CSharpTypeMapper
         INamedTypeSymbol named,
         TranslationContext context)
     {
-        string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+        string simpleName = this.Names(context).GetName(named);
         string target = named.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? $"{ns.ToDisplayString()}.{simpleName}"
+            ? $"{this.Names(context).GetNamespaceName(ns)}.{simpleName}"
             : simpleName;
         foreach (var existing in this.synthesizedTypeAliases)
         {
@@ -552,7 +565,11 @@ public sealed class CSharpTypeMapper
 
         string syntheticName = AnonymousTypeRegistry.SyntheticName(shapeKey, properties.Count);
         var parameters = properties
-            .Select(p => new Cs2Gs.CodeModel.Ast.Parameter(CSharpToGSharpTranslator.SanitizeIdentifier(p.Name), this.Map(p.Type, context, location)))
+            .Select(p => new Cs2Gs.CodeModel.Ast.Parameter(
+                this.Names(context).GetName(
+                    p,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter),
+                this.Map(p.Type, context, location)))
             .ToList();
 
         context.Report(new TranslationDiagnostic(
@@ -584,12 +601,14 @@ public sealed class CSharpTypeMapper
         type is INamedTypeSymbol { ContainingNamespace.Name: "System", ContainingNamespace.ContainingNamespace.IsGlobalNamespace: true } named
             && (named.Name == "Index" || named.Name == "Range");
 
-    internal static string LiftedNestedDelegateName(INamedTypeSymbol named)
+    internal string LiftedNestedDelegateName(
+        INamedTypeSymbol named,
+        TranslationContext context)
     {
         var parts = new List<string>();
         for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
         {
-            parts.Insert(0, CSharpToGSharpTranslator.SanitizeIdentifier(current.Name));
+            parts.Insert(0, this.Names(context).GetName(current));
         }
 
         return string.Join("_", parts);
@@ -628,6 +647,31 @@ public sealed class CSharpTypeMapper
                 type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
             : new NamedTypeReference(this.DelegateTypeName(type, context, location));
     }
+
+    private string QualifiedAliasTarget(INamedTypeSymbol type)
+    {
+        if (this.nameAllocator is null)
+        {
+            return StripGlobalPrefix(
+                type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+        }
+
+        var parts = new Stack<string>();
+        INamedTypeSymbol outermost = type;
+        for (INamedTypeSymbol current = type; current != null; current = current.ContainingType)
+        {
+            parts.Push(this.nameAllocator.GetName(current));
+            outermost = current;
+        }
+
+        string typeName = string.Join(".", parts);
+        return outermost.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? $"{this.nameAllocator.GetNamespaceName(ns)}.{typeName}"
+            : typeName;
+    }
+
+    private EmittedNameAllocator Names(TranslationContext context) =>
+        this.nameAllocator ?? EmittedNameAllocator.For(context.Compilation);
 
     /// <summary>
     /// Issue #1906: maps a C# function-pointer type (<c>delegate*&lt;...&gt;</c>)
@@ -802,7 +846,7 @@ public sealed class CSharpTypeMapper
 
         if (type is ITypeParameterSymbol typeParameter)
         {
-            return new NamedTypeReference(CSharpToGSharpTranslator.SanitizeIdentifier(typeParameter.Name));
+            return new NamedTypeReference(this.Names(context).GetName(typeParameter));
         }
 
         if (type is INamedTypeSymbol named)
@@ -898,12 +942,12 @@ public sealed class CSharpTypeMapper
                     && IsWithinContainingType(named, context, location))
                 {
                     return new NamedTypeReference(
-                        CSharpToGSharpTranslator.SanitizeIdentifier(named.Name),
+                        this.Names(context).GetName(named),
                         mappedOwnTypeArguments);
                 }
 
                 return new NamedTypeReference(
-                    CSharpToGSharpTranslator.SanitizeIdentifier(named.Name),
+                    this.Names(context).GetName(named),
                     mappedOwnTypeArguments,
                     this.Map(named.ContainingType, context, location));
             }
@@ -919,7 +963,7 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference(this.QualifiedTypeName(named, context, location));
         }
 
-        return new NamedTypeReference(CSharpToGSharpTranslator.SanitizeIdentifier(type.Name));
+        return new NamedTypeReference(this.Names(context).GetName(type));
     }
 
     private string DelegateTypeName(
@@ -928,7 +972,7 @@ public sealed class CSharpTypeMapper
         Location location)
     {
         return IsSourceDeclaredDelegate(named) && named.ContainingType != null
-            ? LiftedNestedDelegateName(named)
+            ? this.LiftedNestedDelegateName(named, context)
             : this.QualifiedTypeName(named, context, location);
     }
 
@@ -969,7 +1013,7 @@ public sealed class CSharpTypeMapper
         if (named.ContainingType == null)
         {
             this.TrackShortenedNamespace(named);
-            string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+            string simpleName = this.Names(context).GetName(named);
             if (IsDeclaredInContainingNamespace(named, context, location))
             {
                 return simpleName;
@@ -1011,7 +1055,7 @@ public sealed class CSharpTypeMapper
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs
-                ? $"{containingNs.ToDisplayString()}.{simpleName}"
+                ? $"{this.Names(context).GetNamespaceName(containingNs)}.{simpleName}"
                 : simpleName;
         }
 
@@ -1022,14 +1066,14 @@ public sealed class CSharpTypeMapper
             && !this.HasSourceHomonym(named, context)
             && IsWithinContainingType(named, context, location))
         {
-            return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+            return this.Names(context).GetName(named);
         }
 
         var parts = new List<string>();
         INamedTypeSymbol outermost = named;
         for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
         {
-            parts.Insert(0, CSharpToGSharpTranslator.SanitizeIdentifier(current.Name));
+            parts.Insert(0, this.Names(context).GetName(current));
             outermost = current;
         }
 
@@ -1041,7 +1085,7 @@ public sealed class CSharpTypeMapper
             || (scanOutermostImports && this.HasImportedNamespaceHomonym(outermost, context));
         return outermostAmbiguous
             && outermost.ContainingNamespace is { IsGlobalNamespace: false } outerNamespace
-                ? $"{outerNamespace.ToDisplayString()}.{nestedName}"
+                ? $"{this.Names(context).GetNamespaceName(outerNamespace)}.{nestedName}"
                 : nestedName;
     }
 
@@ -1100,7 +1144,8 @@ public sealed class CSharpTypeMapper
     {
         if (outermostType.ContainingNamespace is { IsGlobalNamespace: false } ns)
         {
-            this.shortenedNamespaces.Add(ns.ToDisplayString());
+            this.shortenedNamespaces.Add(
+                this.nameAllocator?.GetNamespaceName(ns) ?? ns.ToDisplayString());
         }
     }
 

@@ -62,6 +62,22 @@ public sealed class ImportedEnumArgAttribute : Attribute
     public ImportedAttributeMode Mode { get; set; }
 }
 
+/// <summary>Attribute fixture with reserved and colliding CLR identifier names.</summary>
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedReservedNamedAttribute : Attribute
+{
+    /// <summary>Initializes a new instance.</summary>
+    public ImportedReservedNamedAttribute(string @params, string params_)
+    {
+    }
+
+    /// <summary>Gets or sets reserved-name data.</summary>
+    public string @type { get; set; }
+
+    /// <summary>Gets or sets colliding legal-name data.</summary>
+    public string type_ { get; set; }
+}
+
 /// <summary>
 /// A plain reference-assembly class used to verify that imports of non-System
 /// namespaces resolve inside function and method bodies — not just in top-level
