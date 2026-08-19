@@ -171,7 +171,7 @@ namespace Demo
     }
 
     [Fact]
-    public void ImmutableArrayToReadOnlyList_UsesNativeInterfaceProjection()
+    public void ImmutableArrayToReadOnlyList_UsesUnambiguousInterfaceCast()
     {
         const string source = @"
 using System.Collections.Generic;
@@ -190,9 +190,9 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("(values as IReadOnlyList[string])!!", rendered, StringComparison.Ordinal);
+        Assert.Contains("cast[IReadOnlyList[string]](values)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("IReadOnlyList[string](values)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("values as IReadOnlyList[string]", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -226,8 +226,9 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("let boxed = (value as IValue)!!", rendered, StringComparison.Ordinal);
+        Assert.Contains("let boxed = cast[IValue](value)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("value as IValue", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(rendered + Environment.NewLine + "C().Run()");
@@ -255,8 +256,8 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("value as IValue?", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("(value as IValue?)!!", rendered, StringComparison.Ordinal);
+        Assert.Contains("cast[IValue?](value)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("value as IValue?", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
@@ -293,8 +294,8 @@ namespace Demo
 
         string rendered = Translate(source);
 
-        Assert.Contains("cast[IValue](value as IValue)", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("(value as IValue)!!", rendered, StringComparison.Ordinal);
+        Assert.Contains("cast[IValue](value)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("value as IValue", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__cast", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 

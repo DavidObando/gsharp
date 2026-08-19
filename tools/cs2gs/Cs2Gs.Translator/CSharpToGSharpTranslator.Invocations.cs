@@ -2794,37 +2794,12 @@ public sealed partial class CSharpToGSharpTranslator
                     && !targetType.IsNullable
                         ? MakeNullable(targetType)
                         : targetType;
-                if (targetSymbol is { SpecialType: SpecialType.System_Object })
-                {
-                    return new ConversionExpression(boxingTargetType, operand);
-                }
-
-                // Preserve the explicit interface result type without a
-                // synthetic typed slot. `as` supplies the interface projection;
-                // a non-null target then restores the cast's static contract.
-                var projection = new BinaryExpression(
+                bool useUnambiguousCast =
+                    targetSymbol is not { SpecialType: SpecialType.System_Object };
+                return new ConversionExpression(
+                    boxingTargetType,
                     operand,
-                    "as",
-                    new TypeExpression(boxingTargetType));
-                bool sourceIsNullableValueType =
-                    sourceSymbol is INamedTypeSymbol
-                    {
-                        OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
-                    };
-
-                // Boxing Nullable<T> with HasValue=false yields null; asserting
-                // here would turn a valid C# null result into a throw.
-                if (boxingTargetType.IsNullable)
-                {
-                    return projection;
-                }
-
-                return sourceIsNullableValueType
-                    ? new ConversionExpression(
-                        boxingTargetType,
-                        projection,
-                        isCheckedReferenceCast: true)
-                    : new NonNullAssertionExpression(projection);
+                    useUnambiguousCast);
             }
 
             // Preserve explicit class/interface-to-object casts when they
@@ -2851,6 +2826,9 @@ public sealed partial class CSharpToGSharpTranslator
                 || (conversion.IsIdentity
                     && sourceSymbol is { IsReferenceType: true }
                     && targetSymbol is { IsReferenceType: true })
+                || (conversion.IsExplicit
+                    && sourceSymbol is ITypeParameterSymbol
+                    && targetSymbol is { TypeKind: TypeKind.Interface })
                 || (sourceSymbol is { TypeKind: TypeKind.Dynamic }
                     && targetSymbol is { IsReferenceType: true });
             return new ConversionExpression(

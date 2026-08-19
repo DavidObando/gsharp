@@ -136,6 +136,63 @@ public sealed class C
     }
 
     [Fact]
+    public void ExplicitAsNullForgiveness_RemainsTestingConversion()
+    {
+        string printed = Translate(@"
+public sealed class C
+{
+    public int Length(object value) => (value as string)!.Length;
+}");
+
+        Assert.Contains("(value as string)!!.Length", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cast[string](value)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void ConditionalInterfaceBoxingCast_UsesUnambiguousCast()
+    {
+        string printed = Translate(@"
+using System.Collections.Generic;
+using System.Collections.Immutable;
+
+public static class C
+{
+    public static IReadOnlyList<string>? Names(ImmutableArray<string> argumentNames) =>
+        argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames;
+}");
+
+        Assert.Contains(
+            "if argumentNames.IsDefault { default(IReadOnlyList[string]?) } else { cast[IReadOnlyList[string]](argumentNames) }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "(argumentNames as IReadOnlyList[string])!!",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void UnconstrainedGenericInterfaceCast_UsesCheckedCast()
+    {
+        string printed = Translate(@"
+public interface IValue
+{
+    int Read();
+}
+
+public static class C
+{
+    public static IValue Cast<T>(T value) => (IValue)value;
+}");
+
+        Assert.Contains("cast[IValue](value)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("value as IValue", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void GenericAndDynamicReferenceCasts_UseConversionCalls()
     {
         string printed = Translate(@"

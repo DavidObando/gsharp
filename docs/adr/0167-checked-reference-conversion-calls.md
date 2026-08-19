@@ -51,8 +51,9 @@ cannot resolve to a constructor. `T?(value)` remains unambiguously a nullable
 conversion target.
 
 cs2gs maps every C# explicit reference cast `(T)value` to `cast[T](value)` or
-`cast[T?](value)`. Numeric/value casts keep `T(value)` / `T?(value)`. C# `as`
-expressions continue to map to G# `as`.
+`cast[T?](value)`. Explicit boxing casts to non-`object` reference targets use
+the same constructor-independent spelling. Numeric/value casts keep
+`T(value)` / `T?(value)`. C# `as` expressions continue to map to G# `as`.
 
 ## Consequences
 
