@@ -398,9 +398,18 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "Format");
+        Assert.Equal(
+            2,
+            unit.Members.OfType<MethodDeclaration>().Count(method => method.Name == "func_"));
         Assert.Single(
             unit.Members.OfType<MethodDeclaration>(),
-            method => method.Name == "func_");
+            method => method.Name == "func__");
+        Assert.Equal(
+            2,
+            shared.Members.OfType<MethodDeclaration>().Count(method => method.Name == "func_"));
+        Assert.DoesNotContain(
+            shared.Members.OfType<MethodDeclaration>(),
+            method => method.Name == "func__");
         TranslationTestValidation.AssertBinds(rendered);
     }
 
