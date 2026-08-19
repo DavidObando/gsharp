@@ -91,6 +91,9 @@ public static class GSharpAnalyzerHost
                     continue;
                 }
 
+                // `!`: CreateInstance returns null only for Nullable<T>, and
+                // the discovery filter admits only non-abstract reference
+                // types deriving from GSharpDiagnosticAnalyzer.
                 analyzers.Add((GSharpDiagnosticAnalyzer)Activator.CreateInstance(type)!);
                 found++;
             }
