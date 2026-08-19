@@ -237,7 +237,7 @@ namespace Corpus.Issue1901
 
         Assert.Contains("func JoinParts(parts IEnumerable[string]) string", rendered, StringComparison.Ordinal);
         Assert.Contains(
-            "let joined = ParamsCollections.JoinParts(List[string]{ \"a\", \"b\", \"c\" })",
+            "let joined = ParamsCollections.JoinParts(cast[IEnumerable[string]](List[string]{ \"a\", \"b\", \"c\" }))",
             rendered,
             StringComparison.Ordinal);
         AssertRoundTripParses(rendered);

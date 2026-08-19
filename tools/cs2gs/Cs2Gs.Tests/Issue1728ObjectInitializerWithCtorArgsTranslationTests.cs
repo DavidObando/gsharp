@@ -27,7 +27,7 @@ namespace Cs2Gs.Tests;
 public class Issue1728ObjectInitializerWithCtorArgsTranslationTests
 {
     [Fact]
-    public void ReferenceClassNoArgsObjectInitializer_EmitsConstructionSuffix()
+    public void ImportedReferenceClassNoArgsObjectInitializer_EmitsCompositeLiteral()
     {
         string printed = TranslateUnit(@"
 using System.Text;
@@ -39,9 +39,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("StringBuilder()", printed);
-        Assert.Contains("Capacity = 2", printed);
-        Assert.DoesNotContain("StringBuilder{Capacity:", printed);
+        Assert.Contains("StringBuilder{Capacity: 2}", printed);
+        Assert.DoesNotContain("StringBuilder(){", printed);
     }
 
     [Fact]

@@ -607,7 +607,7 @@ namespace App
     }
 
     [Fact]
-    public void CrossProject_MigratedSiblingObjectInitializer_UsesConstructorSuffix()
+    public void CrossProject_MigratedSiblingObjectInitializer_UsesCompositeLiteral()
     {
         const string library = @"
 namespace Library
@@ -644,7 +644,7 @@ namespace App
         string printed = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("Widget(){Enabled = true}", Compact(printed));
+        Assert.Contains("Widget{Enabled: true}", Compact(printed));
     }
 
     // ---- Transitive (three-project) chain: the real Oahu shape -------------

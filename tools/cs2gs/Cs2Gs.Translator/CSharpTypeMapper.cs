@@ -99,6 +99,9 @@ public sealed class CSharpTypeMapper
     private readonly Dictionary<string, string> synthesizedTypeAliases =
         new(System.StringComparer.Ordinal);
 
+    private readonly Dictionary<string, HashSet<string>> reservedTypeAliases =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared type simple
     /// names (built lazily on first use), used to decide whether a source nested
@@ -443,6 +446,29 @@ public sealed class CSharpTypeMapper
         this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
 
     /// <summary>
+    /// Reserves aliases already present in the final translated import set.
+    /// </summary>
+    /// <param name="imports">Imports collected from the active and merged source trees.</param>
+    internal void ReserveImportAliases(IEnumerable<ImportDirective> imports)
+    {
+        foreach (ImportDirective import in imports)
+        {
+            if (import.Alias == null)
+            {
+                continue;
+            }
+
+            if (!this.reservedTypeAliases.TryGetValue(import.Alias, out var targets))
+            {
+                targets = new HashSet<string>(System.StringComparer.Ordinal);
+                this.reservedTypeAliases.Add(import.Alias, targets);
+            }
+
+            targets.Add(import.Name);
+        }
+    }
+
+    /// <summary>
     /// Maps an exact inferred contract while qualifying metadata homonyms
     /// reachable through the current file's imports.
     /// </summary>
@@ -461,6 +487,49 @@ public sealed class CSharpTypeMapper
         {
             this.qualifyMetadataImportCollisions = previous;
         }
+    }
+
+    internal string GetOrCreateMetadataTypeAlias(
+        INamedTypeSymbol named,
+        TranslationContext context)
+    {
+        string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+        string target = named.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? $"{ns.ToDisplayString()}.{simpleName}"
+            : simpleName;
+        foreach (var existing in this.synthesizedTypeAliases)
+        {
+            if (existing.Value == target)
+            {
+                return existing.Key;
+            }
+        }
+
+        foreach (var reservedAlias in this.reservedTypeAliases)
+        {
+            if (reservedAlias.Value.Count == 1
+                && reservedAlias.Value.Contains(target))
+            {
+                return reservedAlias.Key;
+            }
+        }
+
+        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
+        var reserved = new HashSet<string>(
+            this.synthesizedTypeAliases.Keys,
+            System.StringComparer.Ordinal);
+        reserved.UnionWith(this.reservedTypeAliases.Keys);
+        reserved.UnionWith(this.sourceSimpleNameCounts.Keys);
+
+        string baseAlias = $"__cs2gs_{target.Replace('.', '_')}";
+        string alias = baseAlias;
+        for (var suffix = 2; reserved.Contains(alias); suffix++)
+        {
+            alias = $"{baseAlias}_{suffix}";
+        }
+
+        this.synthesizedTypeAliases.Add(alias, target);
+        return alias;
     }
 
     internal (NamedTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) GetOrCreateAnonymousDataClassShape(
@@ -933,16 +1002,12 @@ public sealed class CSharpTypeMapper
             if (!named.Locations.Any(candidate => candidate.IsInSource)
                 && named.Name == "List"
                 && named.ContainingNamespace?.ToDisplayString()
-                    == "System.Collections.Generic"
-                && named.ContainingNamespace is { IsGlobalNamespace: false } aliasNamespace)
+                    == "System.Collections.Generic")
             {
-                // ponytail: Core only needs the List<T> collision. Generalize
-                // when imported CLR type aliases bind reliably in type and
-                // constructor positions for arbitrary metadata types.
-                string target = $"{aliasNamespace.ToDisplayString()}.{simpleName}";
-                string alias = $"__cs2gs_{target.Replace('.', '_')}";
-                this.synthesizedTypeAliases[alias] = target;
-                return alias;
+                // ponytail: ordinary metadata collision qualification only
+                // needs List<T>; constructor paths request aliases explicitly
+                // when a qualified CLR constructor cannot bind.
+                return this.GetOrCreateMetadataTypeAlias(named, context);
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs

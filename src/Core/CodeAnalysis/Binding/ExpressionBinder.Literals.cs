@@ -1351,7 +1351,17 @@ internal sealed partial class ExpressionBinder
 
         var seenFieldNames = new HashSet<string>();
         var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
-        List<(string Name, TypeSymbol MemberType, CollectionInitializerExpressionSyntax Braced, SyntaxToken Anchor)>? bracedCollectionMembers = null;
+        List<(
+            FieldInitializerSyntax Syntax,
+            TypeSymbol MemberType,
+            CollectionInitializerExpressionSyntax? Braced,
+            FieldSymbol? Field,
+            StructSymbol? FieldDeclaringType,
+            PropertySymbol? Property)>? orderedInitializers =
+            syntax.Initializers.Any(initializer =>
+                initializer.Value is CollectionInitializerExpressionSyntax { Target: null })
+                ? new()
+                : null;
         foreach (var initSyntax in syntax.Initializers)
         {
             var fieldName = initSyntax.FieldIdentifier.Text;
@@ -1396,6 +1406,10 @@ internal sealed partial class ExpressionBinder
                     memberAccessibility);
             }
 
+            var memberType = hasField
+                ? Invariant.Required(field, "a resolved field has a type").Type
+                : Invariant.Required(property, "a resolved property has a type").Type;
+
             // Issue #1567: a braced member value `Member: { a, b }` populates the
             // collection member by lowering to `.Add(...)` calls on the
             // constructed receiver's `Member` (the C# collection-initializer-in-
@@ -1412,14 +1426,13 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                bracedCollectionMembers ??= new List<(string, TypeSymbol, CollectionInitializerExpressionSyntax, SyntaxToken)>();
-                bracedCollectionMembers.Add((
-                    fieldName,
-                    hasField
-                        ? Invariant.Required(field, "a resolved field has a type").Type
-                        : Invariant.Required(property, "a resolved property has a type").Type,
+                orderedInitializers!.Add((
+                    initSyntax,
+                    memberType,
                     bracedMemberInit,
-                    initSyntax.FieldIdentifier));
+                    field,
+                    fieldDeclaringType,
+                    property));
                 continue;
             }
 
@@ -1437,9 +1450,18 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var memberType = hasField
-                ? Invariant.Required(field, "a resolved field has a type").Type
-                : Invariant.Required(property, "a resolved property has a type").Type;
+            if (orderedInitializers != null)
+            {
+                orderedInitializers.Add((
+                    initSyntax,
+                    memberType,
+                    Braced: null,
+                    field,
+                    fieldDeclaringType,
+                    property));
+                continue;
+            }
+
             var valueExpr = BindExpression(initSyntax.Value);
             valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, memberType);
             inits.Add(hasField
@@ -1475,32 +1497,66 @@ internal sealed partial class ExpressionBinder
         }
 
         var structLiteral = new BoundStructLiteralExpression(null, structSymbol, inits.ToImmutable());
-        if (bracedCollectionMembers == null)
+        if (orderedInitializers == null)
         {
             return structLiteral;
         }
 
-        // Issue #1567: one or more members were populated with a braced
-        // collection initializer (`Member: { a, b }`). Construct the literal into
-        // a synthetic local, then lower each such member to `.Add(...)` calls on
-        // `local.Member`. Because the collection member is a reference type, the
-        // Adds mutate the same collection the literal already holds, so yielding
-        // the local returns the populated instance. Mirrors the imported-class
-        // and standalone collection-initializer lowerings (block + temp local).
+        // A braced member forces statement lowering for every explicit
+        // initializer so scalar assignments stay interleaved with nested
+        // object/collection population in C# textual evaluation order.
         var litTempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var litTemp = new LocalVariableSymbol(litTempName, isReadOnly: true, structSymbol);
         scope.TryDeclareVariable(litTemp);
 
         var bracedStatements = ImmutableArray.CreateBuilder<BoundStatement>();
         bracedStatements.Add(new BoundVariableDeclaration(syntax, litTemp, structLiteral));
-        foreach (var (name, memberType, braced, anchor) in bracedCollectionMembers)
+        foreach (var initializer in orderedInitializers)
         {
-            var litReceiver = new BoundVariableExpression(anchor, litTemp);
-            if (!TryEmitMemberCollectionInitializer(litReceiver, name, anchor, braced, bracedStatements))
+            if (initializer.Braced != null)
             {
-                Diagnostics.ReportTypeNotCollectionInitializable(anchor.Location, memberType);
-                BindCollectionElementsForDiagnostics(braced);
+                var litReceiver = new BoundVariableExpression(initializer.Syntax, litTemp);
+                if (!TryEmitMemberCollectionInitializer(
+                    litReceiver,
+                    initializer.Syntax.FieldIdentifier.Text,
+                    initializer.Syntax.FieldIdentifier,
+                    initializer.Braced,
+                    bracedStatements))
+                {
+                    Diagnostics.ReportTypeNotCollectionInitializable(
+                        initializer.Syntax.FieldIdentifier.Location,
+                        initializer.MemberType);
+                    BindCollectionElementsForDiagnostics(initializer.Braced);
+                }
+
+                continue;
             }
+
+            var value = BindExpression(initializer.Syntax.Value);
+            var converted = conversions.BindConversion(
+                initializer.Syntax.Value.Location,
+                value,
+                initializer.MemberType);
+            BoundExpression assignment = initializer.Field != null
+                ? new BoundFieldAssignmentExpression(
+                    initializer.Syntax,
+                    litTemp,
+                    Invariant.Required(
+                        initializer.FieldDeclaringType,
+                        "a resolved field has a declaring type"),
+                    initializer.Field,
+                    converted)
+                : new BoundPropertyAssignmentExpression(
+                    initializer.Syntax,
+                    new BoundVariableExpression(initializer.Syntax, litTemp),
+                    structSymbol,
+                    Invariant.Required(
+                        initializer.Property,
+                        "a resolved property initializer has a property"),
+                    converted);
+            bracedStatements.Add(new BoundExpressionStatement(
+                initializer.Syntax,
+                assignment));
         }
 
         var litResult = new BoundVariableExpression(syntax, litTemp);
