@@ -952,10 +952,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// constructor to reach for): the concrete <c>List&lt;T&gt;</c> class itself,
         /// plus the interfaces it already implements. Matched structurally (single
         /// type argument) rather than by shape, per issue #1901 follow-up — a
-        /// <c>ReadOnlySpan&lt;T&gt;</c>/<c>Span&lt;T&gt;</c> (C#13's PREFERRED params-collection
-        /// overload), a <c>HashSet&lt;T&gt;</c>, or any user <c>[CollectionBuilder]</c> type
-        /// has no gsc construction form and must gap instead of silently mismatching
-        /// the declared parameter type.
+        /// <c>HashSet&lt;T&gt;</c> or any user <c>[CollectionBuilder]</c> type has no
+        /// gsc construction form and must gap instead of silently mismatching the
+        /// declared parameter type. Object creation additionally lowers
+        /// <c>Span&lt;T&gt;</c>/<c>ReadOnlySpan&lt;T&gt;</c> through an array argument,
+        /// reusing gsc's existing array-to-span implicit conversion.
         /// </summary>
         private static bool IsSupportedParamsCollectionType(ITypeSymbol type)
         {
@@ -976,6 +977,11 @@ public sealed partial class CSharpToGSharpTranslator
                 SpecialType.System_Collections_Generic_IReadOnlyList_T or
                 SpecialType.System_Collections_Generic_IReadOnlyCollection_T;
         }
+
+        private static bool IsSpanParamsCollectionType(ITypeSymbol type) =>
+            type is INamedTypeSymbol { TypeArguments: [ITypeSymbol] } named
+            && named.ContainingNamespace?.ToDisplayString() == "System"
+            && named.Name is "Span" or "ReadOnlySpan";
 
         private List<GExpression> TranslateCallArguments(SyntaxNode callSyntax, SeparatedSyntaxList<ArgumentSyntax> arguments)
         {
@@ -1025,16 +1031,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateArguments(arguments);
             }
 
-            int paramsOrdinal = paramsCollectionArg.Parameter.Ordinal;
-
-            if (!IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type))
+            bool spanObjectCreation = callSyntax is BaseObjectCreationExpressionSyntax
+                && IsSpanParamsCollectionType(paramsCollectionArg.Parameter.Type);
+            if (!IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type)
+                && !spanObjectCreation)
             {
                 // gsc can only construct a List[T]{...} literal at the call site
                 // (BuildConstruction below has no other collection constructor to
-                // reach for). Anything else — params Span<T>/ReadOnlySpan<T> (the
-                // PREFERRED C#13 overload), HashSet<T>, a [CollectionBuilder] type,
-                // or a collection type with other than one type argument — has no
-                // gsc construction form.
+                // reach for). Anything else — HashSet<T>, a
+                // [CollectionBuilder] type, or a collection type with other than
+                // one type argument — has no gsc construction form. Object
+                // creation's Span<T>/ReadOnlySpan<T> case was handled above.
                 //
                 // Only gap when the callee itself is declared IN SOURCE: MapParameter
                 // gaps that same declaration (issue #1901 follow-up), and a half-
@@ -1047,8 +1054,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // params-collection argument invents a nonexistent zero-arg
                 // constructor.
                 if (targetMethod?.DeclaringSyntaxReferences.IsEmpty == false
-                    || (callSyntax is BaseObjectCreationExpressionSyntax
-                        && arguments.Count == 0))
+                    || callSyntax is BaseObjectCreationExpressionSyntax)
                 {
                     this.context.ReportUnsupported(
                         callSyntax,
@@ -1058,7 +1064,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateArguments(arguments);
             }
 
-            var translatedArguments = arguments.Take(paramsOrdinal).Select(a => this.TranslateArgument(a)).ToList();
+            var translatedArguments = this.TranslateArgumentsBeforeParamsCollection(
+                callSyntax,
+                arguments,
+                operationArguments,
+                paramsCollectionArg,
+                out int consumedSyntaxArguments);
 
             _ = this.typeMapper.Map(
                 paramsCollectionArg.Parameter.Type,
@@ -1067,8 +1078,17 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol paramsElementType = ((INamedTypeSymbol)paramsCollectionArg.Parameter.Type).TypeArguments[0];
             GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callSyntax.GetLocation());
 
-            var collectionElements = arguments.Skip(paramsOrdinal)
-                .Select(a => new CollectionInitializerElement(this.TranslateArgument(a)))
+            var paramsValues = arguments.Skip(consumedSyntaxArguments)
+                .Select(a => this.TranslateArgument(a))
+                .ToList();
+            if (spanObjectCreation)
+            {
+                translatedArguments.Add(new ArrayLiteralExpression(elementType, paramsValues));
+                return translatedArguments;
+            }
+
+            var collectionElements = paramsValues
+                .Select(value => new CollectionInitializerElement(value))
                 .ToList();
             var listType = new NamedTypeReference("List", new List<GTypeReference> { elementType });
             GExpression construction = BuildConstruction(listType, new List<GExpression>());
@@ -1082,6 +1102,39 @@ public sealed partial class CSharpToGSharpTranslator
                 ? construction
                 : new CollectionInitializerExpression(construction, collectionElements));
             return translatedArguments;
+        }
+
+        private List<GExpression> TranslateArgumentsBeforeParamsCollection(
+            SyntaxNode callSyntax,
+            SeparatedSyntaxList<ArgumentSyntax> arguments,
+            ImmutableArray<IArgumentOperation> operationArguments,
+            IArgumentOperation paramsCollectionArgument,
+            out int consumedSyntaxArguments)
+        {
+            var result = new List<GExpression>(paramsCollectionArgument.Parameter.Ordinal);
+            consumedSyntaxArguments = 0;
+            foreach (IArgumentOperation operationArgument in operationArguments)
+            {
+                if (operationArgument.ArgumentKind == ArgumentKind.ParamCollection)
+                {
+                    break;
+                }
+
+                if (operationArgument.ArgumentKind == ArgumentKind.DefaultValue)
+                {
+                    result.Add(this.TranslateOperationDefaultArgument(
+                        callSyntax,
+                        operationArgument,
+                        "parameter",
+                        coerceToParameterType: true));
+                    continue;
+                }
+
+                result.Add(this.TranslateArgument(arguments[consumedSyntaxArguments]));
+                consumedSyntaxArguments++;
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -1108,33 +1161,11 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
                 {
-                    Optional<object> constant = argumentOperation.Value.ConstantValue;
-                    GExpression defaultValue = constant.HasValue
-                        ? this.MapConstantValue(
-                            constant.Value,
-                            argumentOperation.Parameter.Type,
-                            callSyntax,
-                            $"parameter '{argumentOperation.Parameter.Name}''s default value")
-                        : null;
-                    if (defaultValue == null)
-                    {
-                        // `nil` is the CORRECT mapping for a legitimate null/default
-                        // constant (constant.Value == null); anything else that
-                        // failed to map (decimal, default(struct), or no constant
-                        // at all) has no gsc literal form — `nil` there would
-                        // silently substitute the wrong value AND type. Gap loudly.
-                        bool legitimateNull = constant.HasValue && constant.Value == null;
-                        if (!legitimateNull)
-                        {
-                            this.context.ReportUnsupported(
-                                callSyntax,
-                                $"lambda default value of type '{argumentOperation.Parameter.Type}' has no gsc constant form.");
-                        }
-
-                        defaultValue = new IdentifierExpression("nil");
-                    }
-
-                    result.Add(defaultValue);
+                    result.Add(this.TranslateOperationDefaultArgument(
+                        callSyntax,
+                        argumentOperation,
+                        "lambda parameter",
+                        coerceToParameterType: false));
                     continue;
                 }
 
@@ -1143,6 +1174,40 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return result;
+        }
+
+        private GExpression TranslateOperationDefaultArgument(
+            SyntaxNode callSyntax,
+            IArgumentOperation argumentOperation,
+            string parameterKind,
+            bool coerceToParameterType)
+        {
+            Optional<object> constant = argumentOperation.Value.ConstantValue;
+            GExpression defaultValue = constant.HasValue
+                ? this.MapConstantValue(
+                    constant.Value,
+                    argumentOperation.Parameter.Type,
+                    callSyntax,
+                    $"parameter '{argumentOperation.Parameter.Name}''s default value")
+                : null;
+            if (defaultValue == null)
+            {
+                bool legitimateNull = constant.HasValue && constant.Value == null;
+                if (!legitimateNull)
+                {
+                    this.context.ReportUnsupported(
+                        callSyntax,
+                        $"{parameterKind} default value of type '{argumentOperation.Parameter.Type}' has no gsc constant form.");
+                }
+
+                defaultValue = new IdentifierExpression("nil");
+            }
+
+            return coerceToParameterType
+                ? this.CoerceMaterializedDefault(
+                    defaultValue,
+                    argumentOperation.Parameter.Type)
+                : defaultValue;
         }
 
         private GExpression TranslateArgument(ArgumentSyntax argument)
@@ -1760,6 +1825,12 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<GExpression> arguments,
             InitializerExpressionSyntax initializer)
         {
+            if (typeSymbol is INamedTypeSymbol { SpecialType: SpecialType.System_Object } systemObject)
+            {
+                type = new NamedTypeReference(
+                    this.typeMapper.GetOrCreateMetadataTypeAlias(systemObject));
+            }
+
             bool hasCtorArgs = arguments.Count > 0;
 
             // A C# collection initializer maps to the canonical G# collection
@@ -1927,10 +1998,43 @@ public sealed partial class CSharpToGSharpTranslator
                     return arguments;
                 }
 
-                materialized.Add(this.CoerceOperandTo(defaultValue, parameter.Type));
+                materialized.Add(this.CoerceMaterializedDefault(
+                    defaultValue,
+                    parameter.Type));
             }
 
             return materialized;
+        }
+
+        private GExpression CoerceMaterializedDefault(
+            GExpression defaultValue,
+            ITypeSymbol parameterType)
+        {
+            if (!parameterType.IsReferenceType)
+            {
+                return this.CoerceOperandTo(defaultValue, parameterType);
+            }
+
+            GTypeReference mappedType = this.typeMapper.Map(
+                parameterType,
+                this.context,
+                Location.None);
+            if (defaultValue is LiteralExpression { Kind: LiteralKind.Null }
+                || defaultValue is IdentifierExpression { Name: "nil" })
+            {
+                return new DefaultValueExpression(mappedType);
+            }
+
+            if (parameterType.SpecialType == SpecialType.System_String
+                && defaultValue is LiteralExpression { Kind: LiteralKind.String })
+            {
+                return defaultValue;
+            }
+
+            return new ConversionExpression(
+                mappedType,
+                defaultValue,
+                isCheckedReferenceCast: true);
         }
 
         private bool TryBuildSourceStructConstructorFields(

@@ -86,6 +86,68 @@ namespace Cs2Gs.Tests.Fixtures
         public int Value { get; init; }
     }
 
+    public sealed class Issue3460OptionalParamsCollectionOptions
+    {
+        public Issue3460OptionalParamsCollectionOptions(
+            int marker = 7,
+            params List<int> values)
+        {
+            Marker = marker;
+            Count = values.Count;
+        }
+
+        public int Marker { get; }
+
+        public int Count { get; }
+
+        public int Value { get; init; }
+    }
+
+    public sealed class Issue3460SpanParamsOptions
+    {
+        public Issue3460SpanParamsOptions(params ReadOnlySpan<int> values)
+        {
+            Count = values.Length;
+        }
+
+        public int Count { get; }
+
+        public int Value { get; init; }
+    }
+
+    public sealed class Issue3460UnsupportedParamsOptions
+    {
+        public Issue3460UnsupportedParamsOptions(params HashSet<int> values)
+        {
+            Count = values.Count;
+        }
+
+        public int Count { get; }
+
+        public int Value { get; init; }
+    }
+
+    public sealed class Issue3460StringDefaultOptions
+    {
+        public Issue3460StringDefaultOptions(string marker = "selected")
+        {
+            Selected = 1;
+            Marker = marker;
+        }
+
+        public Issue3460StringDefaultOptions(object marker)
+        {
+            Selected = 2;
+            Marker = marker.ToString();
+        }
+
+        public int Selected { get; }
+
+        public string Marker { get; }
+
+        public int Value { get; init; }
+    }
+
     public sealed class Issue3460NonNullNestedHolder
     {
         public Issue3460NestedOptions Nested { get; } = new();
@@ -94,6 +156,11 @@ namespace Cs2Gs.Tests.Fixtures
     public sealed class Issue3460NullNestedHolder
     {
         public Issue3460NestedOptions Nested { get; }
+    }
+
+    public sealed class Issue3460NullCollectionHolder
+    {
+        public List<int> Values { get; }
     }
 }
 
@@ -158,6 +225,10 @@ namespace Cs2Gs.Tests
             string printed = Translate("""
                 namespace Demo
                 {
+                    public sealed class Object
+                    {
+                    }
+
                     public static class Obj
                     {
                         public static string Run() =>
@@ -166,7 +237,11 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("Object()", printed, StringComparison.Ordinal);
+            Assert.Contains(
+                "import __cs2gs_System_Object = System.Object",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains("__cs2gs_System_Object()", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("object{}", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
@@ -304,8 +379,17 @@ namespace Cs2Gs.Tests
 
                 public static class Obj
                 {
+                    private static int trace;
+
+                    private static int Mark(int digit)
+                    {
+                        trace = (trace * 10) + digit;
+                        return digit;
+                    }
+
                     public static int Run()
                     {
+                        trace = 0;
                         var initialized = new Issue3460NonNullNestedHolder
                         {
                             Nested = { Value = 5 },
@@ -315,13 +399,25 @@ namespace Cs2Gs.Tests
                         {
                             _ = new Issue3460NullNestedHolder
                             {
-                                Nested = { Value = 7 },
+                                Nested = { Value = Mark(1) },
                             };
                             return -1;
                         }
                         catch (NullReferenceException)
                         {
-                            return initialized.Nested!.Value;
+                        }
+
+                        try
+                        {
+                            _ = new Issue3460NullCollectionHolder
+                            {
+                                Values = { Mark(2) },
+                            };
+                            return -2;
+                        }
+                        catch (NullReferenceException)
+                        {
+                            return trace + initialized.Nested!.Value;
                         }
                     }
                 }
@@ -329,7 +425,8 @@ namespace Cs2Gs.Tests
                 MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460NestedOptions).Assembly.Location));
 
             Assert.Contains("Nested: { Value = 5 }", printed, StringComparison.Ordinal);
-            Assert.Contains("Nested: { Value = 7 }", printed, StringComparison.Ordinal);
+            Assert.Contains("Nested: { Value = Obj.Mark(1) }", printed, StringComparison.Ordinal);
+            Assert.Contains("Values: { Obj.Mark(2) }", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -337,7 +434,7 @@ namespace Cs2Gs.Tests
                 new[] { typeof(Fixtures.Issue3460NestedOptions).Assembly.Location });
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
-            Assert.Equal(5, result.Value);
+            Assert.Equal(17, result.Value);
         }
 
         [Fact]
@@ -491,7 +588,130 @@ namespace Cs2Gs.Tests
             Assert.Equal(3, result.Value);
         }
 
+        [Fact]
+        public void ImportedOptionalBeforeParamsCollection_MaterializesEveryOperationSlot()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    public static int Run()
+                    {
+                        var options = new Issue3460OptionalParamsCollectionOptions { Value = 3 };
+                        return (options.Marker * 100) + (options.Count * 10) + options.Value;
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460OptionalParamsCollectionOptions).Assembly.Location));
+
+            Assert.Contains(
+                "Issue3460OptionalParamsCollectionOptions(int32(7), List[int32]()){Value = 3}",
+                printed,
+                StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460OptionalParamsCollectionOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(703, result.Value);
+        }
+
+        [Fact]
+        public void ImportedSpanParamsCollection_ExpandedObjectCreationUsesArrayConversion()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    public static int Run()
+                    {
+                        var options = new Issue3460SpanParamsOptions(1, 2) { Value = 3 };
+                        return (options.Count * 10) + options.Value;
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460SpanParamsOptions).Assembly.Location));
+
+            Assert.Contains(
+                "Issue3460SpanParamsOptions([]int32{1, 2}){Value = 3}",
+                printed,
+                StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460SpanParamsOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(23, result.Value);
+        }
+
+        [Fact]
+        public void ImportedUnsupportedParamsCollection_NonemptyExpansionReportsDiagnostic()
+        {
+            (_, TranslationContext context) = TranslateWithContext("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    public static object Run() =>
+                        new Issue3460UnsupportedParamsOptions(1, 2) { Value = 3 };
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460UnsupportedParamsOptions).Assembly.Location));
+
+            Assert.Contains(
+                context.Diagnostics,
+                diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                    && diagnostic.Message.Contains("HashSet", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ImportedStringOptionalDefault_PreservesSelectedReferenceOverload()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    public static int Run()
+                    {
+                        var options = new Issue3460StringDefaultOptions { Value = 3 };
+                        return (options.Selected * 100)
+                            + (options.Marker.Length * 10)
+                            + options.Value;
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460StringDefaultOptions).Assembly.Location));
+
+            Assert.Contains(
+                "Issue3460StringDefaultOptions(\"selected\"){Value = 3}",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("\"selected\" as string", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460StringDefaultOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(183, result.Value);
+        }
+
         private static string Translate(
+            string source,
+            params MetadataReference[] additionalReferences)
+        {
+            return TranslateWithContext(source, additionalReferences).Printed;
+        }
+
+        private static (string Printed, TranslationContext Context) TranslateWithContext(
             string source,
             params MetadataReference[] additionalReferences)
         {
@@ -516,7 +736,7 @@ namespace Cs2Gs.Tests
                 document.SemanticModel,
                 document.FilePath);
             CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-            return GSharpPrinter.Print(unit);
+            return (GSharpPrinter.Print(unit), context);
         }
     }
 }

@@ -463,6 +463,17 @@ public sealed class CSharpTypeMapper
         }
     }
 
+    internal string GetOrCreateMetadataTypeAlias(INamedTypeSymbol named)
+    {
+        string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+        string target = named.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? $"{ns.ToDisplayString()}.{simpleName}"
+            : simpleName;
+        string alias = $"__cs2gs_{target.Replace('.', '_')}";
+        this.synthesizedTypeAliases[alias] = target;
+        return alias;
+    }
+
     internal (NamedTypeReference Type, IReadOnlyList<IPropertySymbol> Properties) GetOrCreateAnonymousDataClassShape(
         INamedTypeSymbol anonymousType,
         TranslationContext context,
@@ -933,16 +944,12 @@ public sealed class CSharpTypeMapper
             if (!named.Locations.Any(candidate => candidate.IsInSource)
                 && named.Name == "List"
                 && named.ContainingNamespace?.ToDisplayString()
-                    == "System.Collections.Generic"
-                && named.ContainingNamespace is { IsGlobalNamespace: false } aliasNamespace)
+                    == "System.Collections.Generic")
             {
-                // ponytail: Core only needs the List<T> collision. Generalize
-                // when imported CLR type aliases bind reliably in type and
-                // constructor positions for arbitrary metadata types.
-                string target = $"{aliasNamespace.ToDisplayString()}.{simpleName}";
-                string alias = $"__cs2gs_{target.Replace('.', '_')}";
-                this.synthesizedTypeAliases[alias] = target;
-                return alias;
+                // ponytail: ordinary metadata collision qualification only
+                // needs List<T>; constructor paths request aliases explicitly
+                // when a qualified CLR constructor cannot bind.
+                return this.GetOrCreateMetadataTypeAlias(named);
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs

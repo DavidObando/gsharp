@@ -797,18 +797,13 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (propRead.Type is NullableTypeSymbol nullableMember
-            && Conversion.IsReferenceLikeTarget(nullableMember.UnderlyingType))
-        {
-            var nullAssertion = BoundUnaryOperator.Bind(
-                SyntaxKind.BangBangToken,
-                nullableMember);
-            propRead = new BoundUnaryExpression(
-                braced,
-                Invariant.Required(nullAssertion, "a null assertion always binds"),
-                propRead);
-        }
-
+        // Reference nullability is metadata-only here. Keep the runtime value
+        // unchecked so assignment/Add arguments run before callvirt observes a
+        // null receiver, matching C# evaluation order.
+        TypeSymbol memberLocalType = propRead.Type is NullableTypeSymbol nullableMember
+            && Conversion.IsReferenceLikeTarget(nullableMember.UnderlyingType)
+                ? nullableMember.UnderlyingType
+                : propRead.Type;
         var nestedObjectAssignments = ImmutableArray.CreateBuilder<AssignmentExpressionSyntax?>(braced.Elements.Count);
         var hasNonIndexedElement = false;
         var hasSpreadElement = false;
@@ -825,14 +820,14 @@ internal sealed partial class ExpressionBinder
 
         var isNestedObjectInitializer = allElementsAreAssignments;
         if (!isNestedObjectInitializer &&
-            ((hasNonIndexedElement && !HasCollectionAdd(propRead.Type)) ||
-             (hasSpreadElement && !HasUnaryCollectionAdd(propRead.Type))))
+            ((hasNonIndexedElement && !HasCollectionAdd(memberLocalType)) ||
+             (hasSpreadElement && !HasUnaryCollectionAdd(memberLocalType))))
         {
             return false;
         }
 
         var tempName = "$collinit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var memberLocal = new LocalVariableSymbol(tempName, isReadOnly: false, propRead.Type);
+        var memberLocal = new LocalVariableSymbol(tempName, isReadOnly: false, memberLocalType);
         scope.TryDeclareVariable(memberLocal);
         statements.Add(new BoundVariableDeclaration(braced, memberLocal, propRead));
 
@@ -848,7 +843,7 @@ internal sealed partial class ExpressionBinder
                     nonNullAssignment.IdentifierToken,
                     nonNullAssignment.EqualsToken,
                     nonNullAssignment.Expression);
-                var boundAssignment = BindObjectInitializerAssignment(memberLocal, propRead.Type, initializer);
+                var boundAssignment = BindObjectInitializerAssignment(memberLocal, memberLocalType, initializer);
                 if (boundAssignment != null)
                 {
                     statements.Add(new BoundExpressionStatement(initializer, boundAssignment));
