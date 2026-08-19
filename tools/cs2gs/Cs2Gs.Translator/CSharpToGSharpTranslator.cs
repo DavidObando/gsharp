@@ -897,14 +897,33 @@ public sealed partial class CSharpToGSharpTranslator
         {
             root.SyntaxTree,
         };
-        var pending = new Queue<TypeDeclarationSyntax>(
-            EnumerateTopLevelDeclarations(root)
-                .OfType<TypeDeclarationSyntax>()
-                .Where(declaration => packageFilter is null
-                    || context.Compilation.GetSemanticModel(declaration.SyntaxTree)
-                        .GetDeclaredSymbol(declaration)?
-                        .ContainingNamespace?
-                        .ToDisplayString() == packageFilter));
+        var pending = new Queue<TypeDeclarationSyntax>();
+        SemanticModel rootModel = context.Compilation.GetSemanticModel(
+            root.SyntaxTree);
+        foreach (TypeDeclarationSyntax declaration in EnumerateTopLevelDeclarations(root)
+            .OfType<TypeDeclarationSyntax>())
+        {
+            INamedTypeSymbol type = rootModel.GetDeclaredSymbol(declaration);
+            if (packageFilter != null
+                && type?.ContainingNamespace?.ToDisplayString() != packageFilter)
+            {
+                continue;
+            }
+
+            if (!preservePartialParts
+                && type != null
+                && partialTypeParts.TryGetValue(
+                    type,
+                    out List<TypeDeclarationSyntax> parts)
+                && (parts[0].SyntaxTree != declaration.SyntaxTree
+                    || parts[0].Span != declaration.Span))
+            {
+                continue;
+            }
+
+            pending.Enqueue(declaration);
+        }
+
         var seen = new HashSet<TypeDeclarationSyntax>();
         while (pending.Count > 0)
         {

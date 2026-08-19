@@ -477,6 +477,60 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ContributingDeclarationGraph_SkipsNonPrimaryPartialSeeds()
+        {
+            string printed = TranslateFile(
+                "B.RootAndNonPrimary.cs",
+                preservePartialParts: false,
+                ("A.CarrierPrimary.cs", """
+                    namespace Demo;
+
+                    public partial class Carrier
+                    {
+                    }
+                    """),
+                ("B.RootAndNonPrimary.cs", """
+                    namespace Demo;
+
+                    public sealed class Root
+                    {
+                        public static string Run() =>
+                            typeof(System.Threading.Timer).FullName!;
+                    }
+
+                    public partial class Carrier
+                    {
+                        public sealed class Nested
+                        {
+                        }
+                    }
+                    """),
+                ("C.NestedExtensions.cs", """
+                    using System.Timers;
+
+                    namespace Demo;
+
+                    public static class NestedExtensions
+                    {
+                        public static int Measure(this Carrier.Nested value) => 1;
+                    }
+                    """));
+
+            Assert.Contains("import System.Threading", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("import System.Timers", printed, StringComparison.Ordinal);
+            Assert.Contains("class Root", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("class Carrier", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("func Measure()", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Demo.Root.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal("System.Threading.Timer", result.Value);
+        }
+
+        [Fact]
         public void ImportedParameterlessInitializer_PreservesOrderedMembersNestedInitializersAndRuntime()
         {
             string printed = Translate("""
