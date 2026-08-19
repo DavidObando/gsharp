@@ -118,11 +118,11 @@ public static class ResxDesignerGenerator
         string gsType = ResxTypeNameMapper.Map(entry.TypeName);
         sb.Append("        prop ").Append(identifier).Append(' ').Append(gsType).AppendLine(" {");
         sb.AppendLine("            get {");
-        sb.Append("                return (ResourceManager.GetObject(\"")
-            .Append(entry.Name)
-            .Append("\", resourceCulture) as ")
+        sb.Append("                return cast[")
             .Append(gsType)
-            .AppendLine(")!!");
+            .Append("](ResourceManager.GetObject(\"")
+            .Append(entry.Name)
+            .AppendLine("\", resourceCulture))");
         sb.AppendLine("            }");
         sb.AppendLine("        }");
     }

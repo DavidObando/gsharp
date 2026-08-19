@@ -220,6 +220,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         string package = this.packageFilter ?? this.ResolvePackage(root, context);
 
+        // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
+        // static class normally become top-level G#. When the entry class owns a
+        // nested aggregate type, keep the class intact instead.
+        IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
+        INamedTypeSymbol entryType = entryPoint?.ContainingType;
+        bool preserveEntryType = entryType?.GetTypeMembers()
+            .Any(type => type.TypeKind != TypeKind.Delegate) == true;
+
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's
         // semantic model (`TranslationContext.UseSemanticModelFor`), so a short
@@ -231,29 +239,23 @@ public sealed partial class CSharpToGSharpTranslator
         // ADR-0145 preserve mode: each part is a standalone declaration, so it
         // must NOT pull in sibling parts' `using` directives — its own imports
         // are all it needs (there is no cross-part member merge to resolve).
+        HashSet<Microsoft.CodeAnalysis.SyntaxTree> contributingTrees =
+            CollectContributingDeclarationTrees(
+                root,
+                context,
+                partialTypeParts,
+                ownedExtensions,
+                this.preservePartialParts,
+                this.packageFilter,
+                preserveEntryType ? null : entryType);
         IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
-            this.preservePartialParts
-                ? Enumerable.Empty<Microsoft.CodeAnalysis.SyntaxTree>()
-                : CollectExtraUsingTrees(root, partialTypeParts);
-        extraUsingTrees = extraUsingTrees.Concat(
-            CollectOwnedExtensionUsingTrees(root, context, ownedExtensions));
+            contributingTrees
+                .Where(tree => tree != root.SyntaxTree)
+                .OrderBy(tree => tree.FilePath, StringComparer.Ordinal);
         IReadOnlyList<ImportDirective> imports = this.TranslateImports(root, extraUsingTrees, context);
 
         HashSet<INamedTypeSymbol> openBases = GetOrCollectSubclassedBaseTypes(context.Compilation);
         HashSet<INamedTypeSymbol> staticUsingTargets = CollectStaticUsingTargets(root, context);
-
-        // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
-        // static class normally become top-level G#. When the entry class owns a
-        // nested aggregate type, keep the class intact instead: G# supports class-scoped
-        // static Main, and flattening would discard the nested type's owner and
-        // private accessibility.
-        //
-        // Computed once here and threaded through so the visitor does not
-        // recompute it (`Compilation.GetEntryPoint` re-walks the compilation).
-        IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
-        INamedTypeSymbol entryType = entryPoint?.ContainingType;
-        bool preserveEntryType = entryType?.GetTypeMembers()
-            .Any(type => type.TypeKind != TypeKind.Delegate) == true;
 
         // Share the anonymous-type registry with every other
         // document already translated (by this same translator instance)
@@ -276,6 +278,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             AnalyzerApiMode = this.analyzerApiMode,
         };
+        typeMapper.ReserveImportAliases(imports);
         var visitor = new DeclarationVisitor(
             context,
             typeMapper,
@@ -884,53 +887,105 @@ public sealed partial class CSharpToGSharpTranslator
         return result;
     }
 
-    // Issue #1910 (gap 3): for every partial type whose PRIMARY part lives in
-    // `root`, collect the distinct `SyntaxTree`s of its OTHER (non-primary)
-    // parts. Those trees' `using` directives are unioned into `root`'s import
-    // block by `TranslateImports`, because merged-in member bodies from those
-    // parts are translated under their own file's semantic model and may rely
-    // on a `using` that only exists there.
-    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectExtraUsingTrees(
-        CompilationUnitSyntax root,
-        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts)
-    {
-        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
-        foreach (List<TypeDeclarationSyntax> parts in partialTypeParts.Values)
-        {
-            if (parts[0].SyntaxTree != root.SyntaxTree)
-            {
-                continue;
-            }
-
-            foreach (TypeDeclarationSyntax part in parts.Skip(1))
-            {
-                if (part.SyntaxTree != root.SyntaxTree)
-                {
-                    trees.Add(part.SyntaxTree);
-                }
-            }
-        }
-
-        return trees;
-    }
-
-    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectOwnedExtensionUsingTrees(
+    // Builds the cycle-safe closure of declarations actually emitted into the
+    // root document: root aggregates, their merged partial declarations, their
+    // nested aggregates, and owned extension methods absorbed by those exact
+    // aggregate symbols. Imports and alias reservation consume the resulting
+    // tree set; unrelated declarations sharing one of those trees are never
+    // traversed.
+    private static HashSet<Microsoft.CodeAnalysis.SyntaxTree> CollectContributingDeclarationTrees(
         CompilationUnitSyntax root,
         TranslationContext context,
-        OwnedExtensionRegistry ownedExtensions)
+        Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
+        OwnedExtensionRegistry ownedExtensions,
+        bool preservePartialParts,
+        string packageFilter,
+        INamedTypeSymbol flattenedEntryType)
     {
-        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>();
-        foreach (TypeDeclarationSyntax declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+        var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>
         {
-            if (context.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type ||
-                !ownedExtensions.TryGetMethods(type, out IReadOnlyList<MethodDeclarationSyntax> methods))
+            root.SyntaxTree,
+        };
+        var pending = new Queue<TypeDeclarationSyntax>();
+        SemanticModel rootModel = context.Compilation.GetSemanticModel(
+            root.SyntaxTree);
+        foreach (TypeDeclarationSyntax declaration in EnumerateTopLevelDeclarations(root)
+            .OfType<TypeDeclarationSyntax>())
+        {
+            INamedTypeSymbol type = rootModel.GetDeclaredSymbol(declaration);
+            if (packageFilter != null
+                && type?.ContainingNamespace?.ToDisplayString() != packageFilter)
             {
                 continue;
             }
 
-            foreach (MethodDeclarationSyntax method in methods)
+            if (!preservePartialParts
+                && type != null
+                && partialTypeParts.TryGetValue(
+                    type,
+                    out List<TypeDeclarationSyntax> parts)
+                && (parts[0].SyntaxTree != declaration.SyntaxTree
+                    || parts[0].Span != declaration.Span))
             {
-                if (method.SyntaxTree != root.SyntaxTree)
+                continue;
+            }
+
+            pending.Enqueue(declaration);
+        }
+
+        var seen = new HashSet<TypeDeclarationSyntax>();
+        while (pending.Count > 0)
+        {
+            TypeDeclarationSyntax declaration = pending.Dequeue();
+            if (!seen.Add(declaration))
+            {
+                continue;
+            }
+
+            trees.Add(declaration.SyntaxTree);
+            SemanticModel model = context.Compilation.GetSemanticModel(
+                declaration.SyntaxTree);
+            INamedTypeSymbol type = model.GetDeclaredSymbol(declaration);
+            bool isFlattenedEntry = type != null
+                && SymbolEqualityComparer.Default.Equals(
+                    type.OriginalDefinition,
+                    flattenedEntryType?.OriginalDefinition);
+            if (isFlattenedEntry)
+            {
+                continue;
+            }
+
+            bool attachOwnedExtensions = true;
+            if (type != null
+                && partialTypeParts.TryGetValue(
+                    type,
+                    out List<TypeDeclarationSyntax> parts))
+            {
+                bool isPrimary = parts[0].SyntaxTree == declaration.SyntaxTree
+                    && parts[0].Span == declaration.Span;
+                attachOwnedExtensions = isPrimary;
+                if (!preservePartialParts && isPrimary)
+                {
+                    foreach (TypeDeclarationSyntax part in parts.Skip(1))
+                    {
+                        pending.Enqueue(part);
+                    }
+                }
+            }
+
+            foreach (TypeDeclarationSyntax nested in declaration.Members
+                .OfType<TypeDeclarationSyntax>())
+            {
+                pending.Enqueue(nested);
+            }
+
+            if (attachOwnedExtensions
+                && type != null
+                && ownedExtensions.TryGetMethods(
+                    type,
+                    out IReadOnlyList<MethodDeclarationSyntax> methods))
+            {
+                foreach (MethodDeclarationSyntax method in methods)
                 {
                     trees.Add(method.SyntaxTree);
                 }

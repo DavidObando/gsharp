@@ -479,12 +479,28 @@ internal sealed partial class MethodBodyEmitter
         // null reference for the missing-value case). `GetElementTypeToken`
         // already selects the right token for the nullable wrapper in either
         // constraint case, so we box the wrapper symbol directly.
-        if ((from is TypeParameterSymbol
-                || (from is NullableTypeSymbol fromNullableTp && fromNullableTp.UnderlyingType is TypeParameterSymbol))
+        var genericBoxSource = from as TypeParameterSymbol
+            ?? (from as NullableTypeSymbol)?.UnderlyingType as TypeParameterSymbol;
+        if (genericBoxSource != null
             && (to.ClrType?.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)))
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(from));
+
+            // Issue #3421 review follow-up: an unconstrained `T -> I`
+            // explicit cast is `box !!T; castclass I`. The castclass is what
+            // rejects incompatible reference and value instantiations.
+            // Constraint-proven implicit `T -> I` conversions remain box-only.
+            var interfaceTarget = to is NullableTypeSymbol nullableInterfaceTarget
+                ? nullableInterfaceTarget.UnderlyingType
+                : to;
+            if (IsInterfaceTargetType(interfaceTarget)
+                && !Conversion.Classify(genericBoxSource, interfaceTarget).IsImplicit)
+            {
+                this.il.OpCode(ILOpCode.Castclass);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(interfaceTarget));
+            }
+
             return;
         }
 
