@@ -463,14 +463,42 @@ public sealed class CSharpTypeMapper
         }
     }
 
-    internal string GetOrCreateMetadataTypeAlias(INamedTypeSymbol named)
+    internal string GetOrCreateMetadataTypeAlias(
+        INamedTypeSymbol named,
+        TranslationContext context)
     {
         string simpleName = CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
         string target = named.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? $"{ns.ToDisplayString()}.{simpleName}"
             : simpleName;
-        string alias = $"__cs2gs_{target.Replace('.', '_')}";
-        this.synthesizedTypeAliases[alias] = target;
+        foreach (var existing in this.synthesizedTypeAliases)
+        {
+            if (existing.Value == target)
+            {
+                return existing.Key;
+            }
+        }
+
+        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
+        var reserved = new HashSet<string>(
+            this.synthesizedTypeAliases.Keys,
+            System.StringComparer.Ordinal);
+        reserved.UnionWith(this.sourceSimpleNameCounts.Keys);
+        reserved.UnionWith(
+            context.SemanticModel.SyntaxTree.GetRoot()
+                .DescendantNodes()
+                .OfType<UsingDirectiveSyntax>()
+                .Where(directive => directive.Alias != null)
+                .Select(directive => directive.Alias.Name.Identifier.ValueText));
+
+        string baseAlias = $"__cs2gs_{target.Replace('.', '_')}";
+        string alias = baseAlias;
+        for (var suffix = 2; reserved.Contains(alias); suffix++)
+        {
+            alias = $"{baseAlias}_{suffix}";
+        }
+
+        this.synthesizedTypeAliases.Add(alias, target);
         return alias;
     }
 
@@ -949,7 +977,7 @@ public sealed class CSharpTypeMapper
                 // ponytail: ordinary metadata collision qualification only
                 // needs List<T>; constructor paths request aliases explicitly
                 // when a qualified CLR constructor cannot bind.
-                return this.GetOrCreateMetadataTypeAlias(named);
+                return this.GetOrCreateMetadataTypeAlias(named, context);
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs

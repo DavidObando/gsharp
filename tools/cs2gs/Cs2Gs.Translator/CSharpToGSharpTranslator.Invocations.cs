@@ -1083,7 +1083,9 @@ public sealed partial class CSharpToGSharpTranslator
                 .ToList();
             if (spanObjectCreation)
             {
-                translatedArguments.Add(new ArrayLiteralExpression(elementType, paramsValues));
+                translatedArguments.Add(this.CoerceMaterializedArgument(
+                    new ArrayLiteralExpression(elementType, paramsValues),
+                    paramsCollectionArg.Parameter.Type));
                 return translatedArguments;
             }
 
@@ -1098,9 +1100,18 @@ public sealed partial class CSharpToGSharpTranslator
             // element (an empty `{ }` fails to bind, GS0157); the bare
             // construction call (`List[int32]()`) is the canonical empty form
             // (mirrors the C# `[]`-collection-expression lowering above).
-            translatedArguments.Add(collectionElements.Count == 0
+            GExpression collectionArgument = collectionElements.Count == 0
                 ? construction
-                : new CollectionInitializerExpression(construction, collectionElements));
+                : new CollectionInitializerExpression(construction, collectionElements);
+            bool exactListParameter = paramsCollectionArg.Parameter.Type
+                is INamedTypeSymbol { Name: "List" } listParameter
+                && listParameter.ContainingNamespace?.ToDisplayString()
+                    == "System.Collections.Generic";
+            translatedArguments.Add(exactListParameter
+                ? collectionArgument
+                : this.CoerceMaterializedArgument(
+                    collectionArgument,
+                    paramsCollectionArg.Parameter.Type));
             return translatedArguments;
         }
 
@@ -1204,7 +1215,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return coerceToParameterType
-                ? this.CoerceMaterializedDefault(
+                ? this.CoerceMaterializedArgument(
                     defaultValue,
                     argumentOperation.Parameter.Type)
                 : defaultValue;
@@ -1828,7 +1839,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (typeSymbol is INamedTypeSymbol { SpecialType: SpecialType.System_Object } systemObject)
             {
                 type = new NamedTypeReference(
-                    this.typeMapper.GetOrCreateMetadataTypeAlias(systemObject));
+                    this.typeMapper.GetOrCreateMetadataTypeAlias(
+                        systemObject,
+                        this.context));
             }
 
             bool hasCtorArgs = arguments.Count > 0;
@@ -1998,7 +2011,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return arguments;
                 }
 
-                materialized.Add(this.CoerceMaterializedDefault(
+                materialized.Add(this.CoerceMaterializedArgument(
                     defaultValue,
                     parameter.Type));
             }
@@ -2006,34 +2019,34 @@ public sealed partial class CSharpToGSharpTranslator
             return materialized;
         }
 
-        private GExpression CoerceMaterializedDefault(
-            GExpression defaultValue,
+        private GExpression CoerceMaterializedArgument(
+            GExpression value,
             ITypeSymbol parameterType)
         {
             if (!parameterType.IsReferenceType)
             {
-                return this.CoerceOperandTo(defaultValue, parameterType);
+                return this.CoerceOperandTo(value, parameterType);
             }
 
             GTypeReference mappedType = this.typeMapper.Map(
                 parameterType,
                 this.context,
                 Location.None);
-            if (defaultValue is LiteralExpression { Kind: LiteralKind.Null }
-                || defaultValue is IdentifierExpression { Name: "nil" })
+            if (value is LiteralExpression { Kind: LiteralKind.Null }
+                || value is IdentifierExpression { Name: "nil" })
             {
                 return new DefaultValueExpression(mappedType);
             }
 
             if (parameterType.SpecialType == SpecialType.System_String
-                && defaultValue is LiteralExpression { Kind: LiteralKind.String })
+                && value is LiteralExpression { Kind: LiteralKind.String })
             {
-                return defaultValue;
+                return value;
             }
 
             return new ConversionExpression(
                 mappedType,
-                defaultValue,
+                value,
                 isCheckedReferenceCast: true);
         }
 

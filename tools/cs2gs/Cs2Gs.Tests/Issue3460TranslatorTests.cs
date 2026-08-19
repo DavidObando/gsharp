@@ -103,6 +103,28 @@ namespace Cs2Gs.Tests.Fixtures
         public int Value { get; init; }
     }
 
+    public sealed class Issue3460ParamsInterfaceOverloadOptions
+    {
+        public Issue3460ParamsInterfaceOverloadOptions(
+            params IEnumerable<int> values)
+        {
+            Selected = 1;
+            Count = values.Count();
+        }
+
+        public Issue3460ParamsInterfaceOverloadOptions(List<int> values)
+        {
+            Selected = 2;
+            Count = values.Count;
+        }
+
+        public int Selected { get; }
+
+        public int Count { get; }
+
+        public int Value { get; init; }
+    }
+
     public sealed class Issue3460SpanParamsOptions
     {
         public Issue3460SpanParamsOptions(params ReadOnlySpan<int> values)
@@ -223,9 +245,11 @@ namespace Cs2Gs.Tests
         public void SystemObjectEmptyInitializer_RemainsClrObjectConstruction()
         {
             string printed = Translate("""
+                using __cs2gs_System_Object = System.Text.StringBuilder;
+
                 namespace Demo
                 {
-                    public sealed class Object
+                    public sealed class __cs2gs_System_Object_2
                     {
                     }
 
@@ -238,10 +262,14 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains(
-                "import __cs2gs_System_Object = System.Object",
+                "import __cs2gs_System_Object = System.Text.StringBuilder",
                 printed,
                 StringComparison.Ordinal);
-            Assert.Contains("__cs2gs_System_Object()", printed, StringComparison.Ordinal);
+            Assert.Contains(
+                "import __cs2gs_System_Object_3 = System.Object",
+                printed,
+                StringComparison.Ordinal);
+            Assert.Contains("__cs2gs_System_Object_3()", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("object{}", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
@@ -620,6 +648,39 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ImportedParamsInterfaceCollection_CoercesToSelectedParameterType()
+        {
+            string printed = Translate("""
+                using Cs2Gs.Tests.Fixtures;
+
+                public static class Obj
+                {
+                    public static int Run()
+                    {
+                        var options = new Issue3460ParamsInterfaceOverloadOptions { Value = 3 };
+                        return (options.Selected * 100)
+                            + (options.Count * 10)
+                            + options.Value;
+                    }
+                }
+                """,
+                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460ParamsInterfaceOverloadOptions).Assembly.Location));
+
+            Assert.Contains(
+                "Issue3460ParamsInterfaceOverloadOptions(cast[IEnumerable[int32]](List[int32]())){Value = 3}",
+                printed,
+                StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Obj.Run()",
+                new[] { typeof(Fixtures.Issue3460ParamsInterfaceOverloadOptions).Assembly.Location });
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(103, result.Value);
+        }
+
+        [Fact]
         public void ImportedSpanParamsCollection_ExpandedObjectCreationUsesArrayConversion()
         {
             string printed = Translate("""
@@ -637,7 +698,7 @@ namespace Cs2Gs.Tests
                 MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460SpanParamsOptions).Assembly.Location));
 
             Assert.Contains(
-                "Issue3460SpanParamsOptions([]int32{1, 2}){Value = 3}",
+                "Issue3460SpanParamsOptions(ReadOnlySpan[int32]([]int32{1, 2})){Value = 3}",
                 printed,
                 StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
