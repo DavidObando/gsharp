@@ -15,6 +15,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
+using GSharpIdentifierNameContext = GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext;
 
 namespace Cs2Gs.Translator;
 
@@ -68,6 +69,7 @@ public sealed partial class CSharpToGSharpTranslator
             int nextOrdinal = 0;
             foreach (EnumMemberDeclarationSyntax member in node.Members)
             {
+                ISymbol memberSymbol = this.context.GetDeclaredSymbol(member);
                 int? explicitValue = null;
                 if (this.context.GetDeclaredSymbol(member) is IFieldSymbol { HasConstantValue: true } fieldSymbol)
                 {
@@ -101,7 +103,8 @@ public sealed partial class CSharpToGSharpTranslator
                             member.GetLocation(),
                             TranslationSeverity.Info));
                         nextOrdinal++;
-                        cases.Add(new EnumCase(SanitizeIdentifier(member.Identifier.Text)));
+                        cases.Add(new EnumCase(
+                            this.EmittedName(memberSymbol, member.Identifier.ValueText)));
                         continue;
                     }
 
@@ -118,11 +121,13 @@ public sealed partial class CSharpToGSharpTranslator
                     nextOrdinal++;
                 }
 
-                cases.Add(new EnumCase(SanitizeIdentifier(member.Identifier.Text), explicitValue: explicitValue));
+                cases.Add(new EnumCase(
+                    this.EmittedName(memberSymbol, member.Identifier.ValueText),
+                    explicitValue: explicitValue));
             }
 
             return new EnumDeclaration(
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 cases,
                 MapVisibility(symbol, this.context, node, preserveStaticClassPrivate: true),
                 attributes: this.MapAttributes(node.AttributeLists));
@@ -299,14 +304,9 @@ public sealed partial class CSharpToGSharpTranslator
             return (funcs, statements);
         }
 
-        // The set of hard G# keywords (Cs2Gs.Compiler SyntaxFacts.GetKeywordKind).
-        // A C# identifier that collides with one of these cannot be emitted bare; it
-        // is suffixed with `_` consistently at every declaration and reference site.
-        // Internal (not private) so the outer <see cref="CSharpToGSharpTranslator"/>
-        // forwarding method can expose it to <see cref="CSharpTypeMapper"/>, which
-        // routes type-name references through this exact sanitizer too (issue
-        // #1734).
-        internal static string SanitizeIdentifier(string name)
+        // G# keywords and parser-reserved declaration spellings come from the
+        // compiler's canonical SyntaxFacts source.
+        private string SanitizeIdentifier(string name)
         {
             if (string.IsNullOrEmpty(name))
             {
@@ -322,8 +322,35 @@ public sealed partial class CSharpToGSharpTranslator
                 name = name.Substring(1);
             }
 
-            return GSharpReservedWords.Contains(name) ? name + "_" : name;
+            return this.nameAllocator.GetName(name);
         }
+
+        private string EmittedName(
+            ISymbol symbol,
+            string fallbackName,
+            GSharpIdentifierNameContext context = GSharpIdentifierNameContext.General)
+        {
+            if (symbol is null)
+            {
+                return this.nameAllocator.GetName(fallbackName, context);
+            }
+
+            if (symbol is IDiscardSymbol)
+            {
+                return fallbackName;
+            }
+
+            return this.nameAllocator.GetName(symbol, context);
+        }
+
+        private string EmittedName(
+            SyntaxNode node,
+            SyntaxToken token,
+            GSharpIdentifierNameContext context = GSharpIdentifierNameContext.General) =>
+            this.EmittedName(
+                this.context.GetDeclaredSymbol(node) ?? this.context.GetSymbolInfo(node).Symbol,
+                token.ValueText,
+                context);
 
         // Issue #2382: whether `localFunction` — declared among the top-level
         // statements — captures NOTHING from its top-level-statement siblings
@@ -406,7 +433,7 @@ public sealed partial class CSharpToGSharpTranslator
             // canonical form" gap (issue #1900) that still applies to a
             // captured/non-hoisted local function.
             return new MethodDeclaration(
-                SanitizeIdentifier(localFunction.Identifier.Text),
+                this.EmittedName(symbol, localFunction.Identifier.ValueText),
                 parameters,
                 returnType,
                 body,
@@ -744,7 +771,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 result.Add((
-                    SanitizeIdentifier(prop.Identifier.Text),
+                    this.EmittedName(symbol, prop.Identifier.ValueText),
                     this.TranslateNullSeamExpression(prop.Initializer.Value)));
             }
 
@@ -889,7 +916,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             string enumTypeName = this.typeMapper.Map(namedEnum, this.context, node?.GetLocation()) is NamedTypeReference typeRef
                 ? typeRef.Name
-                : SanitizeIdentifier(namedEnum.Name);
+                : this.EmittedName(namedEnum, namedEnum.Name);
 
             // Issue #1733 N2: comparing/decomposing the constant as `long` throws
             // `OverflowException` (crashing the translator on otherwise-valid input)
@@ -913,7 +940,9 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (ToEnumBitPattern(member.ConstantValue, underlyingType) == target)
                 {
-                    return new MemberAccessExpression(new IdentifierExpression(enumTypeName), SanitizeIdentifier(member.Name));
+                    return new MemberAccessExpression(
+                        new IdentifierExpression(enumTypeName),
+                        this.EmittedName(member, member.Name));
                 }
             }
 
@@ -932,7 +961,9 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    GExpression memberExpr = new MemberAccessExpression(new IdentifierExpression(enumTypeName), SanitizeIdentifier(member.Name));
+                    GExpression memberExpr = new MemberAccessExpression(
+                        new IdentifierExpression(enumTypeName),
+                        this.EmittedName(member, member.Name));
                     combined = combined == null ? memberExpr : new BinaryExpression(combined, "|", memberExpr);
                     remaining &= ~memberValue;
                 }
@@ -1385,7 +1416,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new TypeDeclaration(
                 kind.Value,
-                SanitizeIdentifier(node.Identifier.Text),
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 typeParameters: typeParameters,
                 primaryConstructorParameters: primaryCtor,
                 baseType: baseType,
@@ -1525,7 +1556,13 @@ public sealed partial class CSharpToGSharpTranslator
                     ? this.TranslateExpression(prop.Initializer.Value)
                     : new DefaultValueExpression(type);
 
-                primaryParameters.Add(new Parameter(SanitizeIdentifier(prop.Identifier.Text), type, defaultValue: defaultValue));
+                primaryParameters.Add(new Parameter(
+                    this.EmittedName(
+                        propSymbol,
+                        prop.Identifier.ValueText,
+                        GSharpIdentifierNameContext.Parameter),
+                    type,
+                    defaultValue: defaultValue));
                 propertiesAsParams.Add(propSymbol);
             }
 
@@ -1781,7 +1818,15 @@ public sealed partial class CSharpToGSharpTranslator
                 type = this.PromoteIfUsedAsNullable(type, param);
                 type = this.PromoteDelegateParameterInvokedWithNull(type, param);
                 GExpression liftedDefault = this.BuildOptionalParameterDefault(param, type, node);
-                primaryParameters.Add(new Parameter(SanitizeIdentifier(target.Name), type, defaultValue: liftedDefault));
+                ISymbol targetSymbol = target.Property
+                    ?? ctorSymbol.ContainingType.GetMembers(target.Name).FirstOrDefault();
+                primaryParameters.Add(new Parameter(
+                    this.EmittedName(
+                        targetSymbol,
+                        target.Name,
+                        GSharpIdentifierNameContext.Parameter),
+                    type,
+                    defaultValue: liftedDefault));
                 if (target.Property != null)
                 {
                     propertiesAsParams.Add(target.Property);

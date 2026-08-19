@@ -9,11 +9,13 @@
 using System;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -1268,7 +1270,25 @@ internal sealed class CustomAttributeEncoder
 
     private void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
     {
-        var name = Invariant.Required(arg.Name, "a named attribute argument always has a member name");
+        string emittedName = Invariant.Required(
+            arg.Name,
+            "a named attribute argument always has a member name");
+        MemberInfo[] members = attributeType
+            .GetMembers(BindingFlags.Public | BindingFlags.Instance)
+            .ToArray();
+        string[] memberNames = members
+            .Select(member => member.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        string name = members
+            .Where(member => member is PropertyInfo or FieldInfo)
+            .Select(member => member.Name)
+            .FirstOrDefault(candidate =>
+                SyntaxFacts.GetEmittedIdentifier(
+                    candidate,
+                    IdentifierNameContext.General,
+                    memberNames) == emittedName)
+            ?? emittedName;
         var prop = attributeType.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
         var field = prop == null
             ? attributeType.GetField(name, BindingFlags.Public | BindingFlags.Instance)
@@ -1293,7 +1313,7 @@ internal sealed class CustomAttributeEncoder
 
         bb.WriteByte(kindTag);
         WriteCustomAttributeFieldOrPropertyType(bb, memberType);
-        bb.WriteSerializedString(arg.Name);
+        bb.WriteSerializedString(name);
         WriteCustomAttributeFixedArg(bb, memberType, arg.Value);
     }
 

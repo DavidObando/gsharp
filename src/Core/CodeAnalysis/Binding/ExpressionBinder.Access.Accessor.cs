@@ -3146,7 +3146,7 @@ internal sealed partial class ExpressionBinder
         const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public;
         foreach (var m in ClrTypeUtilities.SafeGetMethods(type, flags))
         {
-            if (string.Equals(m.Name, name, System.StringComparison.Ordinal))
+            if (ClrTypeUtilities.EmittedMemberNameMatches(m, name))
             {
                 return true;
             }
@@ -3154,7 +3154,7 @@ internal sealed partial class ExpressionBinder
 
         foreach (var p in ClrTypeUtilities.SafeGetProperties(type, flags))
         {
-            if (string.Equals(p.Name, name, System.StringComparison.Ordinal))
+            if (ClrTypeUtilities.EmittedMemberNameMatches(p, name))
             {
                 return true;
             }
@@ -3162,7 +3162,7 @@ internal sealed partial class ExpressionBinder
 
         foreach (var f in ClrTypeUtilities.SafeGetFields(type, flags))
         {
-            if (string.Equals(f.Name, name, System.StringComparison.Ordinal))
+            if (ClrTypeUtilities.EmittedMemberNameMatches(f, name))
             {
                 return true;
             }

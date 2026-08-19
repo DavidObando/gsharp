@@ -152,7 +152,7 @@ internal sealed partial class ExpressionBinder
             foreach (var method in classType.GetMethods(
                          BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
             {
-                if (method.Name == methodName
+                if (ClrTypeUtilities.EmittedMemberNameMatches(method, methodName)
                     && method.IsGenericMethodDefinition
                     && method.GetGenericArguments().Length == explicitTypeArgs.Length)
                 {
@@ -1476,20 +1476,14 @@ internal sealed partial class ExpressionBinder
             {
                 string? parameterName = parameters[parameterIndex].Name;
                 string argumentName = named.NameToken.Text;
-                if (string.Equals(
-                        parameterName,
+                if (parameterName is not null
+                    && string.Equals(
+                        SyntaxFacts.GetEmittedIdentifier(
+                            parameterName,
+                            IdentifierNameContext.Parameter,
+                            parameters.Select(parameter => parameter.Name ?? string.Empty)),
                         argumentName,
-                        StringComparison.Ordinal) ||
-
-                    // parameterName: a real (non-synthetic) method parameter
-                    // always has a name; GetKeywordKind would already have
-                    // thrown on a null reflection Name before this change.
-                    (SyntaxFacts.GetKeywordKind(parameterName!) !=
-                        SyntaxKind.IdentifierToken &&
-                        string.Equals(
-                            parameterName + "_",
-                            argumentName,
-                            StringComparison.Ordinal)))
+                        StringComparison.Ordinal))
                 {
                     return parameterIndex;
                 }

@@ -47,7 +47,8 @@ public sealed partial class CSharpToGSharpTranslator
             GPattern native = this.BuildNativePattern(pattern, binders);
             foreach (ILocalSymbol binder in binders)
             {
-                this.state.PatternBindings[binder] = new IdentifierExpression(SanitizeIdentifier(binder.Name));
+                this.state.PatternBindings[binder] =
+                    new IdentifierExpression(this.EmittedName(binder, binder.Name));
                 this.state.NativePatternVariables.Add(binder);
             }
 
@@ -169,7 +170,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (IdentifierNameSyntax identifier in scope.DescendantNodes().OfType<IdentifierNameSyntax>())
                 {
-                    if (identifier.Identifier.Text != local.Name
+                    if (identifier.Identifier.ValueText != local.Name
                         || !SymbolEqualityComparer.Default.Equals(this.context.GetSymbolInfo(identifier).Symbol, local))
                     {
                         continue;
@@ -499,7 +500,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                             if (sub.NameColon != null)
                             {
-                                directRoots.Add(SanitizeIdentifier(this.GetSubpatternMemberName(sub)));
+                                directRoots.Add(this.EmittedName(
+                                    this.GetPatternMemberSymbol(sub.NameColon.Name),
+                                    this.GetSubpatternMemberName(sub)));
                                 continue;
                             }
 
@@ -509,7 +512,7 @@ public sealed partial class CSharpToGSharpTranslator
                             }
 
                             List<string> names = SplitMemberPath(sub.ExpressionColon.Expression);
-                            string rootName = SanitizeIdentifier(names[0]);
+                            string rootName = names[0];
                             extendedRoots.Add(rootName);
                             if (!extendedTrees.TryGetValue(rootName, out ExtendedPropertyFieldTree tree))
                             {
@@ -701,13 +704,15 @@ public sealed partial class CSharpToGSharpTranslator
                 if (sub.NameColon != null)
                 {
                     fields.Add(new PropertyPatternField(
-                        SanitizeIdentifier(this.GetSubpatternMemberName(sub)),
+                        this.EmittedName(
+                            this.GetPatternMemberSymbol(sub.NameColon.Name),
+                            this.GetSubpatternMemberName(sub)),
                         this.BuildNativePattern(sub.Pattern, binders)));
                     continue;
                 }
 
                 List<string> names = SplitMemberPath(sub.ExpressionColon.Expression);
-                string rootName = SanitizeIdentifier(names[0]);
+                string rootName = names[0];
                 if (!extendedTrees.TryGetValue(rootName, out ExtendedPropertyFieldTree tree))
                 {
                     tree = new ExtendedPropertyFieldTree();
@@ -739,7 +744,7 @@ public sealed partial class CSharpToGSharpTranslator
                 binders.Add(local);
                 return this.state.NativePatternVariableAliases.TryGetValue(local, out string alias)
                     ? alias
-                    : SanitizeIdentifier(single.Identifier.Text);
+                    : this.EmittedName(single, single.Identifier);
             }
 
             return "_";

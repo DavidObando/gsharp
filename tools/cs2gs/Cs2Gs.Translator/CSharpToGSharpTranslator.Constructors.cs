@@ -15,6 +15,8 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
+using GSharpIdentifierNameContext = GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext;
+using GSharpSyntaxFacts = GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts;
 
 namespace Cs2Gs.Translator;
 
@@ -397,7 +399,7 @@ public sealed partial class CSharpToGSharpTranslator
                 IParameterSymbol parameter = argument.NameColon == null
                     ? constructor.Parameters[i]
                     : constructor.Parameters.FirstOrDefault(candidate =>
-                        candidate.Name == argument.NameColon.Name.Identifier.Text);
+                        candidate.Name == argument.NameColon.Name.Identifier.ValueText);
                 if (parameter == null || !explicitArguments.TryAdd(parameter.Ordinal, argument))
                 {
                     this.context.ReportUnsupported(
@@ -723,7 +725,7 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => Variance.None,
             };
 
-            return new TypeParameter(SanitizeIdentifier(tp.Name), legacy, flags, variance);
+            return new TypeParameter(this.EmittedName(tp, tp.Name), legacy, flags, variance);
         }
 
         // Issue #1909: `TypeDeclarationSyntax.ParameterList` carries a primary
@@ -889,11 +891,11 @@ public sealed partial class CSharpToGSharpTranslator
             return new Parameter(MapParameterName(symbol, fallbackNode), type, variadic, refKind, defaultValue, attributes);
         }
 
-        private static string MapParameterName(IParameterSymbol symbol, SyntaxNode fallbackNode)
+        private string MapParameterName(IParameterSymbol symbol, SyntaxNode fallbackNode)
         {
             if (symbol.Name != "_" || fallbackNode is not ParameterSyntax underscoreParameter)
             {
-                return SanitizeIdentifier(symbol.Name);
+                return this.EmittedName(symbol, symbol.Name);
             }
 
             int underscoreCount = underscoreParameter.Parent is ParameterListSyntax parameterList
@@ -1101,19 +1103,29 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
+                    this.ResolveAttributeType(
+                        attribute,
+                        out INamedTypeSymbol attributeType,
+                        out IAliasSymbol sourceAlias);
+                    this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
+
                     var arguments = new List<AttributeArgument>();
                     if (attribute.ArgumentList != null)
                     {
                         foreach (AttributeArgumentSyntax argument in attribute.ArgumentList.Arguments)
                         {
                             GExpression value = this.MapAttributeArgumentValue(argument);
-                            string name = argument.NameEquals?.Name.Identifier.Text
-                                ?? argument.NameColon?.Name.Identifier.Text;
+                            string name = this.TranslateAttributeArgumentName(
+                                argument,
+                                attributeType);
                             arguments.Add(new AttributeArgument(value, name));
                         }
                     }
 
-                    string attributeName = this.TranslateAttributeName(attribute);
+                    string attributeName = this.TranslateAttributeName(
+                        attribute,
+                        attributeType,
+                        sourceAlias);
 
                     attributes.Add(new AttributeUse(attributeName, arguments, target));
                 }
@@ -1125,56 +1137,160 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #3445: resolve attributes semantically so their containing
         // namespaces and aliases participate in synthesized imports, while
         // retaining source qualification and Attribute-suffix spelling.
-        private string TranslateAttributeName(AttributeSyntax attribute)
+        private void ResolveAttributeType(
+            AttributeSyntax attribute,
+            out INamedTypeSymbol attributeType,
+            out IAliasSymbol sourceAlias)
         {
             ISymbol symbol = this.context.GetSymbolInfo(attribute).Symbol
                 ?? this.context.GetSymbolInfo(attribute.Name).Symbol;
-            INamedTypeSymbol attributeType = symbol switch
+            attributeType = symbol switch
             {
                 IMethodSymbol constructor => constructor.ContainingType,
                 INamedTypeSymbol namedType => namedType,
                 IAliasSymbol aliasSymbol => aliasSymbol.Target as INamedTypeSymbol,
                 _ => null,
             };
-            IAliasSymbol sourceAlias = attribute.Name
+            sourceAlias = attribute.Name
                 .DescendantNodesAndSelf()
                 .OfType<IdentifierNameSyntax>()
                 .Select(identifier => this.context.SemanticModel.GetAliasInfo(identifier))
                 .FirstOrDefault(candidate => candidate != null);
-            this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
-            return this.TranslateUnresolvedAttributeName(attribute.Name);
         }
 
-        // Issue #1913: convert C# generic attribute angle brackets to G# square
-        // brackets while retaining the source name and qualification.
-        private string TranslateUnresolvedAttributeName(NameSyntax nameSyntax)
+        private string TranslateAttributeName(
+            AttributeSyntax attribute,
+            INamedTypeSymbol attributeType,
+            IAliasSymbol sourceAlias) =>
+            this.TranslateAttributeNameSyntax(
+                attribute.Name,
+                attributeType,
+                sourceAlias,
+                isRightmost: true);
+
+        private string TranslateAttributeNameSyntax(
+            NameSyntax nameSyntax,
+            INamedTypeSymbol attributeType,
+            IAliasSymbol sourceAlias,
+            bool isRightmost)
         {
-            string attributeName = nameSyntax.ToString();
-            int aliasSeparator = attributeName.IndexOf("::", System.StringComparison.Ordinal);
-            if (aliasSeparator >= 0)
+            switch (nameSyntax)
             {
-                // Strip a `global::` (or extern-alias) qualifier; G# has no
-                // alias-qualified name syntax.
-                attributeName = attributeName.Substring(aliasSeparator + 2);
+                case QualifiedNameSyntax qualified:
+                    return this.TranslateAttributeNameSyntax(
+                            qualified.Left,
+                            attributeType,
+                            sourceAlias,
+                            isRightmost: false)
+                        + "."
+                        + this.TranslateAttributeNameSyntax(
+                            qualified.Right,
+                            attributeType,
+                            sourceAlias,
+                            isRightmost);
+
+                case AliasQualifiedNameSyntax aliasQualified:
+                    string alias = aliasQualified.Alias.Identifier.ValueText == "global"
+                        ? null
+                        : this.EmittedName(
+                            sourceAlias,
+                            aliasQualified.Alias.Identifier.ValueText,
+                            GSharpIdentifierNameContext.Type);
+                    string aliasedName = this.TranslateAttributeNameSyntax(
+                        aliasQualified.Name,
+                        attributeType,
+                        sourceAlias,
+                        isRightmost);
+                    return alias is null ? aliasedName : alias + "." + aliasedName;
+
+                case GenericNameSyntax generic:
+                    string genericName = this.TranslateAttributeSimpleName(
+                        generic.Identifier,
+                        generic,
+                        attributeType,
+                        sourceAlias,
+                        isRightmost);
+                    IReadOnlyList<GTypeReference> typeArguments = this.MapTypeArguments(generic);
+                    return $"{genericName}[{string.Join(", ", typeArguments.Select(GSharpPrinter.RenderTypeReference))}]";
+
+                case IdentifierNameSyntax identifier:
+                    return this.TranslateAttributeSimpleName(
+                        identifier.Identifier,
+                        identifier,
+                        attributeType,
+                        sourceAlias,
+                        isRightmost);
+
+                default:
+                    return nameSyntax.ToString();
+            }
+        }
+
+        private string TranslateAttributeSimpleName(
+            SyntaxToken identifier,
+            SimpleNameSyntax syntax,
+            INamedTypeSymbol attributeType,
+            IAliasSymbol sourceAlias,
+            bool isRightmost)
+        {
+            string sourceName = identifier.ValueText;
+            IAliasSymbol alias = this.context.SemanticModel.GetAliasInfo(syntax);
+            if (alias != null)
+            {
+                return this.EmittedName(
+                    alias,
+                    sourceName,
+                    GSharpIdentifierNameContext.Type);
             }
 
-            GenericNameSyntax generic = nameSyntax switch
+            if (isRightmost
+                && attributeType != null
+                && attributeType.Name == sourceName + "Attribute"
+                && !GSharpSyntaxFacts.IsReservedIdentifier(
+                    sourceName,
+                    GSharpIdentifierNameContext.Type))
             {
-                GenericNameSyntax g => g,
-                QualifiedNameSyntax { Right: GenericNameSyntax g } => g,
-                AliasQualifiedNameSyntax { Name: GenericNameSyntax g } => g,
-                _ => null,
-            };
-
-            if (generic == null)
-            {
-                return attributeName;
+                return sourceName;
             }
 
-            IReadOnlyList<GTypeReference> typeArguments = this.MapTypeArguments(generic);
-            string baseName = attributeName.Substring(0, attributeName.IndexOf('<'));
-            string typeArgumentList = string.Join(", ", typeArguments.Select(GSharpPrinter.RenderTypeReference));
-            return $"{baseName}[{typeArgumentList}]";
+            ISymbol symbol = this.context.GetSymbolInfo(syntax).Symbol;
+            if (isRightmost && attributeType != null)
+            {
+                symbol = attributeType;
+            }
+
+            return this.EmittedName(
+                symbol ?? sourceAlias,
+                sourceName,
+                GSharpIdentifierNameContext.Type);
+        }
+
+        private string TranslateAttributeArgumentName(
+            AttributeArgumentSyntax argument,
+            INamedTypeSymbol attributeType)
+        {
+            SimpleNameSyntax nameSyntax = argument.NameEquals?.Name
+                ?? argument.NameColon?.Name;
+            if (nameSyntax == null)
+            {
+                return null;
+            }
+
+            string sourceName = nameSyntax.Identifier.ValueText;
+            ISymbol symbol = this.context.GetSymbolInfo(nameSyntax).Symbol;
+            GSharpIdentifierNameContext nameContext = argument.NameColon != null
+                ? GSharpIdentifierNameContext.Parameter
+                : GSharpIdentifierNameContext.General;
+            if (symbol == null && attributeType != null)
+            {
+                symbol = argument.NameColon != null
+                    ? attributeType.InstanceConstructors
+                        .SelectMany(constructor => constructor.Parameters)
+                        .FirstOrDefault(parameter => parameter.Name == sourceName)
+                    : attributeType.GetMembers(sourceName).FirstOrDefault();
+            }
+
+            return this.EmittedName(symbol, sourceName, nameContext);
         }
 
         // Issue #1731 N1: attribute-argument expressions here can never be an
@@ -1794,8 +1910,10 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                string ownerName = SanitizeIdentifier(pair.Symbol.ContainingSymbol?.Name ?? "scope");
-                string localName = SanitizeIdentifier(pair.Syntax.Identifier.Text);
+                string ownerName = this.EmittedName(
+                    pair.Symbol.ContainingSymbol,
+                    pair.Symbol.ContainingSymbol?.Name ?? "scope");
+                string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedStaticLocalFunctions[pair.Symbol] =
                     $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}";
             }
@@ -1900,8 +2018,10 @@ public sealed partial class CSharpToGSharpTranslator
                     containingMethod = containingMethod.ContainingSymbol as IMethodSymbol;
                 }
 
-                string ownerName = SanitizeIdentifier(pair.Symbol.ContainingSymbol?.Name ?? "scope");
-                string localName = SanitizeIdentifier(pair.Syntax.Identifier.Text);
+                string ownerName = this.EmittedName(
+                    pair.Symbol.ContainingSymbol,
+                    pair.Symbol.ContainingSymbol?.Name ?? "scope");
+                string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedRecursiveLocalFunctions[pair.Symbol] =
                     new LiftedRecursiveLocalFunction(
                         $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}",
@@ -2087,7 +2207,7 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
-                    string name = SanitizeIdentifier(syntax.Identifier.Text);
+                    string name = this.EmittedName(symbol, syntax.Identifier.ValueText);
                     members.Add(symbol);
                     names.Add(name);
                     declarations.Add(new LocalDeclarationStatement(
@@ -2202,7 +2322,7 @@ public sealed partial class CSharpToGSharpTranslator
                     bool usedHere = statements[i]
                         .DescendantNodes()
                         .OfType<IdentifierNameSyntax>()
-                        .Any(id => id.Identifier.Text == localFunction.Identifier.Text
+                        .Any(id => id.Identifier.ValueText == localFunction.Identifier.ValueText
                             && SymbolEqualityComparer.Default.Equals(
                                 this.context.GetSymbolInfo(id).Symbol, funcSymbol));
                     if (usedHere)
@@ -2336,7 +2456,7 @@ public sealed partial class CSharpToGSharpTranslator
                 body = new BlockStatement(new GStatement[]
                 {
                     new FixedStatement(
-                        SanitizeIdentifier(declarator.Identifier.Text),
+                        this.EmittedName(declarator, declarator.Identifier),
                         pointerType,
                         source,
                         body),
@@ -2558,7 +2678,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // lowers to G#'s async-iteration form `await for x in seq`
                     // (spec AwaitForRangeStmt). Without it, iterating an
                     // `IAsyncEnumerable<T>` with a plain `for` is rejected (GS0116).
-                    string loopIdentifier = SanitizeIdentifier(forEach.Identifier.Text);
+                    string loopIdentifier = this.EmittedName(
+                        this.context.GetDeclaredSymbol(forEach),
+                        forEach.Identifier.ValueText);
                     BlockStatement loopBody = this.TranslateStatementAsBlock(forEach.Statement);
                     Conversion elementConversion = this.context.SemanticModel
                         .GetForEachStatementInfo(forEach)

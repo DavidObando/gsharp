@@ -24,6 +24,12 @@ public sealed partial class CSharpToGSharpTranslator
     {
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
         {
+            if (invocation.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" }
+                && this.context.SemanticModel.GetConstantValue(invocation) is { HasValue: true, Value: string name })
+            {
+                return LiteralExpression.String(name);
+            }
+
             GExpression target;
             IReadOnlyList<GTypeReference> typeArguments = null;
 
@@ -75,7 +81,8 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (LiftedLocalFunctionCapture capture in recursiveLift.Captures)
                 {
                     GExpression captureArgument =
-                        new IdentifierExpression(SanitizeIdentifier(capture.Symbol.Name));
+                        new IdentifierExpression(
+                            this.EmittedName(capture.Symbol, capture.Symbol.Name));
                     recursiveArguments.Add(capture.IsByRef
                         ? new UnaryExpression("&", captureArgument)
                         : captureArgument);
@@ -193,7 +200,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return new InvocationExpression(
                     new MemberAccessExpression(
                         staticExtReceiver,
-                        SanitizeIdentifier((staticExt.ReducedFrom ?? staticExt).Name)),
+                        this.EmittedName(
+                            staticExt.ReducedFrom ?? staticExt,
+                            (staticExt.ReducedFrom ?? staticExt).Name)),
                     staticExtRest,
                     staticExtTypeArgs);
             }
@@ -234,7 +243,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return new InvocationExpression(
                     new MemberAccessExpression(
                         bareExtReceiver,
-                        SanitizeIdentifier((bareExt.ReducedFrom ?? bareExt).Name)),
+                        this.EmittedName(
+                            bareExt.ReducedFrom ?? bareExt,
+                            (bareExt.ReducedFrom ?? bareExt).Name)),
                     bareExtRest,
                     bareExtTypeArgs);
             }
@@ -269,7 +280,28 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (invocation.Expression is GenericNameSyntax generic)
             {
-                target = new IdentifierExpression(SanitizeIdentifier(generic.Identifier.Text));
+                ISymbol genericSymbol = this.context.GetSymbolInfo(invocation).Symbol;
+                if (genericSymbol is IMethodSymbol
+                    { IsStatic: true, ContainingType: { TypeKind: TypeKind.Class or TypeKind.Struct } genericOwner } genericMethod
+                    && RequiresQualifiedImportedContextualCall(
+                        genericMethod,
+                        includeGenericPrefix: true))
+                {
+                    target = new MemberAccessExpression(
+                        this.StaticQualifierReceiver(
+                            genericOwner,
+                            generic.GetLocation()),
+                        this.EmittedName(
+                            genericMethod,
+                            generic.Identifier.ValueText));
+                }
+                else
+                {
+                    target = new IdentifierExpression(this.EmittedName(
+                        genericSymbol,
+                        generic.Identifier.ValueText));
+                }
+
                 typeArguments = this.MapTypeArguments(generic);
             }
             else if (invocation.Expression is MemberAccessExpressionSyntax member
@@ -277,7 +309,9 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 target = new MemberAccessExpression(
                     this.TranslateExpression(member.Expression),
-                    SanitizeIdentifier(memberGeneric.Identifier.Text));
+                    this.EmittedName(
+                        this.context.GetSymbolInfo(invocation).Symbol,
+                        memberGeneric.Identifier.ValueText));
                 typeArguments = this.MapTypeArguments(memberGeneric);
             }
             else if (invocation.Expression is MemberBindingExpressionSyntax memberBinding
@@ -289,14 +323,17 @@ public sealed partial class CSharpToGSharpTranslator
                 // bracket-type-argument form so the chained call keeps `[T...]`.
                 target = new MemberAccessExpression(
                     new ConditionalReceiverExpression(),
-                    SanitizeIdentifier(memberBindingGeneric.Identifier.Text));
+                    this.EmittedName(
+                        this.context.GetSymbolInfo(invocation).Symbol,
+                        memberBindingGeneric.Identifier.ValueText));
                 typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
                 this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true, MethodKind: not MethodKind.LocalFunction } staticMethod &&
                 staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
-                !this.IsStaticUsingTarget(owner) &&
+                (!this.IsStaticUsingTarget(owner)
+                    || RequiresQualifiedImportedContextualCall(staticMethod)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 // A C# bare sibling static call (`Round(value, 2)`) carries an
@@ -314,7 +351,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // via `MethodKind: not MethodKind.LocalFunction`.
                 target = new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, bareName.GetLocation()),
-                    staticMethod.Name);
+                    this.EmittedName(staticMethod, staticMethod.Name));
             }
             else
             {
@@ -341,6 +378,27 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        private static bool RequiresQualifiedImportedContextualCall(
+            IMethodSymbol method,
+            bool includeGenericPrefix = false)
+        {
+            if (!method.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            var context =
+                GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Invocation;
+            if (includeGenericPrefix)
+            {
+                context |= GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Index;
+            }
+
+            return GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+                method.Name,
+                context);
         }
 
         private static bool TryGetExplicitExtensionReceiverArgument(
@@ -415,7 +473,7 @@ public sealed partial class CSharpToGSharpTranslator
             switch (callee)
             {
                 case MemberAccessExpressionSyntax member
-                    when member.Name.Identifier.Text == "Invoke":
+                    when member.Name.Identifier.ValueText == "Invoke":
                     // A nullable delegate/event receiver spelled `field.Invoke(...)`
                     // needs the same `!!` the direct-call spelling `field(...)` gets
                     // below (#1598): route through the shared receiver-forgiveness
@@ -425,7 +483,7 @@ public sealed partial class CSharpToGSharpTranslator
                     receiver = this.TranslateReceiverWithNullForgiveness(member.Expression);
                     return true;
                 case MemberBindingExpressionSyntax binding
-                    when binding.Name.Identifier.Text == "Invoke":
+                    when binding.Name.Identifier.ValueText == "Invoke":
                     receiver = new ConditionalReceiverExpression();
                     return true;
 
@@ -748,8 +806,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             IMethodSymbol original = method.ReducedFrom ?? method;
-            ownerName = original.ContainingType?.Name is { } containingName ? SanitizeIdentifier(containingName) : null;
-            methodName = SanitizeIdentifier(original.Name);
+            ownerName = original.ContainingType is { } containingType
+                ? this.EmittedName(containingType, containingType.Name)
+                : null;
+            methodName = this.EmittedName(original, original.Name);
             return ownerName != null;
         }
 
@@ -779,10 +839,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ownerName = original.ContainingType?.Name is { } containingName
-                ? SanitizeIdentifier(containingName)
+            ownerName = original.ContainingType is { } containingType
+                ? this.EmittedName(containingType, containingType.Name)
                 : null;
-            methodName = SanitizeIdentifier(original.Name);
+            methodName = this.EmittedName(original, original.Name);
             return ownerName != null;
         }
 
@@ -1235,7 +1295,9 @@ public sealed partial class CSharpToGSharpTranslator
             return argument.NameColon == null
                 ? value
                 : new NamedArgumentExpression(
-                    SanitizeIdentifier(argument.NameColon.Name.Identifier.Text),
+                    this.EmittedName(
+                        this.context.GetSymbolInfo(argument.NameColon.Name).Symbol,
+                        argument.NameColon.Name.Identifier.ValueText),
                     value);
         }
 
@@ -1254,7 +1316,7 @@ public sealed partial class CSharpToGSharpTranslator
                     };
                 }
 
-                if (argument.Expression is IdentifierNameSyntax { Identifier.Text: "_" })
+                if (argument.Expression is IdentifierNameSyntax { Identifier.ValueText: "_" })
                 {
                     return new OutArgumentExpression("out", "_");
                 }
@@ -1531,7 +1593,7 @@ public sealed partial class CSharpToGSharpTranslator
                             : this.StaticQualifierReceiver(
                                 original.ContainingType,
                                 expression.GetLocation()),
-                        helperName ?? SanitizeIdentifier(original.Name));
+                        helperName ?? this.EmittedName(original, original.Name));
                 }
                 else
                 {
@@ -1545,7 +1607,7 @@ public sealed partial class CSharpToGSharpTranslator
                         extensionMember.Expression);
                     target = new MemberAccessExpression(
                         receiver,
-                        SanitizeIdentifier(original.Name));
+                        this.EmittedName(original, original.Name));
                 }
             }
 
@@ -1611,7 +1673,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, expression.GetLocation()),
-                    SanitizeIdentifier(method.Name));
+                    this.EmittedName(method, method.Name));
             }
 
             if (expression is MemberAccessExpressionSyntax member
@@ -1623,7 +1685,7 @@ public sealed partial class CSharpToGSharpTranslator
                     member.Expression);
                 return new MemberAccessExpression(
                     receiver,
-                    SanitizeIdentifier(member.Name.Identifier.ValueText));
+                    this.EmittedName(method, member.Name.Identifier.ValueText));
             }
 
             return this.TranslateExpression(expression);
@@ -1786,7 +1848,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             return argument.Parent?.Parent is InvocationExpressionSyntax
             {
-                Expression: IdentifierNameSyntax { Identifier.Text: "nameof" },
+                Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
             };
         }
 
@@ -2387,7 +2449,7 @@ public sealed partial class CSharpToGSharpTranslator
                         if (memberElements != null)
                         {
                             fieldInitializers.Add(new FieldInitializer(
-                                SanitizeIdentifier(name.Identifier.Text),
+                                this.EmittedName(name, name.Identifier),
                                 new CollectionInitializerExpression(target: null, memberElements)));
                             continue;
                         }
@@ -2395,7 +2457,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     GExpression value = this.TranslateExpression(assignment.Right);
                     fieldInitializers.Add(new FieldInitializer(
-                        SanitizeIdentifier(name.Identifier.Text),
+                        this.EmittedName(name, name.Identifier),
                         this.ForgiveObjectInitializerValue(assignment, value)));
                 }
                 else
@@ -2443,7 +2505,7 @@ public sealed partial class CSharpToGSharpTranslator
                         if (memberElements != null)
                         {
                             memberInitializers.Add(new FieldInitializer(
-                                SanitizeIdentifier(name.Identifier.Text),
+                                this.EmittedName(name, name.Identifier),
                                 new CollectionInitializerExpression(target: null, memberElements)));
                             continue;
                         }
@@ -2456,14 +2518,14 @@ public sealed partial class CSharpToGSharpTranslator
                         if (memberElements != null)
                         {
                             memberInitializers.Add(new FieldInitializer(
-                                SanitizeIdentifier(name.Identifier.Text),
+                                this.EmittedName(name, name.Identifier),
                                 new CollectionInitializerExpression(target: null, memberElements)));
                             continue;
                         }
                     }
 
                     memberInitializers.Add(new FieldInitializer(
-                        SanitizeIdentifier(name.Identifier.Text),
+                        this.EmittedName(name, name.Identifier),
                         this.ForgiveObjectInitializerValue(
                             assignment,
                             this.TranslateExpression(assignment.Right))));
@@ -2533,7 +2595,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (element is AssignmentExpressionSyntax { Left: IdentifierNameSyntax memberName } memberAssignment)
                 {
                     elements.Add(new CollectionInitializerElement(
-                        SanitizeIdentifier(memberName.Identifier.Text),
+                        this.EmittedName(memberName, memberName.Identifier),
                         this.TranslateExpression(memberAssignment.Right)));
                 }
                 else if (element is AssignmentExpressionSyntax { Left: ImplicitElementAccessSyntax indexAccess } indexedAssignment)
@@ -2946,7 +3008,9 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 fieldInitializers.Add(new FieldInitializer(
-                    SanitizeIdentifier(initialization.MemberName),
+                    this.EmittedName(
+                        plan.Constructor.ContainingType.GetMembers(initialization.MemberName).FirstOrDefault(),
+                        initialization.MemberName),
                     argumentValue));
             }
 
@@ -2970,7 +3034,9 @@ public sealed partial class CSharpToGSharpTranslator
                 using IDisposable modelScope = this.context.UseSemanticModelFor(fixedExpression.SyntaxTree);
                 GExpression value = this.TranslateExpression(fixedExpression);
                 fieldInitializers.Add(new FieldInitializer(
-                    SanitizeIdentifier(initialization.MemberName),
+                    this.EmittedName(
+                        plan.Constructor.ContainingType.GetMembers(initialization.MemberName).FirstOrDefault(),
+                        initialization.MemberName),
                     value));
             }
 
@@ -3096,7 +3162,7 @@ public sealed partial class CSharpToGSharpTranslator
                     assignment.Left is IdentifierNameSyntax name)
                 {
                     updates.Add(new FieldInitializer(
-                        SanitizeIdentifier(name.Identifier.Text),
+                        this.EmittedName(name, name.Identifier),
                         this.TranslateExpression(assignment.Right)));
                 }
                 else

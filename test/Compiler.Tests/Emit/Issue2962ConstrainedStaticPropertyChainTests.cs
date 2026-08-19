@@ -251,7 +251,7 @@ public class Issue2962ConstrainedStaticPropertyChainTests
 
             Assert.Equal(1, exitCode);
             Assert.Contains(
-                "error GS0333: Constrained static access 'sizeof(int32)' on type parameter 'T' must name a static-virtual member declared by an interface constraint (ADR-0089).",
+                "error GS0333: Constrained static access 'sizeof' on type parameter 'T' must name a static-virtual member declared by an interface constraint (ADR-0089).",
                 output,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("GS9999", output, StringComparison.Ordinal);

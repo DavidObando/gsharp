@@ -21,6 +21,69 @@ public class SyntaxFactsTests
     }
 
     [Theory]
+    [InlineData("class", true)]
+    [InlineData("params", false)]
+    [InlineData("scoped", false)]
+    public void IsReservedIdentifier_ReturnsExpected(string text, bool expected)
+    {
+        Assert.Equal(expected, SyntaxFacts.IsReservedIdentifier(text));
+    }
+
+    [Theory]
+    [InlineData("params", IdentifierNameContext.Parameter)]
+    [InlineData("scoped", IdentifierNameContext.Parameter)]
+    [InlineData("ref", IdentifierNameContext.Parameter)]
+    [InlineData("out", IdentifierNameContext.Parameter)]
+    [InlineData("in", IdentifierNameContext.Parameter)]
+    [InlineData("scoped", IdentifierNameContext.Local)]
+    [InlineData("ref", IdentifierNameContext.Local)]
+    [InlineData("in", IdentifierNameContext.TypeParameter)]
+    [InlineData("out", IdentifierNameContext.TypeParameter)]
+    [InlineData("nameof", IdentifierNameContext.Invocation)]
+    [InlineData("checked", IdentifierNameContext.Invocation)]
+    [InlineData("unchecked", IdentifierNameContext.Invocation)]
+    [InlineData("typeof", IdentifierNameContext.Invocation)]
+    [InlineData("sizeof", IdentifierNameContext.Invocation)]
+    [InlineData("init", IdentifierNameContext.Invocation)]
+    [InlineData("when", IdentifierNameContext.Pattern)]
+    [InlineData("and", IdentifierNameContext.Pattern)]
+    [InlineData("or", IdentifierNameContext.Pattern)]
+    [InlineData("event", IdentifierNameContext.Type)]
+    [InlineData("prop", IdentifierNameContext.Type)]
+    [InlineData("init", IdentifierNameContext.Type)]
+    [InlineData("convenience", IdentifierNameContext.Type)]
+    [InlineData("shared", IdentifierNameContext.Type)]
+    [InlineData("delegate", IdentifierNameContext.Type)]
+    [InlineData("unmanaged", IdentifierNameContext.Type)]
+    [InlineData("stackalloc", IdentifierNameContext.Index)]
+    [InlineData("base", IdentifierNameContext.Index)]
+    public void IsReservedIdentifier_ContextualSpellings_ReturnTrue(
+        string text,
+        IdentifierNameContext context)
+    {
+        Assert.True(SyntaxFacts.IsReservedIdentifier(text, context));
+    }
+
+    [Fact]
+    public void GetEmittedIdentifier_ReservesLegalSourceNamesBeforeSuffixing()
+    {
+        string[] names = { "params", "params_" };
+
+        Assert.Equal(
+            "params__",
+            SyntaxFacts.GetEmittedIdentifier(
+                "params",
+                IdentifierNameContext.Parameter,
+                names));
+        Assert.Equal(
+            "params_",
+            SyntaxFacts.GetEmittedIdentifier(
+                "params_",
+                IdentifierNameContext.Parameter,
+                names));
+    }
+
+    [Theory]
     [InlineData(SyntaxKind.PlusToken, "+")]
     [InlineData(SyntaxKind.FuncKeyword, "func")]
     [InlineData(SyntaxKind.ColonEqualsToken, ":=")]

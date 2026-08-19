@@ -18,6 +18,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -126,6 +127,7 @@ public sealed class ReferenceResolver : IDisposable
     // suffix for open generics — exactly the spellings Assembly.GetType accepts
     // and the binder already constructs (e.g. "Ns.Type`1").
     private readonly Lazy<Dictionary<string, Type>> typeNameIndex;
+    private readonly Lazy<Dictionary<string, string>> emittedTypeNameIndex;
 
     // ADR-0107 (cold-start cache): an optional, externally-supplied
     // full-name -> declaring-assembly-index map that stands in for the eager
@@ -184,6 +186,12 @@ public sealed class ReferenceResolver : IDisposable
         this.runtimeContext = runtimeContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies);
+        this.emittedTypeNameIndex = new Lazy<Dictionary<string, string>>(
+            () => BuildEmittedTypeNameIndex(
+                this.warmNameIndex is { } warm
+                    ? (IEnumerable<string>)warm.Keys
+                    : this.typeNameIndex.Value.Keys),
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     private sealed class NotFoundSentinel
@@ -1190,6 +1198,17 @@ public sealed class ReferenceResolver : IDisposable
                 return true;
             }
 
+            if (TryFindRawTypeName(
+                    fullName,
+                    out string? rawWarmName)
+                && warmNameIndex.TryGetValue(rawWarmName, out assemblyIndex)
+                && TryMaterializeWarmType(rawWarmName, assemblyIndex, out warm))
+            {
+                resolveCache.TryAdd(fullName, warm);
+                type = warm;
+                return true;
+            }
+
             resolveCache.TryAdd(fullName, MissTypeSentinel);
             return false;
         }
@@ -1201,8 +1220,160 @@ public sealed class ReferenceResolver : IDisposable
             return true;
         }
 
+        if (TryFindRawTypeName(
+                fullName,
+                out string? rawName)
+            && typeNameIndex.Value.TryGetValue(rawName, out indexed))
+        {
+            resolveCache.TryAdd(fullName, indexed);
+            type = indexed;
+            return true;
+        }
+
         resolveCache.TryAdd(fullName, MissTypeSentinel);
         return false;
+    }
+
+    private bool TryFindRawTypeName(
+        string emittedName,
+        [NotNullWhen(true)] out string? rawName)
+    {
+        return this.emittedTypeNameIndex.Value.TryGetValue(
+            emittedName,
+            out rawName);
+    }
+
+    private static Dictionary<string, string> BuildEmittedTypeNameIndex(
+        IEnumerable<string> rawNames)
+    {
+        string[] names = rawNames.ToArray();
+        Dictionary<string, HashSet<string>> scopes = BuildTypeNameScopes(names);
+        var index = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string candidate in names)
+        {
+            string canonical = CanonicalTypeName(candidate, scopes);
+            index.TryAdd(canonical, candidate);
+            index.TryAdd(canonical.Replace('+', '.'), candidate);
+        }
+
+        return index;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildTypeNameScopes(
+        IEnumerable<string> rawNames)
+    {
+        var scopes = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (string fullName in rawNames)
+        {
+            SplitRawTypeName(
+                fullName,
+                out string[] namespaceParts,
+                out string[] typeParts);
+            string parent = "namespace:";
+            foreach (string part in namespaceParts)
+            {
+                Add(parent, StripArity(part));
+                parent += "." + part;
+            }
+
+            parent = "type:" + string.Join(".", namespaceParts);
+            foreach (string part in typeParts)
+            {
+                Add(parent, StripArity(part));
+                parent += "+" + part;
+            }
+        }
+
+        return scopes;
+
+        void Add(string scope, string name)
+        {
+            if (!scopes.TryGetValue(scope, out HashSet<string>? names))
+            {
+                names = new HashSet<string>(StringComparer.Ordinal);
+                scopes[scope] = names;
+            }
+
+            names.Add(name);
+        }
+    }
+
+    private static string CanonicalTypeName(
+        string rawName,
+        IReadOnlyDictionary<string, HashSet<string>> scopes)
+    {
+        SplitRawTypeName(
+            rawName,
+            out string[] namespaceParts,
+            out string[] typeParts);
+        var canonicalNamespace = new List<string>(namespaceParts.Length);
+        string parent = "namespace:";
+        foreach (string part in namespaceParts)
+        {
+            string sourceName = StripArity(part);
+            scopes.TryGetValue(parent, out HashSet<string>? siblingNames);
+            canonicalNamespace.Add(SyntaxFacts.GetEmittedIdentifier(
+                sourceName,
+                IdentifierNameContext.General,
+                siblingNames));
+            parent += "." + part;
+        }
+
+        var canonicalTypes = new List<string>(typeParts.Length);
+        parent = "type:" + string.Join(".", namespaceParts);
+        foreach (string part in typeParts)
+        {
+            int arityIndex = part.IndexOf('`');
+            string sourceName = arityIndex >= 0
+                ? part.Substring(0, arityIndex)
+                : part;
+            string arity = arityIndex >= 0
+                ? part.Substring(arityIndex)
+                : string.Empty;
+            scopes.TryGetValue(parent, out HashSet<string>? siblingNames);
+            canonicalTypes.Add(
+                SyntaxFacts.GetEmittedIdentifier(
+                    sourceName,
+                    IdentifierNameContext.Type,
+                    siblingNames)
+                + arity);
+            parent += "+" + part;
+        }
+
+        string typeName = string.Join("+", canonicalTypes);
+        return canonicalNamespace.Count == 0
+            ? typeName
+            : string.Join(".", canonicalNamespace) + "." + typeName;
+    }
+
+    private static void SplitRawTypeName(
+        string fullName,
+        out string[] namespaceParts,
+        out string[] typeParts)
+    {
+        int nestedIndex = fullName.IndexOf('+');
+        string topLevel = nestedIndex >= 0
+            ? fullName.Substring(0, nestedIndex)
+            : fullName;
+        int namespaceEnd = topLevel.LastIndexOf('.');
+        namespaceParts = namespaceEnd >= 0
+            ? topLevel.Substring(0, namespaceEnd).Split('.')
+            : Array.Empty<string>();
+        string topType = namespaceEnd >= 0
+            ? topLevel.Substring(namespaceEnd + 1)
+            : topLevel;
+        string nestedTypes = nestedIndex >= 0
+            ? fullName.Substring(nestedIndex + 1)
+            : string.Empty;
+        typeParts = string.IsNullOrEmpty(nestedTypes)
+            ? new[] { topType }
+            : new[] { topType }.Concat(nestedTypes.Split('+')).ToArray();
+    }
+
+    private static string StripArity(string name)
+    {
+        int arityIndex = name.IndexOf('`');
+        return arityIndex >= 0 ? name.Substring(0, arityIndex) : name;
     }
 
     // Issue: an `internal` (non-externally-visible) type declared by a

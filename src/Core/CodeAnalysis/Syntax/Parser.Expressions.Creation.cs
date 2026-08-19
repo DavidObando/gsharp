@@ -672,10 +672,13 @@ public partial class Parser
         return false;
     }
 
-    private ExpressionSyntax ParseNameOrCallExpression(bool stopBeforeIndirectInvocation = false)
+    private ExpressionSyntax ParseNameOrCallExpression(
+        bool stopBeforeIndirectInvocation = false,
+        bool allowContextualOperators = true)
     {
         ExpressionSyntax current;
-        if (Current.Kind == SyntaxKind.IdentifierToken
+        if (allowContextualOperators
+            && Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "make"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
             && Peek(2).Kind == SyntaxKind.ChanKeyword)
@@ -683,21 +686,24 @@ public partial class Parser
             // Phase 5.4 / ADR-0022: contextual `make(chan T)` / `make(chan T, capacity)`.
             current = ParseMakeChannelExpression();
         }
-        else if (Current.Kind == SyntaxKind.IdentifierToken
+        else if (allowContextualOperators
+            && Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "typeof"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             // Issue #143: contextual `typeof(T)` — argument is a type clause.
             current = ParseTypeOfExpression();
         }
-        else if (Current.Kind == SyntaxKind.IdentifierToken
+        else if (allowContextualOperators
+            && Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "sizeof"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             // Issue #1336: contextual `sizeof(T)` — argument is a type clause.
             current = ParseSizeOfExpression();
         }
-        else if (Current.Kind == SyntaxKind.IdentifierToken
+        else if (allowContextualOperators
+            && Current.Kind == SyntaxKind.IdentifierToken
             && (Current.Text == "checked" || Current.Text == "unchecked")
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
@@ -705,7 +711,8 @@ public partial class Parser
             // argument is an arithmetic expression, not a type clause.
             current = ParseCheckedExpression();
         }
-        else if (Current.Kind == SyntaxKind.IdentifierToken
+        else if (allowContextualOperators
+            && Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "nameof"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {

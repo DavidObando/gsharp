@@ -1107,9 +1107,10 @@ internal sealed partial class OverloadResolver
 
     private static bool ContainsClrParameterName(IEnumerable<string> parameterNames, string name)
     {
-        foreach (var parameterName in parameterNames)
+        string[] names = parameterNames.ToArray();
+        foreach (var parameterName in names)
         {
-            if (ClrParameterNameMatches(parameterName, name))
+            if (ClrParameterNameMatches(parameterName, name, names))
             {
                 return true;
             }
@@ -1120,10 +1121,15 @@ internal sealed partial class OverloadResolver
 
     private static bool ClrParameterNameMatches(
         string parameterName,
-        string argumentName) =>
-        string.Equals(parameterName, argumentName, StringComparison.Ordinal) ||
-        (SyntaxFacts.GetKeywordKind(parameterName) != SyntaxKind.IdentifierToken &&
-            string.Equals(parameterName + "_", argumentName, StringComparison.Ordinal));
+        string argumentName,
+        IEnumerable<string> parameterNames) =>
+        string.Equals(
+            SyntaxFacts.GetEmittedIdentifier(
+                parameterName,
+                IdentifierNameContext.Parameter,
+                parameterNames),
+            argumentName,
+            StringComparison.Ordinal);
 
     public void ValidateRefArguments(
         ImmutableArray<BoundExpression> arguments,

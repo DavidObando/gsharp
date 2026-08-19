@@ -100,18 +100,26 @@ public sealed partial class CSharpToGSharpTranslator
                     { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
                 staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
-                !this.IsStaticUsingTarget(owner) &&
+                (!this.IsStaticUsingTarget(owner)
+                    || RequiresQualifiedImportedContextualValue(
+                        staticMember,
+                        identifier)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 return new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, identifier.GetLocation()),
-                    SanitizeIdentifier(identifier.Identifier.Text));
+                    this.EmittedName(staticMember, identifier.Identifier.ValueText));
             }
 
             // A bare type used as an expression receiver (Path.Combine,
             // Task.FromResult, Console.WriteLine, ...) does not pass through
             // type-syntax translation. Map it here so SDK implicit/global
             // usings still contribute the namespace import required by G#.
+            if (this.context.SemanticModel.GetAliasInfo(identifier) is IAliasSymbol alias)
+            {
+                return new IdentifierExpression(this.EmittedName(alias, alias.Name));
+            }
+
             if (this.context.SemanticModel.GetAliasInfo(identifier) is null &&
                 this.context.GetSymbolInfo(identifier).Symbol is INamedTypeSymbol type)
             {
@@ -124,7 +132,41 @@ public sealed partial class CSharpToGSharpTranslator
                 return new IdentifierExpression("__underscore");
             }
 
-            return new IdentifierExpression(SanitizeIdentifier(identifier.Identifier.Text));
+            if (identifier.Identifier.ValueText == "_"
+                && this.context.GetSymbolInfo(identifier).Symbol is null)
+            {
+                return new IdentifierExpression("_");
+            }
+
+            return new IdentifierExpression(this.EmittedName(identifier, identifier.Identifier));
+        }
+
+        private static bool RequiresQualifiedImportedContextualValue(
+            ISymbol member,
+            IdentifierNameSyntax identifier)
+        {
+            if (!member.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            var context =
+                GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.General;
+            if (identifier.Parent is ElementAccessExpressionSyntax elementAccess
+                && elementAccess.Expression == identifier)
+            {
+                context |= GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Index;
+            }
+
+            if (identifier.Parent is InvocationExpressionSyntax invocation
+                && invocation.Expression == identifier)
+            {
+                context |= GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Invocation;
+            }
+
+            return GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+                member.Name,
+                context);
         }
 
         private static bool IsDirectWrite(IdentifierNameSyntax identifier) =>
@@ -457,7 +499,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // source type elsewhere in the compilation.
                     return new MemberAccessExpression(
                         this.StaticQualifierReceiver(extOwner, member.GetLocation()),
-                        SanitizeIdentifier(member.Name.Identifier.Text));
+                        this.EmittedName(extSymbol, member.Name.Identifier.ValueText));
                 }
 
                 if (extSymbol is IPropertySymbol)
@@ -475,7 +517,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         return new MemberAccessExpression(
                             this.TranslateExpression(member.Expression),
-                            SanitizeIdentifier(member.Name.Identifier.Text));
+                            this.EmittedName(extSymbol, member.Name.Identifier.ValueText));
                     }
 
                     // An instance extension property has no receiver-clause form
@@ -484,7 +526,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // a bare property read becomes a zero-argument call.
                     GExpression extReceiver = this.TranslateReceiverWithNullForgiveness(member.Expression);
                     return new InvocationExpression(
-                        new MemberAccessExpression(extReceiver, SanitizeIdentifier(member.Name.Identifier.Text)),
+                        new MemberAccessExpression(
+                            extReceiver,
+                            this.EmittedName(extSymbol, member.Name.Identifier.ValueText)),
                         new List<GExpression>(),
                         null);
                 }
@@ -550,7 +594,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.GetTypeInfo(member.Expression).Type is { IsAnonymousType: true };
 
             GExpression target;
-            if (this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
+            if (this.context.SemanticModel.GetAliasInfo(member.Expression) is null
+                && this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
                 { IsGenericType: true } receiverNamedType)
             {
                 // A qualified generic type is a MemberAccessExpressionSyntax;
@@ -565,7 +610,8 @@ public sealed partial class CSharpToGSharpTranslator
                     : this.TranslateReceiverWithNullForgiveness(member.Expression);
             }
 
-            string memberName = member.Name.Identifier.Text;
+            string memberName = member.Name.Identifier.ValueText;
+            ISymbol memberSymbol = this.context.GetSymbolInfo(member).Symbol;
 
             // Issue #1905: C# pointer member access (`p->X`) and plain member
             // access (`p.X`) both parse as MemberAccessExpressionSyntax,
@@ -589,11 +635,12 @@ public sealed partial class CSharpToGSharpTranslator
             // positional and carry no element names (ADR-0115 §B.4). The default
             // `.ItemN` access already resolves; only named-element access needs the
             // rewrite, detected via the bound tuple-element field symbol.
-            if (this.context.GetSymbolInfo(member).Symbol is IFieldSymbol field &&
+            if (memberSymbol is IFieldSymbol field &&
                 field.ContainingType is { IsTupleType: true })
             {
                 IFieldSymbol positional = field.CorrespondingTupleField ?? field;
                 memberName = positional.Name;
+                memberSymbol = positional;
             }
 
             // Issue #2282 (was #2224): an anonymous-typed value (`new { A = 1,
@@ -609,7 +656,10 @@ public sealed partial class CSharpToGSharpTranslator
                 memberName = this.MapAnalyzerMemberName(member, memberName);
             }
 
-            return new MemberAccessExpression(target, SanitizeIdentifier(memberName), isArrow);
+            string emittedMemberName = this.InAnalyzerApiMode
+                ? this.nameAllocator.GetName(memberName)
+                : this.EmittedName(memberSymbol, memberName);
+            return new MemberAccessExpression(target, emittedMemberName, isArrow);
         }
 
         /// <summary>

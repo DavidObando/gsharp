@@ -375,7 +375,7 @@ public sealed partial class CSharpToGSharpTranslator
             // synthetic name is used.
             ILocalSymbol mainBinder = this.FindMainPatternBinder(isPattern.Pattern);
             string hoistName = mainBinder != null
-                ? SanitizeIdentifier(mainBinder.Name)
+                ? this.EmittedName(mainBinder, mainBinder.Name)
                 : $"__scrutinee{this.state.LoopHoistCounter++}";
 
             BindingKind binding = mainBinder != null && this.IsLocalReassigned(mainBinder)
@@ -614,7 +614,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
-            string localName = SanitizeIdentifier(single.Identifier.Text);
+            string localName = this.EmittedName(single, single.Identifier);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
 
             if (targetSymbol.IsValueType)
@@ -956,7 +956,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            string localName = SanitizeIdentifier(single.Identifier.Text);
+            string localName = this.EmittedName(single, single.Identifier);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression hoistInitializer;
             GTypeReference targetType;
@@ -1171,7 +1171,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && binder.Type is { TypeKind: not TypeKind.Error, IsRefLikeType: false }
                 && !CSharpTypeMapper.IsSystemIndexOrRange(binder.Type))
             {
-                string mutableName = SanitizeIdentifier(designation.Identifier.Text);
+                string mutableName = this.EmittedName(designation, designation.Identifier);
                 string matchName = FreshPatternMatchName(
                     mutableName,
                     this.state.CurrentBodyScope ?? ifStatement);
@@ -1256,7 +1256,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            string localName = SanitizeIdentifier(designation.Identifier.Text);
+            string localName = this.EmittedName(designation, designation.Identifier);
             GTypeReference localType = MakeNullable(
                 this.typeMapper.Map(
                     binder.Type,
@@ -1314,7 +1314,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
                 }
 
-                string localName = SanitizeIdentifier(single.Identifier.Text);
+                string localName = this.EmittedName(single, single.Identifier);
                 GExpression receiver = this.TranslateExpression(isPattern.Expression);
                 GExpression initializer;
                 GTypeReference targetType;

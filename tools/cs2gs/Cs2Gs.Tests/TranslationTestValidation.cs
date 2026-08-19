@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using Cs2Gs.CodeModel.RoundTrip;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -24,6 +25,17 @@ internal static class TranslationTestValidation
     /// <param name="sources">One or more emitted G# source files.</param>
     /// <returns>The first source's round-trip result for callers that retain detailed parse assertions.</returns>
     public static RoundTripResult AssertBinds(params string[] sources)
+        => AssertBinds(references: null, sources);
+
+    /// <summary>
+    /// Asserts that emitted G# parses and binds against explicit CLR references.
+    /// </summary>
+    /// <param name="references">CLR references available to binding.</param>
+    /// <param name="sources">One or more emitted G# source files.</param>
+    /// <returns>The first source's round-trip result.</returns>
+    public static RoundTripResult AssertBinds(
+        ReferenceResolver references,
+        params string[] sources)
     {
         Assert.NotNull(sources);
         Assert.NotEmpty(sources);
@@ -40,7 +52,10 @@ internal static class TranslationTestValidation
             return SyntaxTree.Parse(SourceText.From(source));
         }).ToImmutableArray();
 
-        BoundGlobalScope scope = Binder.BindGlobalScope(previous: null, trees);
+        BoundGlobalScope scope = Binder.BindGlobalScope(
+            previous: null,
+            trees,
+            references);
         var errors = scope.Diagnostics
             .Concat(Binder.BindProgram(scope).Diagnostics)
             .Where(diagnostic => diagnostic.IsError)

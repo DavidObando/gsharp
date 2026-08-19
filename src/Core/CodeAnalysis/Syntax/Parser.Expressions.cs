@@ -895,7 +895,12 @@ public partial class Parser
     {
         if (!IsTupleElementSelectorToken(Current, includesDot: false))
         {
-            return ParseNameOrCallExpression(stopBeforeIndirectInvocation: true);
+            // Contextual operators (`nameof`, `typeof`, `checked`, ...) are only
+            // operators at expression roots. After `.`/`?.` they are ordinary
+            // CLR/source member names and must not steal the call grammar.
+            return ParseNameOrCallExpression(
+                stopBeforeIndirectInvocation: true,
+                allowContextualOperators: false);
         }
 
         var selectorToken = NextToken();
