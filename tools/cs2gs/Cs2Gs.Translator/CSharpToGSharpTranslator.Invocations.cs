@@ -1396,6 +1396,11 @@ public sealed partial class CSharpToGSharpTranslator
             var arguments = new List<GExpression>(invoke.Parameters.Length + 1);
             GExpression target = null;
             IMethodSymbol original = method.ReducedFrom ?? method;
+            if (original.IsExtensionMethod)
+            {
+                this.typeMapper.TrackExtensionMethodNamespace(original);
+            }
+
             if (expression is MemberAccessExpressionSyntax extensionMember
                 && original.IsExtensionMethod
                 && this.context.GetSymbolInfo(extensionMember.Expression).Symbol

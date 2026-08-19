@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -154,6 +155,68 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
         Assert.Null(result.UnhandledException);
         Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
+    public void CrossNamespaceExactExtensionMethodGroup_GlobalUsingSynthesizesImport()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[]
+            {
+                ("Extensions.cs", """
+                    #nullable enable
+                    namespace Acme.Extensions;
+
+                    public static class Ext
+                    {
+                        public static int Measure(this string? value, int delta) =>
+                            (value?.Length ?? 10) + delta;
+                    }
+                    """),
+                ("GlobalUsings.cs", "global using Acme.Extensions;"),
+                ("Consumer.cs", """
+                    #nullable enable
+                    using System;
+                    namespace Demo;
+
+                    public static class C
+                    {
+                        private static int Apply(Func<int, int> measure) => measure(2);
+
+                        public static int Run()
+                        {
+                            string? value = null;
+                            return Apply(value.Measure);
+                        }
+                    }
+                    """),
+            });
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Snippet should bind with no C# errors: "
+                + string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        var translator = new CSharpToGSharpTranslator();
+        string TranslateDocument(string fileName)
+        {
+            LoadedDocument document = project.Documents.Single(candidate =>
+                Path.GetFileName(candidate.FilePath) == fileName);
+            var context = new TranslationContext(
+                project.Compilation,
+                document.SemanticModel,
+                document.FilePath);
+            string printed = GSharpPrinter.Print(
+                translator.TranslateDocument(document, context));
+            Assert.DoesNotContain(
+                context.Diagnostics,
+                diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+            return printed;
+        }
+
+        string extensions = TranslateDocument("Extensions.cs");
+        string consumer = TranslateDocument("Consumer.cs");
+        Assert.Contains("import Acme.Extensions", consumer, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(extensions, consumer);
     }
 
     [Fact]
