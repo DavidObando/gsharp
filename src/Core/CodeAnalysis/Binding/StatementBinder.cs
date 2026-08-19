@@ -161,6 +161,15 @@ internal sealed partial class StatementBinder
 
     internal BoundStatement? BindStatement(StatementSyntax syntax)
     {
+        // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
+        // analyzer queries can resolve this statement by its syntax.
+        var result = BindStatementCore(syntax);
+        result?.AnchorSyntax(syntax);
+        return result;
+    }
+
+    private BoundStatement? BindStatementCore(StatementSyntax syntax)
+    {
         switch (syntax.Kind)
         {
             case SyntaxKind.CommentToken:

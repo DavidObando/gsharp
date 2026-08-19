@@ -115,6 +115,28 @@ public abstract class SyntaxNode
     public SyntaxNode? Parent => SyntaxTree.GetParent(this);
 
     /// <summary>
+    /// Returns this node or its nearest ancestor of type
+    /// <typeparamref name="T"/>, or <see langword="null"/> when none exists —
+    /// the Roslyn <c>FirstAncestorOrSelf</c> analogue analyzers rely on
+    /// (ADR-0169).
+    /// </summary>
+    /// <typeparam name="T">The node type to find.</typeparam>
+    /// <returns>The nearest matching node, or null.</returns>
+    public T? FirstAncestorOrSelf<T>()
+        where T : SyntaxNode
+    {
+        for (var node = this; node is not null; node = node.Parent)
+        {
+            if (node is T match)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Gets an enumeration of all the children of this syntax node.
     /// </summary>
     /// <returns>An <see cref="IEnumerable{SyntaxNode}"/> with the children of this syntax node.</returns>

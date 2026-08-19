@@ -169,6 +169,19 @@ internal sealed class PatternBinder
         PatternBindingContext bindingContext,
         bool preferTypeNames)
     {
+        // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
+        // analyzer queries can resolve this pattern by its syntax.
+        var result = BindPatternCore(syntax, discriminantType, bindingContext, preferTypeNames);
+        result.AnchorSyntax(syntax);
+        return result;
+    }
+
+    private BoundPattern BindPatternCore(
+        PatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
+    {
         switch (syntax.Kind)
         {
             case SyntaxKind.ConstantPattern:
