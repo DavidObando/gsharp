@@ -507,6 +507,36 @@ public sealed class Issue3461IdentifierSanitizationTests
     }
 
     [Fact]
+    public void MethodTypeParameters_ReserveVisibleNestedTypes()
+    {
+        string rendered = Render(
+            """
+            public sealed class C
+            {
+                public sealed class type_ { }
+
+                public @type Echo<@type>(type_ outer, @type inner) => inner;
+            }
+
+            public static class Holder
+            {
+                public static string Run() =>
+                    new C().Echo<string>(new C.type_(), "ok");
+            }
+            """);
+
+        Assert.Contains("class type_", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](C.type_(), \"ok\")", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        var result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
     public void ConsumerBeforeRecord_UsesPrecomputedPrimaryParameterName()
     {
         IReadOnlyDictionary<string, string> rendered = RenderFiles(
@@ -672,6 +702,68 @@ public sealed class Issue3461IdentifierSanitizationTests
             new EmittedOracleOptions { References = new[] { fixtureAssembly } });
         Assert.Empty(result.Diagnostics);
         Assert.Equal(38, result.Value);
+    }
+
+    [Fact]
+    public void ImportedStaticContextualFields_AreQualifiedAndRun()
+    {
+        string fixtureAssembly = typeof(ImportedContextualStaticFields).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixtureAssembly))
+            .ToArray();
+        string rendered = Render(
+            """
+            using static Cs2Gs.Tests.ImportedContextualStaticFields;
+
+            public static class Holder
+            {
+                public static int Run() => @base[0] + @stackalloc[0] + @nameof();
+            }
+            """,
+            references);
+
+        Assert.Contains("ImportedContextualStaticFields.base!![0]", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStaticFields.stackalloc!![0]", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStaticFields.nameof!!()", rendered, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
+        TranslationTestValidation.AssertBinds(resolver, rendered);
+        var result = EmittedOracle.Evaluate(
+            new[] { rendered + Environment.NewLine + "Holder.Run()" },
+            new EmittedOracleOptions { References = new[] { fixtureAssembly } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(15, result.Value);
+    }
+
+    [Fact]
+    public void ImportedStaticContextualProperties_AreQualifiedAndRun()
+    {
+        string fixtureAssembly = typeof(ImportedContextualStaticProperties).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixtureAssembly))
+            .ToArray();
+        string rendered = Render(
+            """
+            using static Cs2Gs.Tests.ImportedContextualStaticProperties;
+
+            public static class Holder
+            {
+                public static int Run() => @base[0] + @stackalloc[0] + @nameof();
+            }
+            """,
+            references);
+
+        Assert.Contains("ImportedContextualStaticProperties.base!![0]", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStaticProperties.stackalloc!![0]", rendered, StringComparison.Ordinal);
+        Assert.Contains("ImportedContextualStaticProperties.nameof!!()", rendered, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
+        TranslationTestValidation.AssertBinds(resolver, rendered);
+        var result = EmittedOracle.Evaluate(
+            new[] { rendered + Environment.NewLine + "Holder.Run()" },
+            new EmittedOracleOptions { References = new[] { fixtureAssembly } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(18, result.Value);
     }
 
     [Fact]
@@ -1093,4 +1185,30 @@ public static class ImportedContextualStatics
 
     /// <summary>Returns generic value.</summary>
     public static T @nameof<T>(T value) => value;
+}
+
+/// <summary>Imported contextual static field fixture.</summary>
+public static class ImportedContextualStaticFields
+{
+    /// <summary>Reserved index-prefix field.</summary>
+    public static readonly int[] @base = { 3 };
+
+    /// <summary>Reserved index-prefix field.</summary>
+    public static readonly int[] @stackalloc = { 5 };
+
+    /// <summary>Reserved invocation field.</summary>
+    public static readonly Func<int> @nameof = () => 7;
+}
+
+/// <summary>Imported contextual static property fixture.</summary>
+public static class ImportedContextualStaticProperties
+{
+    /// <summary>Reserved index-prefix property.</summary>
+    public static int[] @base { get; } = new[] { 4 };
+
+    /// <summary>Reserved index-prefix property.</summary>
+    public static int[] @stackalloc { get; } = new[] { 6 };
+
+    /// <summary>Reserved invocation property.</summary>
+    public static Func<int> @nameof { get; } = () => 8;
 }

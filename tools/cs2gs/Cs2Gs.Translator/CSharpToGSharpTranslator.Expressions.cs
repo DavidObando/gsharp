@@ -100,7 +100,10 @@ public sealed partial class CSharpToGSharpTranslator
                     { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
                 staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
                 !owner.IsImplicitlyDeclared &&
-                !this.IsStaticUsingTarget(owner) &&
+                (!this.IsStaticUsingTarget(owner)
+                    || RequiresQualifiedImportedContextualValue(
+                        staticMember,
+                        identifier)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
             {
                 return new MemberAccessExpression(
@@ -136,6 +139,34 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new IdentifierExpression(this.EmittedName(identifier, identifier.Identifier));
+        }
+
+        private static bool RequiresQualifiedImportedContextualValue(
+            ISymbol member,
+            IdentifierNameSyntax identifier)
+        {
+            if (!member.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            var context =
+                GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.General;
+            if (identifier.Parent is ElementAccessExpressionSyntax elementAccess
+                && elementAccess.Expression == identifier)
+            {
+                context |= GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Index;
+            }
+
+            if (identifier.Parent is InvocationExpressionSyntax invocation
+                && invocation.Expression == identifier)
+            {
+                context |= GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Invocation;
+            }
+
+            return GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+                member.Name,
+                context);
         }
 
         private static bool IsDirectWrite(IdentifierNameSyntax identifier) =>

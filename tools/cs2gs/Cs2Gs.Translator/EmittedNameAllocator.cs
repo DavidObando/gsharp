@@ -277,7 +277,33 @@ internal sealed class EmittedNameAllocator
                 case INamedTypeSymbol type:
                     names.UnionWith(
                         type.TypeParameters.Select(parameter => parameter.Name));
+                    names.UnionWith(this.GetVisibleNestedTypeNames(type));
                     break;
+            }
+        }
+
+        return names;
+    }
+
+    private IEnumerable<string> GetVisibleNestedTypeNames(INamedTypeSymbol type)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        for (INamedTypeSymbol current = type;
+             current != null;
+             current = current.ContainingType)
+        {
+            names.UnionWith(current.GetTypeMembers().Select(SourceName));
+            for (INamedTypeSymbol baseType = current.BaseType;
+                 baseType != null;
+                 baseType = baseType.BaseType)
+            {
+                foreach (INamedTypeSymbol nested in baseType.GetTypeMembers())
+                {
+                    if (IsVisibleInheritedMember(nested, current))
+                    {
+                        names.Add(SourceName(nested));
+                    }
+                }
             }
         }
 
@@ -742,7 +768,8 @@ internal sealed class EmittedNameAllocator
                     && GSharpSyntaxFacts.IsReservedIdentifier(
                         identifier.Identifier.ValueText,
                         GSharpIdentifierNameContext.Index)
-                    && model.GetSymbolInfo(identifier).Symbol is { } symbol)
+                    && model.GetSymbolInfo(identifier).Symbol is { } symbol
+                    && !symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty)
                 {
                     this.AddPrecomputedContext(
                         symbol,
