@@ -1047,7 +1047,8 @@ public sealed partial class CSharpToGSharpTranslator
                 // params-collection argument invents a nonexistent zero-arg
                 // constructor.
                 if (targetMethod?.DeclaringSyntaxReferences.IsEmpty == false
-                    || callSyntax is BaseObjectCreationExpressionSyntax)
+                    || (callSyntax is BaseObjectCreationExpressionSyntax
+                        && arguments.Count == 0))
                 {
                     this.context.ReportUnsupported(
                         callSyntax,
