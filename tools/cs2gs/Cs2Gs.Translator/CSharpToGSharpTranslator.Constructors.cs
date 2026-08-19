@@ -1091,6 +1091,16 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (AttributeSyntax attribute in list.Attributes)
                 {
                     using IDisposable modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree);
+
+                    // ADR-0169 analyzer mode: [DiagnosticAnalyzer(...)] ->
+                    // [GSharpDiagnosticAnalyzer] with the language argument
+                    // dropped (G# has one language).
+                    if (this.TryTranslateAnalyzerAttribute(attribute, out AttributeUse analyzerAttribute))
+                    {
+                        attributes.Add(analyzerAttribute);
+                        continue;
+                    }
+
                     var arguments = new List<AttributeArgument>();
                     if (attribute.ArgumentList != null)
                     {

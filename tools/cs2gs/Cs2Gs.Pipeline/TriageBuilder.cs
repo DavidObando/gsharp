@@ -112,9 +112,10 @@ public sealed class TriageBuilder
         // construct neither translated nor registered with a rationale) is a
         // coverage hole and gets its own id so ledger/CI can treat it as a
         // distinct, always-actionable class.
-        string diagnosticId = diagnostic.Classification == UnsupportedClassification.ByDesign
-            ? "CS2GS-UNSUPPORTED"
-            : "CS2GS-GAP";
+        string diagnosticId = diagnostic.DiagnosticId
+            ?? (diagnostic.Classification == UnsupportedClassification.ByDesign
+                ? "CS2GS-UNSUPPORTED"
+                : "CS2GS-GAP");
         artifact.Diagnostic = new TriageDiagnostic
         {
             Id = diagnosticId,

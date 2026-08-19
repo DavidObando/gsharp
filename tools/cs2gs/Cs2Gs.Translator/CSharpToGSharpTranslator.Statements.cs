@@ -293,6 +293,14 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private GExpression TranslateBinaryExpression(BinaryExpressionSyntax binary)
         {
+            // ADR-0169 analyzer mode: comparisons against Roslyn members with
+            // no G# counterpart lower to a boolean constant with a
+            // CS2GS-ANALYZER-SHAPE review warning.
+            if (this.InAnalyzerApiMode && this.TryLowerAnalyzerComparison(binary, out GExpression loweredComparison))
+            {
+                return loweredComparison;
+            }
+
             if (binary.IsKind(SyntaxKind.LogicalAndExpression)
                 && !this.ConditionUsesNativePatternVariables(GetConditionRoot(binary))
                 && this.TryTranslateIfLetBooleanExpression(binary, out GExpression ifLet))

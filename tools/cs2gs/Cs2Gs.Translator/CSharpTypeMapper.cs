@@ -150,6 +150,14 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
+    /// Gets or sets a value indicating whether ADR-0169 analyzer translation
+    /// mode is active: Microsoft.CodeAnalysis types are rewritten to the G#
+    /// analyzer API via <see cref="Analyzers.RoslynAnalyzerApiMap"/> instead
+    /// of passing through as imported CLR types.
+    /// </summary>
+    public bool AnalyzerApiMode { get; set; }
+
+    /// <summary>
     /// Gets every namespace shortened into a bare/qualified-nested type name by
     /// this mapper so far (see <see cref="shortenedNamespaces"/>).
     /// </summary>
@@ -167,6 +175,20 @@ public sealed class CSharpTypeMapper
     /// first-seen (deterministic) order.
     /// </summary>
     public IReadOnlyList<TypeDeclaration> PendingAnonymousDataClasses => this.pendingAnonymousDataClasses;
+
+    /// <summary>
+    /// Records a G# namespace substituted for a Roslyn API namespace in
+    /// analyzer translation mode (ADR-0169), so the compilation-unit import
+    /// synthesis emits it even though no C# symbol carries it.
+    /// </summary>
+    /// <param name="gsNamespace">The G# namespace to import.</param>
+    public void TrackSubstitutedNamespace(string gsNamespace)
+    {
+        if (!string.IsNullOrEmpty(gsNamespace))
+        {
+            this.shortenedNamespaces.Add(gsNamespace);
+        }
+    }
 
     /// <summary>
     /// Records a translated attribute type's containing namespace and any
@@ -897,6 +919,40 @@ public sealed class CSharpTypeMapper
     // itself collides across imported packages.
     private string QualifiedTypeName(INamedTypeSymbol named, TranslationContext context, Location location)
     {
+        // ADR-0169 analyzer translation mode: Microsoft.CodeAnalysis types are
+        // rewritten to the G# analyzer API instead of passing through as
+        // imported CLR types (the one place the passthrough rule is wrong).
+        // Unmapped Roslyn types fail loudly as CS2GS-GAP; Adapted mappings
+        // carry a CS2GS-ANALYZER-SHAPE review warning.
+        if (this.AnalyzerApiMode
+            && Analyzers.RoslynAnalyzerApiMap.IsRoslynNamespace(named.ContainingNamespace?.ToDisplayString()))
+        {
+            string roslynName = $"{named.ContainingNamespace.ToDisplayString()}.{named.Name}";
+            if (Analyzers.RoslynAnalyzerApiMap.TryMapType(roslynName, out Analyzers.RoslynAnalyzerApiMap.Entry mapped))
+            {
+                this.shortenedNamespaces.Add(mapped.GsNamespace);
+                if (mapped.AdaptationNote != null)
+                {
+                    context.Report(new TranslationDiagnostic(
+                        "analyzer-api",
+                        $"'{roslynName}' translated as '{mapped.GsNamespace}.{mapped.GsName}': {mapped.AdaptationNote}",
+                        location,
+                        TranslationSeverity.Warning)
+                    {
+                        DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                    });
+                }
+
+                return mapped.GsName;
+            }
+
+            context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                $"Roslyn API type '{roslynName}' has no G# analyzer-API mapping (ADR-0169).",
+                location));
+            return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
+        }
+
         if (named.ContainingType == null)
         {
             this.TrackShortenedNamespace(named);
