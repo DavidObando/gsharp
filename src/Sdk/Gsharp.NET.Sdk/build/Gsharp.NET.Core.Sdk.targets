@@ -458,9 +458,16 @@
     <Message Importance="Low" Text="gsgen: added generated sources to Compile: @(_GsharpGeneratedGsFile)" />
   </Target>
 
+  <!-- ADR-0169: G# diagnostic analyzers. @(GsharpCodeAnalyzer) items — added
+       directly by the project, or flowed from a ProjectReference with
+       OutputItemType="GsharpCodeAnalyzer" ReferenceOutputAssembly="false" —
+       are forwarded to gsc as /gsanalyzer: lines by BuildTask. Analyzer
+       diagnostics come back through the normal stdout relogging. Resolving
+       analyzers from package assets (analyzers/gsharp/) is future work. -->
   <Target Name="CoreCompile"
           Inputs="$(MSBuildAllProjects);
                   @(Compile);
+                  @(GsharpCodeAnalyzer);
                   @(ReferencePathWithRefAssemblies);
                   @(_CoreCompileResourceInputs);
                   @(CompiledLicenseFile);
@@ -517,6 +524,7 @@
         WarningsAsErrors="$(WarningsAsErrors)"
         Compile="@(Compile)"
         References="@(ReferencePathWithRefAssemblies)"
+        GsAnalyzers="@(GsharpCodeAnalyzer)"
         Resources="@(_GsharpCoreCompileResource)"
         SkipCompilerExecution="$(SkipCompilerExecution)"
         ProvideCommandLineArgs="$(ProvideCommandLineArgs)"
