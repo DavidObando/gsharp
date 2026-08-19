@@ -80,6 +80,21 @@ Use normal MSBuild references and package references. The SDK forwards `Referenc
 </ItemGroup>
 ```
 
+## Code analyzers
+
+`GsharpCodeAnalyzer` items load [code analyzers](./analyzers.md) into the build — extra diagnostics reported by rule assemblies, wired either directly or through an analyzer-only project reference:
+
+```xml
+<ItemGroup>
+  <GsharpCodeAnalyzer Include="analyzers/MyAnalyzers.dll" />
+  <ProjectReference Include="../MyAnalyzers/MyAnalyzers.gsproj"
+                    OutputItemType="GsharpCodeAnalyzer"
+                    ReferenceOutputAssembly="false" />
+</ItemGroup>
+```
+
+Analyzer severities follow `NoWarn`/`WarningsAsErrors` and `.editorconfig` `dotnet_diagnostic.<ID>.severity` entries; see the [analyzers guide](./analyzers.md#configuring-severities).
+
 ## Debug and symbol properties
 
 The SDK uses the standard .NET property names where possible.
