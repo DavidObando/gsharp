@@ -433,8 +433,12 @@ internal sealed partial class OverloadResolver
         var conversionType = lookupTypeWithArity(
             syntax.Identifier.Text,
             ctorPreferredArity);
+        var hasSingleInlineOutArgument = syntax.Arguments.Count == 1
+            && UnwrapNamedArgumentValue(syntax.Arguments[0])
+                is RefArgumentExpressionSyntax { IsInlineDeclaration: true };
         if (!hasNonConstructorCallable
             && syntax.Arguments.Count == 1
+            && !hasSingleInlineOutArgument
             && conversionType is TypeSymbol)
         {
             var explicitConversionType = TryConstructConversionTarget(

@@ -1669,9 +1669,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        var inlineOutArguments = GetInlineOutArgumentIndices(syntax);
+
         // Issue #343: pre-validate named-argument layout for CLR constructor calls.
         if (!overloads.TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
         {
+            DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments, bindExplicitTyped: true);
             result = new BoundErrorExpression(syntax);
             return true;
         }
@@ -1696,6 +1699,36 @@ internal sealed partial class ExpressionBinder
                 || (canAccessInternalConstructors
                     && (constructor.IsAssembly || constructor.IsFamilyOrAssembly)))
             .ToArray();
+
+        if (inlineOutArguments.Count > 0)
+        {
+            var invalidInlineOutArguments = inlineOutArguments
+                .Where(index => !ctors.Any(constructor => ConstructorSupportsInlineOutArgument(
+                    constructor,
+                    argumentNames,
+                    index)))
+                .ToArray();
+            if (invalidInlineOutArguments.Length > 0)
+            {
+                foreach (var index in invalidInlineOutArguments)
+                {
+                    Diagnostics.ReportOutDeclarationOutsideOutArgument(
+                        OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index]).Location);
+                }
+
+                DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments, bindExplicitTyped: true);
+                result = new BoundErrorExpression(syntax);
+                return true;
+            }
+
+            ctors = ctors
+                .Where(constructor => ConstructorSupportsInlineOutArguments(
+                    constructor,
+                    argumentNames,
+                    inlineOutArguments))
+                .ToArray();
+        }
+
         var ctorParameterLists = new List<ParameterInfo[]>(ctors.Length);
         foreach (var constructor in ctors)
         {
@@ -1742,13 +1775,20 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
-                syntax.Arguments[i],
-                ctorParameterLists,
-                sourceArgumentCount: syntax.Arguments.Count,
-                sourceArgIndex: i,
-                argName: argName,
-                paramOffset: 0));
+            if (inner is RefArgumentExpressionSyntax refArgument)
+            {
+                boundArguments.Add(BindRefArgumentExpression(refArgument, parameter: null));
+            }
+            else
+            {
+                boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
+                    syntax.Arguments[i],
+                    ctorParameterLists,
+                    sourceArgumentCount: syntax.Arguments.Count,
+                    sourceArgIndex: i,
+                    argName: argName,
+                    paramOffset: 0));
+            }
         }
 
         // Phase A (overload resolution): pick a constructor via the shared
@@ -1760,6 +1800,12 @@ internal sealed partial class ExpressionBinder
         var hasUserClassArg = false;
         for (var i = 0; i < boundArguments.Count; i++)
         {
+            if (TryGetInlineOutVarArgument(syntax, i, out _))
+            {
+                argTypes[i] = ClrOverloadResolution.InlineOutVarArgumentType;
+                continue;
+            }
+
             // Issue #530: use GetEffectiveArgumentClrType (see instance method path).
             // Issue #533: allow null (nil literal) to flow through; overload
             // resolution now handles null source as compatible with reference
@@ -1851,7 +1897,9 @@ internal sealed partial class ExpressionBinder
                     break;
                 case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
                     Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
-                    return false;
+                    DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments);
+                    result = new BoundErrorExpression(syntax);
+                    return true;
                 default:
                     break;
             }
@@ -1859,10 +1907,54 @@ internal sealed partial class ExpressionBinder
 
         if (bestCtor == null)
         {
-            if (boundArguments.Any(static argument => argument.Type == TypeSymbol.Error))
+            var hasInvalidExplicitTypedInlineOut = inlineOutArguments.Any(index =>
+                OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index])
+                    is RefArgumentExpressionSyntax { DeclaredType: not null }
+                && boundArguments[index]
+                    is BoundAddressOfExpression { Operand.Type: var operandType }
+                && operandType == TypeSymbol.Error);
+            var hasErrorArgument =
+                boundArguments.Any(static argument => argument.Type == TypeSymbol.Error);
+            if (TryReportClrConstructorInlineOutTypeMismatch(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    boundArguments,
+                    openGenericDefinition,
+                    symbolicTypeArgs)
+                || (!hasInvalidExplicitTypedInlineOut
+                    && !hasErrorArgument
+                    && inlineOutArguments.Count > 0
+                    && TryReportClrConstructorArgumentTypeMismatch(
+                        syntax,
+                        ctors,
+                        argumentNames,
+                        boundArguments)))
             {
+                DeclareClrConstructorInlineOutLocals(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    openGenericDefinition,
+                    symbolicTypeArgs);
                 result = new BoundErrorExpression(syntax);
-                return false;
+                return true;
+            }
+
+            if (hasInvalidExplicitTypedInlineOut
+                || hasErrorArgument)
+            {
+                DeclareClrConstructorInlineOutLocals(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    openGenericDefinition,
+                    symbolicTypeArgs);
+                result = new BoundErrorExpression(syntax);
+                return hasInvalidExplicitTypedInlineOut || inlineOutArguments.Count > 0;
             }
 
             // Issue #524: CLR value types always have an implicit zero-init
@@ -1892,18 +1984,52 @@ internal sealed partial class ExpressionBinder
             if (!argumentNames.IsDefault
                 && overloads.TryReportUnknownNamedArgumentForClrConstructor(clrType, syntax, argumentNames))
             {
+                DeclareClrConstructorInlineOutLocals(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    openGenericDefinition,
+                    symbolicTypeArgs);
                 result = new BoundErrorExpression(syntax);
                 return true;
             }
 
+            if (inlineOutArguments.Count > 0)
+            {
+                Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, clrType.Name);
+                DeclareClrConstructorInlineOutLocals(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    openGenericDefinition,
+                    symbolicTypeArgs);
+                result = new BoundErrorExpression(syntax);
+                return true;
+            }
+
+            DeclareClrConstructorInlineOutLocals(
+                syntax,
+                inlineOutArguments,
+                ctors,
+                argumentNames,
+                openGenericDefinition,
+                symbolicTypeArgs);
             noApplicableOverload = true;
             boundArgumentsOnFailure = boundArguments.MoveToImmutable();
             return false;
         }
 
         var ctorParameters = bestCtor.GetParameters();
+        var ctorRawArgs = RebindInlineOutConstructorArguments(
+            syntax,
+            boundArguments.MoveToImmutable(),
+            bestCtor,
+            ctorMapping,
+            openGenericDefinition,
+            symbolicTypeArgs);
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
-        var ctorRawArgs = boundArguments.MoveToImmutable();
         var ctorExpandedArgs = ctorIsExpanded
             ? overloads.ExpandParamsArguments(ctorRawArgs, ctorParameters, syntax, parameterMapping: ctorMapping)
             : ctorRawArgs;
@@ -1978,6 +2104,357 @@ internal sealed partial class ExpressionBinder
             ctorRefKinds);
         result = WrapWithHandlerPrelude(ctorCall, ctorHandlerPrelude, syntax);
         return true;
+    }
+
+    private static List<int> GetInlineOutArgumentIndices(CallExpressionSyntax syntax)
+    {
+        var result = new List<int>();
+        for (var i = 0; i < syntax.Arguments.Count; i++)
+        {
+            if (OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[i])
+                is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
+            {
+                result.Add(i);
+            }
+        }
+
+        return result;
+    }
+
+    private bool TryReportClrConstructorArgumentTypeMismatch(
+        CallExpressionSyntax syntax,
+        IReadOnlyList<ConstructorInfo> constructors,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var candidates = constructors
+            .Where(constructor => constructor.GetParameters().Length == syntax.Arguments.Count)
+            .Take(2)
+            .ToArray();
+        if (candidates.Length != 1)
+        {
+            return false;
+        }
+
+        var parameters = candidates[0].GetParameters();
+        for (var index = 0; index < boundArguments.Count; index++)
+        {
+            var name = argumentNames.IsDefault ? null : argumentNames[index];
+            var parameterIndex = name == null ? index : FindClrParameterIndex(parameters, name);
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+            {
+                return false;
+            }
+
+            var parameter = parameters[parameterIndex];
+            var expectedType = TypeSymbol.FromClrType(
+                parameter.ParameterType.IsByRef
+                    ? parameter.ParameterType.GetElementType()
+                    : parameter.ParameterType);
+            var actualType = boundArguments[index] is BoundAddressOfExpression address
+                ? address.Operand.Type
+                : boundArguments[index].Type;
+            if (actualType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var isCompatible = parameter.ParameterType.IsByRef
+                ? DeclarationBinder.TypeSignaturesEquivalent(expectedType, actualType)
+                : Conversion.Classify(actualType, expectedType).IsImplicit;
+            if (!isCompatible)
+            {
+                Diagnostics.ReportWrongArgumentType(
+                    syntax.Arguments[index].Location,
+                    parameter.Name ?? "value",
+                    expectedType,
+                    actualType);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryReportClrConstructorInlineOutTypeMismatch(
+        CallExpressionSyntax syntax,
+        IReadOnlyList<int> inlineOutArguments,
+        IReadOnlyList<ConstructorInfo> constructors,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        Type? openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArguments)
+    {
+        foreach (var index in inlineOutArguments)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)OverloadResolver.UnwrapNamedArgumentValue(
+                syntax.Arguments[index]);
+            if (inlineOut.DeclaredType == null
+                || boundArguments[index]
+                    is not BoundAddressOfExpression { Operand.Type: var actualType }
+                || actualType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            TypeSymbol? expectedType = null;
+            string? parameterName = null;
+            foreach (var constructor in constructors)
+            {
+                var parameters = constructor.GetParameters();
+                var name = argumentNames.IsDefault ? null : argumentNames[index];
+                var parameterIndex = name == null ? index : FindClrParameterIndex(parameters, name);
+                if (parameterIndex < 0
+                    || parameterIndex >= parameters.Length
+                    || !parameters[parameterIndex].IsOut
+                    || parameters[parameterIndex].IsIn)
+                {
+                    continue;
+                }
+
+                var candidateType = ResolveConstructorParameterPointeeType(
+                    constructor,
+                    parameterIndex,
+                    openGenericDefinition,
+                    symbolicTypeArguments)
+                    ?? TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType.GetElementType());
+                if (expectedType != null
+                    && !DeclarationBinder.TypeSignaturesEquivalent(expectedType, candidateType))
+                {
+                    expectedType = null;
+                    break;
+                }
+
+                expectedType = candidateType;
+                parameterName = parameters[parameterIndex].Name ?? "value";
+            }
+
+            if (expectedType != null
+                && !DeclarationBinder.TypeSignaturesEquivalent(expectedType, actualType))
+            {
+                Diagnostics.ReportWrongArgumentType(
+                    inlineOut.Location,
+                    parameterName ?? "value",
+                    expectedType,
+                    actualType);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void DeclareInvalidClrConstructorInlineOutLocals(
+        CallExpressionSyntax syntax,
+        IReadOnlyList<int> inlineOutArguments,
+        bool bindExplicitTyped = false)
+    {
+        var errorParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var index in inlineOutArguments)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)OverloadResolver.UnwrapNamedArgumentValue(
+                syntax.Arguments[index]);
+            if (!inlineOut.IsDiscard
+                && (bindExplicitTyped || inlineOut.DeclaredType == null))
+            {
+                _ = BindRefArgumentExpression(inlineOut, errorParameter);
+            }
+        }
+    }
+
+    private void DeclareClrConstructorInlineOutLocals(
+        CallExpressionSyntax syntax,
+        IReadOnlyList<int> inlineOutArguments,
+        IReadOnlyList<ConstructorInfo> constructors,
+        ImmutableArray<string> argumentNames,
+        Type? openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArguments)
+    {
+        foreach (var index in inlineOutArguments)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)OverloadResolver.UnwrapNamedArgumentValue(
+                syntax.Arguments[index]);
+            if (inlineOut.IsDiscard || inlineOut.DeclaredType != null)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[index];
+            ConstructorInfo? matchingConstructor = null;
+            var matchingParameterIndex = -1;
+            foreach (var constructor in constructors)
+            {
+                var parameters = constructor.GetParameters();
+                var parameterIndex = name == null ? index : FindClrParameterIndex(parameters, name);
+                if (parameterIndex < 0
+                    || parameterIndex >= parameters.Length
+                    || !parameters[parameterIndex].IsOut
+                    || parameters[parameterIndex].IsIn)
+                {
+                    continue;
+                }
+
+                if (matchingConstructor != null)
+                {
+                    matchingConstructor = null;
+                    matchingParameterIndex = -1;
+                    break;
+                }
+
+                matchingConstructor = constructor;
+                matchingParameterIndex = parameterIndex;
+            }
+
+            if (matchingConstructor == null)
+            {
+                var errorParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+                _ = BindRefArgumentExpression(inlineOut, errorParameter);
+                continue;
+            }
+
+            var parameter = matchingConstructor.GetParameters()[matchingParameterIndex];
+            var pointeeType = ResolveConstructorParameterPointeeType(
+                matchingConstructor,
+                matchingParameterIndex,
+                openGenericDefinition,
+                symbolicTypeArguments)
+                ?? TypeSymbol.FromClrType(parameter.ParameterType.GetElementType());
+            var resolvedParameter = new ParameterSymbol(
+                parameter.Name ?? "value",
+                pointeeType,
+                refKind: RefKind.Out);
+            _ = BindRefArgumentExpression(inlineOut, resolvedParameter);
+        }
+    }
+
+    private static bool ConstructorSupportsInlineOutArguments(
+        ConstructorInfo constructor,
+        ImmutableArray<string> argumentNames,
+        IReadOnlyList<int> inlineOutArguments)
+    {
+        foreach (var sourceIndex in inlineOutArguments)
+        {
+            if (!ConstructorSupportsInlineOutArgument(
+                    constructor,
+                    argumentNames,
+                    sourceIndex))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ConstructorSupportsInlineOutArgument(
+        ConstructorInfo constructor,
+        ImmutableArray<string> argumentNames,
+        int sourceIndex)
+    {
+        var parameters = constructor.GetParameters();
+        var name = argumentNames.IsDefault ? null : argumentNames[sourceIndex];
+        var parameterIndex = name == null
+            ? sourceIndex
+            : FindClrParameterIndex(parameters, name);
+        return parameterIndex >= 0
+            && parameterIndex < parameters.Length
+            && parameters[parameterIndex].IsOut
+            && !parameters[parameterIndex].IsIn;
+    }
+
+    private static int FindClrParameterIndex(ParameterInfo[] parameters, string argumentName)
+    {
+        var parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (OverloadResolver.ClrParameterNameMatches(
+                    parameters[i].Name ?? string.Empty,
+                    argumentName,
+                    parameterNames))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private ImmutableArray<BoundExpression> RebindInlineOutConstructorArguments(
+        CallExpressionSyntax syntax,
+        ImmutableArray<BoundExpression> arguments,
+        ConstructorInfo constructor,
+        ImmutableArray<int> parameterMapping,
+        Type? openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArguments)
+    {
+        ImmutableArray<BoundExpression>.Builder? rebuilt = null;
+        var parameters = constructor.GetParameters();
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            if (!TryGetInlineOutVarArgument(syntax, i, out var refArgument))
+            {
+                continue;
+            }
+
+            if (refArgument.DeclaredType != null)
+            {
+                continue;
+            }
+
+            var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var parameter = parameters[parameterIndex];
+            var pointeeType = ResolveConstructorParameterPointeeType(
+                constructor,
+                parameterIndex,
+                openGenericDefinition,
+                symbolicTypeArguments)
+                ?? TypeSymbol.FromClrType(parameter.ParameterType.GetElementType());
+            var syntheticParameter = new ParameterSymbol(
+                parameter.Name ?? "value",
+                pointeeType,
+                refKind: RefKind.Out);
+            rebuilt ??= arguments.ToBuilder();
+            rebuilt[i] = BindRefArgumentExpression(refArgument, syntheticParameter);
+        }
+
+        return rebuilt?.ToImmutable() ?? arguments;
+    }
+
+    private static TypeSymbol? ResolveConstructorParameterPointeeType(
+        ConstructorInfo constructor,
+        int parameterIndex,
+        Type? openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArguments)
+    {
+        if (openGenericDefinition == null || symbolicTypeArguments.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        var openConstructor = ClrTypeUtilities.SafeGetConstructors(
+                openGenericDefinition,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(candidate =>
+                candidate.MetadataToken == constructor.MetadataToken
+                && candidate.Module == constructor.Module);
+        if (openConstructor == null)
+        {
+            return null;
+        }
+
+        var openParameters = openConstructor.GetParameters();
+        if (parameterIndex >= openParameters.Length)
+        {
+            return null;
+        }
+
+        var openPointee = openParameters[parameterIndex].ParameterType.GetElementType();
+        return openPointee == null
+            ? null
+            : MemberLookup.MapOpenClrTypeToSymbolic(
+                openPointee,
+                openGenericDefinition,
+                symbolicTypeArguments);
     }
 
     /// <summary>

@@ -1119,7 +1119,7 @@ internal sealed partial class OverloadResolver
         return false;
     }
 
-    private static bool ClrParameterNameMatches(
+    internal static bool ClrParameterNameMatches(
         string parameterName,
         string argumentName,
         IEnumerable<string> parameterNames) =>

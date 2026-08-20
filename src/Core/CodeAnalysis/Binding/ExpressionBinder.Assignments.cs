@@ -1850,7 +1850,8 @@ internal sealed partial class ExpressionBinder
         {
             // ADR-0060 §1: `out var n [T]` / `out let n [T]` / `out _ [T]`.
             // Only legal when the modifier is `out` AND the parameter (if known) is `out`.
-            if (!string.Equals(syntax.RefKindModifier.Text, "out", System.StringComparison.Ordinal))
+            if (!string.Equals(syntax.RefKindModifier.Text, "out", System.StringComparison.Ordinal)
+                || (parameter != null && parameter.RefKind != RefKind.Out))
             {
                 Diagnostics.ReportOutDeclarationOutsideOutArgument(syntax.Location);
                 return new BoundErrorExpression(null);
@@ -1859,7 +1860,7 @@ internal sealed partial class ExpressionBinder
             TypeSymbol? declaredType = null;
             if (syntax.DeclaredType != null)
             {
-                declaredType = bindTypeClause(syntax.DeclaredType);
+                declaredType = bindTypeClause(syntax.DeclaredType) ?? TypeSymbol.Error;
             }
 
             if (declaredType == null && parameter != null)

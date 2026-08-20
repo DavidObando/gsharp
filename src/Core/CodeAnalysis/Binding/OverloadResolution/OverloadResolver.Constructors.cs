@@ -769,6 +769,16 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private BoundExpression BindExplicitConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
     {
+        var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
+
+        // Issue #343: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). Diagnostics are reported by the helper.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+            return new BoundErrorExpression(syntax);
+        }
+
         // Issue #1214: a generic class declaring an explicit `init(...)`
         // constructor is constructed at a closed type (`Box[int32](5, "x")`).
         // Resolve the type arguments — supplied explicitly or inferred from the
@@ -781,17 +791,35 @@ internal sealed partial class OverloadResolver
         // TypeSpec (ResolveUserCtorTokenForExplicit).
         if (syntax.TypeArgumentList != null || classType.IsGenericDefinition)
         {
-            if (!TryCloseGenericExplicitConstructorType(syntax, classType, out classType))
+            if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
             {
+                var openConstructors = GetAccessibleExplicitConstructorsOrAll(classType);
+                var invalidInlineOutArgument = inlineOutArgumentIndices.FirstOrDefault(
+                    index => !openConstructors.Any(ctor => ConstructorAcceptsInlineOutArgument(
+                        ctor,
+                        argumentNames,
+                        index)),
+                    -1);
+                if (invalidInlineOutArgument >= 0)
+                {
+                    var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                        syntax.Arguments[invalidInlineOutArgument]);
+                    Diagnostics.ReportOutDeclarationOutsideOutArgument(inlineOut.Location);
+                    DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                    return new BoundErrorExpression(syntax);
+                }
+            }
+
+            if (!TryCloseGenericExplicitConstructorType(
+                    syntax,
+                    classType,
+                    argumentNames,
+                    inlineOutArgumentIndices,
+                    out classType))
+            {
+                DeclareUnresolvedInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
                 return new BoundErrorExpression(syntax);
             }
-        }
-
-        // Issue #343: pre-validate named-argument layout (positional precedes
-        // named, no duplicate names). Diagnostics are reported by the helper.
-        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
-        {
-            return new BoundErrorExpression(syntax);
         }
 
         // ADR-0063 §9: when the class declares multiple init(...) constructors,
@@ -800,16 +828,37 @@ internal sealed partial class OverloadResolver
         // single-overload diagnostics (wrong arity) still fire below.
         // Issue #1214: for a closed generic construction, the constructor table
         // lives on the open definition (EffectiveExplicitConstructors).
-        var ctorOverloads = classType.EffectiveExplicitConstructors;
-        var accessibleCtorOverloads = ctorOverloads
-            .Where(ctor => AccessibilityChecker.IsAccessible(
-                ctor.Function.Accessibility,
-                ctor.DeclaringType ?? classType,
-                getCurrentFunction()))
-            .ToImmutableArray();
-        if (!accessibleCtorOverloads.IsDefaultOrEmpty)
+        var ctorOverloads = GetAccessibleExplicitConstructorsOrAll(classType);
+
+        if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
         {
-            ctorOverloads = accessibleCtorOverloads;
+            var invalidInlineOutArgument = inlineOutArgumentIndices.FirstOrDefault(
+                index => !ctorOverloads.Any(ctor => ConstructorAcceptsInlineOutArgument(
+                    ctor,
+                    argumentNames,
+                    index)),
+                -1);
+            if (invalidInlineOutArgument >= 0)
+            {
+                var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                    syntax.Arguments[invalidInlineOutArgument]);
+                Diagnostics.ReportOutDeclarationOutsideOutArgument(inlineOut.Location);
+                DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                return new BoundErrorExpression(syntax);
+            }
+
+            ctorOverloads = ctorOverloads
+                .Where(ctor => ConstructorAcceptsInlineOutArguments(
+                    ctor,
+                    argumentNames,
+                    inlineOutArgumentIndices))
+                .ToImmutableArray();
+            if (ctorOverloads.IsDefaultOrEmpty)
+            {
+                Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                return new BoundErrorExpression(syntax);
+            }
         }
 
         var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
@@ -831,7 +880,7 @@ internal sealed partial class OverloadResolver
                 // The callback uses null to mean that overload resolution has
                 // not identified the ref parameter yet; its legacy non-null
                 // annotation predates that two-pass binding contract.
-                boundArgument = bindRefArgumentExpression(refArgument, parameterForArg!);
+                boundArgument = bindRefArgumentExpression(refArgument, null);
             }
 
             var lambdaArgument = argument as LambdaExpressionSyntax;
@@ -848,6 +897,42 @@ internal sealed partial class OverloadResolver
             boundArgumentsBuilder.Add(boundArgument);
         }
 
+        if (!inlineOutArgumentIndices.IsDefaultOrEmpty && ctorOverloads.Length > 1)
+        {
+            var hasFailedExplicitInlineOutType = inlineOutArgumentIndices.Any(index =>
+                ((RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                    syntax.Arguments[index])).DeclaredType != null
+                && boundArgumentsBuilder[index]
+                    is BoundAddressOfExpression { Operand.Type: var argumentType }
+                && argumentType == TypeSymbol.Error);
+            if (hasFailedExplicitInlineOutType)
+            {
+                DeclareUnresolvedInlineOutLocals(
+                    syntax.Arguments,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder);
+                return new BoundErrorExpression(syntax);
+            }
+
+            ctorOverloads = ctorOverloads
+                .Where(ctor => ConstructorAcceptsTypedInlineOutArguments(
+                    ctor,
+                    classType,
+                    argumentNames,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder))
+                .ToImmutableArray();
+            if (ctorOverloads.IsDefaultOrEmpty)
+            {
+                Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                DeclareUnresolvedInlineOutLocals(
+                    syntax.Arguments,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder);
+                return new BoundErrorExpression(syntax);
+            }
+        }
+
         ConstructorSymbol? selectedCtor;
         if (ctorOverloads.Length <= 1)
         {
@@ -856,9 +941,12 @@ internal sealed partial class OverloadResolver
         else
         {
             var ctorFunctions = ImmutableArray.CreateBuilder<FunctionSymbol>(ctorOverloads.Length);
+            var constructorByFunction = new Dictionary<FunctionSymbol, ConstructorSymbol>();
             foreach (var c in ctorOverloads)
             {
-                ctorFunctions.Add(c.Function);
+                var candidate = CreateConstructedConstructorCandidate(c, classType);
+                ctorFunctions.Add(candidate);
+                constructorByFunction.Add(candidate, c);
             }
 
             var selectedFn = SelectBestInstanceOverload(
@@ -887,18 +975,14 @@ internal sealed partial class OverloadResolver
                     Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
                 }
 
+                DeclareUnresolvedInlineOutLocals(
+                    syntax.Arguments,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder);
                 return new BoundErrorExpression(syntax);
             }
 
-            selectedCtor = null;
-            foreach (var c in ctorOverloads)
-            {
-                if (ReferenceEquals(c.Function, selectedFn))
-                {
-                    selectedCtor = c;
-                    break;
-                }
-            }
+            selectedCtor = constructorByFunction[selectedFn];
         }
 
         selectedCtor = Invariant.Required(selectedCtor, "an applicable explicit constructor has a selected constructor symbol");
@@ -911,6 +995,13 @@ internal sealed partial class OverloadResolver
         // per-position conversion below targets the concrete argument types.
         // For a non-generic or open type these equal the declared types.
         var effectiveParamTypes = classType.GetConstructorParameterTypesForConstruction(selectedCtor);
+        RebindSelectedConstructorInlineOutArguments(
+            syntax.Arguments,
+            argumentNames,
+            selectedCtor,
+            effectiveParamTypes,
+            inlineOutArgumentIndices,
+            boundArgumentsBuilder);
 
         // ADR-0101 follow-up / issue #812: a constructor's last parameter
         // may be variadic. The arity check accepts any count >= the fixed
@@ -1025,7 +1116,7 @@ internal sealed partial class OverloadResolver
 
                 newSyntax[fixedCtorParamCount] = parameterSyntax.Length > fixedCtorParamCount
                     ? parameterSyntax[fixedCtorParamCount]
-                    : (syntax.Arguments.Count > 0 ? syntax.Arguments[syntax.Arguments.Count - 1] : null);
+                    : null;
                 parameterSyntax = newSyntax;
             }
         }
@@ -1077,6 +1168,20 @@ internal sealed partial class OverloadResolver
             // for a closed generic construction (equal to parameter.Type for a
             // non-generic/open type).
             var paramType = effectiveParamTypes[i];
+
+            var argumentSyntax = i < parameterSyntax.Length && parameterSyntax[i] != null
+                ? UnwrapNamedArgumentValue(parameterSyntax[i]!)
+                : null;
+            if (argumentSyntax is RefArgumentExpressionSyntax { IsInlineDeclaration: true } inlineOut)
+            {
+                if (parameter.RefKind != RefKind.Out)
+                {
+                    Diagnostics.ReportOutDeclarationOutsideOutArgument(inlineOut.Location);
+                    hasErrors = true;
+                    convertedArguments.Add(argument);
+                    continue;
+                }
+            }
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
@@ -1207,6 +1312,254 @@ internal sealed partial class OverloadResolver
         return new BoundConstructorCallExpression(syntax, classType, finalArguments, selectedCtor);
     }
 
+    private static ImmutableArray<int> GetInlineOutArgumentIndices(
+        SeparatedSyntaxList<ExpressionSyntax> arguments)
+    {
+        ImmutableArray<int>.Builder? indices = null;
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (UnwrapNamedArgumentValue(arguments[i])
+                is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
+            {
+                indices ??= ImmutableArray.CreateBuilder<int>();
+                indices.Add(i);
+            }
+        }
+
+        return indices?.ToImmutable() ?? default;
+    }
+
+    private static bool ConstructorAcceptsInlineOutArguments(
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            if (!ConstructorAcceptsInlineOutArgument(
+                    constructor,
+                    argumentNames,
+                    argumentIndex))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ConstructorAcceptsInlineOutArgument(
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        int argumentIndex)
+    {
+        var parameters = constructor.Parameters;
+        var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+        var parameterIndex = name == null
+            ? argumentIndex
+            : FindParameterIndex(parameters, name);
+        return parameterIndex >= 0
+            && parameterIndex < parameters.Length
+            && parameters[parameterIndex].RefKind == RefKind.Out;
+    }
+
+    private static int FindParameterIndex(
+        ImmutableArray<ParameterSymbol> parameters,
+        string name)
+    {
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (parameters[i].Name == name)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool ConstructorAcceptsTypedInlineOutArguments(
+        ConstructorSymbol constructor,
+        StructSymbol constructedType,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var parameterTypes = constructedType.GetConstructorParameterTypesForConstruction(constructor);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            if (boundArguments[argumentIndex]
+                    is not BoundAddressOfExpression { Operand.Type: var argumentType }
+                || argumentType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, name);
+            if (parameterIndex < 0
+                || parameterIndex >= parameterTypes.Length
+                || !DeclarationBinder.TypeSignaturesEquivalent(
+                    argumentType,
+                    parameterTypes[parameterIndex]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void DeclareInvalidInlineOutLocals(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<int> inlineOutArgumentIndices)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            _ = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
+    }
+
+    private void DeclareUnresolvedInlineOutLocals(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<int> inlineOutArgumentIndices)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            if (inlineOut.IsDiscard)
+            {
+                continue;
+            }
+
+            _ = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
+    }
+
+    private void DeclareUnresolvedInlineOutLocals(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            if (inlineOut.IsDiscard
+                || inlineOut.DeclaredType != null
+                || boundArguments[argumentIndex]
+                    is not BoundAddressOfExpression { Operand.Type: var argumentType }
+                || argumentType != TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            boundArguments[argumentIndex] = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
+    }
+
+    private void RebindSelectedConstructorInlineOutArguments(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<string> argumentNames,
+        ConstructorSymbol constructor,
+        ImmutableArray<TypeSymbol> parameterTypes,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            if (boundArguments[argumentIndex]
+                    is not BoundAddressOfExpression { Operand.Type: var argumentType }
+                || argumentType != TypeSymbol.Error
+                || inlineOut.DeclaredType != null)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, name);
+            if (parameterIndex < 0 || parameterIndex >= parameterTypes.Length)
+            {
+                continue;
+            }
+
+            var parameter = constructor.Parameters[parameterIndex];
+            var reboundParameter = new ParameterSymbol(
+                parameter.Name,
+                parameterTypes[parameterIndex],
+                refKind: RefKind.Out);
+            boundArguments[argumentIndex] = bindRefArgumentExpression(inlineOut, reboundParameter);
+        }
+    }
+
+    private static FunctionSymbol CreateConstructedConstructorCandidate(
+        ConstructorSymbol constructor,
+        StructSymbol constructedType)
+    {
+        var effectiveTypes = constructedType.GetConstructorParameterTypesForConstruction(constructor);
+        var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(constructor.Parameters.Length);
+        for (var i = 0; i < constructor.Parameters.Length; i++)
+        {
+            var parameter = constructor.Parameters[i];
+            var candidateParameter = new ParameterSymbol(
+                parameter.Name,
+                effectiveTypes[i],
+                parameter.IsVariadic,
+                parameter.DeclaringSyntax,
+                parameter.IsScoped,
+                parameter.RefKind);
+            if (parameter.HasExplicitDefaultValue)
+            {
+                candidateParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
+            }
+
+            parameters.Add(candidateParameter);
+        }
+
+        var function = constructor.Function;
+        return new FunctionSymbol(
+            function.Name,
+            parameters.MoveToImmutable(),
+            function.Type,
+            function.Declaration,
+            function.Package,
+            function.Accessibility,
+            constructedType);
+    }
+
     /// <summary>
     /// Issue #1214: closes a generic class that declares an explicit
     /// <c>init(...)</c> constructor for a construction call <c>Box[int32](args)</c>.
@@ -1221,6 +1574,8 @@ internal sealed partial class OverloadResolver
     private bool TryCloseGenericExplicitConstructorType(
         CallExpressionSyntax syntax,
         StructSymbol classType,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices,
         out StructSymbol constructed)
     {
         constructed = classType;
@@ -1261,38 +1616,173 @@ internal sealed partial class OverloadResolver
         }
         else
         {
-            // Infer the type arguments from the value arguments against the
-            // (first) explicit constructor's parameter list. The open-definition
-            // constructor parameter types reference the class type parameters,
-            // so binding each argument and unifying drives inference.
-            //
             // Issue #1629: this is a throwaway probe — BindExplicitConstructorCallExpression
             // re-binds the same argument syntax for real once the closed type is
             // known. Roll back any diagnostics the probe produced so they are
             // reported exactly once, by the real bind.
             var inferenceDiagMark = Diagnostics.Count;
-
-            var ctorOverloads = classType.EffectiveExplicitConstructors;
-            var ctorParams = ctorOverloads.IsDefaultOrEmpty
-                ? ImmutableArray<ParameterSymbol>.Empty
-                : ctorOverloads[0].Parameters;
-
-            for (var i = 0; i < syntax.Arguments.Count && i < ctorParams.Length; i++)
+            var inferenceArgumentTypes = new TypeSymbol?[syntax.Arguments.Count];
+            var inferenceBoundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+            for (var i = 0; i < syntax.Arguments.Count; i++)
             {
-                var argSyntax = UnwrapNamedArgumentValue(syntax.Arguments[i]);
-                var preBound = bindExpression(argSyntax);
-                inferTypeArguments(ctorParams[i].Type, preBound.Type, substitution);
+                var argument = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+                if (argument is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
+                {
+                    inferenceArgumentTypes[i] = BindExplicitConstructorInferenceArgument(argument);
+                    inferenceBoundArguments.Add(new BoundErrorExpression(argument));
+                    continue;
+                }
+
+                var boundArgument = bindExpression(argument);
+                inferenceArgumentTypes[i] = boundArgument.Type;
+                inferenceBoundArguments.Add(boundArgument);
+            }
+
+            var candidates = new List<(FunctionSymbol Function, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
+            var inferredCandidateCount = 0;
+            TypeParameterSymbol? unresolvedTypeParameter = null;
+            Dictionary<TypeParameterSymbol, TypeSymbol>? constraintFailureSubstitution = null;
+            var inferenceConstructors = GetAccessibleExplicitConstructorsOrAll(classType);
+            foreach (var constructor in inferenceConstructors)
+            {
+                if (!ConstructorAcceptsInlineOutArguments(
+                        constructor,
+                        argumentNames,
+                        inlineOutArgumentIndices))
+                {
+                    continue;
+                }
+
+                var candidateSubstitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                InferExplicitConstructorTypeArguments(
+                    syntax,
+                    constructor,
+                    argumentNames,
+                    inferenceArgumentTypes,
+                    candidateSubstitution);
+                var candidateUnresolvedTypeParameter = tps.FirstOrDefault(tp =>
+                    !candidateSubstitution.TryGetValue(tp, out var inferredType)
+                    || inferredType == TypeSymbol.Error);
+                if (candidateUnresolvedTypeParameter != null)
+                {
+                    if (IsPartiallyApplicableExplicitConstructor(
+                            syntax,
+                            constructor,
+                            argumentNames,
+                            inferenceArgumentTypes,
+                            candidateSubstitution))
+                    {
+                        unresolvedTypeParameter ??= candidateUnresolvedTypeParameter;
+                    }
+
+                    continue;
+                }
+
+                inferredCandidateCount++;
+                if (!tps.All(tp => satisfiesConstraint(candidateSubstitution[tp], tp)))
+                {
+                    constraintFailureSubstitution ??= candidateSubstitution;
+                    continue;
+                }
+
+                var candidateType = ConstructExplicitConstructorType(
+                    classType,
+                    tps,
+                    candidateSubstitution);
+                var candidateFunction = CreateConstructedConstructorCandidate(
+                    constructor,
+                    candidateType);
+                if (!IsApplicableUserCallable(
+                        candidateFunction,
+                        syntax.Arguments.Count,
+                        argumentNames)
+                    || !IsConvertibilityApplicable(
+                        candidateFunction,
+                        syntax.Arguments.Count,
+                        argumentNames,
+                        inferenceBoundArguments)
+                    || !ConstructorAcceptsTypedInlineOutArguments(
+                        syntax,
+                        candidateFunction,
+                        argumentNames,
+                        inlineOutArgumentIndices,
+                        inferenceArgumentTypes))
+                {
+                    continue;
+                }
+
+                candidates.Add((candidateFunction, candidateSubstitution));
             }
 
             Diagnostics.TruncateTo(inferenceDiagMark);
 
-            foreach (var tp in tps)
+            if (candidates.Count == 0)
             {
-                if (!substitution.ContainsKey(tp))
+                if (constraintFailureSubstitution != null)
                 {
-                    Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tp.Name);
+                    substitution = constraintFailureSubstitution;
+                }
+                else
+                {
+                    if (inferredCandidateCount == 0)
+                    {
+                        var hasFailedExplicitInlineOutType =
+                            !inlineOutArgumentIndices.IsDefaultOrEmpty
+                            && inlineOutArgumentIndices.Any(index =>
+                                ((RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                                    syntax.Arguments[index])).DeclaredType != null
+                                && inferenceArgumentTypes[index] == TypeSymbol.Error);
+                        if (!hasFailedExplicitInlineOutType)
+                        {
+                            Diagnostics.ReportTypeArgumentInferenceFailed(
+                                syntax.Identifier.Location,
+                                classType.Name,
+                                (unresolvedTypeParameter ?? tps[0]).Name);
+                        }
+                    }
+                    else
+                    {
+                        Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                    }
+
                     return false;
                 }
+            }
+            else if (candidates.Count == 1)
+            {
+                substitution = candidates[0].Substitution;
+            }
+            else if (candidates.Skip(1).All(candidate =>
+                tps.All(tp => DeclarationBinder.TypeSignaturesEquivalent(
+                    candidate.Substitution[tp],
+                    candidates[0].Substitution[tp]))))
+            {
+                substitution = candidates[0].Substitution;
+            }
+            else
+            {
+                var selected = SelectBestInstanceOverload(
+                    candidates.Select(candidate => candidate.Function).ToImmutableArray(),
+                    syntax.Arguments.Count,
+                    argumentNames,
+                    inferenceBoundArguments.ToImmutable(),
+                    out var ambiguous,
+                    out _);
+                if (selected == null)
+                {
+                    if (ambiguous)
+                    {
+                        Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, classType.Name);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                    }
+
+                    return false;
+                }
+
+                substitution = candidates.First(candidate => ReferenceEquals(candidate.Function, selected)).Substitution;
             }
         }
 
@@ -1309,15 +1799,223 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        var typeArgs = ImmutableArray.CreateBuilder<TypeSymbol>(tps.Length);
-        foreach (var tp in tps)
+        constructed = ConstructExplicitConstructorType(classType, tps, substitution);
+        return true;
+    }
+
+    private static bool ConstructorAcceptsTypedInlineOutArguments(
+        CallExpressionSyntax syntax,
+        FunctionSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        IReadOnlyList<TypeSymbol?> argumentTypes)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
         {
-            typeArgs.Add(substitution[tp]);
+            return true;
         }
 
-        constructed = MapClrType is { } mapClrType
-            ? StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), mapClrType)
-            : StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                syntax.Arguments[argumentIndex]);
+            if (inlineOut.IsDiscard || inlineOut.DeclaredType == null)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, name);
+            if (parameterIndex < 0
+                || parameterIndex >= constructor.Parameters.Length
+                || argumentTypes[argumentIndex] is not { } argumentType
+                || !DeclarationBinder.TypeSignaturesEquivalent(
+                    argumentType,
+                    constructor.Parameters[parameterIndex].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void InferExplicitConstructorTypeArguments(
+        CallExpressionSyntax syntax,
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        IReadOnlyList<TypeSymbol?> argumentTypes,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        var parameters = constructor.Parameters;
+        var isVariadic = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic;
+        var fixedParameterCount = isVariadic ? parameters.Length - 1 : parameters.Length;
+        List<int>? variadicArgumentIndices = null;
+
+        for (var i = 0; i < syntax.Arguments.Count; i++)
+        {
+            var parameterIndex = argumentNames.IsDefault || argumentNames[i] == null
+                ? isVariadic && i >= fixedParameterCount
+                    ? parameters.Length - 1
+                    : i
+                : FindParameterIndex(parameters, argumentNames[i]);
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            if (isVariadic && parameterIndex == parameters.Length - 1)
+            {
+                variadicArgumentIndices ??= new List<int>();
+                variadicArgumentIndices.Add(i);
+                continue;
+            }
+
+            if (argumentTypes[i] is { } argumentType)
+            {
+                inferTypeArguments(parameters[parameterIndex].Type, argumentType, substitution);
+            }
+        }
+
+        if (!isVariadic
+            || variadicArgumentIndices is not { Count: > 0 }
+            || parameters[parameters.Length - 1].Type is not SliceTypeSymbol variadicSlice)
+        {
+            return;
+        }
+
+        if (variadicArgumentIndices.Count == 1)
+        {
+            var argumentType = argumentTypes[variadicArgumentIndices[0]];
+            if (argumentType is SliceTypeSymbol)
+            {
+                inferTypeArguments(variadicSlice, argumentType, substitution);
+            }
+            else if (argumentType != null)
+            {
+                inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
+            }
+
+            return;
+        }
+
+        foreach (var argumentIndex in variadicArgumentIndices)
+        {
+            if (argumentTypes[argumentIndex] is { } argumentType)
+            {
+                inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
+            }
+        }
+    }
+
+    private StructSymbol ConstructExplicitConstructorType(
+        StructSymbol definition,
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(typeParameters.Length);
+        foreach (var typeParameter in typeParameters)
+        {
+            typeArguments.Add(substitution[typeParameter]);
+        }
+
+        return MapClrType is { } mapClrType
+            ? StructSymbol.Construct(definition, typeArguments.MoveToImmutable(), mapClrType)
+            : StructSymbol.Construct(definition, typeArguments.MoveToImmutable());
+    }
+
+    private TypeSymbol? BindExplicitConstructorInferenceArgument(ExpressionSyntax argument)
+    {
+        if (argument is RefArgumentExpressionSyntax { IsInlineDeclaration: true } inlineOut)
+        {
+            return inlineOut.DeclaredType == null
+                ? null
+                : bindTypeClause(inlineOut.DeclaredType) ?? TypeSymbol.Error;
+        }
+
+        return bindExpression(argument).Type;
+    }
+
+    private ImmutableArray<ConstructorSymbol> GetAccessibleExplicitConstructorsOrAll(
+        StructSymbol classType)
+    {
+        var constructors = classType.EffectiveExplicitConstructors;
+        var accessibleConstructors = constructors
+            .Where(constructor => AccessibilityChecker.IsAccessible(
+                constructor.Function.Accessibility,
+                constructor.DeclaringType ?? classType,
+                getCurrentFunction()))
+            .ToImmutableArray();
+        return accessibleConstructors.IsDefaultOrEmpty
+            ? constructors
+            : accessibleConstructors;
+    }
+
+    private bool IsPartiallyApplicableExplicitConstructor(
+        CallExpressionSyntax syntax,
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        IReadOnlyList<TypeSymbol?> argumentTypes,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        if (!IsApplicableUserCallable(
+                constructor.Function,
+                syntax.Arguments.Count,
+                argumentNames))
+        {
+            return false;
+        }
+
+        var parameters = constructor.Parameters;
+        var isVariadic = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic;
+        var fixedParameterCount = isVariadic ? parameters.Length - 1 : parameters.Length;
+        var variadicArgumentCount = isVariadic
+            ? syntax.Arguments.Count - fixedParameterCount
+            : 0;
+        for (var argumentIndex = 0; argumentIndex < syntax.Arguments.Count; argumentIndex++)
+        {
+            var parameterIndex = argumentNames.IsDefault || argumentNames[argumentIndex] == null
+                ? isVariadic && argumentIndex >= fixedParameterCount
+                    ? parameters.Length - 1
+                    : argumentIndex
+                : FindParameterIndex(parameters, argumentNames[argumentIndex]);
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+            {
+                return false;
+            }
+
+            var argumentType = argumentTypes[argumentIndex];
+            if (argumentType == null || argumentType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var parameter = parameters[parameterIndex];
+            var parameterType = Binder.SubstituteType(parameter.Type, substitution);
+            if (isVariadic
+                && parameterIndex == parameters.Length - 1
+                && parameterType is SliceTypeSymbol variadicSlice
+                && (variadicArgumentCount != 1 || argumentType is not SliceTypeSymbol))
+            {
+                parameterType = variadicSlice.ElementType;
+            }
+
+            if (TypeSymbol.ContainsTypeParameter(parameterType))
+            {
+                continue;
+            }
+
+            var isCompatible = parameter.RefKind == RefKind.None
+                ? Conversion.Classify(argumentType, parameterType).IsImplicit
+                : DeclarationBinder.TypeSignaturesEquivalent(argumentType, parameterType);
+            if (!isCompatible)
+            {
+                return false;
+            }
+        }
+
         return true;
     }
 
