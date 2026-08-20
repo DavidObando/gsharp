@@ -889,6 +889,10 @@ internal sealed partial class OverloadResolver
             if (ctorOverloads.IsDefaultOrEmpty)
             {
                 Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                DeclareUnresolvedInlineOutLocals(
+                    syntax.Arguments,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder);
                 return new BoundErrorExpression(syntax);
             }
         }

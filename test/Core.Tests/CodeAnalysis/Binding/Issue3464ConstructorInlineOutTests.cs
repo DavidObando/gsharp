@@ -574,6 +574,32 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceConstructor_TypedFilterFailure_DeclaresSiblingInferredOutLocal()
+    {
+        var result = Evaluate("""
+            class TypedSiblingFailureCtor {
+                init(out first int32, out second int32) {
+                    first = 0
+                    second = 0
+                }
+
+                init(out first int32, out second string) {
+                    first = 0
+                    second = ""
+                }
+            }
+
+            TypedSiblingFailureCtor(out var first, out var second bool)
+            first
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0267");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
     public void SourceConstructor_MissingRequiredAfterOutVar_DeclaresLocal()
     {
         var result = Evaluate("""
