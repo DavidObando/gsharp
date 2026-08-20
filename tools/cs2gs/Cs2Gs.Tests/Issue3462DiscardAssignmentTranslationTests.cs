@@ -272,6 +272,72 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void SwitchArmPostfixCall_PreservesOldValueAndOperandOrder()
+    {
+        string rendered = Render("""
+            public static class Probe
+            {
+                private static int observed;
+
+                private static int Observe(int before, int after)
+                {
+                    observed = ((before + 1) * 10) + after;
+                    return observed;
+                }
+
+                public static int Run()
+                {
+                    int i = 0;
+                    _ = 0 switch
+                    {
+                        0 => Observe(i++, i),
+                        _ => 0,
+                    };
+                    return observed;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(11, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalPostfixCall_PreservesOldValueAndOperandOrder()
+    {
+        string rendered = Render("""
+            public static class Probe
+            {
+                private static int observed;
+
+                private static int Observe(int before, int after)
+                {
+                    observed = ((before + 1) * 10) + after;
+                    return observed;
+                }
+
+                public static int Run()
+                {
+                    int i = 0;
+                    _ = true ? Observe(i++, i) : 0;
+                    return observed;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(11, result.Value);
+    }
+
+    [Fact]
     public void ShortCircuitedPostfix_DiscardRunsOnlyEvaluatedOperands()
     {
         string rendered = Render("""

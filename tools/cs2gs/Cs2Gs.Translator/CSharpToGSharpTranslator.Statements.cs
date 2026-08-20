@@ -2141,7 +2141,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// statements: tuple declaration/deconstruction forms may expand, while
         /// ordinary chained assignments remain native nested expressions.
         /// </summary>
-        private IEnumerable<GStatement> TranslateExpressionStatements(ExpressionSyntax expression)
+        private IEnumerable<GStatement> TranslateExpressionStatements(
+            ExpressionSyntax expression,
+            bool hoistPostfix = true)
         {
             if (expression is AssignmentExpressionSyntax assignment &&
                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
@@ -2232,9 +2234,11 @@ public sealed partial class CSharpToGSharpTranslator
             return this.WithHoistedAssignments(
                 expression,
                 includeSelf: false,
-                () => this.WithHoistedPostfix(
-                    expression,
-                    () => new[] { this.TranslateExpressionStatement(expression) }).ToList());
+                () => hoistPostfix
+                    ? this.WithHoistedPostfix(
+                        expression,
+                        () => new[] { this.TranslateExpressionStatement(expression) }).ToList()
+                    : new List<GStatement> { this.TranslateExpressionStatement(expression) });
         }
 
         // Strips parentheses so chain/assignment detection is parenthesis-transparent.

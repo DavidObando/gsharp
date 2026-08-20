@@ -828,7 +828,7 @@ public sealed partial class CSharpToGSharpTranslator
                     };
                 }
 
-                return this.TranslateExpressionStatements(expression).ToList();
+                return this.TranslateExpressionStatements(expression, hoistPostfix: false).ToList();
             }).ToList());
         }
 
