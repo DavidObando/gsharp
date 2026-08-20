@@ -793,7 +793,7 @@ internal sealed partial class OverloadResolver
         {
             if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
             {
-                var openConstructors = classType.EffectiveExplicitConstructors;
+                var openConstructors = GetAccessibleExplicitConstructorsOrAll(classType);
                 var invalidInlineOutArgument = inlineOutArgumentIndices.FirstOrDefault(
                     index => !openConstructors.Any(ctor => ConstructorAcceptsInlineOutArgument(
                         ctor,
@@ -828,17 +828,7 @@ internal sealed partial class OverloadResolver
         // single-overload diagnostics (wrong arity) still fire below.
         // Issue #1214: for a closed generic construction, the constructor table
         // lives on the open definition (EffectiveExplicitConstructors).
-        var ctorOverloads = classType.EffectiveExplicitConstructors;
-        var accessibleCtorOverloads = ctorOverloads
-            .Where(ctor => AccessibilityChecker.IsAccessible(
-                ctor.Function.Accessibility,
-                ctor.DeclaringType ?? classType,
-                getCurrentFunction()))
-            .ToImmutableArray();
-        if (!accessibleCtorOverloads.IsDefaultOrEmpty)
-        {
-            ctorOverloads = accessibleCtorOverloads;
-        }
+        var ctorOverloads = GetAccessibleExplicitConstructorsOrAll(classType);
 
         if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
         {
@@ -1652,18 +1642,7 @@ internal sealed partial class OverloadResolver
             var inferredCandidateCount = 0;
             TypeParameterSymbol? unresolvedTypeParameter = null;
             Dictionary<TypeParameterSymbol, TypeSymbol>? constraintFailureSubstitution = null;
-            var inferenceConstructors = classType.EffectiveExplicitConstructors;
-            var accessibleInferenceConstructors = inferenceConstructors
-                .Where(constructor => AccessibilityChecker.IsAccessible(
-                    constructor.Function.Accessibility,
-                    constructor.DeclaringType ?? classType,
-                    getCurrentFunction()))
-                .ToImmutableArray();
-            if (!accessibleInferenceConstructors.IsDefaultOrEmpty)
-            {
-                inferenceConstructors = accessibleInferenceConstructors;
-            }
-
+            var inferenceConstructors = GetAccessibleExplicitConstructorsOrAll(classType);
             foreach (var constructor in inferenceConstructors)
             {
                 if (!ConstructorAcceptsInlineOutArguments(
@@ -1957,6 +1936,21 @@ internal sealed partial class OverloadResolver
         }
 
         return bindExpression(argument).Type;
+    }
+
+    private ImmutableArray<ConstructorSymbol> GetAccessibleExplicitConstructorsOrAll(
+        StructSymbol classType)
+    {
+        var constructors = classType.EffectiveExplicitConstructors;
+        var accessibleConstructors = constructors
+            .Where(constructor => AccessibilityChecker.IsAccessible(
+                constructor.Function.Accessibility,
+                constructor.DeclaringType ?? classType,
+                getCurrentFunction()))
+            .ToImmutableArray();
+        return accessibleConstructors.IsDefaultOrEmpty
+            ? constructors
+            : accessibleConstructors;
     }
 
     private bool IsPartiallyApplicableExplicitConstructor(

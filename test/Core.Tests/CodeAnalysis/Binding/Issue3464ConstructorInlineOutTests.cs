@@ -475,6 +475,139 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_InaccessibleOutDoesNotValidateLayout()
+    {
+        var result = Evaluate("""
+            class InaccessibleOutLayoutChoice[T] {
+                init(value T, marker T) {
+                }
+
+                private init(out value T, marker T) {
+                    value = marker
+                }
+            }
+
+            InaccessibleOutLayoutChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0151");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ReversedInaccessibleOutDoesNotValidateLayout()
+    {
+        var result = Evaluate("""
+            class ReversedInaccessibleOutLayoutChoice[T] {
+                private init(out value T, marker T) {
+                    value = marker
+                }
+
+                init(value T, marker T) {
+                }
+            }
+
+            ReversedInaccessibleOutLayoutChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0151");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedInaccessibleOutDoesNotValidateLayout()
+    {
+        var result = Evaluate("""
+            class NamedInaccessibleOutLayoutChoice[T] {
+                init(value T, marker T) {
+                }
+
+                private init(out value T, marker T) {
+                    value = marker
+                }
+            }
+
+            NamedInaccessibleOutLayoutChoice(marker: 42, value: out var value)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0151");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ProtectedOutDoesNotValidateLayout()
+    {
+        var result = Evaluate("""
+            open class ProtectedOutLayoutChoice[T] {
+                init(value T, marker T) {
+                }
+
+                protected init(out value T, marker T) {
+                    value = marker
+                }
+            }
+
+            ProtectedOutLayoutChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0151");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_InternalOutRemainsAccessible()
+    {
+        var result = Evaluate("""
+            class InternalOutLayoutChoice[T] {
+                init(value T, marker T) {
+                }
+
+                internal init(out value T, marker T) {
+                    value = marker
+                }
+            }
+
+            InternalOutLayoutChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_AllPrivateOutPreservesAccessibilityDiagnostic()
+    {
+        var result = Evaluate("""
+            class AllPrivateOutLayoutChoice[T] {
+                private init(out value T, marker T) {
+                    value = marker
+                }
+            }
+
+            AllPrivateOutLayoutChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0472");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0151" or "GS0236");
+    }
+
+    [Fact]
     public void SourceGenericConstructor_OptionalOmittedReportsActualUnresolvedTypeParameter()
     {
         var result = Evaluate("""
