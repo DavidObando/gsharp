@@ -691,16 +691,25 @@ public sealed partial class CSharpToGSharpTranslator
                     helperReceiver);
             }
 
-            var callArgs = new List<GExpression> { helperReceiver };
-            callArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
             IReadOnlyList<GTypeReference> callTypeArgs = helperName is GenericNameSyntax generic
                 ? this.MapTypeArguments(generic)
                 : null;
 
-            call = new InvocationExpression(
-                new MemberAccessExpression(new IdentifierExpression(owner), name),
-                callArgs,
-                callTypeArgs);
+            GExpression TranslateCall()
+            {
+                var callArgs = new List<GExpression> { helperReceiver };
+                callArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
+                return new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression(owner), name),
+                    callArgs,
+                    callTypeArgs);
+            }
+
+            call = this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull)
+                ? this.TranslateWithLocalAssignmentSeam(
+                    conditionalAccess.WhenNotNull,
+                    TranslateCall)
+                : TranslateCall();
             guard = new BinaryExpression(receiver, "!=", LiteralExpression.Null());
         }
 

@@ -438,32 +438,28 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateBinaryRightOperand(BinaryExpressionSyntax binary)
         {
             // A fallback pattern in a right operand may spill its scrutinee.
-            // Host that spill in the operand itself so `&&`/`||`/`??` still
-            // decide whether the scrutinee runs.
+            // A deconstruction assignment also needs statements. Host either in
+            // the operand itself so `&&`/`||`/`??` still decide whether it runs.
             if (!IsShortCircuitOperator(binary)
-                || this.state.PendingSpillPrologue == null
-                || !this.ContainsFallbackPatternSpill(binary.Right))
+                || (!this.RequiresLocalAssignmentSeam(binary.Right)
+                    && (this.state.PendingSpillPrologue == null
+                        || !this.ContainsFallbackPatternSpill(binary.Right))))
             {
                 return this.TranslateExpression(binary.Right);
             }
 
-            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             List<GStatement> previousDeclarations = this.state.ShortCircuitSpillDeclarations;
             SyntaxNode previousScope = this.state.ShortCircuitSpillScope;
-            var statements = new List<GStatement>();
-            this.state.PendingSpillPrologue = statements;
-            this.state.ShortCircuitSpillDeclarations ??= outerSpillPrologue;
+            this.state.ShortCircuitSpillDeclarations ??= this.state.PendingSpillPrologue;
             this.state.ShortCircuitSpillScope ??= binary.Right;
             try
             {
-                GExpression value = this.TranslateExpression(binary.Right);
-                return statements.Count == 0
-                    ? value
-                    : new BlockExpression(statements, value);
+                return this.TranslateWithLocalAssignmentSeam(
+                    binary.Right,
+                    () => this.TranslateExpression(binary.Right));
             }
             finally
             {
-                this.state.PendingSpillPrologue = outerSpillPrologue;
                 this.state.ShortCircuitSpillDeclarations = previousDeclarations;
                 this.state.ShortCircuitSpillScope = previousScope;
             }

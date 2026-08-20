@@ -422,6 +422,188 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void ShortCircuitBooleanOperands_HostDeconstructionOnlyWhenEvaluated()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                private (int, int) ThrowingPair()
+                {
+                    trace = (trace * 10) + 5;
+                    throw new System.InvalidOperationException();
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = false && ((a, b) = Pair(1)).Item1 > 0;
+                    _ = true && ((a, b) = Pair(2)).Item1 > 0;
+                    _ = true || ((a, b) = Pair(3)).Item1 > 0;
+                    bool consumed = false || ((a, b) = Pair(4)).Item1 > 0;
+                    _ = false && ((a, b) = ThrowingPair()).Item1 > 0;
+                    try
+                    {
+                        _ = true && ((a, b) = ThrowingPair()).Item1 > 0;
+                    }
+                    catch (System.InvalidOperationException)
+                    {
+                    }
+
+                    return (trace * 100) + (a * 10) + b + (consumed ? 0 : 10000);
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(24544, result.Value);
+    }
+
+    [Fact]
+    public void CoalesceOperand_HostsDeconstructionForDiscardAndConsumedValues()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value + 1);
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    int? present = 7;
+                    int? absent = null;
+                    int first = present ?? ((a, b) = Pair(1)).Item1;
+                    int second = absent ?? ((a, b) = Pair(2)).Item1;
+                    _ = absent ?? ((a, b) = Pair(3)).Item1;
+                    return (trace * 10000) + (first * 1000) + (second * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(237234, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalAccessOperands_HostDeconstructionOnlyForNonNullReceivers()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                private int Observe(int value)
+                {
+                    trace = (trace * 10) + 5;
+                    return value;
+                }
+
+                private Probe? Receiver(bool present)
+                {
+                    trace = (trace * 10) + 9;
+                    return present ? this : null;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = Receiver(false)?.Observe(((a, b) = Pair(1)).Item1);
+                    int? observed = Receiver(true)?.Observe(((a, b) = Pair(2)).Item1);
+                    int[]? missingValues = null;
+                    int[] values = new[] { 0, 1, 2, 3 };
+                    _ = missingValues?[((a, b) = Pair(3)).Item1];
+                    int? indexed = values?[((a, b) = Pair(1)).Item1];
+                    return (trace * 1000) + (a * 100) + (b * 10) +
+                        (observed ?? 0) + (indexed ?? 0);
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(99251113, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalExtensionCall_HostsDeconstructionInsideGuardedCall()
+    {
+        string rendered = Render("""
+            public static class ProbeExtensions
+            {
+                public static int Observe(this Probe probe, int value) => probe.Record(value);
+            }
+
+            public sealed class Probe
+            {
+                private int trace;
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                public int Record(int value)
+                {
+                    trace = (trace * 10) + 5;
+                    return value;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    Probe? missing = null;
+                    Probe? present = this;
+                    _ = missing?.Observe(((a, b) = Pair(1)).Item1);
+                    int? observed = present?.Observe(((a, b) = Pair(2)).Item1);
+                    return (trace * 100) + (a * 10) + b + (observed ?? 0);
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(2524, result.Value);
+    }
+
+    [Fact]
     public void ConditionalPostfix_DiscardExecutesOnlySelectedBranch()
     {
         string rendered = Render("""

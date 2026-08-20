@@ -93,6 +93,37 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
+        private bool RequiresLocalAssignmentSeam(ExpressionSyntax expression) =>
+            this.CollectEmbeddedAssignments(expression, includeSelf: true).Count > 0;
+
+        private GExpression TranslateWithLocalAssignmentSeam(
+            ExpressionSyntax expression,
+            Func<GExpression> translate)
+        {
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            var statements = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            this.state.PendingSpillPrologue = statements;
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    expression,
+                    includeSelf: true,
+                    statements,
+                    replacements);
+            try
+            {
+                GExpression value = translate();
+                return statements.Count == 0
+                    ? value
+                    : new BlockExpression(statements, value);
+            }
+            finally
+            {
+                this.ReleaseHoistedAssignments(embedded, replacements);
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+            }
+        }
+
         private void HoistPrecedingEvaluationOperands(
             ExpressionSyntax root,
             AssignmentExpressionSyntax assignment,
@@ -238,9 +269,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// excluding ones inside a nested lambda/local function (their own
         /// statement seam). Assignments inside a conditional
         /// (`?:`) arm are left for that arm's native G# block-expression seam.
-        /// Assignments hidden inside any other short-circuited operand would change
-        /// evaluation COUNT/order if hoisted, so they are flagged unsupported
-        /// instead (issue #1723).
+        /// Assignments inside any other short-circuited operand are left for that
+        /// operand's local block-expression seam.
         /// </summary>
         private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
         {
@@ -355,16 +385,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (IsInShortCircuitedSubexpression(candidate, expression))
                 {
-                    // ADR-0161 / issue #3350: a short-circuited operand's write must
-                    // run only when that operand is evaluated, so it cannot be
-                    // hoisted into a preceding statement — but it does not need to
-                    // be. G# assignment is a value-yielding expression, so
-                    // `TranslateAssignmentAsExpression` emits it in place, exactly
-                    // where C# put it. Skipping it here leaves it to that path.
-                    //
-                    // This previously reported Unsupported and then DROPPED the
-                    // write entirely (issue #1723), on the mistaken premise that G#
-                    // assignment was statement-only.
+                    // Scalar assignments remain native G# value expressions.
+                    // Deconstruction is hosted by the nested short-circuit
+                    // operand's own block-expression seam.
                     continue;
                 }
 
@@ -426,8 +449,7 @@ public sealed partial class CSharpToGSharpTranslator
         // True when `node` is reached only through a not-always-evaluated operand
         // inside `root`: the right operand of `&&`/`||`/`??`, or the "when not
         // null" side of a `?.`/`?[...]` conditional-access chain (including any
-        // member/element access further chained off it). Unlike a `?:` arm, these
-        // positions have no native statement-hosting expression seam.
+        // member/element access further chained off it).
         private static bool IsInShortCircuitedSubexpression(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
