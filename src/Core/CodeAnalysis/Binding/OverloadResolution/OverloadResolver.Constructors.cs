@@ -1477,9 +1477,11 @@ internal sealed partial class OverloadResolver
 
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
             if (boundArguments[argumentIndex]
                     is not BoundAddressOfExpression { Operand.Type: var argumentType }
-                || argumentType != TypeSymbol.Error)
+                || argumentType != TypeSymbol.Error
+                || inlineOut.DeclaredType != null)
             {
                 continue;
             }
@@ -1498,7 +1500,6 @@ internal sealed partial class OverloadResolver
                 parameter.Name,
                 parameterTypes[parameterIndex],
                 refKind: RefKind.Out);
-            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
             boundArguments[argumentIndex] = bindRefArgumentExpression(inlineOut, reboundParameter);
         }
     }
@@ -1701,6 +1702,13 @@ internal sealed partial class OverloadResolver
                 }
             }
             else if (candidates.Count == 1)
+            {
+                substitution = candidates[0].Substitution;
+            }
+            else if (candidates.Skip(1).All(candidate =>
+                tps.All(tp => DeclarationBinder.TypeSignaturesEquivalent(
+                    candidate.Substitution[tp],
+                    candidates[0].Substitution[tp]))))
             {
                 substitution = candidates[0].Substitution;
             }

@@ -1860,7 +1860,7 @@ internal sealed partial class ExpressionBinder
             TypeSymbol? declaredType = null;
             if (syntax.DeclaredType != null)
             {
-                declaredType = bindTypeClause(syntax.DeclaredType);
+                declaredType = bindTypeClause(syntax.DeclaredType) ?? TypeSymbol.Error;
             }
 
             if (declaredType == null && parameter != null)

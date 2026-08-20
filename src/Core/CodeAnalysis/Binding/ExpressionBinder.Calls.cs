@@ -1907,7 +1907,14 @@ internal sealed partial class ExpressionBinder
 
         if (bestCtor == null)
         {
-            if (boundArguments.Any(static argument => argument.Type == TypeSymbol.Error))
+            var hasInvalidExplicitTypedInlineOut = inlineOutArguments.Any(index =>
+                OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index])
+                    is RefArgumentExpressionSyntax { DeclaredType: not null }
+                && boundArguments[index]
+                    is BoundAddressOfExpression { Operand.Type: var operandType }
+                && operandType == TypeSymbol.Error);
+            if (hasInvalidExplicitTypedInlineOut
+                || boundArguments.Any(static argument => argument.Type == TypeSymbol.Error))
             {
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
@@ -1917,7 +1924,7 @@ internal sealed partial class ExpressionBinder
                     openGenericDefinition,
                     symbolicTypeArgs);
                 result = new BoundErrorExpression(syntax);
-                return false;
+                return hasInvalidExplicitTypedInlineOut;
             }
 
             // Issue #524: CLR value types always have an implicit zero-init
@@ -2218,6 +2225,11 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < arguments.Length; i++)
         {
             if (!TryGetInlineOutVarArgument(syntax, i, out var refArgument))
+            {
+                continue;
+            }
+
+            if (refArgument.DeclaredType != null)
             {
                 continue;
             }

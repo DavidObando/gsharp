@@ -695,6 +695,28 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_PositionalExplicitTypedOutFiltersMultipleTypeParameters()
+    {
+        var result = Evaluate("""
+            class PositionalTypedGenericChoice[T,U] {
+                init(out value int32, first T, second U) {
+                    value = 42
+                }
+
+                init(out value string, first T, second U) {
+                    value = ""
+                }
+            }
+
+            PositionalTypedGenericChoice(out var value int32, 2, "x")
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void SourceGenericConstructor_IncompatibleExplicitTypedOutReportsNoApplicable()
     {
         var result = Evaluate("""
@@ -716,6 +738,38 @@ public sealed class Issue3464ConstructorInlineOutTests
         Assert.DoesNotContain(
             result.Diagnostics,
             diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceConstructor_UnknownExplicitOutTypeReportsOnceAndDeclaresLocal()
+    {
+        var result = Evaluate("""
+            class UnknownExplicitOutTypeChoice {
+                init(out value int32) {
+                    value = 0
+                }
+            }
+
+            UnknownExplicitOutTypeChoice(out var value NoSuchIssue3464SourceType)
+            value
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0113", diagnostic.Id);
+    }
+
+    [Fact]
+    public void ImportedConstructor_UnknownExplicitOutTypeReportsOnceAndDeclaresLocal()
+    {
+        var result = Evaluate("""
+            import System.Threading
+
+            Mutex(false, nil, out var value NoSuchIssue3464ImportedType)
+            value
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0113", diagnostic.Id);
     }
 
     [Fact]
