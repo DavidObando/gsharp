@@ -111,6 +111,48 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void ImportedMutex_MismatchedExplicitTypedOutReportsConstructorDiagnostic()
+    {
+        var result = Evaluate("""
+            import System.Threading
+
+            Mutex(false, nil, out var value int64)
+            value
+            """);
+
+        AssertImportedTypedOutMismatchWithoutCascades(result);
+    }
+
+    [Fact]
+    public void ImportedMutex_NamedMismatchedExplicitTypedOutReportsConstructorDiagnostic()
+    {
+        var result = Evaluate("""
+            import System.Threading
+
+            Mutex(
+                createdNew: out var value int64,
+                name: nil,
+                initiallyOwned: false)
+            value
+            """);
+
+        AssertImportedTypedOutMismatchWithoutCascades(result);
+    }
+
+    [Fact]
+    public void ImportedConstructor_MismatchedTypedOutDeclaresInferredSibling()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464TwoOutConstructor(out var invalid int64, out var sibling)
+            invalid + sibling
+            """);
+
+        AssertImportedTypedOutMismatchWithoutCascades(result);
+    }
+
+    [Fact]
     public void ImportedGenericConstructor_InfersOutVarType()
     {
         var result = EvaluateFixture("""
@@ -1580,6 +1622,14 @@ public sealed class Issue3464ConstructorInlineOutTests
             diagnostic => diagnostic.Id is "GS0125" or "GS0159" or "GS0285");
     }
 
+    private static void AssertImportedTypedOutMismatchWithoutCascades(EmittedOracleResult result)
+    {
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0154");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0130");
+    }
+
     private static EmittedOracleResult Evaluate(string source) => EmittedOracle.Evaluate(source);
 
     private static EmittedOracleResult EvaluateFixture(string source) =>
@@ -1649,5 +1699,14 @@ public sealed class Issue3464FailureConstructor
     public Issue3464FailureConstructor(int prefix, out int value, int required)
     {
         value = prefix + required;
+    }
+}
+
+public sealed class Issue3464TwoOutConstructor
+{
+    public Issue3464TwoOutConstructor(out bool first, out int second)
+    {
+        first = true;
+        second = 42;
     }
 }

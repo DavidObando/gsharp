@@ -1907,6 +1907,26 @@ internal sealed partial class ExpressionBinder
 
         if (bestCtor == null)
         {
+            if (TryReportClrConstructorInlineOutTypeMismatch(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    boundArguments,
+                    openGenericDefinition,
+                    symbolicTypeArgs))
+            {
+                DeclareClrConstructorInlineOutLocals(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    openGenericDefinition,
+                    symbolicTypeArgs);
+                result = new BoundErrorExpression(syntax);
+                return true;
+            }
+
             var hasInvalidExplicitTypedInlineOut = inlineOutArguments.Any(index =>
                 OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index])
                     is RefArgumentExpressionSyntax { DeclaredType: not null }
@@ -2075,6 +2095,74 @@ internal sealed partial class ExpressionBinder
         }
 
         return result;
+    }
+
+    private bool TryReportClrConstructorInlineOutTypeMismatch(
+        CallExpressionSyntax syntax,
+        IReadOnlyList<int> inlineOutArguments,
+        IReadOnlyList<ConstructorInfo> constructors,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        Type? openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArguments)
+    {
+        foreach (var index in inlineOutArguments)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)OverloadResolver.UnwrapNamedArgumentValue(
+                syntax.Arguments[index]);
+            if (inlineOut.DeclaredType == null
+                || boundArguments[index]
+                    is not BoundAddressOfExpression { Operand.Type: var actualType }
+                || actualType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            TypeSymbol? expectedType = null;
+            string? parameterName = null;
+            foreach (var constructor in constructors)
+            {
+                var parameters = constructor.GetParameters();
+                var name = argumentNames.IsDefault ? null : argumentNames[index];
+                var parameterIndex = name == null ? index : FindClrParameterIndex(parameters, name);
+                if (parameterIndex < 0
+                    || parameterIndex >= parameters.Length
+                    || !parameters[parameterIndex].IsOut
+                    || parameters[parameterIndex].IsIn)
+                {
+                    continue;
+                }
+
+                var candidateType = ResolveConstructorParameterPointeeType(
+                    constructor,
+                    parameterIndex,
+                    openGenericDefinition,
+                    symbolicTypeArguments)
+                    ?? TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType.GetElementType());
+                if (expectedType != null
+                    && !DeclarationBinder.TypeSignaturesEquivalent(expectedType, candidateType))
+                {
+                    expectedType = null;
+                    break;
+                }
+
+                expectedType = candidateType;
+                parameterName = parameters[parameterIndex].Name ?? "value";
+            }
+
+            if (expectedType != null
+                && !DeclarationBinder.TypeSignaturesEquivalent(expectedType, actualType))
+            {
+                Diagnostics.ReportWrongArgumentType(
+                    inlineOut.Location,
+                    parameterName ?? "value",
+                    expectedType,
+                    actualType);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void DeclareInvalidClrConstructorInlineOutLocals(
