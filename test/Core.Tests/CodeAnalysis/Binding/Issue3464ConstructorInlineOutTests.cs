@@ -208,6 +208,26 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_PartialInferenceFailure_DeclaresExplicitTypedOutLocal()
+    {
+        var result = Evaluate("""
+            class PhantomBox[T, U] {
+                init(out value T) {
+                    value = default(T)
+                }
+            }
+
+            PhantomBox(out var made int32)
+            made
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0151");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
     public void SourceGenericConstructor_ConcreteOutVar_BindsAndRuns()
     {
         var result = Evaluate("""
