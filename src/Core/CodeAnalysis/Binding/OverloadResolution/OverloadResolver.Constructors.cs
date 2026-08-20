@@ -909,6 +909,21 @@ internal sealed partial class OverloadResolver
 
         if (!inlineOutArgumentIndices.IsDefaultOrEmpty && ctorOverloads.Length > 1)
         {
+            var hasFailedExplicitInlineOutType = inlineOutArgumentIndices.Any(index =>
+                ((RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                    syntax.Arguments[index])).DeclaredType != null
+                && boundArgumentsBuilder[index]
+                    is BoundAddressOfExpression { Operand.Type: var argumentType }
+                && argumentType == TypeSymbol.Error);
+            if (hasFailedExplicitInlineOutType)
+            {
+                DeclareUnresolvedInlineOutLocals(
+                    syntax.Arguments,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder);
+                return new BoundErrorExpression(syntax);
+            }
+
             ctorOverloads = ctorOverloads
                 .Where(ctor => ConstructorAcceptsTypedInlineOutArguments(
                     ctor,
@@ -1659,7 +1674,16 @@ internal sealed partial class OverloadResolver
                     || inferredType == TypeSymbol.Error);
                 if (candidateUnresolvedTypeParameter != null)
                 {
-                    unresolvedTypeParameter ??= candidateUnresolvedTypeParameter;
+                    if (IsPartiallyApplicableExplicitConstructor(
+                            syntax,
+                            constructor,
+                            argumentNames,
+                            inferenceArgumentTypes,
+                            candidateSubstitution))
+                    {
+                        unresolvedTypeParameter ??= candidateUnresolvedTypeParameter;
+                    }
+
                     continue;
                 }
 
@@ -1921,6 +1945,53 @@ internal sealed partial class OverloadResolver
         }
 
         return bindExpression(argument).Type;
+    }
+
+    private static bool IsPartiallyApplicableExplicitConstructor(
+        CallExpressionSyntax syntax,
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        IReadOnlyList<TypeSymbol?> argumentTypes,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        if (constructor.Parameters.Length != syntax.Arguments.Count)
+        {
+            return false;
+        }
+
+        for (var argumentIndex = 0; argumentIndex < syntax.Arguments.Count; argumentIndex++)
+        {
+            var parameterIndex = argumentNames.IsDefault || argumentNames[argumentIndex] == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, argumentNames[argumentIndex]);
+            if (parameterIndex < 0 || parameterIndex >= constructor.Parameters.Length)
+            {
+                return false;
+            }
+
+            var argumentType = argumentTypes[argumentIndex];
+            if (argumentType == null || argumentType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var parameter = constructor.Parameters[parameterIndex];
+            var parameterType = Binder.SubstituteType(parameter.Type, substitution);
+            if (TypeSymbol.ContainsTypeParameter(parameterType))
+            {
+                continue;
+            }
+
+            var isCompatible = parameter.RefKind == RefKind.None
+                ? Conversion.Classify(argumentType, parameterType).IsImplicit
+                : DeclarationBinder.TypeSignaturesEquivalent(argumentType, parameterType);
+            if (!isCompatible)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -1907,6 +1907,14 @@ internal sealed partial class ExpressionBinder
 
         if (bestCtor == null)
         {
+            var hasInvalidExplicitTypedInlineOut = inlineOutArguments.Any(index =>
+                OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index])
+                    is RefArgumentExpressionSyntax { DeclaredType: not null }
+                && boundArguments[index]
+                    is BoundAddressOfExpression { Operand.Type: var operandType }
+                && operandType == TypeSymbol.Error);
+            var hasErrorArgument =
+                boundArguments.Any(static argument => argument.Type == TypeSymbol.Error);
             if (TryReportClrConstructorInlineOutTypeMismatch(
                     syntax,
                     inlineOutArguments,
@@ -1914,7 +1922,14 @@ internal sealed partial class ExpressionBinder
                     argumentNames,
                     boundArguments,
                     openGenericDefinition,
-                    symbolicTypeArgs))
+                    symbolicTypeArgs)
+                || (!hasInvalidExplicitTypedInlineOut
+                    && !hasErrorArgument
+                    && TryReportClrConstructorArgumentTypeMismatch(
+                        syntax,
+                        ctors,
+                        argumentNames,
+                        boundArguments)))
             {
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
@@ -1927,14 +1942,8 @@ internal sealed partial class ExpressionBinder
                 return true;
             }
 
-            var hasInvalidExplicitTypedInlineOut = inlineOutArguments.Any(index =>
-                OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index])
-                    is RefArgumentExpressionSyntax { DeclaredType: not null }
-                && boundArguments[index]
-                    is BoundAddressOfExpression { Operand.Type: var operandType }
-                && operandType == TypeSymbol.Error);
             if (hasInvalidExplicitTypedInlineOut
-                || boundArguments.Any(static argument => argument.Type == TypeSymbol.Error))
+                || hasErrorArgument)
             {
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
@@ -1944,7 +1953,7 @@ internal sealed partial class ExpressionBinder
                     openGenericDefinition,
                     symbolicTypeArgs);
                 result = new BoundErrorExpression(syntax);
-                return hasInvalidExplicitTypedInlineOut;
+                return hasInvalidExplicitTypedInlineOut || inlineOutArguments.Count > 0;
             }
 
             // Issue #524: CLR value types always have an implicit zero-init
@@ -1974,6 +1983,20 @@ internal sealed partial class ExpressionBinder
             if (!argumentNames.IsDefault
                 && overloads.TryReportUnknownNamedArgumentForClrConstructor(clrType, syntax, argumentNames))
             {
+                DeclareClrConstructorInlineOutLocals(
+                    syntax,
+                    inlineOutArguments,
+                    ctors,
+                    argumentNames,
+                    openGenericDefinition,
+                    symbolicTypeArgs);
+                result = new BoundErrorExpression(syntax);
+                return true;
+            }
+
+            if (inlineOutArguments.Count > 0)
+            {
+                Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, clrType.Name);
                 DeclareClrConstructorInlineOutLocals(
                     syntax,
                     inlineOutArguments,
@@ -2095,6 +2118,61 @@ internal sealed partial class ExpressionBinder
         }
 
         return result;
+    }
+
+    private bool TryReportClrConstructorArgumentTypeMismatch(
+        CallExpressionSyntax syntax,
+        IReadOnlyList<ConstructorInfo> constructors,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var candidates = constructors
+            .Where(constructor => constructor.GetParameters().Length == syntax.Arguments.Count)
+            .Take(2)
+            .ToArray();
+        if (candidates.Length != 1)
+        {
+            return false;
+        }
+
+        var parameters = candidates[0].GetParameters();
+        for (var index = 0; index < boundArguments.Count; index++)
+        {
+            var name = argumentNames.IsDefault ? null : argumentNames[index];
+            var parameterIndex = name == null ? index : FindClrParameterIndex(parameters, name);
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+            {
+                return false;
+            }
+
+            var parameter = parameters[parameterIndex];
+            var expectedType = TypeSymbol.FromClrType(
+                parameter.ParameterType.IsByRef
+                    ? parameter.ParameterType.GetElementType()
+                    : parameter.ParameterType);
+            var actualType = boundArguments[index] is BoundAddressOfExpression address
+                ? address.Operand.Type
+                : boundArguments[index].Type;
+            if (actualType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var isCompatible = parameter.ParameterType.IsByRef
+                ? DeclarationBinder.TypeSignaturesEquivalent(expectedType, actualType)
+                : Conversion.Classify(actualType, expectedType).IsImplicit;
+            if (!isCompatible)
+            {
+                Diagnostics.ReportWrongArgumentType(
+                    syntax.Arguments[index].Location,
+                    parameter.Name ?? "value",
+                    expectedType,
+                    actualType);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool TryReportClrConstructorInlineOutTypeMismatch(

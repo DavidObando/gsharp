@@ -153,6 +153,48 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void ImportedConstructor_ErrorArgumentConsumesConstructorFailureOnce()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(missing, out var value int32, 1)
+            value
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0125"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0130");
+    }
+
+    [Fact]
+    public void ImportedConstructor_ConversionFailureConsumesConstructorFailureOnce()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(1, out var value int32, "bad")
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0154");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0130");
+    }
+
+    [Fact]
+    public void NonexistentCallableStillReportsFunctionNotFound()
+    {
+        var result = Evaluate("""
+            DefinitelyMissingIssue3464Callable(1)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0130");
+    }
+
+    [Fact]
     public void ImportedGenericConstructor_InfersOutVarType()
     {
         var result = EvaluateFixture("""
@@ -253,6 +295,86 @@ public sealed class Issue3464ConstructorInlineOutTests
         var diagnostic = Assert.Single(result.Diagnostics);
         Assert.Equal("GS0151", diagnostic.Id);
         Assert.Contains("'U'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_InferenceIgnoresInapplicablePartialCandidate()
+    {
+        var result = Evaluate("""
+            class ApplicablePartialInference[T,U] {
+                init(value T, marker string) {
+                }
+
+                init(value int32, marker U) {
+                }
+            }
+
+            ApplicablePartialInference(42, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0151", diagnostic.Id);
+        Assert.Contains("'T'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ReversedInferenceIgnoresInapplicablePartialCandidate()
+    {
+        var result = Evaluate("""
+            class ReversedApplicablePartialInference[T,U] {
+                init(value int32, marker U) {
+                }
+
+                init(value T, marker string) {
+                }
+            }
+
+            ReversedApplicablePartialInference(42, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0151", diagnostic.Id);
+        Assert.Contains("'T'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedInferenceIgnoresInapplicablePartialCandidate()
+    {
+        var result = Evaluate("""
+            class NamedApplicablePartialInference[T,U] {
+                init(value T, marker string) {
+                }
+
+                init(value int32, marker U) {
+                }
+            }
+
+            NamedApplicablePartialInference(marker: true, value: 42)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0151", diagnostic.Id);
+        Assert.Contains("'T'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ExplicitArgumentsBypassPartialInference()
+    {
+        var result = Evaluate("""
+            class ExplicitApplicablePartialInference[T,U] {
+                init(value T, marker string) {
+                }
+
+                init(value int32, marker U) {
+                }
+            }
+
+            ExplicitApplicablePartialInference[int32,bool](42, true)
+            42
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]
@@ -917,6 +1039,28 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceConstructor_UnknownExplicitOutTypeStopsOverloadSelection()
+    {
+        var result = Evaluate("""
+            class UnknownExplicitOutOverloadChoice {
+                init(out value int32) {
+                    value = 0
+                }
+
+                init(out value string) {
+                    value = ""
+                }
+            }
+
+            UnknownExplicitOutOverloadChoice(out var value MissingIssue3464OutType)
+            value
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0113", diagnostic.Id);
+    }
+
+    [Fact]
     public void ImportedConstructor_UnknownExplicitOutTypeReportsOnceAndDeclaresLocal()
     {
         var result = Evaluate("""
@@ -1250,7 +1394,7 @@ public sealed class Issue3464ConstructorInlineOutTests
             value + 1
             """);
 
-        AssertImportedPrimaryWithoutCascades(result, "GS0130");
+        AssertImportedPrimaryWithoutCascades(result, "GS0154");
     }
 
     [Fact]
@@ -1263,7 +1407,7 @@ public sealed class Issue3464ConstructorInlineOutTests
             value + 1
             """);
 
-        AssertImportedPrimaryWithoutCascades(result, "GS0130");
+        AssertImportedPrimaryWithoutCascades(result, "GS0267");
     }
 
     [Fact]
