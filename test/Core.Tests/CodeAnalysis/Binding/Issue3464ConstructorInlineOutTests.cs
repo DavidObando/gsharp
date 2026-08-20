@@ -431,6 +431,105 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_InvalidOutPositions_ReportGs0236BeforeInference()
+    {
+        var result = Evaluate("""
+            class GenericValuePosition[T] {
+                init(value T) { }
+            }
+
+            class GenericTypedValuePosition[T] {
+                init(value T) { }
+            }
+
+            class GenericRefPosition[T] {
+                init(ref value T) { }
+            }
+
+            class GenericInPosition[T] {
+                init(in value T) { }
+            }
+
+            GenericValuePosition(out var value)
+            value
+            GenericTypedValuePosition(out var typedValue int32)
+            typedValue
+            GenericRefPosition(out let refValue)
+            refValue
+            GenericInPosition(out var inValue)
+            inValue
+            """);
+
+        Assert.Equal(4, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0236"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0151");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedInvalidOut_ReportsActualOffender()
+    {
+        var result = Evaluate("""
+            class NamedInvalidGenericOut[T] {
+                init(seed T, value T) { }
+            }
+
+            NamedInvalidGenericOut(value: out var invalid, seed: 42)
+            invalid
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0236", diagnostic.Id);
+        Assert.Equal(
+            "out var invalid",
+            diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_OpenOverloads_UseValidOutLayoutForInference()
+    {
+        var result = Evaluate("""
+            class GenericOpenOutChoice[T] {
+                init(value T, marker int32) { }
+
+                init(out value T, seed T) {
+                    value = seed
+                }
+            }
+
+            GenericOpenOutChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ValidOutLayouts_RemainAmbiguous()
+    {
+        var result = Evaluate("""
+            class AmbiguousGenericOutChoice[T] {
+                init(out value T) {
+                    value = default(T)
+                }
+
+                init(out value int32) {
+                    value = 0
+                }
+            }
+
+            AmbiguousGenericOutChoice[int32](out var value)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0266");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0236");
+    }
+
+    [Fact]
     public void SourceConstructor_ReorderedNamedOutVar_IsVisibleAndAssigned()
     {
         var result = Evaluate("""

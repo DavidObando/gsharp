@@ -771,6 +771,14 @@ internal sealed partial class OverloadResolver
     {
         var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
 
+        // Issue #343: pre-validate named-argument layout (positional precedes
+        // named, no duplicate names). Diagnostics are reported by the helper.
+        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+        {
+            DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+            return new BoundErrorExpression(syntax);
+        }
+
         // Issue #1214: a generic class declaring an explicit `init(...)`
         // constructor is constructed at a closed type (`Box[int32](5, "x")`).
         // Resolve the type arguments — supplied explicitly or inferred from the
@@ -783,19 +791,35 @@ internal sealed partial class OverloadResolver
         // TypeSpec (ResolveUserCtorTokenForExplicit).
         if (syntax.TypeArgumentList != null || classType.IsGenericDefinition)
         {
-            if (!TryCloseGenericExplicitConstructorType(syntax, classType, out classType))
+            if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
+            {
+                var openConstructors = classType.EffectiveExplicitConstructors;
+                var invalidInlineOutArgument = inlineOutArgumentIndices.FirstOrDefault(
+                    index => !openConstructors.Any(ctor => ConstructorAcceptsInlineOutArgument(
+                        ctor,
+                        argumentNames,
+                        index)),
+                    -1);
+                if (invalidInlineOutArgument >= 0)
+                {
+                    var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                        syntax.Arguments[invalidInlineOutArgument]);
+                    Diagnostics.ReportOutDeclarationOutsideOutArgument(inlineOut.Location);
+                    DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                    return new BoundErrorExpression(syntax);
+                }
+            }
+
+            if (!TryCloseGenericExplicitConstructorType(
+                    syntax,
+                    classType,
+                    argumentNames,
+                    inlineOutArgumentIndices,
+                    out classType))
             {
                 DeclareUnresolvedInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
                 return new BoundErrorExpression(syntax);
             }
-        }
-
-        // Issue #343: pre-validate named-argument layout (positional precedes
-        // named, no duplicate names). Diagnostics are reported by the helper.
-        if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
-        {
-            DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
-            return new BoundErrorExpression(syntax);
         }
 
         // ADR-0063 §9: when the class declares multiple init(...) constructors,
@@ -1304,6 +1328,11 @@ internal sealed partial class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<int> inlineOutArgumentIndices)
     {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
             if (!ConstructorAcceptsInlineOutArgument(
@@ -1493,6 +1522,8 @@ internal sealed partial class OverloadResolver
     private bool TryCloseGenericExplicitConstructorType(
         CallExpressionSyntax syntax,
         StructSymbol classType,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices,
         out StructSymbol constructed)
     {
         constructed = classType;
@@ -1545,9 +1576,15 @@ internal sealed partial class OverloadResolver
             var inferenceDiagMark = Diagnostics.Count;
 
             var ctorOverloads = classType.EffectiveExplicitConstructors;
-            var ctorParams = ctorOverloads.IsDefaultOrEmpty
-                ? ImmutableArray<ParameterSymbol>.Empty
-                : ctorOverloads[0].Parameters;
+            var inferenceConstructor = ctorOverloads.FirstOrDefault(
+                ctor => ConstructorAcceptsInlineOutArguments(
+                    ctor,
+                    argumentNames,
+                    inlineOutArgumentIndices));
+            var ctorParams = inferenceConstructor?.Parameters
+                ?? (ctorOverloads.IsDefaultOrEmpty
+                    ? ImmutableArray<ParameterSymbol>.Empty
+                    : ctorOverloads[0].Parameters);
             var ctorIsVariadic = ctorParams.Length > 0
                 && ctorParams[ctorParams.Length - 1].IsVariadic;
             var fixedParameterCount = ctorIsVariadic ? ctorParams.Length - 1 : ctorParams.Length;
