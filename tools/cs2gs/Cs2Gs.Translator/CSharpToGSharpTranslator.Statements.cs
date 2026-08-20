@@ -314,13 +314,9 @@ public sealed partial class CSharpToGSharpTranslator
             string op = binary.OperatorToken.Text;
             GExpression right = this.TranslateBinaryRightOperand(binary);
 
-            // C# string concatenation `a + b`: when the `+` operator binds to
-            // `string`, C# implicitly converts each non-string operand to a string
-            // (via `String.Concat`/`ToString`). G# has no implicit conversion, so a
-            // `+` whose operands are not both `string` is GS0129 (`operator '+' is
-            // not defined for 'Indent' and 'string'`). Rewrite each non-string
-            // operand to an explicit `operand.ToString()` so the concatenation
-            // type-checks, matching C#'s displayed value.
+            // C# string concatenation `a + b`: gsc handles char operands
+            // natively. Other non-string operands still need an explicit
+            // `ToString()` because G# does not expose C#'s string + object arms.
             if (binary.IsKind(SyntaxKind.AddExpression)
                 && this.context.GetTypeInfo(binary).Type?.SpecialType == SpecialType.System_String)
             {
@@ -503,18 +499,14 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not
-        // already `string`, wrap the translated operand in an explicit
-        // `operand.ToString()` call so G# (which has no implicit string conversion)
-        // type-checks the concatenation. A string operand (including a nested
-        // string `+` sub-expression, whose type is also `string`) is returned
-        // unchanged, as is a bare `null` literal (`null.ToString()` would throw;
-        // C# renders it as the empty string, and a translated `nil` keeps that
-        // intent while remaining assignable to a `string` slot). The operand is
-        // parenthesized when needed so member access binds to the whole operand.
+        // already `string` or `char`, wrap the translated operand in an explicit
+        // `operand.ToString()` call. G# handles char concatenation natively. A
+        // bare `null` literal is also unchanged (`null.ToString()` would throw).
         private GExpression CoerceConcatOperand(ExpressionSyntax operandSyntax, GExpression translated)
         {
             ITypeSymbol operandType = this.context.GetTypeInfo(operandSyntax).Type;
-            if (operandType?.SpecialType == SpecialType.System_String)
+            SpecialType specialType = operandType?.SpecialType ?? SpecialType.None;
+            if (specialType is SpecialType.System_String or SpecialType.System_Char)
             {
                 return translated;
             }

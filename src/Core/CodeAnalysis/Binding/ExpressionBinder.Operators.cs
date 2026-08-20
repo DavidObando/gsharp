@@ -2294,6 +2294,25 @@ internal sealed partial class ExpressionBinder
     {
         var boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
 
+        // Issue #3463: C# defines string concatenation with char operands in
+        // either order. Keep char-to-string adaptation local to `+` rather
+        // than introducing a general implicit char -> string conversion.
+        if (boundOperator == null && operatorKind == SyntaxKind.PlusToken)
+        {
+            if (GetNullableUnderlying(boundLeft.Type) == TypeSymbol.String
+                && boundRight.Type == TypeSymbol.Char)
+            {
+                boundRight = ConvertStringConcatCharOperand(boundRight, rightLocation);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+            else if (boundLeft.Type == TypeSymbol.Char
+                && GetNullableUnderlying(boundRight.Type) == TypeSymbol.String)
+            {
+                boundLeft = ConvertStringConcatCharOperand(boundLeft, leftLocation);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
         if (operatorKind is SyntaxKind.ShiftLeftToken or SyntaxKind.ShiftRightToken or SyntaxKind.UnsignedShiftRightToken
             && (GetNullableUnderlying(boundLeft.Type) == TypeSymbol.Char
                 || GetNullableUnderlying(boundRight.Type) == TypeSymbol.Char))
@@ -2593,6 +2612,16 @@ internal sealed partial class ExpressionBinder
         }
 
         return boundOperator;
+    }
+
+    private BoundExpression ConvertStringConcatCharOperand(BoundExpression expression, TextLocation location)
+    {
+        return expression switch
+        {
+            BoundLiteralExpression { Value: char value } =>
+                new BoundLiteralExpression(expression.Syntax, value.ToString()),
+            _ => ConvertToString(expression, location),
+        };
     }
 
     private static bool TryGetPromotedCharUnaryType(SyntaxKind operatorKind, TypeSymbol operandType, out TypeSymbol? promotedType)
