@@ -2357,6 +2357,17 @@ internal sealed partial class DeclarationBinder
             case BoundConversionExpression conv:
                 return TryEvaluateConstant(conv.Expression, out value);
 
+            case BoundImportedCallExpression call
+                when call.Function.Method.DeclaringType?.IsSameAs(typeof(System.Convert)) == true
+                && call.Function.Method.Name == nameof(System.Convert.ToString)
+                && call.Function.Method.GetParameters() is [{ ParameterType: var parameterType }]
+                && parameterType.IsSameAs(typeof(char))
+                && call.Arguments is [{ } argument]
+                && TryEvaluateConstant(argument, out var charValue)
+                && charValue is char ch:
+                value = ch.ToString();
+                return true;
+
             case BoundFieldAccessExpression fieldAccess
                 when fieldAccess.Field.IsConst
                 && fieldAccess.Field.ConstantValue != null:

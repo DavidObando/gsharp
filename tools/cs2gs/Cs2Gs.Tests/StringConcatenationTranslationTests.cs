@@ -14,14 +14,9 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Translation tests for C# string concatenation (issue #914). C# `a + b`
-/// implicitly converts each non-<c>string</c> operand to a string via
-/// <c>String.Concat</c>/<c>ToString</c>, but G# has no implicit string
-/// conversion (spec: use interpolation or an explicit conversion), so a `+`
-/// whose operands are not both <c>string</c> is rejected with GS0129
-/// (<c>operator '+' is not defined for 'Indent' and 'string'</c>). The
-/// translator rewrites each non-<c>string</c> operand to an explicit
-/// <c>operand.ToString()</c> call so the concatenation type-checks while
-/// preserving C#'s displayed value.
+/// implicitly converts non-<c>string</c> operands through its predefined
+/// concatenation operators. G# handles <c>char</c> natively; remaining operand
+/// types are rewritten to explicit <c>ToString()</c> calls.
 /// </summary>
 public class StringConcatenationTranslationTests
 {
@@ -70,6 +65,28 @@ namespace Demo
 }");
 
         Assert.Contains("\"n=\" + n.ToString()", printed);
+    }
+
+    [Fact]
+    public void CharConcatenation_UsesNativeGSharpOperator()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class C
+    {
+        public string F(char ch)
+        {
+            string value = ""root"";
+            value += ch;
+            return ch + value;
+        }
+    }
+}");
+
+        Assert.Contains("value += ch", printed);
+        Assert.Contains("return ch + value", printed);
+        Assert.DoesNotContain("ch.ToString()", printed);
     }
 
     [Fact]
