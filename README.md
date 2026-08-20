@@ -11,7 +11,6 @@ Kotlin- and Swift-style semantics, Go- and Python-inspired syntax — on the CLR
 [![build](https://github.com/DavidObando/gsharp/actions/workflows/build.yml/badge.svg)](https://github.com/DavidObando/gsharp/actions/workflows/build.yml)
 [![quality dashboard](https://github.com/DavidObando/gsharp/actions/workflows/pages.yml/badge.svg)](https://davidobando.github.io/gsharp/docs/next/project/quality-dashboard)
 [![NuGet](https://img.shields.io/nuget/v/Gsharp.NET.Sdk.svg?label=Gsharp.NET.Sdk)](https://www.nuget.org/packages/Gsharp.NET.Sdk/)
-[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/gsharplang.vscode-gsharp?label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [Documentation](https://davidobando.github.io/gsharp/) ·
