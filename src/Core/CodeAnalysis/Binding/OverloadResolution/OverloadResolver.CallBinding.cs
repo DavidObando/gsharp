@@ -463,11 +463,14 @@ internal sealed partial class OverloadResolver
             var typeArgumentsMatchConversionTarget = syntax.TypeArgumentList == null
                 || (singleArgClass is { IsGenericDefinition: true }
                     && syntax.TypeArgumentList.Arguments.Count == singleArgClass.TypeParameters.Length);
+            var hasInlineOutArgument = UnwrapNamedArgumentValue(syntax.Arguments[0])
+                is RefArgumentExpressionSyntax { IsInlineDeclaration: true };
             if (singleArgClass != null
                 && singleArgClass.IsClass
                 && typeArgumentsMatchConversionTarget
                 && (syntax.NullableQuestionToken != null
-                    || !HasSingleArgumentConstructorShape(singleArgClass)))
+                    || (!hasInlineOutArgument
+                        && !HasSingleArgumentConstructorShape(singleArgClass))))
             {
                 reportObsoleteUseIfApplicable(
                     syntax.Identifier.Location,

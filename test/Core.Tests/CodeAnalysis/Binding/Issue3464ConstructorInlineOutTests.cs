@@ -391,6 +391,130 @@ public sealed class Issue3464ConstructorInlineOutTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
     }
 
+    [Fact]
+    public void SourceConstructor_MissingRequiredAfterOutVar_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            class MissingRequiredCtor {
+                init(out value int32, other int32) {
+                    value = other
+                }
+            }
+
+            MissingRequiredCtor(out var value)
+            value + 1
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0144");
+    }
+
+    [Fact]
+    public void SourceConstructor_TooManyArgumentsAfterOutLet_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            class TooManyCtor {
+                init(out value int32) {
+                    value = 0
+                }
+            }
+
+            TooManyCtor(out let value, 1)
+            value + 1
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0144");
+    }
+
+    [Fact]
+    public void SourceConstructor_InvalidNamedOrderAfterTypedOut_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            class NamedOrderCtor {
+                init(other int32, out value int32) {
+                    value = other
+                }
+            }
+
+            NamedOrderCtor(value: out var value int32, 1)
+            value + 1
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0244");
+    }
+
+    [Fact]
+    public void SourceConstructor_DuplicateNamedArgumentWithOutVar_DeclaresErrorLocal()
+    {
+        var result = Evaluate("""
+            class DuplicateNamedCtor {
+                init(out value int32, other int32 = 0) {
+                    value = other
+                }
+            }
+
+            DuplicateNamedCtor(value: out var value, value: 1)
+            value
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0245");
+    }
+
+    [Fact]
+    public void SourceConstructor_UnknownNamedArgumentAfterOutVar_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            class UnknownNamedCtor {
+                init(out value int32, other int32 = 0) {
+                    value = other
+                }
+            }
+
+            UnknownNamedCtor(value: out var value, missing: 1)
+            value
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0246");
+    }
+
+    [Fact]
+    public void SourceConstructor_VariadicMismatchAfterOutDiscard_PreservesPrimaryDiagnostic()
+    {
+        var result = Evaluate("""
+            class VariadicMismatchCtor {
+                init(out value int32, rest ...int32) {
+                    value = 0
+                }
+            }
+
+            VariadicMismatchCtor(out _, "bad")
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0154");
+    }
+
+    [Fact]
+    public void SourceConstructor_ConversionFailureAfterOutVar_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            class ConversionFailureCtor {
+                init(out value int32, other int32) {
+                    value = other
+                }
+            }
+
+            ConversionFailureCtor(out var value, "bad")
+            value + 1
+            """);
+
+        AssertPrimaryWithoutUndefined(result, "GS0154");
+    }
+
+    private static void AssertPrimaryWithoutUndefined(EmittedOracleResult result, string primaryId)
+    {
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == primaryId);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id is "GS0125" or "GS0236");
+    }
+
     private static EmittedOracleResult Evaluate(string source) => EmittedOracle.Evaluate(source);
 
     private static EmittedOracleResult EvaluateFixture(string source) =>

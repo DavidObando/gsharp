@@ -787,10 +787,13 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
+
         // Issue #343: pre-validate named-argument layout (positional precedes
         // named, no duplicate names). Diagnostics are reported by the helper.
         if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
         {
+            DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
             return new BoundErrorExpression(syntax);
         }
 
@@ -812,7 +815,6 @@ internal sealed partial class OverloadResolver
             ctorOverloads = accessibleCtorOverloads;
         }
 
-        var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
         if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
         {
             ctorOverloads = ctorOverloads
@@ -947,6 +949,13 @@ internal sealed partial class OverloadResolver
         // per-position conversion below targets the concrete argument types.
         // For a non-generic or open type these equal the declared types.
         var effectiveParamTypes = classType.GetConstructorParameterTypesForConstruction(selectedCtor);
+        RebindSelectedConstructorInlineOutArguments(
+            syntax.Arguments,
+            argumentNames,
+            selectedCtor,
+            effectiveParamTypes,
+            inlineOutArgumentIndices,
+            boundArgumentsBuilder);
 
         // ADR-0101 follow-up / issue #812: a constructor's last parameter
         // may be variadic. The arity check accepts any count >= the fixed
@@ -1363,6 +1372,47 @@ internal sealed partial class OverloadResolver
         {
             var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
             _ = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
+    }
+
+    private void RebindSelectedConstructorInlineOutArguments(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<string> argumentNames,
+        ConstructorSymbol constructor,
+        ImmutableArray<TypeSymbol> parameterTypes,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            if (boundArguments[argumentIndex]
+                    is not BoundAddressOfExpression { Operand.Type: var argumentType }
+                || argumentType != TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, name);
+            if (parameterIndex < 0 || parameterIndex >= parameterTypes.Length)
+            {
+                continue;
+            }
+
+            var parameter = constructor.Parameters[parameterIndex];
+            var reboundParameter = new ParameterSymbol(
+                parameter.Name,
+                parameterTypes[parameterIndex],
+                refKind: RefKind.Out);
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            boundArguments[argumentIndex] = bindRefArgumentExpression(inlineOut, reboundParameter);
         }
     }
 
