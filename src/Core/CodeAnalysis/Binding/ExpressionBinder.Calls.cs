@@ -2079,7 +2079,7 @@ internal sealed partial class ExpressionBinder
         {
             var inlineOut = (RefArgumentExpressionSyntax)OverloadResolver.UnwrapNamedArgumentValue(
                 syntax.Arguments[index]);
-            if (!inlineOut.IsDiscard)
+            if (!inlineOut.IsDiscard && inlineOut.DeclaredType == null)
             {
                 _ = BindRefArgumentExpression(inlineOut, errorParameter);
             }

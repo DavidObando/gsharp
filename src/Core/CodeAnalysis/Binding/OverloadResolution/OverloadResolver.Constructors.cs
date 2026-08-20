@@ -932,6 +932,10 @@ internal sealed partial class OverloadResolver
                     Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
                 }
 
+                DeclareUnresolvedInlineOutLocals(
+                    syntax.Arguments,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder);
                 return new BoundErrorExpression(syntax);
             }
 
@@ -1390,6 +1394,28 @@ internal sealed partial class OverloadResolver
         {
             var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
             _ = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
+    }
+
+    private void DeclareUnresolvedInlineOutLocals(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            if (inlineOut.IsDiscard
+                || inlineOut.DeclaredType != null
+                || boundArguments[argumentIndex]
+                    is not BoundAddressOfExpression { Operand.Type: var argumentType }
+                || argumentType != TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            boundArguments[argumentIndex] = bindRefArgumentExpression(inlineOut, errorOutParameter);
         }
     }
 

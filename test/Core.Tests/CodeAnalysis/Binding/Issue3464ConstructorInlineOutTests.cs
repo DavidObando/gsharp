@@ -310,6 +310,22 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void ImportedConstructor_ExplicitTypedOutAmbiguity_DoesNotRedeclareLocal()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464AmbiguousTypedConstructor(out var value int32)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0160");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
     public void ImportedConstructor_DuplicateNamedOutVar_DeclaresErrorLocal()
     {
         var result = EvaluateFixture("""
@@ -483,10 +499,78 @@ public sealed class Issue3464ConstructorInlineOutTests
             }
 
             AmbiguousCtor(out var value)
+            value
             """);
 
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0236");
+    }
+
+    [Fact]
+    public void SourceConstructor_OutLetAmbiguity_DeclaresErrorLocal()
+    {
+        var result = Evaluate("""
+            class AmbiguousLetCtor {
+                init(out value int32) {
+                    value = 0
+                }
+
+                init(out value string) {
+                    value = ""
+                }
+            }
+
+            AmbiguousLetCtor(out let value)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0266");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0125");
+    }
+
+    [Fact]
+    public void SourceConstructor_OutDiscardAmbiguity_PreservesPrimaryDiagnostic()
+    {
+        var result = Evaluate("""
+            class AmbiguousDiscardCtor {
+                init(out value int32) {
+                    value = 0
+                }
+
+                init(out value string) {
+                    value = ""
+                }
+            }
+
+            AmbiguousDiscardCtor(out _)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0266");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0125");
+    }
+
+    [Fact]
+    public void SourceConstructor_NoApplicableOutVar_DeclaresErrorLocal()
+    {
+        var result = Evaluate("""
+            class NoApplicableOutCtor {
+                init(out value int32, first int32, second int32) {
+                    value = first + second
+                }
+
+                init(out value string, first string, second string, third string) {
+                    value = first + second + third
+                }
+            }
+
+            NoApplicableOutCtor(out var value, 1)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0267");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0125");
     }
 
     [Fact]
@@ -671,6 +755,19 @@ public sealed class Issue3464AmbiguousConstructor
     public Issue3464AmbiguousConstructor(out string value)
     {
         value = string.Empty;
+    }
+}
+
+public sealed class Issue3464AmbiguousTypedConstructor
+{
+    public Issue3464AmbiguousTypedConstructor(out int value, string tag = null)
+    {
+        value = tag?.Length ?? 0;
+    }
+
+    public Issue3464AmbiguousTypedConstructor(out int value, Uri tag = null)
+    {
+        value = tag == null ? 0 : 1;
     }
 }
 
