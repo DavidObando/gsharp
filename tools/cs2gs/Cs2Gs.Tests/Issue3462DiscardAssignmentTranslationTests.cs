@@ -866,6 +866,88 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void VoidConditionalInstanceCall_CapturesRefLocalAliasBeforeArguments()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+                private Probe? current;
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 1;
+                    current = null;
+                    return (1, 1);
+                }
+
+                private void Accept((int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    current = this;
+                    ref Probe? alias = ref current;
+                    alias?.Accept(((a, b) = Pair()));
+                    return trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(15, result.Value);
+    }
+
+    [Fact]
+    public void VoidConditionalInstanceCall_CapturesRefReadonlyAliasBeforeArguments()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+                private Probe? current;
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 1;
+                    current = null;
+                    return (1, 1);
+                }
+
+                private void Accept((int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    current = this;
+                    ref readonly Probe? alias = ref current;
+                    alias?.Accept(((a, b) = Pair()));
+                    return trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(15, result.Value);
+    }
+
+    [Fact]
     public void ConditionalPostfix_DiscardExecutesOnlySelectedBranch()
     {
         string rendered = Render("""

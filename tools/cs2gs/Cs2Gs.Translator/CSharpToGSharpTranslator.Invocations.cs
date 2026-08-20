@@ -1003,7 +1003,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (symbol is IParameterSymbol { RefKind: not RefKind.None })
+            if (symbol is ILocalSymbol { RefKind: not RefKind.None }
+                or IParameterSymbol { RefKind: not RefKind.None })
             {
                 return false;
             }
