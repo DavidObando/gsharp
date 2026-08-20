@@ -930,9 +930,12 @@ internal sealed partial class OverloadResolver
         else
         {
             var ctorFunctions = ImmutableArray.CreateBuilder<FunctionSymbol>(ctorOverloads.Length);
+            var constructorByFunction = new Dictionary<FunctionSymbol, ConstructorSymbol>();
             foreach (var c in ctorOverloads)
             {
-                ctorFunctions.Add(c.Function);
+                var candidate = CreateConstructedConstructorCandidate(c, classType);
+                ctorFunctions.Add(candidate);
+                constructorByFunction.Add(candidate, c);
             }
 
             var selectedFn = SelectBestInstanceOverload(
@@ -968,15 +971,7 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(syntax);
             }
 
-            selectedCtor = null;
-            foreach (var c in ctorOverloads)
-            {
-                if (ReferenceEquals(c.Function, selectedFn))
-                {
-                    selectedCtor = c;
-                    break;
-                }
-            }
+            selectedCtor = constructorByFunction[selectedFn];
         }
 
         selectedCtor = Invariant.Required(selectedCtor, "an applicable explicit constructor has a selected constructor symbol");
@@ -1436,7 +1431,7 @@ internal sealed partial class OverloadResolver
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
             var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
-            if (inlineOut.IsDiscard || inlineOut.DeclaredType != null)
+            if (inlineOut.IsDiscard)
             {
                 continue;
             }
@@ -1508,6 +1503,41 @@ internal sealed partial class OverloadResolver
         }
     }
 
+    private static FunctionSymbol CreateConstructedConstructorCandidate(
+        ConstructorSymbol constructor,
+        StructSymbol constructedType)
+    {
+        var effectiveTypes = constructedType.GetConstructorParameterTypesForConstruction(constructor);
+        var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(constructor.Parameters.Length);
+        for (var i = 0; i < constructor.Parameters.Length; i++)
+        {
+            var parameter = constructor.Parameters[i];
+            var candidateParameter = new ParameterSymbol(
+                parameter.Name,
+                effectiveTypes[i],
+                parameter.IsVariadic,
+                parameter.DeclaringSyntax,
+                parameter.IsScoped,
+                parameter.RefKind);
+            if (parameter.HasExplicitDefaultValue)
+            {
+                candidateParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
+            }
+
+            parameters.Add(candidateParameter);
+        }
+
+        var function = constructor.Function;
+        return new FunctionSymbol(
+            function.Name,
+            parameters.MoveToImmutable(),
+            function.Type,
+            function.Declaration,
+            function.Package,
+            function.Accessibility,
+            constructedType);
+    }
+
     /// <summary>
     /// Issue #1214: closes a generic class that declares an explicit
     /// <c>init(...)</c> constructor for a construction call <c>Box[int32](args)</c>.
@@ -1564,99 +1594,134 @@ internal sealed partial class OverloadResolver
         }
         else
         {
-            // Infer the type arguments from the value arguments against the
-            // (first) explicit constructor's parameter list. The open-definition
-            // constructor parameter types reference the class type parameters,
-            // so binding each argument and unifying drives inference.
-            //
             // Issue #1629: this is a throwaway probe — BindExplicitConstructorCallExpression
             // re-binds the same argument syntax for real once the closed type is
             // known. Roll back any diagnostics the probe produced so they are
             // reported exactly once, by the real bind.
             var inferenceDiagMark = Diagnostics.Count;
-
-            var ctorOverloads = classType.EffectiveExplicitConstructors;
-            var inferenceConstructor = ctorOverloads.FirstOrDefault(
-                ctor => ConstructorAcceptsInlineOutArguments(
-                    ctor,
-                    argumentNames,
-                    inlineOutArgumentIndices));
-            var ctorParams = inferenceConstructor?.Parameters
-                ?? (ctorOverloads.IsDefaultOrEmpty
-                    ? ImmutableArray<ParameterSymbol>.Empty
-                    : ctorOverloads[0].Parameters);
-            var ctorIsVariadic = ctorParams.Length > 0
-                && ctorParams[ctorParams.Length - 1].IsVariadic;
-            var fixedParameterCount = ctorIsVariadic ? ctorParams.Length - 1 : ctorParams.Length;
-            List<ExpressionSyntax>? variadicArguments = null;
-
+            var inferenceArgumentTypes = new TypeSymbol?[syntax.Arguments.Count];
+            var inferenceBoundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
             for (var i = 0; i < syntax.Arguments.Count; i++)
             {
-                var sourceArgument = syntax.Arguments[i];
-                var parameterIndex = sourceArgument is NamedArgumentExpressionSyntax named
-                    ? FindParameterIndex(ctorParams, named.NameToken.Text)
-                    : ctorIsVariadic && i >= fixedParameterCount
-                        ? ctorParams.Length - 1
-                        : i;
-                if (parameterIndex < 0 || parameterIndex >= ctorParams.Length)
+                var argument = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+                if (argument is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
                 {
+                    inferenceArgumentTypes[i] = BindExplicitConstructorInferenceArgument(argument);
+                    inferenceBoundArguments.Add(new BoundErrorExpression(argument));
                     continue;
                 }
 
-                var argSyntax = UnwrapNamedArgumentValue(sourceArgument);
-                if (ctorIsVariadic && parameterIndex == ctorParams.Length - 1)
-                {
-                    variadicArguments ??= new List<ExpressionSyntax>();
-                    variadicArguments.Add(argSyntax);
-                    continue;
-                }
-
-                var argumentType = BindExplicitConstructorInferenceArgument(argSyntax);
-                if (argumentType != null)
-                {
-                    inferTypeArguments(ctorParams[parameterIndex].Type, argumentType, substitution);
-                }
+                var boundArgument = bindExpression(argument);
+                inferenceArgumentTypes[i] = boundArgument.Type;
+                inferenceBoundArguments.Add(boundArgument);
             }
 
-            if (ctorIsVariadic
-                && variadicArguments is { Count: > 0 }
-                && ctorParams[ctorParams.Length - 1].Type is SliceTypeSymbol variadicSlice)
+            var candidates = new List<(FunctionSymbol Function, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
+            var inferredCandidateCount = 0;
+            Dictionary<TypeParameterSymbol, TypeSymbol>? constraintFailureSubstitution = null;
+            foreach (var constructor in classType.EffectiveExplicitConstructors)
             {
-                if (variadicArguments.Count == 1)
+                if (!ConstructorAcceptsInlineOutArguments(
+                        constructor,
+                        argumentNames,
+                        inlineOutArgumentIndices))
                 {
-                    var argumentType = BindExplicitConstructorInferenceArgument(variadicArguments[0]);
-                    if (argumentType is SliceTypeSymbol)
-                    {
-                        inferTypeArguments(variadicSlice, argumentType, substitution);
-                    }
-                    else if (argumentType != null)
-                    {
-                        inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
-                    }
+                    continue;
                 }
-                else
+
+                var candidateSubstitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                InferExplicitConstructorTypeArguments(
+                    syntax,
+                    constructor,
+                    argumentNames,
+                    inferenceArgumentTypes,
+                    candidateSubstitution);
+                if (tps.Any(tp => !candidateSubstitution.TryGetValue(tp, out var inferredType)
+                    || inferredType == TypeSymbol.Error))
                 {
-                    foreach (var variadicArgument in variadicArguments)
-                    {
-                        var argumentType = BindExplicitConstructorInferenceArgument(variadicArgument);
-                        if (argumentType != null)
-                        {
-                            inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
-                        }
-                    }
+                    continue;
                 }
+
+                inferredCandidateCount++;
+                if (!tps.All(tp => satisfiesConstraint(candidateSubstitution[tp], tp)))
+                {
+                    constraintFailureSubstitution ??= candidateSubstitution;
+                    continue;
+                }
+
+                var candidateType = ConstructExplicitConstructorType(
+                    classType,
+                    tps,
+                    candidateSubstitution);
+                var candidateFunction = CreateConstructedConstructorCandidate(
+                    constructor,
+                    candidateType);
+                if (!IsApplicableUserCallable(
+                        candidateFunction,
+                        syntax.Arguments.Count,
+                        argumentNames)
+                    || !IsConvertibilityApplicable(
+                        candidateFunction,
+                        syntax.Arguments.Count,
+                        argumentNames,
+                        inferenceBoundArguments))
+                {
+                    continue;
+                }
+
+                candidates.Add((candidateFunction, candidateSubstitution));
             }
 
             Diagnostics.TruncateTo(inferenceDiagMark);
 
-            foreach (var tp in tps)
+            if (candidates.Count == 0)
             {
-                if (!substitution.TryGetValue(tp, out var inferredType)
-                    || inferredType == TypeSymbol.Error)
+                if (constraintFailureSubstitution != null)
                 {
-                    Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tp.Name);
+                    substitution = constraintFailureSubstitution;
+                }
+                else
+                {
+                    if (inferredCandidateCount == 0)
+                    {
+                        Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tps[0].Name);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                    }
+
                     return false;
                 }
+            }
+            else if (candidates.Count == 1)
+            {
+                substitution = candidates[0].Substitution;
+            }
+            else
+            {
+                var selected = SelectBestInstanceOverload(
+                    candidates.Select(candidate => candidate.Function).ToImmutableArray(),
+                    syntax.Arguments.Count,
+                    argumentNames,
+                    inferenceBoundArguments.ToImmutable(),
+                    out var ambiguous,
+                    out _);
+                if (selected == null)
+                {
+                    if (ambiguous)
+                    {
+                        Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, classType.Name);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                    }
+
+                    return false;
+                }
+
+                substitution = candidates.First(candidate => ReferenceEquals(candidate.Function, selected)).Substitution;
             }
         }
 
@@ -1673,16 +1738,92 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        var typeArgs = ImmutableArray.CreateBuilder<TypeSymbol>(tps.Length);
-        foreach (var tp in tps)
+        constructed = ConstructExplicitConstructorType(classType, tps, substitution);
+        return true;
+    }
+
+    private void InferExplicitConstructorTypeArguments(
+        CallExpressionSyntax syntax,
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        IReadOnlyList<TypeSymbol?> argumentTypes,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        var parameters = constructor.Parameters;
+        var isVariadic = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic;
+        var fixedParameterCount = isVariadic ? parameters.Length - 1 : parameters.Length;
+        List<int>? variadicArgumentIndices = null;
+
+        for (var i = 0; i < syntax.Arguments.Count; i++)
         {
-            typeArgs.Add(substitution[tp]);
+            var parameterIndex = argumentNames.IsDefault || argumentNames[i] == null
+                ? isVariadic && i >= fixedParameterCount
+                    ? parameters.Length - 1
+                    : i
+                : FindParameterIndex(parameters, argumentNames[i]);
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            if (isVariadic && parameterIndex == parameters.Length - 1)
+            {
+                variadicArgumentIndices ??= new List<int>();
+                variadicArgumentIndices.Add(i);
+                continue;
+            }
+
+            if (argumentTypes[i] is { } argumentType)
+            {
+                inferTypeArguments(parameters[parameterIndex].Type, argumentType, substitution);
+            }
         }
 
-        constructed = MapClrType is { } mapClrType
-            ? StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), mapClrType)
-            : StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
-        return true;
+        if (!isVariadic
+            || variadicArgumentIndices is not { Count: > 0 }
+            || parameters[parameters.Length - 1].Type is not SliceTypeSymbol variadicSlice)
+        {
+            return;
+        }
+
+        if (variadicArgumentIndices.Count == 1)
+        {
+            var argumentType = argumentTypes[variadicArgumentIndices[0]];
+            if (argumentType is SliceTypeSymbol)
+            {
+                inferTypeArguments(variadicSlice, argumentType, substitution);
+            }
+            else if (argumentType != null)
+            {
+                inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
+            }
+
+            return;
+        }
+
+        foreach (var argumentIndex in variadicArgumentIndices)
+        {
+            if (argumentTypes[argumentIndex] is { } argumentType)
+            {
+                inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
+            }
+        }
+    }
+
+    private StructSymbol ConstructExplicitConstructorType(
+        StructSymbol definition,
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(typeParameters.Length);
+        foreach (var typeParameter in typeParameters)
+        {
+            typeArguments.Add(substitution[typeParameter]);
+        }
+
+        return MapClrType is { } mapClrType
+            ? StructSymbol.Construct(definition, typeArguments.MoveToImmutable(), mapClrType)
+            : StructSymbol.Construct(definition, typeArguments.MoveToImmutable());
     }
 
     private TypeSymbol? BindExplicitConstructorInferenceArgument(ExpressionSyntax argument)

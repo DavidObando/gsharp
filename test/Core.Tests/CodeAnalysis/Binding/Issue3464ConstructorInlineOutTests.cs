@@ -76,6 +76,41 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void ImportedMutex_InvalidExplicitTypedOut_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            import System.Threading
+
+            Mutex(out var invalid bool, nil, out _)
+            invalid
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void ImportedMutex_NamedInvalidExplicitTypedOut_DeclaresLocal()
+    {
+        var result = Evaluate("""
+            import System.Threading
+
+            Mutex(
+                createdNew: out _,
+                name: nil,
+                initiallyOwned: out var invalid bool)
+            invalid
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
     public void ImportedGenericConstructor_InfersOutVarType()
     {
         var result = EvaluateFixture("""
@@ -527,6 +562,112 @@ public sealed class Issue3464ConstructorInlineOutTests
         Assert.DoesNotContain(
             result.Diagnostics,
             diagnostic => diagnostic.Id is "GS0125" or "GS0236");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_InferenceUsesApplicableOutLayoutCandidate()
+    {
+        var result = Evaluate("""
+            class CandidateSpecificGenericChoice[T] {
+                init(out value int32, seed string) {
+                    value = 0
+                }
+
+                init(out value T, seed T) {
+                    value = seed
+                }
+            }
+
+            CandidateSpecificGenericChoice(out var value, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedInferenceUsesApplicableOutLayoutCandidate()
+    {
+        var result = Evaluate("""
+            class NamedCandidateGenericChoice[T] {
+                init(out value int32, seed string) {
+                    value = 0
+                }
+
+                init(out value T, seed T) {
+                    value = seed
+                }
+            }
+
+            NamedCandidateGenericChoice(seed: 42, value: out var value)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceClosedGenericConstructor_RanksSubstitutedParameterTypes()
+    {
+        var result = Evaluate("""
+            class ClosedGenericChoice[T] {
+                init(out value T, seed T) {
+                    value = seed
+                }
+
+                init(out value int32, seed int64) {
+                    value = 0
+                }
+            }
+
+            ClosedGenericChoice[int32](out var value, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_BadTypeArity_DeclaresExplicitTypedOutLocal()
+    {
+        var result = Evaluate("""
+            class ExplicitTypedRecoveryBox[T] {
+                init(out value T) {
+                    value = default(T)
+                }
+            }
+
+            ExplicitTypedRecoveryBox[int32, string](out var value int32)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0148");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_BadTypeArityNamedOut_DeclaresExplicitTypedLocal()
+    {
+        var result = Evaluate("""
+            class NamedExplicitTypedRecoveryBox[T] {
+                init(out value T) {
+                    value = default(T)
+                }
+            }
+
+            NamedExplicitTypedRecoveryBox[int32, string](value: out var value int32)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0148");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
     }
 
     [Fact]

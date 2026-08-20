@@ -1674,7 +1674,7 @@ internal sealed partial class ExpressionBinder
         // Issue #343: pre-validate named-argument layout for CLR constructor calls.
         if (!overloads.TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
         {
-            DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments);
+            DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments, bindExplicitTyped: true);
             result = new BoundErrorExpression(syntax);
             return true;
         }
@@ -1716,7 +1716,7 @@ internal sealed partial class ExpressionBinder
                         OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[index]).Location);
                 }
 
-                DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments);
+                DeclareInvalidClrConstructorInlineOutLocals(syntax, inlineOutArguments, bindExplicitTyped: true);
                 result = new BoundErrorExpression(syntax);
                 return true;
             }
@@ -2072,14 +2072,16 @@ internal sealed partial class ExpressionBinder
 
     private void DeclareInvalidClrConstructorInlineOutLocals(
         CallExpressionSyntax syntax,
-        IReadOnlyList<int> inlineOutArguments)
+        IReadOnlyList<int> inlineOutArguments,
+        bool bindExplicitTyped = false)
     {
         var errorParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
         foreach (var index in inlineOutArguments)
         {
             var inlineOut = (RefArgumentExpressionSyntax)OverloadResolver.UnwrapNamedArgumentValue(
                 syntax.Arguments[index]);
-            if (!inlineOut.IsDiscard && inlineOut.DeclaredType == null)
+            if (!inlineOut.IsDiscard
+                && (bindExplicitTyped || inlineOut.DeclaredType == null))
             {
                 _ = BindRefArgumentExpression(inlineOut, errorParameter);
             }
