@@ -1925,6 +1925,7 @@ internal sealed partial class ExpressionBinder
                     symbolicTypeArgs)
                 || (!hasInvalidExplicitTypedInlineOut
                     && !hasErrorArgument
+                    && inlineOutArguments.Count > 0
                     && TryReportClrConstructorArgumentTypeMismatch(
                         syntax,
                         ctors,
