@@ -47,17 +47,13 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // Value-position deconstruction assignments still need a
                     // statement seam; ordinary assignments remain inline.
+                    var replacements = new List<ExpressionSyntax>();
                     List<AssignmentExpressionSyntax> initializerEmbedded =
-                        this.CollectEmbeddedAssignments(declarator.Initializer.Value, includeSelf: true);
-                    foreach (AssignmentExpressionSyntax node in initializerEmbedded)
-                    {
-                        results.AddRange(this.FlattenChainedAssignment(node));
-                    }
-
-                    foreach (AssignmentExpressionSyntax node in initializerEmbedded)
-                    {
-                        this.state.SuppressedAssignments.Add(node);
-                    }
+                        this.HoistAssignmentsInOrder(
+                            declarator.Initializer.Value,
+                            includeSelf: true,
+                            results,
+                            replacements);
 
                     try
                     {
@@ -69,10 +65,9 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                     finally
                     {
-                        foreach (AssignmentExpressionSyntax node in initializerEmbedded)
-                        {
-                            this.state.SuppressedAssignments.Remove(node);
-                        }
+                        this.ReleaseHoistedAssignments(
+                            initializerEmbedded,
+                            replacements);
                     }
                 }
 
@@ -1094,17 +1089,13 @@ public sealed partial class CSharpToGSharpTranslator
             this.state.PendingSpillPrologue = statements;
             try
             {
+                var replacements = new List<ExpressionSyntax>();
                 List<AssignmentExpressionSyntax> embedded =
-                    this.CollectEmbeddedAssignments(branch, includeSelf: true);
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    statements.AddRange(this.FlattenChainedAssignment(node));
-                }
-
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Add(node);
-                }
+                    this.HoistAssignmentsInOrder(
+                        branch,
+                        includeSelf: true,
+                        statements,
+                        replacements);
 
                 try
                 {
@@ -1115,10 +1106,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 finally
                 {
-                    foreach (AssignmentExpressionSyntax node in embedded)
-                    {
-                        this.state.SuppressedAssignments.Remove(node);
-                    }
+                    this.ReleaseHoistedAssignments(embedded, replacements);
                 }
             }
             finally

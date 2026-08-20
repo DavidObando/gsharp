@@ -32,38 +32,162 @@ public sealed partial class CSharpToGSharpTranslator
             bool includeSelf,
             Func<List<GStatement>> buildMain)
         {
-            List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf);
-            if (embedded.Count == 0)
+            var hoisted = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            List<AssignmentExpressionSyntax> suppressed =
+                this.HoistAssignmentsInOrder(
+                    expression,
+                    includeSelf,
+                    hoisted,
+                    replacements);
+            if (suppressed.Count == 0)
             {
                 return buildMain();
             }
 
-            var hoisted = new List<GStatement>();
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                hoisted.AddRange(this.FlattenChainedAssignment(node));
-            }
-
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                this.state.SuppressedAssignments.Add(node);
-            }
-
-            List<GStatement> main;
             try
             {
-                main = buildMain();
+                hoisted.AddRange(buildMain());
+                return hoisted;
             }
             finally
             {
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Remove(node);
-                }
+                this.ReleaseHoistedAssignments(suppressed, replacements);
+            }
+        }
+
+        private List<AssignmentExpressionSyntax> HoistAssignmentsInOrder(
+            ExpressionSyntax expression,
+            bool includeSelf,
+            List<GStatement> statements,
+            List<ExpressionSyntax> replacements)
+        {
+            List<AssignmentExpressionSyntax> embedded =
+                this.CollectEmbeddedAssignments(expression, includeSelf);
+            foreach (AssignmentExpressionSyntax node in embedded)
+            {
+                this.HoistPrecedingEvaluationOperands(
+                    expression,
+                    node,
+                    statements,
+                    replacements);
+                statements.AddRange(this.FlattenChainedAssignment(node));
+                this.state.SuppressedAssignments.Add(node);
             }
 
-            hoisted.AddRange(main);
-            return hoisted;
+            return embedded;
+        }
+
+        private void ReleaseHoistedAssignments(
+            IEnumerable<AssignmentExpressionSyntax> suppressed,
+            IEnumerable<ExpressionSyntax> replacements)
+        {
+            foreach (AssignmentExpressionSyntax node in suppressed)
+            {
+                this.state.SuppressedAssignments.Remove(node);
+            }
+
+            foreach (ExpressionSyntax replacement in replacements)
+            {
+                this.state.HoistedExpressionValues.Remove(replacement);
+            }
+        }
+
+        private void HoistPrecedingEvaluationOperands(
+            ExpressionSyntax root,
+            AssignmentExpressionSyntax assignment,
+            List<GStatement> statements,
+            List<ExpressionSyntax> replacements)
+        {
+            IOperation current = this.context.SemanticModel.GetOperation(assignment);
+            if (current == null)
+            {
+                return;
+            }
+
+            var groups = new List<List<ExpressionSyntax>>();
+            while (current.Parent is IOperation parent && current.Syntax != root)
+            {
+                var preceding = new List<ExpressionSyntax>();
+                foreach (IOperation child in parent.ChildOperations)
+                {
+                    if (ReferenceEquals(child, current))
+                    {
+                        break;
+                    }
+
+                    ExpressionSyntax expression = OperationExpression(child);
+                    if (expression != null
+                        && root.Span.Contains(expression.Span)
+                        && expression != root)
+                    {
+                        preceding.Add(expression);
+                    }
+                }
+
+                if (preceding.Count > 0)
+                {
+                    groups.Insert(0, preceding);
+                }
+
+                current = parent;
+            }
+
+            foreach (ExpressionSyntax preceding in groups.SelectMany(group => group))
+            {
+                if (this.state.HoistedExpressionValues.ContainsKey(preceding)
+                    || preceding is LiteralExpressionSyntax
+                        or ThisExpressionSyntax
+                        or BaseExpressionSyntax
+                        or DefaultExpressionSyntax
+                        or TypeOfExpressionSyntax)
+                {
+                    continue;
+                }
+
+                List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+                this.state.PendingSpillPrologue = statements;
+                GExpression value;
+                try
+                {
+                    value = this.TranslateExpression(preceding);
+                }
+                finally
+                {
+                    this.state.PendingSpillPrologue = outerSpillPrologue;
+                }
+
+                string temp = $"__spill{this.state.SpillCounter++}";
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    temp,
+                    type: null,
+                    initializer: value));
+                this.state.HoistedExpressionValues[preceding] =
+                    new IdentifierExpression(temp);
+                replacements.Add(preceding);
+            }
+        }
+
+        private static ExpressionSyntax OperationExpression(IOperation operation)
+        {
+            if (operation is IInstanceReferenceOperation { IsImplicit: true }
+                or IMethodReferenceOperation)
+            {
+                return null;
+            }
+
+            if (operation is IArgumentOperation argument)
+            {
+                return argument.Value.Syntax as ExpressionSyntax;
+            }
+
+            while (operation.IsImplicit && operation.ChildOperations.Count() == 1)
+            {
+                operation = operation.ChildOperations.Single();
+            }
+
+            return operation.Syntax as ExpressionSyntax;
         }
 
         /// <summary>
@@ -91,32 +215,20 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateConditionWithHoistCore(ExpressionSyntax expression, List<GStatement> prologue)
         {
-            List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf: true);
-            if (embedded.Count == 0)
-            {
-                return this.TranslateExpression(expression);
-            }
-
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                prologue.AddRange(this.FlattenChainedAssignment(node));
-            }
-
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                this.state.SuppressedAssignments.Add(node);
-            }
-
+            var replacements = new List<ExpressionSyntax>();
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    expression,
+                    includeSelf: true,
+                    prologue,
+                    replacements);
             try
             {
                 return this.TranslateExpression(expression);
             }
             finally
             {
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Remove(node);
-                }
+                this.ReleaseHoistedAssignments(embedded, replacements);
             }
         }
 

@@ -108,6 +108,12 @@ internal sealed class DocumentTranslationState
     public Dictionary<TupleExpressionSyntax, GExpression> TupleAssignmentValues { get; } =
         new Dictionary<TupleExpressionSyntax, GExpression>();
 
+    // Values captured before a nested deconstruction assignment is hoisted.
+    // TranslateExpression substitutes these temps at their original positions
+    // so C# left-to-right operand evaluation remains intact.
+    public Dictionary<ExpressionSyntax, GExpression> HoistedExpressionValues { get; } =
+        new Dictionary<ExpressionSyntax, GExpression>();
+
     // Static-field initializers lifted out of a `static` constructor body
     // (`static T() { Field = value; }`). G# has no static constructor, so a
     // simple static ctor is folded into the corresponding `shared { }` field

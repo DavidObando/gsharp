@@ -2606,17 +2606,13 @@ public sealed partial class CSharpToGSharpTranslator
                     // Only a value-position deconstruction assignment needs a
                     // return prologue; ordinary assignments remain inline.
                     var returnPrologue = new List<GStatement>();
+                    var replacements = new List<ExpressionSyntax>();
                     List<AssignmentExpressionSyntax> returnEmbedded =
-                        this.CollectEmbeddedAssignments(ret.Expression, includeSelf: true);
-                    foreach (AssignmentExpressionSyntax node in returnEmbedded)
-                    {
-                        returnPrologue.AddRange(this.FlattenChainedAssignment(node));
-                    }
-
-                    foreach (AssignmentExpressionSyntax node in returnEmbedded)
-                    {
-                        this.state.SuppressedAssignments.Add(node);
-                    }
+                        this.HoistAssignmentsInOrder(
+                            ret.Expression,
+                            includeSelf: true,
+                            returnPrologue,
+                            replacements);
 
                     GExpression returnValue;
                     try
@@ -2625,10 +2621,9 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                     finally
                     {
-                        foreach (AssignmentExpressionSyntax node in returnEmbedded)
-                        {
-                            this.state.SuppressedAssignments.Remove(node);
-                        }
+                        this.ReleaseHoistedAssignments(
+                            returnEmbedded,
+                            replacements);
                     }
 
                     returnPrologue.Add(new ReturnStatement(

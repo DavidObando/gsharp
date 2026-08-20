@@ -24,6 +24,11 @@ public sealed partial class CSharpToGSharpTranslator
     {
         private GExpression TranslateExpression(ExpressionSyntax expression)
         {
+            if (this.state.HoistedExpressionValues.TryGetValue(expression, out GExpression hoistedValue))
+            {
+                return hoistedValue;
+            }
+
             switch (expression)
             {
                 case LiteralExpressionSyntax literal:

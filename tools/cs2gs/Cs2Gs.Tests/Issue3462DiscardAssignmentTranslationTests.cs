@@ -177,6 +177,251 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void NestedDeconstruction_PreservesEarlierCallArgumentOrder()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private int Mark(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return value;
+                }
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 2;
+                    return (2, 3);
+                }
+
+                private int Observe(int first, (int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                    return first + pair.Item1;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = Observe(Mark(1), ((a, b) = Pair()));
+                    return trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(125, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalAndSwitchArmNestedDeconstruction_PreserveArgumentOrder()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private int Mark(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return value;
+                }
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 2;
+                    return (2, 3);
+                }
+
+                private int Observe(int first, (int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                    return first + pair.Item1;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = 0 switch
+                    {
+                        0 => Observe(Mark(1), ((a, b) = Pair())),
+                        _ => 0,
+                    };
+                    _ = true
+                        ? Observe(Mark(3), ((a, b) = Pair()))
+                        : 0;
+                    return trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(125325, result.Value);
+    }
+
+    [Fact]
+    public void NestedDeconstruction_PreservesReceiverBeforeArguments()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private Probe Receiver()
+                {
+                    trace = (trace * 10) + 1;
+                    return this;
+                }
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 2;
+                    return (2, 3);
+                }
+
+                private int Observe((int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                    return pair.Item1;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = Receiver().Observe(((a, b) = Pair()));
+                    return trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(125, result.Value);
+    }
+
+    [Fact]
+    public void NestedDeconstruction_PreservesConstructorAndIndexerArgumentOrder()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                public Probe()
+                {
+                }
+
+                private Probe(int first, (int, int) pair, Probe owner)
+                {
+                    owner.trace = (owner.trace * 10) + 5;
+                }
+
+                private int this[int value]
+                {
+                    get
+                    {
+                        trace = (trace * 10) + 5;
+                        return value;
+                    }
+                }
+
+                private int Mark(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return value;
+                }
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 2;
+                    return (2, 3);
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = new Probe(Mark(1), ((a, b) = Pair()), this);
+                    int constructorTrace = trace;
+                    trace = 0;
+                    _ = this[Mark(1) + ((a, b) = Pair()).Item1];
+                    return (constructorTrace * 1000) + trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(125125, result.Value);
+    }
+
+    [Fact]
+    public void EarlierThrow_PreventsNestedDeconstructionEvaluation()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private int ThrowFirst()
+                {
+                    trace = (trace * 10) + 1;
+                    throw new System.InvalidOperationException();
+                }
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 2;
+                    return (2, 3);
+                }
+
+                private static int Observe(int first, (int, int) pair) => first;
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    try
+                    {
+                        _ = Observe(ThrowFirst(), ((a, b) = Pair()));
+                    }
+                    catch (System.InvalidOperationException)
+                    {
+                    }
+
+                    return trace;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
     public void ConditionalPostfix_DiscardExecutesOnlySelectedBranch()
     {
         string rendered = Render("""
