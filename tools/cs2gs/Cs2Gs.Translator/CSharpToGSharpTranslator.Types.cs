@@ -245,10 +245,14 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     if (exactTargetInvoke != null)
                     {
+                        GStatement resultStatement =
+                            exactTargetInvoke.ReturnsVoid
+                                ? new ExpressionStatement(expressionBody)
+                                : new ReturnStatement(expressionBody);
                         return new LambdaExpression(
                             parameters,
                             blockBody: new BlockStatement(
-                                new GStatement[] { new ReturnStatement(expressionBody) }),
+                                new[] { resultStatement }),
                             isAsync: isAsync,
                             returnType: exactReturnType,
                             isFunctionLiteral: true);
@@ -257,7 +261,12 @@ public sealed partial class CSharpToGSharpTranslator
                     return new LambdaExpression(parameters, expressionBody: expressionBody, isAsync: isAsync);
                 }
 
-                var bodyStatements = new List<GStatement>(spillPrologue) { new ReturnStatement(expressionBody) };
+                var bodyStatements = new List<GStatement>(spillPrologue)
+                {
+                    exactTargetInvoke?.ReturnsVoid == true
+                        ? new ExpressionStatement(expressionBody)
+                        : new ReturnStatement(expressionBody),
+                };
                 return new LambdaExpression(
                     parameters,
                     blockBody: new BlockStatement(bodyStatements),
@@ -270,6 +279,21 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.PendingSpillPrologue = outerSpillPrologue;
                 this.state.CurrentBodyScope = previousBodyScope;
             }
+        }
+
+        private GExpression TranslateContextualLambda(
+            AnonymousFunctionExpressionSyntax lambda)
+        {
+            if (!this.TryGetConvertedDelegateInvoke(
+                    lambda,
+                    out IMethodSymbol invoke)
+                || !this.LambdaResultNeedsExactTarget(lambda, invoke))
+            {
+                return this.TranslateLambda(lambda);
+            }
+
+            return this.typeMapper.WithMetadataImportCollisionQualification(
+                () => this.TranslateLambda(lambda, invoke));
         }
 
         // Shared mapping of a method/lambda result type into a G# func return type,
