@@ -629,6 +629,96 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_ExplicitTypedOutFiltersInferredCandidates()
+    {
+        var result = Evaluate("""
+            class TypedGenericChoice[T] {
+                init(out value int32, seed T) {
+                    value = 40
+                }
+
+                init(out value string, seed T) {
+                    value = ""
+                }
+            }
+
+            TypedGenericChoice(out var value int32, 2)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(40, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ExplicitTypedOutFiltersReversedCandidates()
+    {
+        var result = Evaluate("""
+            class ReversedTypedGenericChoice[T] {
+                init(out value string, seed T) {
+                    value = ""
+                }
+
+                init(out value int32, seed T) {
+                    value = 40
+                }
+            }
+
+            ReversedTypedGenericChoice(out var value int32, 2)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(40, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedExplicitTypedOutFiltersMultipleTypeParameters()
+    {
+        var result = Evaluate("""
+            class NamedTypedGenericChoice[T,U] {
+                init(out value int32, first T, second U) {
+                    value = 42
+                }
+
+                init(out value string, first T, second U) {
+                    value = ""
+                }
+            }
+
+            NamedTypedGenericChoice(second: "x", value: out var value int32, first: 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_IncompatibleExplicitTypedOutReportsNoApplicable()
+    {
+        var result = Evaluate("""
+            class IncompatibleTypedGenericChoice[T] {
+                init(out value int32, seed T) {
+                    value = 0
+                }
+
+                init(out value string, seed T) {
+                    value = ""
+                }
+            }
+
+            IncompatibleTypedGenericChoice(out var value bool, 2)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0267");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
     public void SourceClosedGenericConstructor_RanksSubstitutedParameterTypes()
     {
         var result = Evaluate("""

@@ -1664,7 +1664,13 @@ internal sealed partial class OverloadResolver
                         candidateFunction,
                         syntax.Arguments.Count,
                         argumentNames,
-                        inferenceBoundArguments))
+                        inferenceBoundArguments)
+                    || !ConstructorAcceptsTypedInlineOutArguments(
+                        syntax,
+                        candidateFunction,
+                        argumentNames,
+                        inlineOutArgumentIndices,
+                        inferenceArgumentTypes))
                 {
                     continue;
                 }
@@ -1739,6 +1745,40 @@ internal sealed partial class OverloadResolver
         }
 
         constructed = ConstructExplicitConstructorType(classType, tps, substitution);
+        return true;
+    }
+
+    private static bool ConstructorAcceptsTypedInlineOutArguments(
+        CallExpressionSyntax syntax,
+        FunctionSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        IReadOnlyList<TypeSymbol?> argumentTypes)
+    {
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                syntax.Arguments[argumentIndex]);
+            if (inlineOut.IsDiscard || inlineOut.DeclaredType == null)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, name);
+            if (parameterIndex < 0
+                || parameterIndex >= constructor.Parameters.Length
+                || argumentTypes[argumentIndex] is not { } argumentType
+                || !DeclarationBinder.TypeSignaturesEquivalent(
+                    argumentType,
+                    constructor.Parameters[parameterIndex].Type))
+            {
+                return false;
+            }
+        }
+
         return true;
     }
 
