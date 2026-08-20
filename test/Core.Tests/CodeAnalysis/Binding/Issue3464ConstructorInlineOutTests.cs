@@ -104,6 +104,93 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_WrongTypeArgumentArity_DeclaresOutLocal()
+    {
+        var result = Evaluate("""
+            class WrongArityGenericOutBox[T] {
+                init(seed int32, out flag bool) {
+                    flag = seed > 0
+                }
+            }
+
+            WrongArityGenericOutBox[int32, int32](5, out var flag)
+            flag
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0148");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_UnknownTypeArgument_DeclaresOutLocal()
+    {
+        var result = Evaluate("""
+            class UnknownTypeGenericOutBox[T] {
+                init(seed int32, out flag bool) {
+                    flag = seed > 0
+                }
+            }
+
+            UnknownTypeGenericOutBox[MissingIssue3464Type](5, out var flag)
+            flag
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0113");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_UninferableOutDeclarations_DoNotDuplicateLocals()
+    {
+        var result = Evaluate("""
+            class UninferableVarGenericOutBox[T] {
+                init(out value T) { }
+            }
+
+            class UninferableLetGenericOutBox[T] {
+                init(out value T) { }
+            }
+
+            class UninferableDiscardGenericOutBox[T] {
+                init(out value T) { }
+            }
+
+            UninferableVarGenericOutBox(out var varValue)
+            varValue
+            UninferableLetGenericOutBox(out let letValue)
+            letValue
+            UninferableDiscardGenericOutBox(out _)
+            """);
+
+        Assert.Equal(3, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0151"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ConcreteOutVar_BindsAndRuns()
+    {
+        var result = Evaluate("""
+            class ConcreteGenericOutBox[T] {
+                init(seed T, out value T) {
+                    value = seed
+                }
+            }
+
+            ConcreteGenericOutBox[int32](42, out var value)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void SourceConstructor_ReorderedNamedOutVar_IsVisibleAndAssigned()
     {
         var result = Evaluate("""

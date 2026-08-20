@@ -769,6 +769,8 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private BoundExpression BindExplicitConstructorCallExpression(CallExpressionSyntax syntax, StructSymbol classType)
     {
+        var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
+
         // Issue #1214: a generic class declaring an explicit `init(...)`
         // constructor is constructed at a closed type (`Box[int32](5, "x")`).
         // Resolve the type arguments — supplied explicitly or inferred from the
@@ -783,11 +785,10 @@ internal sealed partial class OverloadResolver
         {
             if (!TryCloseGenericExplicitConstructorType(syntax, classType, out classType))
             {
+                DeclareUnresolvedInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
                 return new BoundErrorExpression(syntax);
             }
         }
-
-        var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
 
         // Issue #343: pre-validate named-argument layout (positional precedes
         // named, no duplicate names). Diagnostics are reported by the helper.
@@ -1150,14 +1151,6 @@ internal sealed partial class OverloadResolver
                     convertedArguments.Add(argument);
                     continue;
                 }
-
-                if (inlineOut.DeclaredType == null
-                    && argument is BoundAddressOfExpression { Operand.Type: var operandType }
-                    && operandType == TypeSymbol.Error)
-                {
-                    var rebindParameter = new ParameterSymbol(parameter.Name, paramType, refKind: RefKind.Out);
-                    boundArguments[i] = argument = bindRefArgumentExpression(inlineOut, rebindParameter);
-                }
             }
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
@@ -1403,6 +1396,23 @@ internal sealed partial class OverloadResolver
 
     private void DeclareUnresolvedInlineOutLocals(
         SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<int> inlineOutArgumentIndices)
+    {
+        var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            if (inlineOut.IsDiscard || inlineOut.DeclaredType != null)
+            {
+                continue;
+            }
+
+            _ = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
+    }
+
+    private void DeclareUnresolvedInlineOutLocals(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
         ImmutableArray<int> inlineOutArgumentIndices,
         ImmutableArray<BoundExpression>.Builder boundArguments)
     {
@@ -1545,7 +1555,8 @@ internal sealed partial class OverloadResolver
 
             foreach (var tp in tps)
             {
-                if (!substitution.ContainsKey(tp))
+                if (!substitution.TryGetValue(tp, out var inferredType)
+                    || inferredType == TypeSymbol.Error)
                 {
                     Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tp.Name);
                     return false;
