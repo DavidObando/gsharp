@@ -1652,7 +1652,19 @@ internal sealed partial class OverloadResolver
             var inferredCandidateCount = 0;
             TypeParameterSymbol? unresolvedTypeParameter = null;
             Dictionary<TypeParameterSymbol, TypeSymbol>? constraintFailureSubstitution = null;
-            foreach (var constructor in classType.EffectiveExplicitConstructors)
+            var inferenceConstructors = classType.EffectiveExplicitConstructors;
+            var accessibleInferenceConstructors = inferenceConstructors
+                .Where(constructor => AccessibilityChecker.IsAccessible(
+                    constructor.Function.Accessibility,
+                    constructor.DeclaringType ?? classType,
+                    getCurrentFunction()))
+                .ToImmutableArray();
+            if (!accessibleInferenceConstructors.IsDefaultOrEmpty)
+            {
+                inferenceConstructors = accessibleInferenceConstructors;
+            }
+
+            foreach (var constructor in inferenceConstructors)
             {
                 if (!ConstructorAcceptsInlineOutArguments(
                         constructor,
@@ -1947,24 +1959,35 @@ internal sealed partial class OverloadResolver
         return bindExpression(argument).Type;
     }
 
-    private static bool IsPartiallyApplicableExplicitConstructor(
+    private bool IsPartiallyApplicableExplicitConstructor(
         CallExpressionSyntax syntax,
         ConstructorSymbol constructor,
         ImmutableArray<string> argumentNames,
         IReadOnlyList<TypeSymbol?> argumentTypes,
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
     {
-        if (constructor.Parameters.Length != syntax.Arguments.Count)
+        if (!IsApplicableUserCallable(
+                constructor.Function,
+                syntax.Arguments.Count,
+                argumentNames))
         {
             return false;
         }
 
+        var parameters = constructor.Parameters;
+        var isVariadic = parameters.Length > 0 && parameters[parameters.Length - 1].IsVariadic;
+        var fixedParameterCount = isVariadic ? parameters.Length - 1 : parameters.Length;
+        var variadicArgumentCount = isVariadic
+            ? syntax.Arguments.Count - fixedParameterCount
+            : 0;
         for (var argumentIndex = 0; argumentIndex < syntax.Arguments.Count; argumentIndex++)
         {
             var parameterIndex = argumentNames.IsDefault || argumentNames[argumentIndex] == null
-                ? argumentIndex
-                : FindParameterIndex(constructor.Parameters, argumentNames[argumentIndex]);
-            if (parameterIndex < 0 || parameterIndex >= constructor.Parameters.Length)
+                ? isVariadic && argumentIndex >= fixedParameterCount
+                    ? parameters.Length - 1
+                    : argumentIndex
+                : FindParameterIndex(parameters, argumentNames[argumentIndex]);
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
             {
                 return false;
             }
@@ -1975,8 +1998,16 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            var parameter = constructor.Parameters[parameterIndex];
+            var parameter = parameters[parameterIndex];
             var parameterType = Binder.SubstituteType(parameter.Type, substitution);
+            if (isVariadic
+                && parameterIndex == parameters.Length - 1
+                && parameterType is SliceTypeSymbol variadicSlice
+                && (variadicArgumentCount != 1 || argumentType is not SliceTypeSymbol))
+            {
+                parameterType = variadicSlice.ElementType;
+            }
+
             if (TypeSymbol.ContainsTypeParameter(parameterType))
             {
                 continue;

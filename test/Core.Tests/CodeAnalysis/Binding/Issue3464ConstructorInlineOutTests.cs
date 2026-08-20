@@ -378,6 +378,194 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_InferenceIgnoresInaccessibleCandidate()
+    {
+        var result = Evaluate("""
+            class AccessibilityInferenceChoice[T] {
+                init(value T, marker string) {
+                }
+
+                private init(value int32, marker T) {
+                }
+            }
+
+            AccessibilityInferenceChoice(42, "x")
+            42
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ReversedInferenceIgnoresInaccessibleCandidate()
+    {
+        var result = Evaluate("""
+            class ReversedAccessibilityInferenceChoice[T] {
+                private init(value int32, marker T) {
+                }
+
+                init(value T, marker string) {
+                }
+            }
+
+            ReversedAccessibilityInferenceChoice(42, "x")
+            42
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedInferenceIgnoresInaccessibleCandidate()
+    {
+        var result = Evaluate("""
+            class NamedAccessibilityInferenceChoice[T] {
+                init(value T, marker string) {
+                }
+
+                private init(value int32, marker T) {
+                }
+            }
+
+            NamedAccessibilityInferenceChoice(marker: "x", value: 42)
+            42
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_InlineOutInferenceIgnoresInaccessibleCandidate()
+    {
+        var result = Evaluate("""
+            class InlineOutAccessibilityInferenceChoice[T] {
+                init(out value T, seed T, marker string) {
+                    value = seed
+                }
+
+                private init(out value int32, seed int32, marker T) {
+                    value = seed
+                }
+            }
+
+            InlineOutAccessibilityInferenceChoice(out var value, 42, "x")
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_AllInaccessibleReportsAccessibility()
+    {
+        var result = Evaluate("""
+            class InaccessibleGenericConstructor[T] {
+                private init(value T) {
+                }
+            }
+
+            InaccessibleGenericConstructor(42)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0472");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_OptionalOmittedReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class OptionalPartialInference[T,U] {
+                init(value T, marker string = "x") {
+                }
+            }
+
+            OptionalPartialInference(42)
+            """);
+
+        AssertUnresolvedTypeParameter(result, "U");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_OptionalSuppliedReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class SuppliedOptionalPartialInference[T,U] {
+                init(value T, marker string = "x") {
+                }
+            }
+
+            SuppliedOptionalPartialInference(42, "y")
+            """);
+
+        AssertUnresolvedTypeParameter(result, "U");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_NamedOptionalReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class NamedOptionalPartialInference[T,U] {
+                init(value T, marker string = "x") {
+                }
+            }
+
+            NamedOptionalPartialInference(value: 42)
+            """);
+
+        AssertUnresolvedTypeParameter(result, "U");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ZeroVariadicReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class ZeroVariadicPartialInference[T,U] {
+                init(value T, items ...string) {
+                }
+            }
+
+            ZeroVariadicPartialInference(42)
+            """);
+
+        AssertUnresolvedTypeParameter(result, "U");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_MultipleVariadicReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class MultipleVariadicPartialInference[T,U] {
+                init(value T, items ...string) {
+                }
+            }
+
+            MultipleVariadicPartialInference(42, "x", "y")
+            """);
+
+        AssertUnresolvedTypeParameter(result, "U");
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_PassThroughVariadicReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class PassThroughVariadicPartialInference[T,U] {
+                init(value T, items ...string) {
+                }
+            }
+
+            let items = []string{"x", "y"}
+            PassThroughVariadicPartialInference(42, items)
+            """);
+
+        AssertUnresolvedTypeParameter(result, "U");
+    }
+
+    [Fact]
     public void SourceGenericConstructor_UninferableOutDeclarations_DoNotDuplicateLocals()
     {
         var result = Evaluate("""
@@ -1772,6 +1960,15 @@ public sealed class Issue3464ConstructorInlineOutTests
         Assert.DoesNotContain(
             result.Diagnostics,
             diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0130");
+    }
+
+    private static void AssertUnresolvedTypeParameter(
+        EmittedOracleResult result,
+        string typeParameter)
+    {
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0151", diagnostic.Id);
+        Assert.Contains($"'{typeParameter}'", diagnostic.Message, StringComparison.Ordinal);
     }
 
     private static EmittedOracleResult Evaluate(string source) => EmittedOracle.Evaluate(source);
