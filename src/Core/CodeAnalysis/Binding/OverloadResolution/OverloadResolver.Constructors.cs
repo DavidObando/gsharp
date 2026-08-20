@@ -831,7 +831,7 @@ internal sealed partial class OverloadResolver
                 // The callback uses null to mean that overload resolution has
                 // not identified the ref parameter yet; its legacy non-null
                 // annotation predates that two-pass binding contract.
-                boundArgument = bindRefArgumentExpression(refArgument, parameterForArg!);
+                boundArgument = bindRefArgumentExpression(refArgument, null);
             }
 
             var lambdaArgument = argument as LambdaExpressionSyntax;
@@ -1077,6 +1077,28 @@ internal sealed partial class OverloadResolver
             // for a closed generic construction (equal to parameter.Type for a
             // non-generic/open type).
             var paramType = effectiveParamTypes[i];
+
+            var argumentSyntax = i < parameterSyntax.Length && parameterSyntax[i] != null
+                ? UnwrapNamedArgumentValue(parameterSyntax[i]!)
+                : null;
+            if (argumentSyntax is RefArgumentExpressionSyntax { IsInlineDeclaration: true } inlineOut)
+            {
+                if (parameter.RefKind != RefKind.Out)
+                {
+                    Diagnostics.ReportOutDeclarationOutsideOutArgument(inlineOut.Location);
+                    hasErrors = true;
+                    convertedArguments.Add(argument);
+                    continue;
+                }
+
+                if (inlineOut.DeclaredType == null
+                    && argument is BoundAddressOfExpression { Operand.Type: var operandType }
+                    && operandType == TypeSymbol.Error)
+                {
+                    var rebindParameter = new ParameterSymbol(parameter.Name, paramType, refKind: RefKind.Out);
+                    boundArguments[i] = argument = bindRefArgumentExpression(inlineOut, rebindParameter);
+                }
+            }
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
