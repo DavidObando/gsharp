@@ -125,6 +125,154 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceConstructor_OutVar_SelectsOutOverRefAndIn()
+    {
+        var result = Evaluate("""
+            class RefKindChoice {
+                var Tag int32
+
+                init(out value int32) {
+                    value = 41
+                    Tag = 1
+                }
+
+                init(ref value string) {
+                    Tag = 2
+                }
+
+                init(in value bool) {
+                    Tag = 3
+                }
+            }
+
+            let choice = RefKindChoice(out var value)
+            value + choice.Tag
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceConstructor_ReorderedAndMixedNamedOutVar_SelectOutOverRefAndIn()
+    {
+        var result = Evaluate("""
+            class NamedRefKindChoice {
+                var Tag int32
+
+                init(prefix int32, out value int32) {
+                    value = prefix + 1
+                    Tag = 1
+                }
+
+                init(prefix int32, ref value string) {
+                    Tag = 2
+                }
+
+                init(prefix int32, in value bool) {
+                    Tag = 3
+                }
+            }
+
+            let reordered = NamedRefKindChoice(value: out var first, prefix: 40)
+            let mixed = NamedRefKindChoice(prefix: 20, out var second)
+            first + second + reordered.Tag + mixed.Tag
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(64, result.Value);
+    }
+
+    [Fact]
+    public void SourceConstructor_OutLetAndDiscard_SelectOutOverRefAndIn()
+    {
+        var result = Evaluate("""
+            class LetDiscardRefKindChoice {
+                var Tag int32
+
+                init(out value int32) {
+                    value = 20
+                    Tag = 1
+                }
+
+                init(ref value string) {
+                    Tag = 2
+                }
+
+                init(in value bool) {
+                    Tag = 3
+                }
+            }
+
+            let kept = LetDiscardRefKindChoice(out let value)
+            let discarded = LetDiscardRefKindChoice(out _)
+            value + kept.Tag + discarded.Tag
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(22, result.Value);
+    }
+
+    [Fact]
+    public void SourceConstructor_ExplicitTypedOut_SelectsMatchingOutOverRef()
+    {
+        var result = Evaluate("""
+            class TypedRefKindChoice {
+                var Tag int32
+
+                init(out value int32) {
+                    value = 40
+                    Tag = 2
+                }
+
+                init(out value string) {
+                    value = ""
+                    Tag = 3
+                }
+
+                init(ref value bool) {
+                    Tag = 4
+                }
+            }
+
+            let choice = TypedRefKindChoice(out var value int32)
+            value + choice.Tag
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceConstructor_OrdinaryRefAndInCallsStillBind()
+    {
+        var result = Evaluate("""
+            class RefOnly {
+                init(ref value string) {
+                    value = value + "!"
+                }
+            }
+
+            class InOnly {
+                var Value bool
+
+                init(in value bool) {
+                    Value = value
+                }
+            }
+
+            var text = "ok"
+            RefOnly(&text)
+            let flag = true
+            let captured = InOnly(in flag)
+            text.Length + (captured.Value ? 1 : 0)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4, result.Value);
+    }
+
+    [Fact]
     public void ImportedConstructor_OutDeclarationAtValuePosition_ReportsOnlyGs0236()
     {
         var result = Evaluate("""
@@ -145,8 +293,7 @@ public sealed class Issue3464ConstructorInlineOutTests
             Issue3464RefConstructor(out var value)
             """);
 
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0236");
-        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0130");
+        Assert.Equal("GS0236", Assert.Single(result.Diagnostics).Id);
     }
 
     [Fact]
@@ -179,6 +326,45 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceConstructor_NoOutOverload_ReportsOnlyGs0236AndDeclaresErrorLocal()
+    {
+        var result = Evaluate("""
+            class NoOutChoice {
+                init(value int32) {
+                }
+
+                init(ref value string) {
+                }
+
+                init(in value bool) {
+                }
+            }
+
+            NoOutChoice(out var value)
+            value
+            """);
+
+        Assert.Equal("GS0236", Assert.Single(result.Diagnostics).Id);
+    }
+
+    [Fact]
+    public void SourceConstructor_NamedInlineOutMappedToRef_ReportsOnlyGs0236()
+    {
+        var result = Evaluate("""
+            class NamedNoOutChoice {
+                init(out result int32, ref other string) {
+                    result = 0
+                }
+            }
+
+            NamedNoOutChoice(other: out var value, result: out _)
+            value
+            """);
+
+        Assert.Equal("GS0236", Assert.Single(result.Diagnostics).Id);
+    }
+
+    [Fact]
     public void SourceConstructor_OutVarOverloads_RemainAmbiguous()
     {
         var result = Evaluate("""
@@ -189,6 +375,12 @@ public sealed class Issue3464ConstructorInlineOutTests
 
                 init(out value string) {
                     value = ""
+                }
+
+                init(ref value bool) {
+                }
+
+                init(in value int64) {
                 }
             }
 

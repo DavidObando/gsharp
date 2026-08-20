@@ -812,6 +812,25 @@ internal sealed partial class OverloadResolver
             ctorOverloads = accessibleCtorOverloads;
         }
 
+        var inlineOutArgumentIndices = GetInlineOutArgumentIndices(syntax.Arguments);
+        if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            ctorOverloads = ctorOverloads
+                .Where(ctor => ConstructorAcceptsInlineOutArguments(
+                    ctor,
+                    argumentNames,
+                    inlineOutArgumentIndices))
+                .ToImmutableArray();
+            if (ctorOverloads.IsDefaultOrEmpty)
+            {
+                var firstInlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                    syntax.Arguments[inlineOutArgumentIndices[0]]);
+                Diagnostics.ReportOutDeclarationOutsideOutArgument(firstInlineOut.Location);
+                DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                return new BoundErrorExpression(syntax);
+            }
+        }
+
         var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
         for (var ai = 0; ai < syntax.Arguments.Count; ai++)
         {
@@ -846,6 +865,23 @@ internal sealed partial class OverloadResolver
 
             boundArgument ??= BindOverloadArgumentValue(argument);
             boundArgumentsBuilder.Add(boundArgument);
+        }
+
+        if (!inlineOutArgumentIndices.IsDefaultOrEmpty && ctorOverloads.Length > 1)
+        {
+            ctorOverloads = ctorOverloads
+                .Where(ctor => ConstructorAcceptsTypedInlineOutArguments(
+                    ctor,
+                    classType,
+                    argumentNames,
+                    inlineOutArgumentIndices,
+                    boundArgumentsBuilder))
+                .ToImmutableArray();
+            if (ctorOverloads.IsDefaultOrEmpty)
+            {
+                Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                return new BoundErrorExpression(syntax);
+            }
         }
 
         ConstructorSymbol? selectedCtor;
@@ -1227,6 +1263,107 @@ internal sealed partial class OverloadResolver
             convertedArguments.ToImmutable(),
             parameterNameAt);
         return new BoundConstructorCallExpression(syntax, classType, finalArguments, selectedCtor);
+    }
+
+    private static ImmutableArray<int> GetInlineOutArgumentIndices(
+        SeparatedSyntaxList<ExpressionSyntax> arguments)
+    {
+        ImmutableArray<int>.Builder? indices = null;
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (UnwrapNamedArgumentValue(arguments[i])
+                is RefArgumentExpressionSyntax { IsInlineDeclaration: true })
+            {
+                indices ??= ImmutableArray.CreateBuilder<int>();
+                indices.Add(i);
+            }
+        }
+
+        return indices?.ToImmutable() ?? default;
+    }
+
+    private static bool ConstructorAcceptsInlineOutArguments(
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices)
+    {
+        var parameters = constructor.Parameters;
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(parameters, name);
+            if (parameterIndex < 0
+                || parameterIndex >= parameters.Length
+                || parameters[parameterIndex].RefKind != RefKind.Out)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static int FindParameterIndex(
+        ImmutableArray<ParameterSymbol> parameters,
+        string name)
+    {
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (parameters[i].Name == name)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool ConstructorAcceptsTypedInlineOutArguments(
+        ConstructorSymbol constructor,
+        StructSymbol constructedType,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<int> inlineOutArgumentIndices,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var parameterTypes = constructedType.GetConstructorParameterTypesForConstruction(constructor);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            if (boundArguments[argumentIndex]
+                    is not BoundAddressOfExpression { Operand.Type: var argumentType }
+                || argumentType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+            var parameterIndex = name == null
+                ? argumentIndex
+                : FindParameterIndex(constructor.Parameters, name);
+            if (parameterIndex < 0
+                || parameterIndex >= parameterTypes.Length
+                || !DeclarationBinder.TypeSignaturesEquivalent(
+                    argumentType,
+                    parameterTypes[parameterIndex]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void DeclareInvalidInlineOutLocals(
+        SeparatedSyntaxList<ExpressionSyntax> arguments,
+        ImmutableArray<int> inlineOutArgumentIndices)
+    {
+        var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
+        foreach (var argumentIndex in inlineOutArgumentIndices)
+        {
+            var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(arguments[argumentIndex]);
+            _ = bindRefArgumentExpression(inlineOut, errorOutParameter);
+        }
     }
 
     /// <summary>
