@@ -2174,15 +2174,13 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.WithHoistedAssignments(
                         assignment.Right,
                         includeSelf: true,
-                        () => this.WithHoistedPostfix(
-                            assignment.Right,
-                            () => new[]
-                            {
-                                (GStatement)new LocalDeclarationStatement(
-                                    BindingKind.Let,
-                                    "_",
-                                    initializer: this.TranslateExpression(assignment.Right)),
-                            }).ToList());
+                        () => new List<GStatement>
+                        {
+                            new LocalDeclarationStatement(
+                                BindingKind.Let,
+                                "_",
+                                initializer: this.TranslateExpression(assignment.Right)),
+                        });
                 }
 
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))

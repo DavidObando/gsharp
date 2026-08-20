@@ -177,6 +177,134 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void ConditionalPostfix_DiscardExecutesOnlySelectedBranch()
+    {
+        string rendered = Render("""
+            public static class Probe
+            {
+                public static int Run()
+                {
+                    int i = 0;
+                    int j = 0;
+                    bool pickFirst = true;
+                    _ = pickFirst ? i++ : j++;
+                    return (i * 10) + j;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(10, result.Value);
+    }
+
+    [Fact]
+    public void DeconstructionRhsPostfix_ExecutesExactlyOnce()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int calls;
+
+                private (int, int) Next(int marker)
+                {
+                    calls++;
+                    return (marker + 1, marker + 2);
+                }
+
+                private static int Observe((int, int) value) => value.Item1;
+
+                public int Run()
+                {
+                    int i = 0;
+                    int a = 0;
+                    int b = 0;
+                    _ = Observe(((a, b) = Next(i++)));
+                    return (calls * 1000) + (i * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1112, result.Value);
+    }
+
+    [Fact]
+    public void SwitchArmIncrement_DiscardKeepsEffectsBranchLocal()
+    {
+        string rendered = Render("""
+            public static class Probe
+            {
+                public static int Run()
+                {
+                    int i = 0;
+                    int j = 0;
+                    int k = 0;
+                    int l = 0;
+                    _ = 0 switch
+                    {
+                        0 => i++,
+                        _ => j++,
+                    };
+                    _ = 0 switch
+                    {
+                        0 => ++k,
+                        _ => ++l,
+                    };
+                    return (i * 1000) + (j * 100) + (k * 10) + l;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1010, result.Value);
+    }
+
+    [Fact]
+    public void ShortCircuitedPostfix_DiscardRunsOnlyEvaluatedOperands()
+    {
+        string rendered = Render("""
+            #nullable enable
+
+            public sealed class Probe
+            {
+                private int Observe(int value) => value;
+
+                public static int Run()
+                {
+                    int i = 0;
+                    int j = 0;
+                    int? present = 1;
+                    int? missing = null;
+                    Probe? absent = null;
+                    _ = present ?? i++;
+                    _ = missing ?? j++;
+                    _ = absent?.Observe(i++);
+                    return (i * 10) + j;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
     public void ThrowingGetter_IsStillEvaluated()
     {
         string rendered = Render("""

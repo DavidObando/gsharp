@@ -341,13 +341,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static List<PostfixUnaryExpressionSyntax> CollectEmbeddedPostfix(ExpressionSyntax expression)
         {
-            // Collect `i++` / `i--` nodes nested inside `expression` (in document
-            // order), excluding any that live inside a nested lambda / local
-            // function (those belong to that body's own statement seam).
+            // Collect eagerly evaluated `i++` / `i--` nodes in document order.
+            // Conditional/short-circuited operands keep G#'s native inline form.
             return expression.DescendantNodes(descendIntoChildren: node =>
                     node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
                 .OfType<PostfixUnaryExpressionSyntax>()
                 .Where(p => p.IsKind(SyntaxKind.PostIncrementExpression) || p.IsKind(SyntaxKind.PostDecrementExpression))
+                .Where(p => !IsInsideConditionalValueBranch(p, expression))
+                .Where(p => !IsInShortCircuitedSubexpression(p, expression))
                 .ToList();
         }
 
