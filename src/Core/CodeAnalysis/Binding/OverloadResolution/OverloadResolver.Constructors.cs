@@ -1755,6 +1755,11 @@ internal sealed partial class OverloadResolver
         ImmutableArray<int> inlineOutArgumentIndices,
         IReadOnlyList<TypeSymbol?> argumentTypes)
     {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
             var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
