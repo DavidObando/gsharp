@@ -191,6 +191,97 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_LeadingOutVar_InfersFromLaterArgument()
+    {
+        var result = Evaluate("""
+            class LeadingOutGenericBox[T] {
+                init(out value T, seed T) {
+                    value = seed
+                }
+            }
+
+            LeadingOutGenericBox(out var value, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_TrailingOutLet_InfersFromEarlierArgument()
+    {
+        var result = Evaluate("""
+            class TrailingOutGenericBox[T] {
+                init(seed T, out value T) {
+                    value = seed
+                }
+            }
+
+            TrailingOutGenericBox(42, out let value)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ReorderedNamedOutVar_InfersFromNamedArgument()
+    {
+        var result = Evaluate("""
+            class NamedOutGenericBox[T] {
+                init(out value T, seed T) {
+                    value = seed
+                }
+            }
+
+            NamedOutGenericBox(seed: 42, value: out var value)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_MultipleLeadingOuts_InferEachTypeParameter()
+    {
+        var result = Evaluate("""
+            class MultipleOutGenericBox[T, U] {
+                init(out first T, out second U, seed T, other U) {
+                    first = seed
+                    second = other
+                }
+            }
+
+            MultipleOutGenericBox(out var first, out let second, 40, 2)
+            first + second
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_ExplicitTypedOut_IsInferenceEvidence()
+    {
+        var result = Evaluate("""
+            class TypedOutGenericBox[T] {
+                init(out value T) {
+                    value = default(T)
+                }
+            }
+
+            TypedOutGenericBox(out var value int32)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
     public void SourceConstructor_ReorderedNamedOutVar_IsVisibleAndAssigned()
     {
         var result = Evaluate("""

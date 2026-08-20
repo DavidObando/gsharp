@@ -1549,11 +1549,36 @@ internal sealed partial class OverloadResolver
                 ? ImmutableArray<ParameterSymbol>.Empty
                 : ctorOverloads[0].Parameters;
 
-            for (var i = 0; i < syntax.Arguments.Count && i < ctorParams.Length; i++)
+            for (var i = 0; i < syntax.Arguments.Count; i++)
             {
-                var argSyntax = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+                var sourceArgument = syntax.Arguments[i];
+                var parameterIndex = sourceArgument is NamedArgumentExpressionSyntax named
+                    ? FindParameterIndex(ctorParams, named.NameToken.Text)
+                    : i;
+                if (parameterIndex < 0 || parameterIndex >= ctorParams.Length)
+                {
+                    continue;
+                }
+
+                var argSyntax = UnwrapNamedArgumentValue(sourceArgument);
+                if (argSyntax is RefArgumentExpressionSyntax { IsInlineDeclaration: true } inlineOut)
+                {
+                    if (inlineOut.DeclaredType == null)
+                    {
+                        continue;
+                    }
+
+                    var declaredType = bindTypeClause(inlineOut.DeclaredType);
+                    if (declaredType != null)
+                    {
+                        inferTypeArguments(ctorParams[parameterIndex].Type, declaredType, substitution);
+                    }
+
+                    continue;
+                }
+
                 var preBound = bindExpression(argSyntax);
-                inferTypeArguments(ctorParams[i].Type, preBound.Type, substitution);
+                inferTypeArguments(ctorParams[parameterIndex].Type, preBound.Type, substitution);
             }
 
             Diagnostics.TruncateTo(inferenceDiagMark);
