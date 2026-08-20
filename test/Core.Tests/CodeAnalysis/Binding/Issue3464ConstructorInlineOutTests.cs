@@ -310,6 +310,84 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void ImportedConstructor_DuplicateNamedOutVar_DeclaresErrorLocal()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(value: out var value, value: 1)
+            value
+            """);
+
+        AssertImportedPrimaryWithoutCascades(result, "GS0245");
+    }
+
+    [Fact]
+    public void ImportedConstructor_OutVarAtNonOutPosition_DeclaresErrorLocal()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(out var value, 1)
+            value
+            """);
+
+        AssertImportedPrimaryWithoutCascades(result, "GS0236");
+    }
+
+    [Fact]
+    public void ImportedConstructor_ConversionFailure_DeclaresTypedOutLocal()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(1, out var value, "bad")
+            value + 1
+            """);
+
+        AssertImportedPrimaryWithoutCascades(result, "GS0130");
+    }
+
+    [Fact]
+    public void ImportedConstructor_MissingRequiredArgument_DeclaresTypedOutLocal()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(1, out var value)
+            value + 1
+            """);
+
+        AssertImportedPrimaryWithoutCascades(result, "GS0130");
+    }
+
+    [Fact]
+    public void ImportedConstructor_UnknownNamedArgument_DeclaresTypedOutLocal()
+    {
+        var result = EvaluateFixture("""
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            Issue3464FailureConstructor(1, value: out var value, missing: 2)
+            value + 1
+            """);
+
+        AssertImportedPrimaryWithoutCascades(result, "GS0246");
+    }
+
+    [Fact]
+    public void ImportedMutex_DuplicateNamedOutVar_DeclaresErrorLocal()
+    {
+        var result = Evaluate("""
+            import System.Threading
+
+            Mutex(false, createdNew: out var createdNew, createdNew: out _)
+            createdNew
+            """);
+
+        AssertImportedPrimaryWithoutCascades(result, "GS0245");
+    }
+
+    [Fact]
     public void SourceConstructor_OutDeclarationAtValuePosition_ReportsGs0236()
     {
         var result = Evaluate("""
@@ -362,6 +440,26 @@ public sealed class Issue3464ConstructorInlineOutTests
             """);
 
         Assert.Equal("GS0236", Assert.Single(result.Diagnostics).Id);
+    }
+
+    [Fact]
+    public void SourceConstructor_Gs0236PointsToActualInvalidInlineOutArgument()
+    {
+        var result = Evaluate("""
+            class LocatedNoOutChoice {
+                init(out result int32, ref other string) {
+                    result = 0
+                }
+            }
+
+            LocatedNoOutChoice(result: out _, other: out var invalid)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0236", diagnostic.Id);
+        Assert.Equal(
+            "out var invalid",
+            diagnostic.Location.Text.ToString(diagnostic.Location.Span));
     }
 
     [Fact]
@@ -515,6 +613,16 @@ public sealed class Issue3464ConstructorInlineOutTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id is "GS0125" or "GS0236");
     }
 
+    private static void AssertImportedPrimaryWithoutCascades(
+        EmittedOracleResult result,
+        string primaryId)
+    {
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == primaryId);
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0125" or "GS0159" or "GS0285");
+    }
+
     private static EmittedOracleResult Evaluate(string source) => EmittedOracle.Evaluate(source);
 
     private static EmittedOracleResult EvaluateFixture(string source) =>
@@ -563,5 +671,13 @@ public sealed class Issue3464AmbiguousConstructor
     public Issue3464AmbiguousConstructor(out string value)
     {
         value = string.Empty;
+    }
+}
+
+public sealed class Issue3464FailureConstructor
+{
+    public Issue3464FailureConstructor(int prefix, out int value, int required)
+    {
+        value = prefix + required;
     }
 }

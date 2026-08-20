@@ -817,20 +817,27 @@ internal sealed partial class OverloadResolver
 
         if (!inlineOutArgumentIndices.IsDefaultOrEmpty)
         {
+            var invalidInlineOutArgument = inlineOutArgumentIndices.FirstOrDefault(
+                index => !ctorOverloads.Any(ctor => ConstructorAcceptsInlineOutArgument(
+                    ctor,
+                    argumentNames,
+                    index)),
+                -1);
+            if (invalidInlineOutArgument >= 0)
+            {
+                var inlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                    syntax.Arguments[invalidInlineOutArgument]);
+                Diagnostics.ReportOutDeclarationOutsideOutArgument(inlineOut.Location);
+                DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                return new BoundErrorExpression(syntax);
+            }
+
             ctorOverloads = ctorOverloads
                 .Where(ctor => ConstructorAcceptsInlineOutArguments(
                     ctor,
                     argumentNames,
                     inlineOutArgumentIndices))
                 .ToImmutableArray();
-            if (ctorOverloads.IsDefaultOrEmpty)
-            {
-                var firstInlineOut = (RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
-                    syntax.Arguments[inlineOutArgumentIndices[0]]);
-                Diagnostics.ReportOutDeclarationOutsideOutArgument(firstInlineOut.Location);
-                DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
-                return new BoundErrorExpression(syntax);
-            }
         }
 
         var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
@@ -1296,22 +1303,33 @@ internal sealed partial class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<int> inlineOutArgumentIndices)
     {
-        var parameters = constructor.Parameters;
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
-            var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
-            var parameterIndex = name == null
-                ? argumentIndex
-                : FindParameterIndex(parameters, name);
-            if (parameterIndex < 0
-                || parameterIndex >= parameters.Length
-                || parameters[parameterIndex].RefKind != RefKind.Out)
+            if (!ConstructorAcceptsInlineOutArgument(
+                    constructor,
+                    argumentNames,
+                    argumentIndex))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool ConstructorAcceptsInlineOutArgument(
+        ConstructorSymbol constructor,
+        ImmutableArray<string> argumentNames,
+        int argumentIndex)
+    {
+        var parameters = constructor.Parameters;
+        var name = argumentNames.IsDefault ? null : argumentNames[argumentIndex];
+        var parameterIndex = name == null
+            ? argumentIndex
+            : FindParameterIndex(parameters, name);
+        return parameterIndex >= 0
+            && parameterIndex < parameters.Length
+            && parameters[parameterIndex].RefKind == RefKind.Out;
     }
 
     private static int FindParameterIndex(
