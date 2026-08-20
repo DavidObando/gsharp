@@ -1398,6 +1398,11 @@ internal sealed partial class OverloadResolver
         SeparatedSyntaxList<ExpressionSyntax> arguments,
         ImmutableArray<int> inlineOutArgumentIndices)
     {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
         var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
