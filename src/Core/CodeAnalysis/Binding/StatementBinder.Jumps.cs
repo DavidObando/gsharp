@@ -346,7 +346,12 @@ internal sealed partial class StatementBinder
             // `return cond ? … : …` honors the function's declared return type
             // as the target type so the result type can unify to the return type
             // (C#-style target-typing) before the conversion below.
-            if ((syntax.Expression is LambdaExpressionSyntax
+            // Expression-tree lambdas retain their natural body shape until the
+            // expression-tree conversion below applies the delegate target.
+            var targetTypesLambdaReturn = syntax.Expression is LambdaExpressionSyntax
+                && function != null
+                && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(function.Type, out _);
+            if ((targetTypesLambdaReturn
                     || syntax.Expression is SwitchExpressionSyntax
                     || syntax.Expression is IfExpressionSyntax
                     || syntax.Expression is IfLetExpressionSyntax
