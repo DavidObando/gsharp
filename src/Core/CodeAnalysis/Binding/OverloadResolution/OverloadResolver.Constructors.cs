@@ -1086,7 +1086,7 @@ internal sealed partial class OverloadResolver
 
                 newSyntax[fixedCtorParamCount] = parameterSyntax.Length > fixedCtorParamCount
                     ? parameterSyntax[fixedCtorParamCount]
-                    : (syntax.Arguments.Count > 0 ? syntax.Arguments[syntax.Arguments.Count - 1] : null);
+                    : null;
                 parameterSyntax = newSyntax;
             }
         }
@@ -1548,37 +1548,66 @@ internal sealed partial class OverloadResolver
             var ctorParams = ctorOverloads.IsDefaultOrEmpty
                 ? ImmutableArray<ParameterSymbol>.Empty
                 : ctorOverloads[0].Parameters;
+            var ctorIsVariadic = ctorParams.Length > 0
+                && ctorParams[ctorParams.Length - 1].IsVariadic;
+            var fixedParameterCount = ctorIsVariadic ? ctorParams.Length - 1 : ctorParams.Length;
+            List<ExpressionSyntax>? variadicArguments = null;
 
             for (var i = 0; i < syntax.Arguments.Count; i++)
             {
                 var sourceArgument = syntax.Arguments[i];
                 var parameterIndex = sourceArgument is NamedArgumentExpressionSyntax named
                     ? FindParameterIndex(ctorParams, named.NameToken.Text)
-                    : i;
+                    : ctorIsVariadic && i >= fixedParameterCount
+                        ? ctorParams.Length - 1
+                        : i;
                 if (parameterIndex < 0 || parameterIndex >= ctorParams.Length)
                 {
                     continue;
                 }
 
                 var argSyntax = UnwrapNamedArgumentValue(sourceArgument);
-                if (argSyntax is RefArgumentExpressionSyntax { IsInlineDeclaration: true } inlineOut)
+                if (ctorIsVariadic && parameterIndex == ctorParams.Length - 1)
                 {
-                    if (inlineOut.DeclaredType == null)
-                    {
-                        continue;
-                    }
-
-                    var declaredType = bindTypeClause(inlineOut.DeclaredType);
-                    if (declaredType != null)
-                    {
-                        inferTypeArguments(ctorParams[parameterIndex].Type, declaredType, substitution);
-                    }
-
+                    variadicArguments ??= new List<ExpressionSyntax>();
+                    variadicArguments.Add(argSyntax);
                     continue;
                 }
 
-                var preBound = bindExpression(argSyntax);
-                inferTypeArguments(ctorParams[parameterIndex].Type, preBound.Type, substitution);
+                var argumentType = BindExplicitConstructorInferenceArgument(argSyntax);
+                if (argumentType != null)
+                {
+                    inferTypeArguments(ctorParams[parameterIndex].Type, argumentType, substitution);
+                }
+            }
+
+            if (ctorIsVariadic
+                && variadicArguments is { Count: > 0 }
+                && ctorParams[ctorParams.Length - 1].Type is SliceTypeSymbol variadicSlice)
+            {
+                if (variadicArguments.Count == 1)
+                {
+                    var argumentType = BindExplicitConstructorInferenceArgument(variadicArguments[0]);
+                    if (argumentType is SliceTypeSymbol)
+                    {
+                        inferTypeArguments(variadicSlice, argumentType, substitution);
+                    }
+                    else if (argumentType != null)
+                    {
+                        inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
+                    }
+                }
+                else
+                {
+                    foreach (var variadicArgument in variadicArguments)
+                    {
+                        var argumentType = BindExplicitConstructorInferenceArgument(variadicArgument);
+                        if (argumentType != null)
+                        {
+                            inferTypeArguments(variadicSlice.ElementType, argumentType, substitution);
+                        }
+                    }
+                }
             }
 
             Diagnostics.TruncateTo(inferenceDiagMark);
@@ -1617,6 +1646,18 @@ internal sealed partial class OverloadResolver
             ? StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), mapClrType)
             : StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
         return true;
+    }
+
+    private TypeSymbol? BindExplicitConstructorInferenceArgument(ExpressionSyntax argument)
+    {
+        if (argument is RefArgumentExpressionSyntax { IsInlineDeclaration: true } inlineOut)
+        {
+            return inlineOut.DeclaredType == null
+                ? null
+                : bindTypeClause(inlineOut.DeclaredType);
+        }
+
+        return bindExpression(argument).Type;
     }
 
     /// <summary>

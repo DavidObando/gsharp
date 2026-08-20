@@ -282,6 +282,155 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericVariadicConstructor_LeadingOutVar_InfersFromPackedTail()
+    {
+        var result = Evaluate("""
+            class LeadingOutVariadicBox[T] {
+                init(out value T, items ...T) {
+                    value = items[0]
+                }
+            }
+
+            LeadingOutVariadicBox(out var value, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_InfersFromMultiplePackedTailArguments()
+    {
+        var result = Evaluate("""
+            class MultiTailVariadicBox[T] {
+                init(out value T, items ...T) {
+                    value = items[2]
+                }
+            }
+
+            MultiTailVariadicBox(out var value, 40, 41, 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_InfersFromPassThroughSlice()
+    {
+        var result = Evaluate("""
+            class SliceTailVariadicBox[T] {
+                init(out value T, items ...T) {
+                    value = items[0]
+                }
+            }
+
+            let items = []int32{42}
+            SliceTailVariadicBox(out var value, items)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_TrailingOut_UsesFixedArgumentEvidence()
+    {
+        var result = Evaluate("""
+            class TrailingOutVariadicBox[T] {
+                init(seed T, out value T, items ...T) {
+                    value = seed
+                }
+            }
+
+            TrailingOutVariadicBox(42, out let value)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_MultipleTypeParameters_InferFixedAndTail()
+    {
+        var result = Evaluate("""
+            class MultipleTypeVariadicBox[T, U] {
+                init(out value T, marker U, items ...T) {
+                    value = items[0]
+                }
+            }
+
+            MultipleTypeVariadicBox(out var value, "marker", 42)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_ExplicitTypedOut_AllowsZeroTail()
+    {
+        var result = Evaluate("""
+            class TypedOutVariadicBox[T] {
+                init(out value T, items ...T) {
+                    value = default(T)
+                }
+            }
+
+            TypedOutVariadicBox(out var value int32)
+            value
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_ZeroTailWithoutEvidence_ReportsInference()
+    {
+        var result = Evaluate("""
+            class NoEvidenceVariadicBox[T] {
+                init(out value T, items ...T) {
+                    value = default(T)
+                }
+            }
+
+            NoEvidenceVariadicBox(out var value)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0151");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceGenericVariadicConstructor_MixedNamedArguments_PreservePrimaryDiagnostic()
+    {
+        var result = Evaluate("""
+            class NamedVariadicInferenceBox[T] {
+                init(out value T, marker int32, items ...T) {
+                    value = items[0]
+                }
+            }
+
+            NamedVariadicInferenceBox(value: out var value, 0, 42)
+            value
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0246");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0151");
+    }
+
+    [Fact]
     public void SourceConstructor_ReorderedNamedOutVar_IsVisibleAndAssigned()
     {
         var result = Evaluate("""
