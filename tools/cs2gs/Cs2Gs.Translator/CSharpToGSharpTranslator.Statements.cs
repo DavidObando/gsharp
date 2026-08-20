@@ -1903,6 +1903,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return conditionalHelperStatement;
             }
 
+            if (expression is ConditionalAccessExpressionSyntax voidConditionalAccess
+                && this.context.GetTypeInfo(voidConditionalAccess).Type
+                    is { SpecialType: SpecialType.System_Void }
+                && this.RequiresLocalAssignmentSeam(
+                    voidConditionalAccess.WhenNotNull))
+            {
+                return this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(
+                    voidConditionalAccess);
+            }
+
             switch (expression)
             {
                 case AssignmentExpressionSyntax assignment when this.IsDelegateMulticastCombine(assignment, out string combineOp):
@@ -1965,6 +1975,42 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return new ExpressionStatement(this.TranslateExpression(expression));
             }
+        }
+
+        private GStatement TranslateVoidConditionalAccessWithLocalAssignmentSeam(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            GExpression receiver = this.SpillOperand(
+                this.TranslateExpression(conditionalAccess.Expression),
+                conditionalAccess.Expression);
+            GExpression previousReceiver = this.state.ConditionalReceiverReplacement;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            var statements = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            this.state.ConditionalReceiverReplacement =
+                new NonNullAssertionExpression(receiver);
+            this.state.PendingSpillPrologue = statements;
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    conditionalAccess.WhenNotNull,
+                    includeSelf: true,
+                    statements,
+                    replacements);
+            try
+            {
+                statements.Add(new ExpressionStatement(
+                    this.TranslateExpression(conditionalAccess.WhenNotNull)));
+            }
+            finally
+            {
+                this.ReleaseHoistedAssignments(embedded, replacements);
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.ConditionalReceiverReplacement = previousReceiver;
+            }
+
+            return new IfStatement(
+                new BinaryExpression(receiver, "!=", LiteralExpression.Null()),
+                new BlockStatement(statements));
         }
 
         private GExpression TranslateAssignmentValue(AssignmentExpressionSyntax assignment)

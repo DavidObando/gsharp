@@ -604,6 +604,115 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void VoidConditionalInstanceCall_HostsDeconstructionInsideGuardedStatement()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private Probe? Receiver(bool present)
+                {
+                    trace = (trace * 10) + 9;
+                    return present ? this : null;
+                }
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                private (int, int) ThrowingPair()
+                {
+                    trace = (trace * 10) + 7;
+                    throw new System.InvalidOperationException();
+                }
+
+                private void Accept((int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    Receiver(false)?.Accept(((a, b) = Pair(1)));
+                    Receiver(true)?.Accept(((a, b) = Pair(2)));
+                    Receiver(false)?.Accept(((a, b) = ThrowingPair()));
+                    try
+                    {
+                        Receiver(true)?.Accept(((a, b) = ThrowingPair()));
+                    }
+                    catch (System.InvalidOperationException)
+                    {
+                    }
+
+                    return (trace * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(992599722, result.Value);
+    }
+
+    [Fact]
+    public void VoidConditionalExtensionCall_HostsDeconstructionInsideGuardedStatement()
+    {
+        string rendered = Render("""
+            public static class ProbeExtensions
+            {
+                public static void Accept(this Probe probe, (int, int) pair) =>
+                    probe.Record();
+            }
+
+            public sealed class Probe
+            {
+                private int trace;
+
+                private Probe? Receiver(bool present)
+                {
+                    trace = (trace * 10) + 9;
+                    return present ? this : null;
+                }
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                public void Record()
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    Receiver(false)?.Accept(((a, b) = Pair(1)));
+                    Receiver(true)?.Accept(((a, b) = Pair(2)));
+                    return (trace * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(992522, result.Value);
+    }
+
+    [Fact]
     public void ConditionalPostfix_DiscardExecutesOnlySelectedBranch()
     {
         string rendered = Render("""
