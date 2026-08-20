@@ -249,6 +249,30 @@ public sealed class Issue3465InferenceTests
     }
 
     [Fact]
+    public void GenericFunction_ContextuallyBindsVoidBlockLambda()
+    {
+        var result = Evaluate("""
+            import System.Collections.Generic
+
+            func Visit[T](value T, action (T)->void) {
+                action(value)
+            }
+
+            let seen = HashSet[int32]()
+            Visit(17, (value int32) -> {
+                if value == 0 {
+                    return
+                }
+                seen.Add(value)
+            })
+            seen.Count
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
     public void NestedDelegateTarget_ContextuallyBindsVoidBlockLambda()
     {
         var result = Evaluate("""

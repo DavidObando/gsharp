@@ -5922,7 +5922,21 @@ public sealed class Binder
                         break;
                     }
 
-                    var clr = substitutedArgs[i].ClrType;
+                    // A concrete nullable value type carries the bare
+                    // underlying CLR type on TypeSymbol.ClrType. Use its
+                    // effective Nullable<T> shape when closing an imported
+                    // generic. Preserve the erasure of `T?` for an originally
+                    // unconstrained type parameter, however: unlike a
+                    // struct-constrained `T?`, that annotation is represented
+                    // by T itself even when this call later substitutes a
+                    // value type (issue #1471).
+                    var originalArg = it.TypeArguments[i];
+                    var preserveErasedNullableTypeParameter =
+                        originalArg is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol originalTypeParameter }
+                        && !originalTypeParameter.HasValueTypeConstraint;
+                    var clr = preserveErasedNullableTypeParameter
+                        ? substitutedArgs[i].ClrType
+                        : NullableLifting.GetEffectiveClrType(substitutedArgs[i]);
                     if (clr == null)
                     {
                         allClr = false;
