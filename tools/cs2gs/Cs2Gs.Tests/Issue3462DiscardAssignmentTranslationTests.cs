@@ -99,6 +99,84 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
     }
 
     [Fact]
+    public void ParenthesizedDeconstructionAssignment_WritesTargetsAndEvaluatesOnce()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int calls;
+
+                private (int, int) Get()
+                {
+                    calls++;
+                    return (1, 2);
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = ((a, b) = Get());
+                    return (calls * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(112, result.Value);
+    }
+
+    [Fact]
+    public void NestedAssignmentShapes_PreserveBranchesValuesAndOrder()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+
+                private (int, int) Next(int marker)
+                {
+                    trace = (trace * 10) + marker;
+                    return (marker, marker + 1);
+                }
+
+                private int Observe((int, int) value)
+                {
+                    trace = (trace * 10) + value.Item1;
+                    return value.Item2;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    _ = Observe(((a, b) = Next(2)));
+                    _ = true ? ((a, b) = Next(3)) : ((a, b) = Next(8));
+                    _ = 0 switch
+                    {
+                        0 => ((a, b) = Next(4)),
+                        _ => ((a, b) = Next(9)),
+                    };
+                    _ = (a = 6);
+                    _ = (a += 1);
+                    return (trace * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(223475, result.Value);
+    }
+
+    [Fact]
     public void ThrowingGetter_IsStillEvaluated()
     {
         string rendered = Render("""

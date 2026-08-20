@@ -1071,9 +1071,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression condition = this.TranslateExpression(conditional.Condition);
             (GExpression whenTrue, List<GStatement> thenStatements) =
-                this.TranslateConditionalBranch(conditional.WhenTrue);
+                this.TranslateConditionalValueBranch(conditional.WhenTrue);
             (GExpression whenFalse, List<GStatement> elseStatements) =
-                this.TranslateConditionalBranch(conditional.WhenFalse);
+                this.TranslateConditionalValueBranch(conditional.WhenFalse);
             (whenTrue, whenFalse) = this.CoerceConditionalArms(conditional, whenTrue, whenFalse);
             return new IfExpression(
                 condition,
@@ -1083,11 +1083,11 @@ public sealed partial class CSharpToGSharpTranslator
                 elseStatements);
         }
 
-        // A G# if-expression arm is a block expression: it can run statements,
-        // then yield its trailing expression. Keep every arm-local spill/write in
-        // that block so only the selected C# arm executes it (issue #1723).
-        private (GExpression Value, List<GStatement> Statements) TranslateConditionalBranch(
-            ExpressionSyntax branch)
+        // G# conditional/switch arms can use block expressions: run arm-local
+        // spills/writes there so only the selected C# arm executes them.
+        private (GExpression Value, List<GStatement> Statements) TranslateConditionalValueBranch(
+            ExpressionSyntax branch,
+            Func<GExpression> translateValue = null)
         {
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             var statements = new List<GStatement>();
@@ -1108,7 +1108,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 try
                 {
-                    return (this.TranslateValueWithNullForgiveness(branch), statements);
+                    GExpression value = translateValue != null
+                        ? translateValue()
+                        : this.TranslateValueWithNullForgiveness(branch);
+                    return (value, statements);
                 }
                 finally
                 {
@@ -2156,24 +2159,30 @@ public sealed partial class CSharpToGSharpTranslator
                         return System.Array.Empty<GStatement>();
                     }
 
-                    if ((assignment.Right is AssignmentExpressionSyntax or SwitchExpressionSyntax)
-                        || (assignment.Right is PrefixUnaryExpressionSyntax prefix
+                    ExpressionSyntax discardedValue = Unwrap(assignment.Right);
+                    if ((discardedValue is AssignmentExpressionSyntax or SwitchExpressionSyntax)
+                        || (discardedValue is PrefixUnaryExpressionSyntax prefix
                             && (prefix.IsKind(SyntaxKind.PreIncrementExpression)
                                 || prefix.IsKind(SyntaxKind.PreDecrementExpression)))
-                        || (assignment.Right is PostfixUnaryExpressionSyntax postfix
+                        || (discardedValue is PostfixUnaryExpressionSyntax postfix
                             && (postfix.IsKind(SyntaxKind.PostIncrementExpression)
                                 || postfix.IsKind(SyntaxKind.PostDecrementExpression))))
                     {
-                        return this.TranslateExpressionStatements(assignment.Right);
+                        return this.TranslateExpressionStatements(discardedValue);
                     }
 
-                    return new[]
-                    {
-                        (GStatement)new LocalDeclarationStatement(
-                            BindingKind.Let,
-                            "_",
-                            initializer: this.TranslateExpression(assignment.Right)),
-                    };
+                    return this.WithHoistedAssignments(
+                        assignment.Right,
+                        includeSelf: true,
+                        () => this.WithHoistedPostfix(
+                            assignment.Right,
+                            () => new[]
+                            {
+                                (GStatement)new LocalDeclarationStatement(
+                                    BindingKind.Let,
+                                    "_",
+                                    initializer: this.TranslateExpression(assignment.Right)),
+                            }).ToList());
                 }
 
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))

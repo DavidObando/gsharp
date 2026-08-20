@@ -801,7 +801,7 @@ public sealed partial class CSharpToGSharpTranslator
                      !initializer.IsKind(SyntaxKind.WithInitializerExpression)))
                 .Any(assignment =>
                     AssignmentRequiresStatementLowering(assignment)
-                    && !IsInsideConditionalExpressionBranch(assignment, branch));
+                    && !IsInsideConditionalValueBranch(assignment, branch));
         }
 
         /// <summary>

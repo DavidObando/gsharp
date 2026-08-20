@@ -236,7 +236,7 @@ public sealed partial class CSharpToGSharpTranslator
             var safe = new List<AssignmentExpressionSyntax>();
             foreach (AssignmentExpressionSyntax candidate in candidates)
             {
-                if (IsInsideConditionalExpressionBranch(candidate, expression))
+                if (IsInsideConditionalValueBranch(candidate, expression))
                 {
                     continue;
                 }
@@ -288,16 +288,21 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        // A `?:` arm owns a native G# block-expression seam. An enclosing seam
-        // must not hoist the arm's assignment unconditionally; it leaves the node
-        // for TranslateConditionalBranch to lower inside the selected arm.
-        private static bool IsInsideConditionalExpressionBranch(SyntaxNode node, ExpressionSyntax root)
+        // Conditional and switch-expression arms own block-expression seams. An
+        // enclosing seam must leave each assignment inside its selected arm.
+        private static bool IsInsideConditionalValueBranch(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
             {
                 SyntaxNode parent = current.Parent;
                 if (parent is ConditionalExpressionSyntax conditional &&
                     (current == conditional.WhenTrue || current == conditional.WhenFalse))
+                {
+                    return true;
+                }
+
+                if (parent is SwitchExpressionArmSyntax switchArm &&
+                    current == switchArm.Expression)
                 {
                     return true;
                 }
