@@ -863,6 +863,12 @@ internal sealed partial class OverloadResolver
                     argumentNames,
                     inlineOutArgumentIndices))
                 .ToImmutableArray();
+            if (ctorOverloads.IsDefaultOrEmpty)
+            {
+                Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, classType.Name);
+                DeclareInvalidInlineOutLocals(syntax.Arguments, inlineOutArgumentIndices);
+                return new BoundErrorExpression(syntax);
+            }
         }
 
         var boundArgumentsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
@@ -1410,6 +1416,11 @@ internal sealed partial class OverloadResolver
         SeparatedSyntaxList<ExpressionSyntax> arguments,
         ImmutableArray<int> inlineOutArgumentIndices)
     {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
         var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
@@ -1445,6 +1456,11 @@ internal sealed partial class OverloadResolver
         ImmutableArray<int> inlineOutArgumentIndices,
         ImmutableArray<BoundExpression>.Builder boundArguments)
     {
+        if (inlineOutArgumentIndices.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
         var errorOutParameter = new ParameterSymbol("value", TypeSymbol.Error, refKind: RefKind.Out);
         foreach (var argumentIndex in inlineOutArgumentIndices)
         {
@@ -1619,6 +1635,7 @@ internal sealed partial class OverloadResolver
 
             var candidates = new List<(FunctionSymbol Function, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
             var inferredCandidateCount = 0;
+            TypeParameterSymbol? unresolvedTypeParameter = null;
             Dictionary<TypeParameterSymbol, TypeSymbol>? constraintFailureSubstitution = null;
             foreach (var constructor in classType.EffectiveExplicitConstructors)
             {
@@ -1637,9 +1654,12 @@ internal sealed partial class OverloadResolver
                     argumentNames,
                     inferenceArgumentTypes,
                     candidateSubstitution);
-                if (tps.Any(tp => !candidateSubstitution.TryGetValue(tp, out var inferredType)
-                    || inferredType == TypeSymbol.Error))
+                var candidateUnresolvedTypeParameter = tps.FirstOrDefault(tp =>
+                    !candidateSubstitution.TryGetValue(tp, out var inferredType)
+                    || inferredType == TypeSymbol.Error);
+                if (candidateUnresolvedTypeParameter != null)
                 {
+                    unresolvedTypeParameter ??= candidateUnresolvedTypeParameter;
                     continue;
                 }
 
@@ -1691,7 +1711,19 @@ internal sealed partial class OverloadResolver
                 {
                     if (inferredCandidateCount == 0)
                     {
-                        Diagnostics.ReportTypeArgumentInferenceFailed(syntax.Identifier.Location, classType.Name, tps[0].Name);
+                        var hasFailedExplicitInlineOutType =
+                            !inlineOutArgumentIndices.IsDefaultOrEmpty
+                            && inlineOutArgumentIndices.Any(index =>
+                                ((RefArgumentExpressionSyntax)UnwrapNamedArgumentValue(
+                                    syntax.Arguments[index])).DeclaredType != null
+                                && inferenceArgumentTypes[index] == TypeSymbol.Error);
+                        if (!hasFailedExplicitInlineOutType)
+                        {
+                            Diagnostics.ReportTypeArgumentInferenceFailed(
+                                syntax.Identifier.Location,
+                                classType.Name,
+                                (unresolvedTypeParameter ?? tps[0]).Name);
+                        }
                     }
                     else
                     {
@@ -1885,7 +1917,7 @@ internal sealed partial class OverloadResolver
         {
             return inlineOut.DeclaredType == null
                 ? null
-                : bindTypeClause(inlineOut.DeclaredType);
+                : bindTypeClause(inlineOut.DeclaredType) ?? TypeSymbol.Error;
         }
 
         return bindExpression(argument).Type;

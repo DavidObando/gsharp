@@ -179,6 +179,41 @@ public sealed class Issue3464ConstructorInlineOutTests
     }
 
     [Fact]
+    public void SourceGenericConstructor_UnknownExplicitOutTypeReportsOnceAndDeclaresLocal()
+    {
+        var result = Evaluate("""
+            class UnknownExplicitGenericOutType[T] {
+                init(out value T) {
+                    value = default(T)
+                }
+            }
+
+            UnknownExplicitGenericOutType(out var value NoSuchIssue3464GenericType)
+            value
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0113", diagnostic.Id);
+    }
+
+    [Fact]
+    public void SourceGenericConstructor_InferenceReportsActualUnresolvedTypeParameter()
+    {
+        var result = Evaluate("""
+            class PartialGenericInference[T,U] {
+                init(value T) {
+                }
+            }
+
+            PartialGenericInference(42)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0151", diagnostic.Id);
+        Assert.Contains("'U'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SourceGenericConstructor_UninferableOutDeclarations_DoNotDuplicateLocals()
     {
         var result = Evaluate("""
@@ -738,6 +773,87 @@ public sealed class Issue3464ConstructorInlineOutTests
         Assert.DoesNotContain(
             result.Diagnostics,
             diagnostic => diagnostic.Id is "GS0102" or "GS0125");
+    }
+
+    [Fact]
+    public void SourceConstructor_SplitOutLayoutsReportNoApplicable()
+    {
+        var result = Evaluate("""
+            class SplitOutLayoutChoice {
+                init(out first int32, second int32) {
+                    first = second
+                }
+
+                init(first int32, out second int32) {
+                    second = first
+                }
+            }
+
+            SplitOutLayoutChoice(out var first, out var second)
+            first + second
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0267");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0236");
+    }
+
+    [Fact]
+    public void SourceConstructor_ReversedSplitOutLayoutsReportNoApplicable()
+    {
+        var result = Evaluate("""
+            class ReversedSplitOutLayoutChoice {
+                init(first int32, out second int32) {
+                    second = first
+                }
+
+                init(out first int32, second int32) {
+                    first = second
+                }
+            }
+
+            ReversedSplitOutLayoutChoice(out var first, out var second)
+            first + second
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0267");
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0102" or "GS0125" or "GS0236");
+    }
+
+    [Fact]
+    public void SourceConstructor_DuplicateNamedArgumentsWithoutInlineOutDoesNotCrash()
+    {
+        var result = Evaluate("""
+            class DuplicateNamedWithoutOut {
+                init(first int32, second int32) {
+                }
+            }
+
+            DuplicateNamedWithoutOut(first: 1, first: 2)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0245");
+    }
+
+    [Fact]
+    public void SourceConstructor_NoApplicableOverloadWithoutInlineOutDoesNotCrash()
+    {
+        var result = Evaluate("""
+            class NoApplicableWithoutOut {
+                init(value int32) {
+                }
+
+                init(value string) {
+                }
+            }
+
+            NoApplicableWithoutOut(true)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id is "GS0266" or "GS0267");
     }
 
     [Fact]
