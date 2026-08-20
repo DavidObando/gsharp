@@ -47,17 +47,13 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // Value-position deconstruction assignments still need a
                     // statement seam; ordinary assignments remain inline.
+                    var replacements = new List<ExpressionSyntax>();
                     List<AssignmentExpressionSyntax> initializerEmbedded =
-                        this.CollectEmbeddedAssignments(declarator.Initializer.Value, includeSelf: true);
-                    foreach (AssignmentExpressionSyntax node in initializerEmbedded)
-                    {
-                        results.AddRange(this.FlattenChainedAssignment(node));
-                    }
-
-                    foreach (AssignmentExpressionSyntax node in initializerEmbedded)
-                    {
-                        this.state.SuppressedAssignments.Add(node);
-                    }
+                        this.HoistAssignmentsInOrder(
+                            declarator.Initializer.Value,
+                            includeSelf: true,
+                            results,
+                            replacements);
 
                     try
                     {
@@ -69,10 +65,9 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                     finally
                     {
-                        foreach (AssignmentExpressionSyntax node in initializerEmbedded)
-                        {
-                            this.state.SuppressedAssignments.Remove(node);
-                        }
+                        this.ReleaseHoistedAssignments(
+                            initializerEmbedded,
+                            replacements);
                     }
                 }
 
@@ -443,32 +438,28 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateBinaryRightOperand(BinaryExpressionSyntax binary)
         {
             // A fallback pattern in a right operand may spill its scrutinee.
-            // Host that spill in the operand itself so `&&`/`||`/`??` still
-            // decide whether the scrutinee runs.
+            // A deconstruction assignment also needs statements. Host either in
+            // the operand itself so `&&`/`||`/`??` still decide whether it runs.
             if (!IsShortCircuitOperator(binary)
-                || this.state.PendingSpillPrologue == null
-                || !this.ContainsFallbackPatternSpill(binary.Right))
+                || (!this.RequiresLocalAssignmentSeam(binary.Right)
+                    && (this.state.PendingSpillPrologue == null
+                        || !this.ContainsFallbackPatternSpill(binary.Right))))
             {
                 return this.TranslateExpression(binary.Right);
             }
 
-            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             List<GStatement> previousDeclarations = this.state.ShortCircuitSpillDeclarations;
             SyntaxNode previousScope = this.state.ShortCircuitSpillScope;
-            var statements = new List<GStatement>();
-            this.state.PendingSpillPrologue = statements;
-            this.state.ShortCircuitSpillDeclarations ??= outerSpillPrologue;
+            this.state.ShortCircuitSpillDeclarations ??= this.state.PendingSpillPrologue;
             this.state.ShortCircuitSpillScope ??= binary.Right;
             try
             {
-                GExpression value = this.TranslateExpression(binary.Right);
-                return statements.Count == 0
-                    ? value
-                    : new BlockExpression(statements, value);
+                return this.TranslateWithLocalAssignmentSeam(
+                    binary.Right,
+                    () => this.TranslateExpression(binary.Right));
             }
             finally
             {
-                this.state.PendingSpillPrologue = outerSpillPrologue;
                 this.state.ShortCircuitSpillDeclarations = previousDeclarations;
                 this.state.ShortCircuitSpillScope = previousScope;
             }
@@ -1071,9 +1062,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression condition = this.TranslateExpression(conditional.Condition);
             (GExpression whenTrue, List<GStatement> thenStatements) =
-                this.TranslateConditionalBranch(conditional.WhenTrue);
+                this.TranslateConditionalValueBranch(conditional.WhenTrue);
             (GExpression whenFalse, List<GStatement> elseStatements) =
-                this.TranslateConditionalBranch(conditional.WhenFalse);
+                this.TranslateConditionalValueBranch(conditional.WhenFalse);
             (whenTrue, whenFalse) = this.CoerceConditionalArms(conditional, whenTrue, whenFalse);
             return new IfExpression(
                 condition,
@@ -1083,39 +1074,35 @@ public sealed partial class CSharpToGSharpTranslator
                 elseStatements);
         }
 
-        // A G# if-expression arm is a block expression: it can run statements,
-        // then yield its trailing expression. Keep every arm-local spill/write in
-        // that block so only the selected C# arm executes it (issue #1723).
-        private (GExpression Value, List<GStatement> Statements) TranslateConditionalBranch(
-            ExpressionSyntax branch)
+        // G# conditional/switch arms can use block expressions: run arm-local
+        // spills/writes there so only the selected C# arm executes them.
+        private (GExpression Value, List<GStatement> Statements) TranslateConditionalValueBranch(
+            ExpressionSyntax branch,
+            Func<GExpression> translateValue = null)
         {
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             var statements = new List<GStatement>();
             this.state.PendingSpillPrologue = statements;
             try
             {
+                var replacements = new List<ExpressionSyntax>();
                 List<AssignmentExpressionSyntax> embedded =
-                    this.CollectEmbeddedAssignments(branch, includeSelf: true);
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    statements.AddRange(this.FlattenChainedAssignment(node));
-                }
-
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Add(node);
-                }
+                    this.HoistAssignmentsInOrder(
+                        branch,
+                        includeSelf: true,
+                        statements,
+                        replacements);
 
                 try
                 {
-                    return (this.TranslateValueWithNullForgiveness(branch), statements);
+                    GExpression value = translateValue != null
+                        ? translateValue()
+                        : this.TranslateValueWithNullForgiveness(branch);
+                    return (value, statements);
                 }
                 finally
                 {
-                    foreach (AssignmentExpressionSyntax node in embedded)
-                    {
-                        this.state.SuppressedAssignments.Remove(node);
-                    }
+                    this.ReleaseHoistedAssignments(embedded, replacements);
                 }
             }
             finally
@@ -1916,6 +1903,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return conditionalHelperStatement;
             }
 
+            if (expression is ConditionalAccessExpressionSyntax voidConditionalAccess
+                && this.context.GetTypeInfo(voidConditionalAccess).Type
+                    is { SpecialType: SpecialType.System_Void }
+                && this.RequiresLocalAssignmentSeam(
+                    voidConditionalAccess.WhenNotNull))
+            {
+                return this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(
+                    voidConditionalAccess);
+            }
+
             switch (expression)
             {
                 case AssignmentExpressionSyntax assignment when this.IsDelegateMulticastCombine(assignment, out string combineOp):
@@ -1978,6 +1975,43 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return new ExpressionStatement(this.TranslateExpression(expression));
             }
+        }
+
+        private GStatement TranslateVoidConditionalAccessWithLocalAssignmentSeam(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            GExpression receiver = this.CaptureReceiverOnce(
+                this.TranslateExpression(conditionalAccess.Expression),
+                conditionalAccess.Expression,
+                "a void conditional-access statement here has no enclosing evaluation seam to capture its receiver once.");
+            GExpression previousReceiver = this.state.ConditionalReceiverReplacement;
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            var statements = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            this.state.ConditionalReceiverReplacement =
+                new NonNullAssertionExpression(receiver);
+            this.state.PendingSpillPrologue = statements;
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    conditionalAccess.WhenNotNull,
+                    includeSelf: true,
+                    statements,
+                    replacements);
+            try
+            {
+                statements.Add(new ExpressionStatement(
+                    this.TranslateExpression(conditionalAccess.WhenNotNull)));
+            }
+            finally
+            {
+                this.ReleaseHoistedAssignments(embedded, replacements);
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.ConditionalReceiverReplacement = previousReceiver;
+            }
+
+            return new IfStatement(
+                new BinaryExpression(receiver, "!=", LiteralExpression.Null()),
+                new BlockStatement(statements));
         }
 
         private GExpression TranslateAssignmentValue(AssignmentExpressionSyntax assignment)
@@ -2102,12 +2136,45 @@ public sealed partial class CSharpToGSharpTranslator
             return symbol is IDiscardSymbol or null;
         }
 
+        private bool CanDropDiscardedExpression(ExpressionSyntax expression)
+        {
+            expression = Unwrap(expression);
+            switch (expression)
+            {
+                case LiteralExpressionSyntax:
+                case ThisExpressionSyntax:
+                case BaseExpressionSyntax:
+                case DefaultExpressionSyntax:
+                case TypeOfExpressionSyntax:
+                    return true;
+
+                case IdentifierNameSyntax identifier:
+                    return this.context.GetSymbolInfo(identifier).Symbol
+                        is ILocalSymbol { RefKind: RefKind.None }
+                        or IParameterSymbol { RefKind: RefKind.None }
+                        or IRangeVariableSymbol;
+
+                case PostfixUnaryExpressionSyntax suppressed
+                    when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return this.CanDropDiscardedExpression(suppressed.Operand);
+
+                case TupleExpressionSyntax tuple:
+                    return tuple.Arguments.All(argument =>
+                        this.CanDropDiscardedExpression(argument.Expression));
+
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>
         /// Translates an expression-statement that may expand into several G#
         /// statements: tuple declaration/deconstruction forms may expand, while
         /// ordinary chained assignments remain native nested expressions.
         /// </summary>
-        private IEnumerable<GStatement> TranslateExpressionStatements(ExpressionSyntax expression)
+        private IEnumerable<GStatement> TranslateExpressionStatements(
+            ExpressionSyntax expression,
+            bool hoistPostfix = true)
         {
             if (expression is AssignmentExpressionSyntax assignment &&
                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
@@ -2117,10 +2184,36 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     // C# statement-level discard `_ = e` (Roslyn parses the `_`
                     // target as an IdentifierNameSyntax). G# has no discard target
-                    // (`_ = e` → GS0125), so drop the assignment and emit just the
-                    // RHS as statement(s); `_ = a = b`, `_ = x ?? throw E`, and
-                    // `_ = await ...` flow through the RHS translation (issue #914).
-                    return this.TranslateExpressionStatements(assignment.Right);
+                    // (`_ = e` → GS0125). Drop only reads that cannot run code or
+                    // throw; otherwise G#'s native discard declaration evaluates
+                    // the RHS exactly once while keeping its value unbound.
+                    if (this.CanDropDiscardedExpression(assignment.Right))
+                    {
+                        return System.Array.Empty<GStatement>();
+                    }
+
+                    ExpressionSyntax discardedValue = Unwrap(assignment.Right);
+                    if ((discardedValue is AssignmentExpressionSyntax or SwitchExpressionSyntax)
+                        || (discardedValue is PrefixUnaryExpressionSyntax prefix
+                            && (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                                || prefix.IsKind(SyntaxKind.PreDecrementExpression)))
+                        || (discardedValue is PostfixUnaryExpressionSyntax postfix
+                            && (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                                || postfix.IsKind(SyntaxKind.PostDecrementExpression))))
+                    {
+                        return this.TranslateExpressionStatements(discardedValue);
+                    }
+
+                    return this.WithHoistedAssignments(
+                        assignment.Right,
+                        includeSelf: true,
+                        () => new List<GStatement>
+                        {
+                            new LocalDeclarationStatement(
+                                BindingKind.Let,
+                                "_",
+                                initializer: this.TranslateExpression(assignment.Right)),
+                        });
                 }
 
                 if (this.TryGetDeconstructionTargets(assignment.Left, out BindingKind binding, out IReadOnlyList<string> names))
@@ -2172,9 +2265,11 @@ public sealed partial class CSharpToGSharpTranslator
             return this.WithHoistedAssignments(
                 expression,
                 includeSelf: false,
-                () => this.WithHoistedPostfix(
-                    expression,
-                    () => new[] { this.TranslateExpressionStatement(expression) }).ToList());
+                () => hoistPostfix
+                    ? this.WithHoistedPostfix(
+                        expression,
+                        () => new[] { this.TranslateExpressionStatement(expression) }).ToList()
+                    : new List<GStatement> { this.TranslateExpressionStatement(expression) });
         }
 
         // Strips parentheses so chain/assignment detection is parenthesis-transparent.

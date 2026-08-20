@@ -557,7 +557,8 @@ public sealed partial class CSharpToGSharpTranslator
                 helperName,
                 chainedReceiver,
                 out GExpression guard,
-                out GExpression call);
+                out GExpression call,
+                hostLocalAssignmentSeam: true);
 
             GTypeReference nullableType = this.typeMapper.Map(
                 conditionalType,
@@ -614,19 +615,38 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            this.BuildNullConditionalStaticExtensionHelper(
-                conditionalAccess,
-                invocation,
-                owner,
-                name,
-                helperName,
-                chainedReceiver,
-                out GExpression guard,
-                out GExpression call);
+            var localStatements = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    conditionalAccess.WhenNotNull,
+                    includeSelf: true,
+                    localStatements,
+                    replacements);
+            GExpression guard;
+            GExpression call;
+            try
+            {
+                this.BuildNullConditionalStaticExtensionHelper(
+                    conditionalAccess,
+                    invocation,
+                    owner,
+                    name,
+                    helperName,
+                    chainedReceiver,
+                    out guard,
+                    out call,
+                    hostLocalAssignmentSeam: false);
+            }
+            finally
+            {
+                this.ReleaseHoistedAssignments(embedded, replacements);
+            }
 
+            localStatements.Add(new ExpressionStatement(call));
             result = new IfStatement(
                 guard,
-                new BlockStatement(new GStatement[] { new ExpressionStatement(call) }));
+                new BlockStatement(localStatements));
             return true;
         }
 
@@ -678,11 +698,13 @@ public sealed partial class CSharpToGSharpTranslator
             SimpleNameSyntax helperName,
             ExpressionSyntax chainedReceiver,
             out GExpression guard,
-            out GExpression call)
+            out GExpression call,
+            bool hostLocalAssignmentSeam)
         {
-            GExpression receiver = this.SpillOperand(
+            GExpression receiver = this.CaptureReceiverOnce(
                 this.TranslateExpression(conditionalAccess.Expression),
-                conditionalAccess.Expression);
+                conditionalAccess.Expression,
+                "a conditional-access helper call here has no enclosing evaluation seam to capture its receiver once.");
             GExpression helperReceiver = new NonNullAssertionExpression(receiver);
             if (chainedReceiver != null)
             {
@@ -691,16 +713,26 @@ public sealed partial class CSharpToGSharpTranslator
                     helperReceiver);
             }
 
-            var callArgs = new List<GExpression> { helperReceiver };
-            callArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
             IReadOnlyList<GTypeReference> callTypeArgs = helperName is GenericNameSyntax generic
                 ? this.MapTypeArguments(generic)
                 : null;
 
-            call = new InvocationExpression(
-                new MemberAccessExpression(new IdentifierExpression(owner), name),
-                callArgs,
-                callTypeArgs);
+            GExpression TranslateCall()
+            {
+                var callArgs = new List<GExpression> { helperReceiver };
+                callArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
+                return new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression(owner), name),
+                    callArgs,
+                    callTypeArgs);
+            }
+
+            call = hostLocalAssignmentSeam
+                && this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull)
+                ? this.TranslateWithLocalAssignmentSeam(
+                    conditionalAccess.WhenNotNull,
+                    TranslateCall)
+                : TranslateCall();
             guard = new BinaryExpression(receiver, "!=", LiteralExpression.Null());
         }
 
@@ -912,7 +944,16 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression CaptureMethodGroupReceiver(
             GExpression receiver,
-            ExpressionSyntax receiverSyntax)
+            ExpressionSyntax receiverSyntax) =>
+            this.CaptureReceiverOnce(
+                receiver,
+                receiverSyntax,
+                "a static-helper extension method group here has no enclosing evaluation seam to capture its receiver once.");
+
+        private GExpression CaptureReceiverOnce(
+            GExpression receiver,
+            ExpressionSyntax receiverSyntax,
+            string unsupportedMessage)
         {
             // Issue #3357/#3360: a trivial, stable receiver needs no temp. A
             // mutable/reassigned local still spills because C# captures the
@@ -934,7 +975,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             this.context.ReportUnsupported(
                 receiverSyntax,
-                "a static-helper extension method group here has no enclosing evaluation seam to capture its receiver once.");
+                unsupportedMessage);
             return receiver;
         }
 
@@ -962,7 +1003,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (symbol is IParameterSymbol { RefKind: not RefKind.None })
+            if (symbol is ILocalSymbol { RefKind: not RefKind.None }
+                or IParameterSymbol { RefKind: not RefKind.None })
             {
                 return false;
             }

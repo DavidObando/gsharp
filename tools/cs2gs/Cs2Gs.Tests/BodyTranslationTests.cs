@@ -127,15 +127,13 @@ public class BodyTranslationTests
         Assert.Contains("for var i = 1; i <= 3; i++ {", body);
     }
 
-    /// <summary>C# statement-level discard <c>_ = expr;</c> has no G# discard target
-    /// (<c>_ = e</c> → GS0125), so it lowers to a bare expression statement of the
-    /// RHS (issue #914).</summary>
+    /// <summary>C# statement-level discard <c>_ = expr;</c> has no G# assignment
+    /// target. Effectful RHS values use G#'s native discard declaration.</summary>
     [Fact]
-    public void DiscardAssignment_EmitsBareRightHandSide()
+    public void DiscardAssignment_UsesNativeDiscardDeclaration()
     {
         string body = GetMethodBody("_ = n.ToString();");
-        Assert.Contains("n.ToString()", body);
-        Assert.DoesNotContain("_ =", body);
+        Assert.Contains("let _ = n.ToString()", body);
     }
 
     /// <summary>A C-style <c>for</c> with multiple declarators/initializers or

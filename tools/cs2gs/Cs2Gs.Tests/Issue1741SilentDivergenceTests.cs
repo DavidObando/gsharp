@@ -184,8 +184,7 @@ namespace Demo
 
     /// <summary>
     /// A genuine C# discard (<c>_ = e;</c> with no <c>_</c> variable in scope)
-    /// must still drop the assignment and keep only the RHS, exactly as
-    /// before (issue #914).
+    /// must still drop the assignment target and preserve RHS evaluation.
     /// </summary>
     [Fact]
     public void TrueDiscard_StillDropsAssignment()
@@ -204,8 +203,7 @@ namespace Demo
     }
 }");
         string printed = GSharpPrinter.Print(unit);
-        Assert.DoesNotContain("_ =", printed, StringComparison.Ordinal);
-        Assert.Contains("Next()", printed, StringComparison.Ordinal);
+        Assert.Contains("let _ = Next()", printed, StringComparison.Ordinal);
     }
 
     private static (CompilationUnit Unit, TranslationContext Context) Translate(string source)

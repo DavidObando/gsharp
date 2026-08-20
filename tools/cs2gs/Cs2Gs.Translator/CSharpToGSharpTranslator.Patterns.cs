@@ -24,6 +24,11 @@ public sealed partial class CSharpToGSharpTranslator
     {
         private GExpression TranslateExpression(ExpressionSyntax expression)
         {
+            if (this.state.HoistedExpressionValues.TryGetValue(expression, out GExpression hoistedValue))
+            {
+                return hoistedValue;
+            }
+
             switch (expression)
             {
                 case LiteralExpressionSyntax literal:
@@ -276,6 +281,12 @@ public sealed partial class CSharpToGSharpTranslator
                         return enumExtResult;
                     }
 
+                    if (this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull))
+                    {
+                        return this.TranslateConditionalAccessWithLocalAssignmentSeam(
+                            conditionalAccess);
+                    }
+
                     if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression)
                         && FindLeadingElementBinding(conditionalAccess.WhenNotNull)
                             is ElementBindingExpressionSyntax conditionalIndexBinding
@@ -512,6 +523,45 @@ public sealed partial class CSharpToGSharpTranslator
                     FindLeadingElementBinding(elementAccess.Expression),
                 _ => null,
             };
+
+        private GExpression TranslateConditionalAccessWithLocalAssignmentSeam(
+            ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            GExpression receiver = this.CaptureReceiverOnce(
+                this.TranslateExpression(conditionalAccess.Expression),
+                conditionalAccess.Expression,
+                "a conditional-access expression here has no enclosing evaluation seam to capture its receiver once.");
+            GExpression previousReceiver = this.state.ConditionalReceiverReplacement;
+            this.state.ConditionalReceiverReplacement =
+                new NonNullAssertionExpression(receiver);
+            GExpression whenNotNull;
+            try
+            {
+                whenNotNull = this.TranslateWithLocalAssignmentSeam(
+                    conditionalAccess.WhenNotNull,
+                    () => this.TranslateExpression(conditionalAccess.WhenNotNull));
+            }
+            finally
+            {
+                this.state.ConditionalReceiverReplacement = previousReceiver;
+            }
+
+            ITypeSymbol conditionalType = this.context.GetTypeInfo(conditionalAccess).Type;
+            GTypeReference nullableType = this.typeMapper.Map(
+                conditionalType,
+                this.context,
+                conditionalAccess.GetLocation());
+            if (!nullableType.IsNullable)
+            {
+                nullableType = MakeNullable(nullableType);
+            }
+
+            return new ParenthesizedExpression(
+                new IfExpression(
+                    new BinaryExpression(receiver, "!=", LiteralExpression.Null()),
+                    whenNotNull,
+                    new DefaultValueExpression(nullableType)));
+        }
 
         private GExpression TranslateNonNullableConditionalIndex(
             ExpressionSyntax continuation,

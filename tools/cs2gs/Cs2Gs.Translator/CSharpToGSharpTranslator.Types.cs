@@ -630,9 +630,15 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             GTypeReference nullableResultType)
         {
-            return nullableResultType != null && IsNullOrDefaultLiteral(expression)
-                ? new DefaultValueExpression(nullableResultType)
-                : this.TranslateValueWithNullForgiveness(expression);
+            (GExpression value, List<GStatement> statements) =
+                this.TranslateConditionalValueBranch(
+                    expression,
+                    () => nullableResultType != null && IsNullOrDefaultLiteral(expression)
+                        ? new DefaultValueExpression(nullableResultType)
+                        : this.TranslateValueWithNullForgiveness(expression));
+            return statements.Count == 0
+                ? value
+                : new BlockExpression(statements, value);
         }
 
         private GExpression TranslateSwitchPatternGuard(
@@ -756,7 +762,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 GExpression guard;
-                GStatement body;
+                BlockStatement body;
                 try
                 {
                     guard = this.TranslateSwitchPatternGuard(
@@ -764,7 +770,7 @@ public sealed partial class CSharpToGSharpTranslator
                         guards,
                         mutableBindings);
                     this.UseMutableSwitchPatternLocals(mutableBindings);
-                    body = this.TranslateSwitchArmExpressionAsStatement(arm.Expression);
+                    body = this.TranslateSwitchArmExpressionAsBlock(arm.Expression);
                 }
                 finally
                 {
@@ -780,7 +786,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 BlockStatement armBody = this.MaterializeMutableSwitchPatternLocals(
-                    new BlockStatement(new[] { body }),
+                    body,
                     mutableBindings,
                     arm.Pattern);
                 cases.Add(new SwitchStatementCase(pattern, armBody, guard));
@@ -808,18 +814,22 @@ public sealed partial class CSharpToGSharpTranslator
             return new SwitchStatement(subject, cases);
         }
 
-        // Renders a switch-expression arm's value expression as a single G#
-        // statement for the discarded switch-statement lowering above. A `throw`
-        // arm becomes a throw statement; every other expression is emitted as an
-        // expression statement (its value is discarded).
-        private GStatement TranslateSwitchArmExpressionAsStatement(ExpressionSyntax expression)
+        // Renders a switch-expression arm through the shared statement seam so
+        // assignment/deconstruction side effects stay inside the selected arm.
+        private BlockStatement TranslateSwitchArmExpressionAsBlock(ExpressionSyntax expression)
         {
-            if (expression is ThrowExpressionSyntax throwExpression)
+            return new BlockStatement(this.WithSpillSeam(() =>
             {
-                return new ThrowStatement(this.TranslateExpression(throwExpression.Expression));
-            }
+                if (expression is ThrowExpressionSyntax throwExpression)
+                {
+                    return new[]
+                    {
+                        (GStatement)new ThrowStatement(this.TranslateExpression(throwExpression.Expression)),
+                    };
+                }
 
-            return new ExpressionStatement(this.TranslateExpression(expression));
+                return this.TranslateExpressionStatements(expression, hoistPostfix: false).ToList();
+            }).ToList());
         }
 
         private IEnumerable<GStatement> TranslateSwitchStatement(SwitchStatementSyntax node)

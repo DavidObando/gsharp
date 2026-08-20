@@ -32,38 +32,193 @@ public sealed partial class CSharpToGSharpTranslator
             bool includeSelf,
             Func<List<GStatement>> buildMain)
         {
-            List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf);
-            if (embedded.Count == 0)
+            var hoisted = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            List<AssignmentExpressionSyntax> suppressed =
+                this.HoistAssignmentsInOrder(
+                    expression,
+                    includeSelf,
+                    hoisted,
+                    replacements);
+            if (suppressed.Count == 0)
             {
                 return buildMain();
             }
 
-            var hoisted = new List<GStatement>();
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                hoisted.AddRange(this.FlattenChainedAssignment(node));
-            }
-
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                this.state.SuppressedAssignments.Add(node);
-            }
-
-            List<GStatement> main;
             try
             {
-                main = buildMain();
+                hoisted.AddRange(buildMain());
+                return hoisted;
             }
             finally
             {
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Remove(node);
-                }
+                this.ReleaseHoistedAssignments(suppressed, replacements);
+            }
+        }
+
+        private List<AssignmentExpressionSyntax> HoistAssignmentsInOrder(
+            ExpressionSyntax expression,
+            bool includeSelf,
+            List<GStatement> statements,
+            List<ExpressionSyntax> replacements)
+        {
+            List<AssignmentExpressionSyntax> embedded =
+                this.CollectEmbeddedAssignments(expression, includeSelf);
+            foreach (AssignmentExpressionSyntax node in embedded)
+            {
+                this.HoistPrecedingEvaluationOperands(
+                    expression,
+                    node,
+                    statements,
+                    replacements);
+                statements.AddRange(this.FlattenChainedAssignment(node));
+                this.state.SuppressedAssignments.Add(node);
             }
 
-            hoisted.AddRange(main);
-            return hoisted;
+            return embedded;
+        }
+
+        private void ReleaseHoistedAssignments(
+            IEnumerable<AssignmentExpressionSyntax> suppressed,
+            IEnumerable<ExpressionSyntax> replacements)
+        {
+            foreach (AssignmentExpressionSyntax node in suppressed)
+            {
+                this.state.SuppressedAssignments.Remove(node);
+            }
+
+            foreach (ExpressionSyntax replacement in replacements)
+            {
+                this.state.HoistedExpressionValues.Remove(replacement);
+            }
+        }
+
+        private bool RequiresLocalAssignmentSeam(ExpressionSyntax expression) =>
+            this.CollectEmbeddedAssignments(expression, includeSelf: true).Count > 0;
+
+        private GExpression TranslateWithLocalAssignmentSeam(
+            ExpressionSyntax expression,
+            Func<GExpression> translate)
+        {
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            var statements = new List<GStatement>();
+            var replacements = new List<ExpressionSyntax>();
+            this.state.PendingSpillPrologue = statements;
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    expression,
+                    includeSelf: true,
+                    statements,
+                    replacements);
+            try
+            {
+                GExpression value = translate();
+                return statements.Count == 0
+                    ? value
+                    : new BlockExpression(statements, value);
+            }
+            finally
+            {
+                this.ReleaseHoistedAssignments(embedded, replacements);
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+            }
+        }
+
+        private void HoistPrecedingEvaluationOperands(
+            ExpressionSyntax root,
+            AssignmentExpressionSyntax assignment,
+            List<GStatement> statements,
+            List<ExpressionSyntax> replacements)
+        {
+            IOperation current = this.context.SemanticModel.GetOperation(assignment);
+            if (current == null)
+            {
+                return;
+            }
+
+            var groups = new List<List<ExpressionSyntax>>();
+            while (current.Parent is IOperation parent && current.Syntax != root)
+            {
+                var preceding = new List<ExpressionSyntax>();
+                foreach (IOperation child in parent.ChildOperations)
+                {
+                    if (ReferenceEquals(child, current))
+                    {
+                        break;
+                    }
+
+                    ExpressionSyntax expression = OperationExpression(child);
+                    if (expression != null
+                        && root.Span.Contains(expression.Span)
+                        && expression != root)
+                    {
+                        preceding.Add(expression);
+                    }
+                }
+
+                if (preceding.Count > 0)
+                {
+                    groups.Insert(0, preceding);
+                }
+
+                current = parent;
+            }
+
+            foreach (ExpressionSyntax preceding in groups.SelectMany(group => group))
+            {
+                if (this.state.HoistedExpressionValues.ContainsKey(preceding)
+                    || preceding is LiteralExpressionSyntax
+                        or ThisExpressionSyntax
+                        or BaseExpressionSyntax
+                        or DefaultExpressionSyntax
+                        or TypeOfExpressionSyntax)
+                {
+                    continue;
+                }
+
+                List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+                this.state.PendingSpillPrologue = statements;
+                GExpression value;
+                try
+                {
+                    value = this.TranslateExpression(preceding);
+                }
+                finally
+                {
+                    this.state.PendingSpillPrologue = outerSpillPrologue;
+                }
+
+                string temp = $"__spill{this.state.SpillCounter++}";
+                statements.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    temp,
+                    type: null,
+                    initializer: value));
+                this.state.HoistedExpressionValues[preceding] =
+                    new IdentifierExpression(temp);
+                replacements.Add(preceding);
+            }
+        }
+
+        private static ExpressionSyntax OperationExpression(IOperation operation)
+        {
+            if (operation is IInstanceReferenceOperation { IsImplicit: true }
+                or IMethodReferenceOperation)
+            {
+                return null;
+            }
+
+            if (operation is IArgumentOperation argument)
+            {
+                return argument.Value.Syntax as ExpressionSyntax;
+            }
+
+            while (operation.IsImplicit && operation.ChildOperations.Count() == 1)
+            {
+                operation = operation.ChildOperations.Single();
+            }
+
+            return operation.Syntax as ExpressionSyntax;
         }
 
         /// <summary>
@@ -91,32 +246,20 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateConditionWithHoistCore(ExpressionSyntax expression, List<GStatement> prologue)
         {
-            List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(expression, includeSelf: true);
-            if (embedded.Count == 0)
-            {
-                return this.TranslateExpression(expression);
-            }
-
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                prologue.AddRange(this.FlattenChainedAssignment(node));
-            }
-
-            foreach (AssignmentExpressionSyntax node in embedded)
-            {
-                this.state.SuppressedAssignments.Add(node);
-            }
-
+            var replacements = new List<ExpressionSyntax>();
+            List<AssignmentExpressionSyntax> embedded =
+                this.HoistAssignmentsInOrder(
+                    expression,
+                    includeSelf: true,
+                    prologue,
+                    replacements);
             try
             {
                 return this.TranslateExpression(expression);
             }
             finally
             {
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Remove(node);
-                }
+                this.ReleaseHoistedAssignments(embedded, replacements);
             }
         }
 
@@ -126,9 +269,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// excluding ones inside a nested lambda/local function (their own
         /// statement seam). Assignments inside a conditional
         /// (`?:`) arm are left for that arm's native G# block-expression seam.
-        /// Assignments hidden inside any other short-circuited operand would change
-        /// evaluation COUNT/order if hoisted, so they are flagged unsupported
-        /// instead (issue #1723).
+        /// Assignments inside any other short-circuited operand are left for that
+        /// operand's local block-expression seam.
         /// </summary>
         private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
         {
@@ -236,23 +378,16 @@ public sealed partial class CSharpToGSharpTranslator
             var safe = new List<AssignmentExpressionSyntax>();
             foreach (AssignmentExpressionSyntax candidate in candidates)
             {
-                if (IsInsideConditionalExpressionBranch(candidate, expression))
+                if (IsInsideConditionalValueBranch(candidate, expression))
                 {
                     continue;
                 }
 
                 if (IsInShortCircuitedSubexpression(candidate, expression))
                 {
-                    // ADR-0161 / issue #3350: a short-circuited operand's write must
-                    // run only when that operand is evaluated, so it cannot be
-                    // hoisted into a preceding statement — but it does not need to
-                    // be. G# assignment is a value-yielding expression, so
-                    // `TranslateAssignmentAsExpression` emits it in place, exactly
-                    // where C# put it. Skipping it here leaves it to that path.
-                    //
-                    // This previously reported Unsupported and then DROPPED the
-                    // write entirely (issue #1723), on the mistaken premise that G#
-                    // assignment was statement-only.
+                    // Scalar assignments remain native G# value expressions.
+                    // Deconstruction is hosted by the nested short-circuit
+                    // operand's own block-expression seam.
                     continue;
                 }
 
@@ -288,16 +423,21 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        // A `?:` arm owns a native G# block-expression seam. An enclosing seam
-        // must not hoist the arm's assignment unconditionally; it leaves the node
-        // for TranslateConditionalBranch to lower inside the selected arm.
-        private static bool IsInsideConditionalExpressionBranch(SyntaxNode node, ExpressionSyntax root)
+        // Conditional and switch-expression arms own block-expression seams. An
+        // enclosing seam must leave each assignment inside its selected arm.
+        private static bool IsInsideConditionalValueBranch(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
             {
                 SyntaxNode parent = current.Parent;
                 if (parent is ConditionalExpressionSyntax conditional &&
                     (current == conditional.WhenTrue || current == conditional.WhenFalse))
+                {
+                    return true;
+                }
+
+                if (parent is SwitchExpressionArmSyntax switchArm &&
+                    current == switchArm.Expression)
                 {
                     return true;
                 }
@@ -309,8 +449,7 @@ public sealed partial class CSharpToGSharpTranslator
         // True when `node` is reached only through a not-always-evaluated operand
         // inside `root`: the right operand of `&&`/`||`/`??`, or the "when not
         // null" side of a `?.`/`?[...]` conditional-access chain (including any
-        // member/element access further chained off it). Unlike a `?:` arm, these
-        // positions have no native statement-hosting expression seam.
+        // member/element access further chained off it).
         private static bool IsInShortCircuitedSubexpression(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
@@ -336,13 +475,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static List<PostfixUnaryExpressionSyntax> CollectEmbeddedPostfix(ExpressionSyntax expression)
         {
-            // Collect `i++` / `i--` nodes nested inside `expression` (in document
-            // order), excluding any that live inside a nested lambda / local
-            // function (those belong to that body's own statement seam).
+            // Collect eagerly evaluated `i++` / `i--` nodes in document order.
+            // Conditional/short-circuited operands keep G#'s native inline form.
             return expression.DescendantNodes(descendIntoChildren: node =>
                     node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
                 .OfType<PostfixUnaryExpressionSyntax>()
                 .Where(p => p.IsKind(SyntaxKind.PostIncrementExpression) || p.IsKind(SyntaxKind.PostDecrementExpression))
+                .Where(p => !IsInsideConditionalValueBranch(p, expression))
+                .Where(p => !IsInShortCircuitedSubexpression(p, expression))
                 .ToList();
         }
 

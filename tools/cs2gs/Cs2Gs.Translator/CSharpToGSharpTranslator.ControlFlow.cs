@@ -330,21 +330,17 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (clause is not IsPatternExpressionSyntax isPattern)
             {
-                List<AssignmentExpressionSyntax> embedded = this.CollectEmbeddedAssignments(clause, includeSelf: true);
+                var replacements = new List<ExpressionSyntax>();
+                List<AssignmentExpressionSyntax> embedded =
+                    this.HoistAssignmentsInOrder(
+                        clause,
+                        includeSelf: true,
+                        into,
+                        replacements);
                 if (embedded.Count == 0)
                 {
                     into.Add(BreakIf(Negate(this.TranslateExpression(clause))));
                     return;
-                }
-
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    into.AddRange(this.FlattenChainedAssignment(node));
-                }
-
-                foreach (AssignmentExpressionSyntax node in embedded)
-                {
-                    this.state.SuppressedAssignments.Add(node);
                 }
 
                 try
@@ -353,10 +349,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 finally
                 {
-                    foreach (AssignmentExpressionSyntax node in embedded)
-                    {
-                        this.state.SuppressedAssignments.Remove(node);
-                    }
+                    this.ReleaseHoistedAssignments(embedded, replacements);
                 }
 
                 return;
