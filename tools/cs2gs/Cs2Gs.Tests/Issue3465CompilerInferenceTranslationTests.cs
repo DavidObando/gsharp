@@ -268,6 +268,47 @@ public sealed class Issue3465CompilerInferenceTranslationTests
         Assert.Equal(181, result.Value);
     }
 
+    [Fact]
+    public void NestedDelegateTargets_StayNaturalThroughConditionalAndBlockBodies()
+    {
+        string rendered = Render("""
+            using System;
+            using System.Collections.Generic;
+
+            public sealed class NestedDelegateProbe
+            {
+                private readonly HashSet<int> seen = new();
+
+                private static void Accept(Func<Action<int>> factory) =>
+                    factory()(2);
+
+                public int Run(bool flag)
+                {
+                    Accept(() => flag
+                        ? (value => seen.Add(value))
+                        : (value => seen.Add(value * 10)));
+                    Accept(() =>
+                    {
+                        var offset = 1;
+                        return value => seen.Add(value + offset);
+                    });
+                    return seen.Count;
+                }
+            }
+            """);
+
+        Assert.Contains("Accept(() -> if flag", rendered, StringComparison.Ordinal);
+        Assert.Contains("(value int32) -> seen.Add(value)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Accept(func ", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "NestedDelegateProbe().Run(true)");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(2, result.Value);
+    }
+
     private static string Render(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

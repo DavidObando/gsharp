@@ -1276,7 +1276,8 @@ internal sealed partial class OverloadResolver
                     expectedType,
                     argLoc,
                     out var targetTypedLambda,
-                    lambdaSyntax))
+                    lambdaSyntax,
+                    extension.Parameters[i + 1]))
             {
                 convertedArgs.Add(Invariant.Required(
                     targetTypedLambda,
@@ -1724,7 +1725,8 @@ internal sealed partial class OverloadResolver
                     expectedType,
                     argLoc,
                     out var targetTypedLambda,
-                    lambdaSyntax))
+                    lambdaSyntax,
+                    parameter))
             {
                 convertedArgs.Add(Invariant.Required(
                     targetTypedLambda,

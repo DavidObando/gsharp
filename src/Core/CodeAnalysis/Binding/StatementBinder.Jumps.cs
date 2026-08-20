@@ -346,7 +346,8 @@ internal sealed partial class StatementBinder
             // `return cond ? … : …` honors the function's declared return type
             // as the target type so the result type can unify to the return type
             // (C#-style target-typing) before the conversion below.
-            if ((syntax.Expression is SwitchExpressionSyntax
+            if ((syntax.Expression is LambdaExpressionSyntax
+                    || syntax.Expression is SwitchExpressionSyntax
                     || syntax.Expression is IfExpressionSyntax
                     || syntax.Expression is IfLetExpressionSyntax
                     || syntax.Expression is ConditionalExpressionSyntax

@@ -86,6 +86,102 @@ public sealed class Issue3465InferenceTests
     }
 
     [Fact]
+    public void GenericMethod_ConflictingImportedInterfaceProjections_DoNotInferArbitrarily()
+    {
+        foreach (var typeName in new[]
+        {
+            nameof(Issue3465ConflictingCollectionForward),
+            nameof(Issue3465ConflictingCollectionReverse),
+        })
+        {
+            var result = Evaluate($$"""
+                import GSharp.Core.Tests.CodeAnalysis.Binding
+                import System.Collections.Generic
+
+                func Count[T](items IReadOnlyCollection[T]) int32 {
+                    return items.Count
+                }
+
+                Count({{typeName}}())
+                """);
+
+            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0151");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+        }
+    }
+
+    [Fact]
+    public void GenericMethod_RegexGroupCollectionConflict_DoesNotInferArbitrarily()
+    {
+        var result = Evaluate("""
+            import System.Collections.Generic
+            import System.Text.RegularExpressions
+
+            func Count[T](items IReadOnlyCollection[T]) int32 {
+                return items.Count
+            }
+
+            Count(Regex.Match("a", "a").Groups)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0151");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+    }
+
+    [Fact]
+    public void GenericMethod_InfersThroughSourceGenericBase()
+    {
+        var result = Evaluate("""
+            open class Base[T any] {}
+            class Derived : Base[string] {}
+
+            func Read[T](item Base[T]) T -> default(T)
+
+            let value string? = Read(Derived())
+            value == nil ? 1 : 0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void GenericMethod_InfersThroughTransitiveSourceInterface()
+    {
+        var result = Evaluate("""
+            interface Root[T] {}
+            interface Middle[T] : Root[T] {}
+            class Leaf : Middle[int32] {}
+
+            func Read[T](item Root[T]) T -> default(T)
+
+            let value int32 = Read(Leaf())
+            value + 1
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void GenericMethod_ConflictingSourceInterfaceProjections_DoNotInfer()
+    {
+        var result = Evaluate("""
+            interface Root[T] {}
+            interface Left : Root[int32] {}
+            interface Right : Root[string] {}
+            class Both : Left, Right {}
+
+            func Read[T](item Root[T]) T -> default(T)
+
+            Read(Both())
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0151");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+    }
+
+    [Fact]
     public void GenericConstructor_InfersThroughImportedImplementedInterface()
     {
         var result = Evaluate("""
@@ -300,6 +396,170 @@ public sealed class Issue3465InferenceTests
     }
 
     [Fact]
+    public void NestedUntypedDelegateTarget_DefersUntilOuterTargetIsKnown()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Accept(factory ()->Action[int32]) int32 {
+                let action = factory()
+                action(13)
+                return 1
+            }
+
+            Accept(() -> (value) -> {})
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void NestedUntypedDelegateTarget_FlowsThroughConditionalSwitchAndBlock()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Accept(factory ()->Action[int32]) {
+                factory()(2)
+            }
+
+            var seen = 0
+            let flag = true
+            Accept(() -> flag
+                ? ((value) -> { seen = seen + value })
+                : ((value) -> { seen = seen + 100 }))
+            Accept(() -> switch flag {
+                case true: (value) -> { seen = seen + value }
+                default: (value) -> { seen = seen + 100 }
+            })
+            Accept(() -> {
+                let ignored = 1
+                (value) -> { seen = seen + value }
+            })
+            seen
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void NestedUntypedLambdaReturnShape_DisambiguatesOverloads()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Choose(factory ()->Action[int32]) int32 -> 1
+            func Choose(factory ()->Func[int32, int32]) int32 -> 2
+
+            Choose(() -> (value) -> {})
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void VoidTarget_RejectsExplicitValueReturnWithoutEmitterFailure()
+    {
+        var result = Evaluate("""
+            func Visit(action ()->void) int32 {
+                action()
+                return 1
+            }
+
+            Visit(() -> { return 1 })
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0154");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+    }
+
+    [Fact]
+    public void VoidOverload_RejectsExplicitValueReturnAndSelectsValueOverload()
+    {
+        var result = Evaluate("""
+            func Visit(action ()->void) int32 -> 1
+            func Visit(action ()->int32) int32 -> action() + 1
+
+            Visit(() -> { return 41 })
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void VoidTarget_StillDiscardsExpressionAndBlockTailValues()
+    {
+        var result = Evaluate("""
+            func Visit(action ()->void) {
+                action()
+            }
+
+            Visit(() -> 1)
+            Visit(() -> { 2 })
+            3
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncNoValueTarget_RejectsExplicitValueReturn(string taskType)
+    {
+        var result = Evaluate($$"""
+            import System.Threading.Tasks
+
+            func Visit(action ()->{{taskType}}) int32 -> 1
+
+            Visit(async () -> { return 1 })
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0154");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncNoValueOverload_RejectsExplicitValueReturn(string taskType)
+    {
+        var result = Evaluate($$"""
+            import System.Threading.Tasks
+
+            func Visit(action ()->{{taskType}}) int32 -> 1
+            func Visit(action ()->Task[int32]) int32 -> 2
+
+            Visit(async () -> { return 1 })
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Theory]
+    [InlineData("Task")]
+    [InlineData("ValueTask")]
+    public void AsyncNoValueTarget_AcceptsVoidBlock(string taskType)
+    {
+        var result = Evaluate($$"""
+            import System.Threading.Tasks
+
+            func Visit(action ()->{{taskType}}) int32 -> 7
+
+            Visit(async () -> {})
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
     public void ValueReturningBlockLambda_KeepsValueReturnType()
     {
         var result = Evaluate("""
@@ -400,4 +660,30 @@ public sealed class Issue3465ProjectedBase<TMarker> : Issue3465ImportedGenericBa
     {
         Value = "projected-base";
     }
+}
+
+public sealed class Issue3465ConflictingCollectionForward :
+    IReadOnlyCollection<int>,
+    IReadOnlyCollection<string>
+{
+    public int Count => 0;
+
+    IEnumerator<int> IEnumerable<int>.GetEnumerator() => ((IEnumerable<int>)System.Array.Empty<int>()).GetEnumerator();
+
+    IEnumerator<string> IEnumerable<string>.GetEnumerator() => ((IEnumerable<string>)System.Array.Empty<string>()).GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<int>)this).GetEnumerator();
+}
+
+public sealed class Issue3465ConflictingCollectionReverse :
+    IReadOnlyCollection<string>,
+    IReadOnlyCollection<int>
+{
+    public int Count => 0;
+
+    IEnumerator<int> IEnumerable<int>.GetEnumerator() => ((IEnumerable<int>)System.Array.Empty<int>()).GetEnumerator();
+
+    IEnumerator<string> IEnumerable<string>.GetEnumerator() => ((IEnumerable<string>)System.Array.Empty<string>()).GetEnumerator();
+
+    IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<string>)this).GetEnumerator();
 }

@@ -670,7 +670,12 @@ internal sealed partial class OverloadResolver
 
                 // Issues #889/#3465: contextually bind lambda/delegate arguments.
                 if (parameter.RefKind == RefKind.None
-                    && TryConvertLambdaArgumentWithTarget(argument, parameter.Type, Invariant.Required(parameterSyntax[i], "a delegate constructor argument has source syntax").Location, out var targetTypedLambda))
+                    && TryConvertLambdaArgumentWithTarget(
+                        argument,
+                        parameter.Type,
+                        Invariant.Required(parameterSyntax[i], "a delegate constructor argument has source syntax").Location,
+                        out var targetTypedLambda,
+                        parameter: parameter))
                 {
                     boundArguments[i] = Invariant.Required(targetTypedLambda, "a successful target-typed lambda conversion produces a bound expression");
                     continue;
@@ -1259,7 +1264,12 @@ internal sealed partial class OverloadResolver
 
                 // Issues #889/#3465: contextually bind lambda/delegate arguments.
                 if (parameter.RefKind == RefKind.None
-                    && TryConvertLambdaArgumentWithTarget(argument, paramType, argLocation, out var targetTypedLambda))
+                    && TryConvertLambdaArgumentWithTarget(
+                        argument,
+                        paramType,
+                        argLocation,
+                        out var targetTypedLambda,
+                        parameter: parameter))
                 {
                     convertedArguments.Add(Invariant.Required(targetTypedLambda, "a successful target-typed lambda conversion produces a bound expression"));
                     continue;
@@ -2312,7 +2322,12 @@ internal sealed partial class OverloadResolver
 
                 // Issues #889/#3465: contextually bind lambda/delegate arguments.
                 if (parameter.RefKind == RefKind.None
-                    && TryConvertLambdaArgumentWithTarget(argument, parameter.Type, argLocation, out var targetTypedLambda))
+                    && TryConvertLambdaArgumentWithTarget(
+                        argument,
+                        parameter.Type,
+                        argLocation,
+                        out var targetTypedLambda,
+                        parameter: parameter))
                 {
                     convertedArgs.Add(Invariant.Required(targetTypedLambda, "a successful target-typed lambda conversion produces a bound expression"));
                     continue;

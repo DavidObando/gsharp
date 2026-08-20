@@ -1066,6 +1066,16 @@ internal sealed partial class OverloadResolver
                 return false;
             }
 
+            // A target-dependent lambda is represented by an Error-typed
+            // placeholder until one candidate supplies its delegate shape.
+            // Return-shape/arity checks above are the meaningful applicability
+            // test; do not reject the surviving candidate merely because the
+            // placeholder has no natural function type yet.
+            if (lambdaSyntax != null && argType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
             if (lambdaSyntax != null
                 && argType is FunctionTypeSymbol { ReturnType: var lambdaReturn } argumentFunction
                 && lambdaReturn == TypeSymbol.Error
@@ -1199,6 +1209,18 @@ internal sealed partial class OverloadResolver
             return true;
         }
 
+        return IsLambdaReturnShapeCompatible(lambda, target);
+    }
+
+    private bool IsLambdaReturnShapeCompatible(
+        LambdaExpressionSyntax lambda,
+        FunctionTypeSymbol target)
+    {
+        if (lambda.Parameters.Count != target.Arity)
+        {
+            return false;
+        }
+
         var hasVoidReturn = false;
         var hasValueReturn = false;
         var stack = new Stack<SyntaxNode>();
@@ -1228,9 +1250,66 @@ internal sealed partial class OverloadResolver
 
         var targetReturnsNoValue = target.ReturnType == TypeSymbol.Void
             || (lambda.IsAsync && IsNonGenericTaskReturnType(target.ReturnType));
-        return targetReturnsNoValue
-            ? !hasValueReturn
-            : !hasVoidReturn;
+        if (targetReturnsNoValue)
+        {
+            return !hasValueReturn;
+        }
+
+        if (hasVoidReturn
+            || (lambda.Body is BlockExpressionSyntax
+                {
+                    Expression: null,
+                    Statements.Length: 0,
+                }))
+        {
+            return false;
+        }
+
+        if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+            target.ReturnType,
+            out var nestedTarget))
+        {
+            return true;
+        }
+
+        return IsNestedLambdaResultShapeCompatible(lambda.Body, nestedTarget);
+    }
+
+    private bool IsNestedLambdaResultShapeCompatible(
+        ExpressionSyntax syntax,
+        FunctionTypeSymbol target)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        return syntax switch
+        {
+            LambdaExpressionSyntax nestedLambda =>
+                IsLambdaReturnShapeCompatible(nestedLambda, target),
+            BlockExpressionSyntax { Expression: { } tail } =>
+                IsNestedLambdaResultShapeCompatible(tail, target),
+            ConditionalExpressionSyntax conditional =>
+                IsNestedLambdaResultShapeCompatible(conditional.WhenTrue, target)
+                && IsNestedLambdaResultShapeCompatible(conditional.WhenFalse, target),
+            IfExpressionSyntax ifExpression =>
+                IsNestedLambdaResultShapeCompatible(ifExpression.ThenBlock, target)
+                && (ifExpression.ElseExpression == null
+                    || IsNestedLambdaResultShapeCompatible(ifExpression.ElseExpression, target)),
+            IfLetExpressionSyntax ifLetExpression =>
+                IsNestedLambdaResultShapeCompatible(ifLetExpression.ThenBlock, target)
+                && (ifLetExpression.ElseExpression == null
+                    || IsNestedLambdaResultShapeCompatible(ifLetExpression.ElseExpression, target)),
+            SwitchExpressionSyntax switchExpression =>
+                switchExpression.Arms.All(arm =>
+                    IsNestedLambdaResultShapeCompatible(arm.Result, target)),
+            BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken =>
+                    IsNestedLambdaResultShapeCompatible(binary.Left, target)
+                    && IsNestedLambdaResultShapeCompatible(binary.Right, target),
+            _ => true,
+        };
     }
 
     private static bool IsNonGenericTaskReturnType(TypeSymbol type)

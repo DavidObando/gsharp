@@ -1644,7 +1644,8 @@ internal sealed partial class OverloadResolver
                     expectedType,
                     lambdaTargetLoc,
                     out var targetTypedLambda,
-                    lambdaSyntax))
+                    lambdaSyntax,
+                    parameter))
             {
                 boundArguments[i] = Invariant.Required(
                     targetTypedLambda,
@@ -1934,7 +1935,12 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                if (TryConvertLambdaArgumentWithTarget(argument, targetType, voidDelegateLoc, out var targetTypedLambdaArg))
+                if (TryConvertLambdaArgumentWithTarget(
+                    argument,
+                    targetType,
+                    voidDelegateLoc,
+                    out var targetTypedLambdaArg,
+                    parameter: parameter))
                 {
                     boundArguments[i] = Invariant.Required(targetTypedLambdaArg, "a successful target-typed lambda conversion produces a bound expression");
                     continue;
@@ -2268,15 +2274,53 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        for (var i = 0; i < lambda.Parameters.Count; i++)
+        return ContainsTargetDependentLambda(lambda);
+    }
+
+    private static bool ContainsTargetDependentLambda(ExpressionSyntax syntax)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
         {
-            if (lambda.Parameters[i].Type == null)
-            {
-                return true;
-            }
+            syntax = parenthesized.Expression;
         }
 
-        return false;
+        if (syntax is LambdaExpressionSyntax lambda)
+        {
+            for (var i = 0; i < lambda.Parameters.Count; i++)
+            {
+                if (lambda.Parameters[i].Type == null)
+                {
+                    return true;
+                }
+            }
+
+            return ContainsTargetDependentLambda(lambda.Body);
+        }
+
+        return syntax switch
+        {
+            BlockExpressionSyntax { Expression: { } tail } =>
+                ContainsTargetDependentLambda(tail),
+            ConditionalExpressionSyntax conditional =>
+                ContainsTargetDependentLambda(conditional.WhenTrue)
+                || ContainsTargetDependentLambda(conditional.WhenFalse),
+            IfExpressionSyntax ifExpression =>
+                ContainsTargetDependentLambda(ifExpression.ThenBlock)
+                || (ifExpression.ElseExpression != null
+                    && ContainsTargetDependentLambda(ifExpression.ElseExpression)),
+            IfLetExpressionSyntax ifLetExpression =>
+                ContainsTargetDependentLambda(ifLetExpression.ThenBlock)
+                || (ifLetExpression.ElseExpression != null
+                    && ContainsTargetDependentLambda(ifLetExpression.ElseExpression)),
+            SwitchExpressionSyntax switchExpression =>
+                switchExpression.Arms.Any(arm =>
+                    ContainsTargetDependentLambda(arm.Result)),
+            BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken =>
+                    ContainsTargetDependentLambda(binary.Left)
+                    || ContainsTargetDependentLambda(binary.Right),
+            _ => false,
+        };
     }
 
     /// <summary>

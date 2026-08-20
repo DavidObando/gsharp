@@ -1198,7 +1198,29 @@ internal sealed partial class ExpressionBinder
             syntax = parenthesized.Expression;
         }
 
-        return syntax is LambdaExpressionSyntax;
+        return syntax switch
+        {
+            LambdaExpressionSyntax => true,
+            BlockExpressionSyntax { Expression: { } tail } => IsNestedLambdaExpression(tail),
+            ConditionalExpressionSyntax conditional =>
+                IsNestedLambdaExpression(conditional.WhenTrue)
+                || IsNestedLambdaExpression(conditional.WhenFalse),
+            IfExpressionSyntax ifExpression =>
+                IsNestedLambdaExpression(ifExpression.ThenBlock)
+                || (ifExpression.ElseExpression != null
+                    && IsNestedLambdaExpression(ifExpression.ElseExpression)),
+            IfLetExpressionSyntax ifLetExpression =>
+                IsNestedLambdaExpression(ifLetExpression.ThenBlock)
+                || (ifLetExpression.ElseExpression != null
+                    && IsNestedLambdaExpression(ifLetExpression.ElseExpression)),
+            SwitchExpressionSyntax switchExpression =>
+                switchExpression.Arms.Any(arm => IsNestedLambdaExpression(arm.Result)),
+            BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken =>
+                    IsNestedLambdaExpression(binary.Left)
+                    || IsNestedLambdaExpression(binary.Right),
+            _ => false,
+        };
     }
 
     private BoundExpression BindLambdaBlockBodyExpression(BlockExpressionSyntax block, TypeSymbol? targetType)

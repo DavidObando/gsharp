@@ -1380,7 +1380,7 @@ internal sealed partial class ExpressionBinder
                     }
                 }
 
-                return false;
+                return IsTargetDependentExpressionSyntax(lambda.Body);
             case ConditionalExpressionSyntax conditional:
                 return IsTargetDependentExpressionSyntax(conditional.WhenTrue)
                     || IsTargetDependentExpressionSyntax(conditional.WhenFalse);

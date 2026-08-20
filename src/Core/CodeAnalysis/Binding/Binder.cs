@@ -5394,33 +5394,45 @@ public sealed class Binder
         TypeSymbol argumentType,
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
     {
+        var foundSymbolicProjection = false;
         if (argumentType is ImportedTypeSymbol importedArgument
             && parameterType.OpenDefinition != null
-            && MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+            && MemberLookup.TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
                 importedArgument,
                 parameterType.OpenDefinition,
-                out var mappedArguments)
-            && mappedArguments.Length == parameterType.TypeArguments.Length)
+                out var mappedArguments,
+                out foundSymbolicProjection))
         {
-            for (var i = 0; i < parameterType.TypeArguments.Length; i++)
+            if (mappedArguments.Length == parameterType.TypeArguments.Length)
             {
-                InferTypeArguments(
-                    parameterType.TypeArguments[i],
-                    mappedArguments[i],
-                    substitution);
+                for (var i = 0; i < parameterType.TypeArguments.Length; i++)
+                {
+                    InferTypeArguments(
+                        parameterType.TypeArguments[i],
+                        mappedArguments[i],
+                        substitution);
+                }
             }
 
             return;
         }
 
-        var argumentClrType = argumentType.ClrType;
-        var matchedProjection = argumentClrType != null
-            && parameterType.OpenDefinition != null
-                ? FindMatchingGenericProjection(argumentClrType, parameterType.OpenDefinition)
-                : null;
-        if (matchedProjection != null)
+        // Matching symbolic projections existed but disagreed. Reflection
+        // enumeration order must not choose one of them for inference.
+        if (foundSymbolicProjection)
         {
-            var matchedArguments = matchedProjection.GetGenericArguments();
+            return;
+        }
+
+        var argumentClrType = argumentType.ClrType;
+        if (argumentClrType != null
+            && parameterType.OpenDefinition != null
+            && TryFindUniqueGenericProjection(
+                argumentClrType,
+                parameterType.OpenDefinition,
+                out var matchedProjection))
+        {
+            var matchedArguments = matchedProjection!.GetGenericArguments();
             if (matchedArguments.Length == parameterType.TypeArguments.Length)
             {
                 for (var i = 0; i < parameterType.TypeArguments.Length; i++)
@@ -5450,31 +5462,83 @@ public sealed class Binder
     // shape through a non-generic concrete type's base class or interfaces.
     // Example: FieldDefinitionHandleCollection implements
     // IReadOnlyCollection<FieldDefinitionHandle>.
-    private static Type? FindMatchingGenericProjection(Type clrType, Type openDefinition)
+    private static bool TryFindUniqueGenericProjection(
+        Type clrType,
+        Type openDefinition,
+        out Type? projection)
     {
+        projection = null;
         if (!openDefinition.IsGenericTypeDefinition)
         {
-            return null;
+            return false;
         }
 
         try
         {
-            for (var current = clrType; current != null; current = current.BaseType)
+            var pending = new Stack<Type>();
+            var visited = new HashSet<Type>();
+            pending.Push(clrType);
+            while (pending.Count > 0)
             {
+                var current = pending.Pop();
+                if (!visited.Add(current))
+                {
+                    continue;
+                }
+
                 if (current.IsGenericType
                     && current.GetGenericTypeDefinition().IsSameAs(openDefinition))
                 {
-                    return current;
+                    if (projection == null)
+                    {
+                        projection = current;
+                    }
+                    else if (!ClrGenericArgumentVectorsEquivalent(
+                        projection.GetGenericArguments(),
+                        current.GetGenericArguments()))
+                    {
+                        projection = null;
+                        return false;
+                    }
+                }
+
+                foreach (var iface in current.GetInterfaces())
+                {
+                    pending.Push(iface);
+                }
+
+                if (current.BaseType != null)
+                {
+                    pending.Push(current.BaseType);
                 }
             }
 
-            return FindMatchingInterface(clrType, openDefinition);
+            return projection != null;
         }
         catch (Exception)
         {
             // MLC cross-context or other reflection failure — treat as no match.
-            return null;
+            projection = null;
+            return false;
         }
+    }
+
+    private static bool ClrGenericArgumentVectorsEquivalent(Type[] left, Type[] right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!ClrTypeUtilities.AreSame(left[i], right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // Issue #1932: extract the generic definition + constructed type arguments
@@ -5501,33 +5565,81 @@ public sealed class Binder
         }
     }
 
-    // Issue #1932: find the constructed type arguments for `definition` on
-    // `type` itself, or (when `type` is a struct/class) on one of its
-    // implemented interfaces — e.g. matching parameter `IHolder[T]` against
-    // an argument struct/class that implements `IHolder[string]`.
+    // Issue #1932 / #3465: find a unique constructed projection of `definition`
+    // across the complete substituted source base/interface closure.
     private static bool TryFindUserGenericArguments(TypeSymbol type, TypeSymbol definition, out ImmutableArray<TypeSymbol> typeArguments)
     {
-        if (TryGetUserGenericArguments(type, out var ownDefinition, out typeArguments)
-            && ReferenceEquals(ownDefinition, definition))
-        {
-            return true;
-        }
+        typeArguments = ImmutableArray<TypeSymbol>.Empty;
+        var pending = new Stack<TypeSymbol>();
+        var visited = new HashSet<TypeSymbol>();
+        var foundProjection = false;
+        pending.Push(type);
 
-        if (type is StructSymbol s && !s.Interfaces.IsDefaultOrEmpty)
+        while (pending.Count > 0)
         {
-            foreach (var iface in s.Interfaces)
+            var current = pending.Pop();
+            if (!visited.Add(current))
             {
-                if (TryGetUserGenericArguments(iface, out var ifaceDefinition, out var ifaceArgs)
-                    && ReferenceEquals(ifaceDefinition, definition))
+                continue;
+            }
+
+            if (TryGetUserGenericArguments(current, out var currentDefinition, out var currentArguments)
+                && ReferenceEquals(currentDefinition, definition))
+            {
+                if (!foundProjection)
                 {
-                    typeArguments = ifaceArgs;
-                    return true;
+                    typeArguments = currentArguments;
+                    foundProjection = true;
+                }
+                else if (!TypeArgumentVectorsEquivalent(typeArguments, currentArguments))
+                {
+                    typeArguments = ImmutableArray<TypeSymbol>.Empty;
+                    return false;
+                }
+            }
+
+            if (current is StructSymbol currentStruct)
+            {
+                if (currentStruct.BaseClass != null)
+                {
+                    pending.Push(currentStruct.BaseClass);
+                }
+
+                foreach (var iface in currentStruct.Interfaces)
+                {
+                    pending.Push(iface);
+                }
+            }
+            else if (current is InterfaceSymbol currentInterface)
+            {
+                foreach (var baseInterface in currentInterface.BaseInterfaces)
+                {
+                    pending.Push(baseInterface);
                 }
             }
         }
 
-        typeArguments = ImmutableArray<TypeSymbol>.Empty;
-        return false;
+        return foundProjection;
+    }
+
+    private static bool TypeArgumentVectorsEquivalent(
+        ImmutableArray<TypeSymbol> left,
+        ImmutableArray<TypeSymbol> right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!DeclarationBinder.TypeSignaturesEquivalent(left[i], right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // #313: surface the CLR generic arguments of an argument type (e.g. the

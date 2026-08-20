@@ -361,7 +361,8 @@ internal sealed partial class OverloadResolver
         TypeSymbol? expectedType,
         TextLocation location,
         out BoundExpression? result,
-        LambdaExpressionSyntax? lambdaSyntax = null)
+        LambdaExpressionSyntax? lambdaSyntax = null,
+        ParameterSymbol? parameter = null)
     {
         result = null;
         var lambda = lambdaSyntax ?? argument.Syntax as LambdaExpressionSyntax;
@@ -371,6 +372,18 @@ internal sealed partial class OverloadResolver
             || TypeSymbol.ContainsTypeParameter(targetFnType))
         {
             return false;
+        }
+
+        if (lambda != null
+            && !IsLambdaReturnShapeCompatible(argument, expectedType, lambda))
+        {
+            Diagnostics.ReportWrongArgumentType(
+                location,
+                parameter?.Name ?? "value",
+                expectedType,
+                argument.Type ?? TypeSymbol.Error);
+            result = new BoundErrorExpression(lambda);
+            return true;
         }
 
         BoundExpression candidate;
