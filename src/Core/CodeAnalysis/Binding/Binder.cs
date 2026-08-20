@@ -308,8 +308,8 @@ public sealed class Binder
             ExpressionSyntax syntax,
             TypeSymbol targetType) =>
             Expressions.BindExpression(syntax, targetType);
-        BoundExpression BindLambdaBodyExpressionForLambdas(ExpressionSyntax syntax) =>
-            Expressions.BindLambdaBodyExpression(syntax);
+        BoundExpression BindLambdaBodyExpressionForLambdas(ExpressionSyntax syntax, TypeSymbol? targetType) =>
+            Expressions.BindLambdaBodyExpression(syntax, targetType);
         statements = new StatementBinder(
             binderCtx,
             conversions,
@@ -5394,15 +5394,19 @@ public sealed class Binder
         TypeSymbol argumentType,
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
     {
-        var argumentClrArguments = GetClrGenericArguments(argumentType);
-        if (!argumentClrArguments.IsDefaultOrEmpty
-            && argumentClrArguments.Length == parameterType.TypeArguments.Length)
+        if (argumentType is ImportedTypeSymbol importedArgument
+            && parameterType.OpenDefinition != null
+            && MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                importedArgument,
+                parameterType.OpenDefinition,
+                out var mappedArguments)
+            && mappedArguments.Length == parameterType.TypeArguments.Length)
         {
             for (var i = 0; i < parameterType.TypeArguments.Length; i++)
             {
                 InferTypeArguments(
                     parameterType.TypeArguments[i],
-                    argumentClrArguments[i],
+                    mappedArguments[i],
                     substitution);
             }
 
@@ -5410,14 +5414,13 @@ public sealed class Binder
         }
 
         var argumentClrType = argumentType.ClrType;
-        var matchedInterface = argumentClrType != null
-            && argumentClrType.IsArray
+        var matchedProjection = argumentClrType != null
             && parameterType.OpenDefinition != null
-                ? FindMatchingInterface(argumentClrType, parameterType.OpenDefinition)
+                ? FindMatchingGenericProjection(argumentClrType, parameterType.OpenDefinition)
                 : null;
-        if (matchedInterface != null)
+        if (matchedProjection != null)
         {
-            var matchedArguments = matchedInterface.GetGenericArguments();
+            var matchedArguments = matchedProjection.GetGenericArguments();
             if (matchedArguments.Length == parameterType.TypeArguments.Length)
             {
                 for (var i = 0; i < parameterType.TypeArguments.Length; i++)
@@ -5440,6 +5443,37 @@ public sealed class Binder
                 ? slice.ElementType
                 : ((ArrayTypeSymbol)argumentType).ElementType;
             InferTypeArguments(parameterType.TypeArguments[0], elementType, substitution);
+        }
+    }
+
+    // Issue #3465: imported argument types can expose a generic parameter
+    // shape through a non-generic concrete type's base class or interfaces.
+    // Example: FieldDefinitionHandleCollection implements
+    // IReadOnlyCollection<FieldDefinitionHandle>.
+    private static Type? FindMatchingGenericProjection(Type clrType, Type openDefinition)
+    {
+        if (!openDefinition.IsGenericTypeDefinition)
+        {
+            return null;
+        }
+
+        try
+        {
+            for (var current = clrType; current != null; current = current.BaseType)
+            {
+                if (current.IsGenericType
+                    && current.GetGenericTypeDefinition().IsSameAs(openDefinition))
+                {
+                    return current;
+                }
+            }
+
+            return FindMatchingInterface(clrType, openDefinition);
+        }
+        catch (Exception)
+        {
+            // MLC cross-context or other reflection failure — treat as no match.
+            return null;
         }
     }
 

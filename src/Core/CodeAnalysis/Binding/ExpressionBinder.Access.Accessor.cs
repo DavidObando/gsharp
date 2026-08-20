@@ -3720,6 +3720,18 @@ internal sealed partial class ExpressionBinder
                 var argLoc = i < parameterSyntax.Length
                     ? parameterSyntax[i]?.Location ?? ce.Location
                     : ce.Location;
+                if (slotSyntax is { } sourceArgument
+                    && OverloadResolver.UnwrapNamedArgumentValue(sourceArgument) is LambdaExpressionSyntax lambda
+                    && method.Parameters[i].RefKind == RefKind.None
+                    && !TypeSymbol.ContainsTypeParameter(expectedType)
+                    && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFunctionType)
+                    && (!LambdaBinder.TryGetFunctionLiteral(permutedArgs[i], out var naturalLiteral)
+                        || !ReferenceEquals(naturalLiteral.FunctionType, targetFunctionType)))
+                {
+                    convertedArgs.Add(BindExpression(lambda, expectedType));
+                    continue;
+                }
+
                 convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i]));
             }
 

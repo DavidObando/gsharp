@@ -349,33 +349,53 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
-    /// Issue #889: when a <c>func</c>/arrow literal argument has a value-typed
-    /// natural return (e.g. <c>() -> called = called + 1</c> inferred as
-    /// <c>() -> int32</c>) but the target parameter is a void-returning
-    /// delegate (<c>System.Action</c>, a named void delegate, or a
-    /// <c>(...) -> void</c> function type), void-ize the literal so its trailing
-    /// value is discarded — matching the existing <c>func() { ... }</c>
-    /// statement-body behaviour. Returns the converted argument through
-    /// <paramref name="result"/> on success. Has no effect for non-literal
-    /// arguments or non-void delegate targets, so genuine type-mismatch
-    /// diagnostics still fire on the regular path.
+    /// Rebinds an arrow lambda against its resolved delegate parameter type
+    /// before conversion. This preserves contextual return typing, including
+    /// void block lambdas whose target-less return inference produced
+    /// <see cref="TypeSymbol.Error"/> and nested delegate-returning lambdas.
+    /// Also preserves issue #889's value-discard conversion for <c>func</c>
+    /// literals targeting void delegates.
     /// </summary>
-    private bool TryConvertLiteralArgumentToVoidDelegate(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression? result)
+    private bool TryConvertLambdaArgumentWithTarget(
+        BoundExpression argument,
+        TypeSymbol? expectedType,
+        TextLocation location,
+        out BoundExpression? result,
+        LambdaExpressionSyntax? lambdaSyntax = null)
     {
         result = null;
+        var lambda = lambdaSyntax ?? argument.Syntax as LambdaExpressionSyntax;
         if (expectedType == null
-            || !tryGetFunctionLiteral(argument, out var literal)
-            || literal.FunctionType is not FunctionTypeSymbol literalFnType
-            || literalFnType.ReturnType == TypeSymbol.Void
-            || literalFnType.ReturnType == TypeSymbol.Error
+            || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _)
             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFnType)
-            || targetFnType.ReturnType != TypeSymbol.Void
-            || targetFnType.Arity != literalFnType.Arity)
+            || TypeSymbol.ContainsTypeParameter(targetFnType))
         {
             return false;
         }
 
-        var converted = conversions.BindConversion(location, literal, expectedType);
+        BoundExpression candidate;
+        if (lambda != null && bindLambdaWithTarget != null)
+        {
+            candidate = tryGetFunctionLiteral(argument, out var naturalLiteral)
+                && ReferenceEquals(naturalLiteral.FunctionType, targetFnType)
+                    ? naturalLiteral
+                    : bindLambdaWithTarget(lambda, targetFnType);
+        }
+        else if (targetFnType.ReturnType == TypeSymbol.Void
+            && tryGetFunctionLiteral(argument, out var literal)
+            && literal.FunctionType is FunctionTypeSymbol literalFunctionType
+            && literalFunctionType.ReturnType != TypeSymbol.Void
+            && literalFunctionType.ReturnType != TypeSymbol.Error
+            && literalFunctionType.Arity == targetFnType.Arity)
+        {
+            candidate = literal;
+        }
+        else
+        {
+            return false;
+        }
+
+        var converted = conversions.BindConversion(location, candidate, expectedType);
         if (converted is BoundErrorExpression)
         {
             return false;

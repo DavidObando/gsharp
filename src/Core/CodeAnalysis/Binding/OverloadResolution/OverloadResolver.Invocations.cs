@@ -1267,6 +1267,23 @@ internal sealed partial class OverloadResolver
             var argLoc = i < permutedSyntax.Length
                 ? permutedSyntax[i]?.Location ?? ce.Location
                 : ce.Location;
+            var lambdaSyntax = i < permutedSyntax.Length && permutedSyntax[i] is { } sourceArgument
+                ? UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                : null;
+            if (extension.Parameters[i + 1].RefKind == RefKind.None
+                && TryConvertLambdaArgumentWithTarget(
+                    permutedArguments[i],
+                    expectedType,
+                    argLoc,
+                    out var targetTypedLambda,
+                    lambdaSyntax))
+            {
+                convertedArgs.Add(Invariant.Required(
+                    targetTypedLambda,
+                    "a successfully target-typed extension lambda produces a bound expression"));
+                continue;
+            }
+
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
         }
 
@@ -1697,6 +1714,23 @@ internal sealed partial class OverloadResolver
             }
 
             var argSyntaxForLocation = i < permutedSyntax.Length ? permutedSyntax[i] : null;
+            var argLoc = argSyntaxForLocation?.Location ?? ce.Location;
+            var lambdaSyntax = argSyntaxForLocation is { } sourceArgument
+                ? UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                : null;
+            if (parameter.RefKind == RefKind.None
+                && TryConvertLambdaArgumentWithTarget(
+                    permutedArguments[i],
+                    expectedType,
+                    argLoc,
+                    out var targetTypedLambda,
+                    lambdaSyntax))
+            {
+                convertedArgs.Add(Invariant.Required(
+                    targetTypedLambda,
+                    "a successfully target-typed instance lambda produces a bound expression"));
+                continue;
+            }
 
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument to
             // FormattableStringFactory.Create when the parameter is
@@ -1709,7 +1743,6 @@ internal sealed partial class OverloadResolver
         continue;
             }
 
-            var argLoc = argSyntaxForLocation?.Location ?? ce.Location;
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
         }
 

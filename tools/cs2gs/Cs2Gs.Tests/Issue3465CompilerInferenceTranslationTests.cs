@@ -1,4 +1,4 @@
-// <copyright file="Issue3465InferenceHintsTranslationTests.cs" company="GSharp">
+// <copyright file="Issue3465CompilerInferenceTranslationTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -12,10 +12,10 @@ using Xunit;
 
 namespace Cs2Gs.Tests;
 
-public sealed class Issue3465InferenceHintsTranslationTests
+public sealed class Issue3465CompilerInferenceTranslationTests
 {
     [Fact]
-    public void InterfaceBasedInference_EmitsHintsForStaticInstanceAndExtensionCalls()
+    public void InterfaceBasedInference_StaysNaturalForStaticInstanceAndExtensionCalls()
     {
         string rendered = Render("""
             using System.Collections.Generic;
@@ -23,7 +23,7 @@ public sealed class Issue3465InferenceHintsTranslationTests
 
             public sealed class InferenceProbe
             {
-                public static bool StaticEqual<T>(
+                public static bool EqualHandles<T>(
                     IEnumerable<T> left,
                     IEnumerable<T> right)
                     where T : struct
@@ -50,13 +50,13 @@ public sealed class Issue3465InferenceHintsTranslationTests
                     IEnumerable<T> left,
                     IEnumerable<T> right)
                     where T : struct =>
-                    StaticEqual(left, right);
+                    EqualHandles(left, right);
 
                 public static bool Select<T>(
                     IEnumerable<T> left,
                     IEnumerable<T> right)
                     where T : struct =>
-                    StaticEqual(left, right);
+                    EqualHandles(left, right);
 
                 public static bool Select<T>(
                     IEnumerable<T> left,
@@ -70,7 +70,7 @@ public sealed class Issue3465InferenceHintsTranslationTests
                     Metadata.TypeDefinition right)
                 {
                     var probe = new InferenceProbe();
-                    return StaticEqual(left.GetFields(), right.GetFields())
+                    return EqualHandles(left.GetFields(), right.GetFields())
                         && probe.InstanceEqual(left.GetFields(), right.GetFields())
                         && left.GetFields().SequenceEqual(right.GetFields())
                         && Select(left.GetFields(), right.GetFields());
@@ -90,21 +90,22 @@ public sealed class Issue3465InferenceHintsTranslationTests
             """);
 
         Assert.Contains(
-            "StaticEqual[FieldDefinitionHandle](left.GetFields(), right.GetFields())",
+            "EqualHandles(left.GetFields(), right.GetFields())",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains(
-            "probe.InstanceEqual[FieldDefinitionHandle](left.GetFields(), right.GetFields())",
+            "probe.InstanceEqual(left.GetFields(), right.GetFields())",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains(
-            "left.GetFields().SequenceEqual[FieldDefinitionHandle](right.GetFields())",
+            "left.GetFields().SequenceEqual(right.GetFields())",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Select[FieldDefinitionHandle](left.GetFields(), right.GetFields())",
+            "Select(left.GetFields(), right.GetFields())",
             rendered,
             StringComparison.Ordinal);
+        Assert.DoesNotContain("[FieldDefinitionHandle](", rendered, StringComparison.Ordinal);
         Assert.Contains("import System.Reflection.Metadata", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
@@ -150,7 +151,7 @@ public sealed class Issue3465InferenceHintsTranslationTests
     }
 
     [Fact]
-    public void VoidBlockLambda_UsesKnownDelegateReturn_ValueBlockLambdaStaysArrow()
+    public void VoidAndValueBlockLambdas_StayNaturalAndBindContextually()
     {
         string rendered = Render("""
             using System;
@@ -195,11 +196,13 @@ public sealed class Issue3465InferenceHintsTranslationTests
             """);
 
         Assert.Contains(
-            "func (operandType OperandType, token int32) {",
+            "Visit((operandType OperandType, token int32) -> {",
             rendered,
             StringComparison.Ordinal);
-        Assert.Contains("VisitOne(func (value int32) {", rendered, StringComparison.Ordinal);
+        Assert.Contains("VisitOne((value int32) -> seen.Add(value))", rendered, StringComparison.Ordinal);
         Assert.Contains("Produce(() -> {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Visit(func ", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("VisitOne(func ", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -251,7 +254,8 @@ public sealed class Issue3465InferenceHintsTranslationTests
             }
             """);
 
-        Assert.Contains("func (value int32) {", rendered, StringComparison.Ordinal);
+        Assert.Contains("(value int32) -> {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("func (value int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("Invoke(MethodGroupValue)", rendered, StringComparison.Ordinal);
         Assert.Contains("Invoke(() -> 5)", rendered, StringComparison.Ordinal);
         Assert.Contains("Invoke(() -> {", rendered, StringComparison.Ordinal);

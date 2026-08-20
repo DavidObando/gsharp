@@ -1290,7 +1290,7 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, out var nullSafetyFailure, syntax.TypeArgumentList?.Arguments.Count ?? 0);
+            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, syntax, out var overloadAmbiguous, out var nullSafetyFailure, syntax.TypeArgumentList?.Arguments.Count ?? 0);
             if (selected == null)
             {
                 if (nullSafetyFailure != null)
@@ -1632,6 +1632,26 @@ internal sealed partial class OverloadResolver
                 boundArguments[i] = argument = bindExpression(deferredLambda);
             }
 
+            var lambdaTargetLoc = i < parameterSyntax.Length
+                ? parameterSyntax[i]?.Location ?? syntax.Identifier.Location
+                : syntax.Identifier.Location;
+            var lambdaSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } sourceArgument
+                ? UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                : null;
+            if (parameter.RefKind == RefKind.None
+                && TryConvertLambdaArgumentWithTarget(
+                    argument,
+                    expectedType,
+                    lambdaTargetLoc,
+                    out var targetTypedLambda,
+                    lambdaSyntax))
+            {
+                boundArguments[i] = Invariant.Required(
+                    targetTypedLambda,
+                    "a successfully target-typed lambda produces a bound expression");
+                continue;
+            }
+
             // ADR-0100 / issue #795: materialise a bare-`default`
             // placeholder argument (BoundDefaultExpression with Error
             // type and bare DefaultExpressionSyntax) against the
@@ -1914,9 +1934,9 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, targetType, voidDelegateLoc, out var voidDelegateArg))
+                if (TryConvertLambdaArgumentWithTarget(argument, targetType, voidDelegateLoc, out var targetTypedLambdaArg))
                 {
-                    boundArguments[i] = Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression");
+                    boundArguments[i] = Invariant.Required(targetTypedLambdaArg, "a successful target-typed lambda conversion produces a bound expression");
                     continue;
                 }
 

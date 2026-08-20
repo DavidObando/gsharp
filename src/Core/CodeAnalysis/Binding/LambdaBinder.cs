@@ -78,7 +78,7 @@ internal sealed class LambdaBinder
     private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Action<FunctionSymbol?> setCurrentFunction;
     private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
-    private readonly Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression;
+    private readonly Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
     /// <summary>
@@ -133,7 +133,8 @@ internal sealed class LambdaBinder
     /// annotations on a lambda parameter using the declaration binder's
     /// standard parameter-target validation.</param>
     /// <param name="bindLambdaBodyExpression">ADR-0074 / issue #714:
-    /// optional callback that binds an arrow-lambda body expression.
+    /// optional callback that binds an arrow-lambda body expression, with the
+    /// contextual return type available for nested lambda bodies.
     /// Required only when <see cref="BindLambdaExpression"/> is
     /// invoked; the function-literal pipeline does not need it.</param>
     /// <param name="bindTypeParameterList">Issue #1886: callback that
@@ -154,7 +155,7 @@ internal sealed class LambdaBinder
         Func<FunctionSymbol?> getCurrentFunction,
         Action<FunctionSymbol?> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
-        Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression = null,
+        Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression = null,
         Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -862,9 +863,20 @@ internal sealed class LambdaBinder
         BoundExpression boundBody;
         try
         {
+            var bodyTargetType = targetFunctionType?.ReturnType;
+            if (isAsync && bodyTargetType != null)
+            {
+                bodyTargetType = UnwrapTaskReturnType(bodyTargetType);
+            }
+
+            if (bodyTargetType == TypeSymbol.Void)
+            {
+                bodyTargetType = null;
+            }
+
             boundBody = Invariant.Required(
                 bindLambdaBodyExpression,
-                "lambda binding has a body-expression callback")(syntax.Body);
+                "lambda binding has a body-expression callback")(syntax.Body, bodyTargetType);
             FinalizeNestedFrameLabels();
         }
         finally

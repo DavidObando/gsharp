@@ -223,17 +223,17 @@ public sealed partial class CSharpToGSharpTranslator
                         index);
 
                 case SimpleLambdaExpressionSyntax simpleLambda:
-                    return this.TranslateContextualLambda(simpleLambda);
+                    return this.TranslateLambda(simpleLambda);
 
                 case ParenthesizedLambdaExpressionSyntax parenLambda:
-                    return this.TranslateContextualLambda(parenLambda);
+                    return this.TranslateLambda(parenLambda);
 
                 // `delegate (params) { … }` is semantically a block-bodied lambda
                 // (C# spec §12.19); route it through the same lowering rather than
                 // a parallel path so closures, spills, and mutability scoping all
                 // just work (issue #1898).
                 case AnonymousMethodExpressionSyntax anonymousMethod:
-                    return this.TranslateContextualLambda(anonymousMethod);
+                    return this.TranslateLambda(anonymousMethod);
 
                 case AwaitExpressionSyntax awaitExpression:
                     return new AwaitExpression(this.TranslateExpression(awaitExpression.Expression));

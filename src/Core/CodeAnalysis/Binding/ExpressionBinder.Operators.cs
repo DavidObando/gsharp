@@ -1165,25 +1165,43 @@ internal sealed partial class ExpressionBinder
     /// <see cref="TypeSymbol.Void"/>-returning lambda.
     /// </summary>
     /// <param name="bodySyntax">The lambda body syntax.</param>
+    /// <param name="targetType">Optional contextual return type for a nested
+    /// lambda used directly as the body or trailing block expression.</param>
     /// <returns>The bound body expression. <see cref="TypeSymbol.Void"/> is
     /// allowed; a missing-trailing-expression block lowers to a
     /// <see cref="BoundBlockExpression"/> whose trailing expression is a
     /// synthesized <see cref="BoundLiteralExpression"/> placeholder of type
     /// <see cref="TypeSymbol.Void"/>.</returns>
-    internal BoundExpression BindLambdaBodyExpression(ExpressionSyntax bodySyntax)
+    internal BoundExpression BindLambdaBodyExpression(ExpressionSyntax bodySyntax, TypeSymbol? targetType = null)
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
+            var trailingTarget = block.Expression != null
+                && IsNestedLambdaExpression(block.Expression)
+                    ? targetType
+                    : null;
             return BindInBlockExpressionScope(() =>
             {
-                return BindLambdaBlockBodyExpression(block);
+                return BindLambdaBlockBodyExpression(block, trailingTarget);
             });
         }
 
-        return BindExpression(bodySyntax, canBeVoid: true);
+        return targetType == null || !IsNestedLambdaExpression(bodySyntax)
+            ? BindExpression(bodySyntax, canBeVoid: true)
+            : BindExpression(bodySyntax, targetType);
     }
 
-    private BoundExpression BindLambdaBlockBodyExpression(BlockExpressionSyntax block)
+    private static bool IsNestedLambdaExpression(ExpressionSyntax syntax)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        return syntax is LambdaExpressionSyntax;
+    }
+
+    private BoundExpression BindLambdaBlockBodyExpression(BlockExpressionSyntax block, TypeSymbol? targetType)
     {
         // Lambda body block: a missing trailing expression means a void
         // lambda. Bind any prefix statements; if there is a trailing
@@ -1209,7 +1227,8 @@ internal sealed partial class ExpressionBinder
             BindBlockExpressionParts(
                 block.Statements,
                 Invariant.Required(block.Expression, "a value-returning lambda block has a trailing expression"),
-                canBeVoid: true);
+                canBeVoid: true,
+                targetType);
         if (boundStatements.Length == 0)
         {
             return trailing;

@@ -89,7 +89,8 @@ internal sealed partial class OverloadResolver
             out var ambiguous,
             out var nullSafetyFailure,
             explicitTypeArgCount,
-            boundTypeArguments);
+            boundTypeArguments,
+            ce);
         if (selected != null)
         {
             return selected;
@@ -181,11 +182,12 @@ internal sealed partial class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
+        CallExpressionSyntax callSyntax,
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0)
     {
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, callSyntax, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
     }
 
     /// <summary>
@@ -202,7 +204,8 @@ internal sealed partial class OverloadResolver
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
-        ImmutableArray<TypeSymbol> explicitTypeArguments = default)
+        ImmutableArray<TypeSymbol> explicitTypeArguments = default,
+        CallExpressionSyntax? callSyntax = null)
     {
         ambiguous = false;
         nullSafetyFailure = null;
@@ -223,6 +226,7 @@ internal sealed partial class OverloadResolver
             argumentCount,
             argumentNames,
             builder,
+            callSyntax,
             out ambiguous,
             out nullSafetyFailure,
             explicitTypeArgCount,
@@ -234,6 +238,7 @@ internal sealed partial class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
+        CallExpressionSyntax? callSyntax,
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
@@ -360,7 +365,8 @@ internal sealed partial class OverloadResolver
                         argumentCount,
                         argumentNames,
                         boundArguments,
-                        GetCandidateSubstitution(cand)))
+                        GetCandidateSubstitution(cand),
+                        callSyntax))
                 {
                     convertible.Add(cand);
                 }
@@ -992,7 +998,8 @@ internal sealed partial class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null,
+        CallExpressionSyntax? callSyntax = null)
     {
         // Generic candidates may carry unsubstituted method type parameters in
         // their signature; rely on the existing #1124 inference filter instead.
@@ -1044,6 +1051,43 @@ internal sealed partial class OverloadResolver
             if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[i], out var deferredSyntax))
             {
                 if (!ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax, paramType))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            var lambdaSyntax = callSyntax != null && i < callSyntax.Arguments.Count
+                ? UnwrapNamedArgumentValue(callSyntax.Arguments[i]) as LambdaExpressionSyntax
+                : null;
+            if (!IsLambdaReturnShapeCompatible(boundArguments[i], paramType, lambdaSyntax))
+            {
+                return false;
+            }
+
+            if (lambdaSyntax != null
+                && argType is FunctionTypeSymbol { ReturnType: var lambdaReturn } argumentFunction
+                && lambdaReturn == TypeSymbol.Error
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var targetFunction))
+            {
+                if (argumentFunction.Arity != targetFunction.Arity)
+                {
+                    return false;
+                }
+
+                var parametersCompatible = true;
+                for (var parameterIndex = 0; parameterIndex < argumentFunction.Arity; parameterIndex++)
+                {
+                    var writtenType = argumentFunction.ParameterTypes[parameterIndex];
+                    var targetType = targetFunction.ParameterTypes[parameterIndex];
+                    parametersCompatible &=
+                        TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(targetType, writtenType)
+                        || Conversion.ClassifyNonStructural(targetType, writtenType).IsImplicit
+                        || conversions.HasUserDefinedImplicitConversion(targetType, writtenType);
+                }
+
+                if (!parametersCompatible)
                 {
                     return false;
                 }
@@ -1137,6 +1181,64 @@ internal sealed partial class OverloadResolver
         }
 
         return true;
+    }
+
+    // Issue #3465: overload applicability must honor explicit return shape
+    // before a lambda has a single contextual target. A `return;` makes the
+    // lambda void-only; a `return value` makes it value-returning. Returns in
+    // nested lambdas/functions belong to those nested bodies and are ignored.
+    private bool IsLambdaReturnShapeCompatible(
+        BoundExpression argument,
+        TypeSymbol parameterType,
+        LambdaExpressionSyntax? lambdaSyntax)
+    {
+        var lambda = lambdaSyntax ?? argument.Syntax as LambdaExpressionSyntax;
+        if (lambda == null
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target))
+        {
+            return true;
+        }
+
+        var hasVoidReturn = false;
+        var hasValueReturn = false;
+        var stack = new Stack<SyntaxNode>();
+        stack.Push(lambda.Body);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is LambdaExpressionSyntax
+                or FunctionLiteralExpressionSyntax
+                or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax returnStatement)
+            {
+                hasVoidReturn |= returnStatement.Expression == null;
+                hasValueReturn |= returnStatement.Expression != null;
+                continue;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
+
+        var targetReturnsNoValue = target.ReturnType == TypeSymbol.Void
+            || (lambda.IsAsync && IsNonGenericTaskReturnType(target.ReturnType));
+        return targetReturnsNoValue
+            ? !hasValueReturn
+            : !hasVoidReturn;
+    }
+
+    private static bool IsNonGenericTaskReturnType(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        return clr != null
+            && (clr.IsSameAs(typeof(System.Threading.Tasks.Task))
+                || clr.IsSameAs(typeof(System.Threading.Tasks.ValueTask)));
     }
 
     /// <summary>

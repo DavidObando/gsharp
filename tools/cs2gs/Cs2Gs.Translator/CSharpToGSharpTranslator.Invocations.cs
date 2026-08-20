@@ -31,8 +31,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GExpression target;
-            IMethodSymbol invocationMethod =
-                this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+            IReadOnlyList<GTypeReference> typeArguments = null;
 
             // Issue #2351: an extension-method call site (reduced instance
             // form, unreduced static form, or a bare sibling static call)
@@ -42,7 +41,7 @@ public sealed partial class CSharpToGSharpTranslator
             // import is still synthesized when the file relies on an
             // implicit/global `using` for it (e.g. `<ImplicitUsings>enable`
             // supplying `System.Linq`).
-            if (invocationMethod is { IsExtensionMethod: true } invocationExtMethod)
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { IsExtensionMethod: true } invocationExtMethod)
             {
                 this.typeMapper.TrackExtensionMethodNamespace(invocationExtMethod);
             }
@@ -54,9 +53,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return analyzerIdiom;
             }
-
-            IReadOnlyList<GTypeReference> typeArguments =
-                this.MapInvocationTypeArguments(invocation, invocationMethod);
 
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
                     { MethodKind: MethodKind.LocalFunction } recursiveLocal
@@ -98,10 +94,14 @@ public sealed partial class CSharpToGSharpTranslator
                             this.StaticQualifierReceiver(recursiveContainingType, invocation.GetLocation()),
                             recursiveLift.Name)
                         : new IdentifierExpression(recursiveLift.Name);
+                IReadOnlyList<GTypeReference> recursiveTypeArguments =
+                    invocation.Expression is GenericNameSyntax recursiveGeneric
+                        ? this.MapTypeArguments(recursiveGeneric)
+                        : null;
                 return new InvocationExpression(
                     recursiveTarget,
                     recursiveArguments,
-                    typeArguments);
+                    recursiveTypeArguments);
             }
 
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol enumTryParse
@@ -155,10 +155,13 @@ public sealed partial class CSharpToGSharpTranslator
                         extMethod),
                 };
                 extArgs.AddRange(this.TranslateArguments(invocation.ArgumentList.Arguments));
+                IReadOnlyList<GTypeReference> extTypeArgs = extMember.Name is GenericNameSyntax extGeneric
+                    ? this.MapTypeArguments(extGeneric)
+                    : null;
                 return new InvocationExpression(
                     new MemberAccessExpression(new IdentifierExpression(extOwner), extName),
                     extArgs,
-                    typeArguments);
+                    extTypeArgs);
             }
 
             // A SOURCE-defined extension method called in STATIC (unreduced) form
@@ -190,6 +193,10 @@ public sealed partial class CSharpToGSharpTranslator
                 var staticExtRest = this.TranslateStaticExtensionTrailingArguments(
                     invocation,
                     (ArgumentSyntax)staticExtReceiverArgument.Syntax);
+                IReadOnlyList<GTypeReference> staticExtTypeArgs =
+                    staticExtMember.Name is GenericNameSyntax staticExtGeneric
+                        ? this.MapTypeArguments(staticExtGeneric)
+                        : null;
                 return new InvocationExpression(
                     new MemberAccessExpression(
                         staticExtReceiver,
@@ -197,7 +204,7 @@ public sealed partial class CSharpToGSharpTranslator
                             staticExt.ReducedFrom ?? staticExt,
                             (staticExt.ReducedFrom ?? staticExt).Name)),
                     staticExtRest,
-                    typeArguments);
+                    staticExtTypeArgs);
             }
 
             // A SOURCE-defined extension method called through its BARE name
@@ -229,6 +236,10 @@ public sealed partial class CSharpToGSharpTranslator
                 var bareExtRest = this.TranslateStaticExtensionTrailingArguments(
                     invocation,
                     (ArgumentSyntax)bareExtReceiverArgument.Syntax);
+                IReadOnlyList<GTypeReference> bareExtTypeArgs =
+                    bareExtName is GenericNameSyntax bareExtGeneric
+                        ? this.MapTypeArguments(bareExtGeneric)
+                        : null;
                 return new InvocationExpression(
                     new MemberAccessExpression(
                         bareExtReceiver,
@@ -236,7 +247,7 @@ public sealed partial class CSharpToGSharpTranslator
                             bareExt.ReducedFrom ?? bareExt,
                             (bareExt.ReducedFrom ?? bareExt).Name)),
                     bareExtRest,
-                    typeArguments);
+                    bareExtTypeArgs);
             }
 
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
@@ -702,8 +713,9 @@ public sealed partial class CSharpToGSharpTranslator
                     helperReceiver);
             }
 
-            IReadOnlyList<GTypeReference> callTypeArgs =
-                this.MapInvocationTypeArguments(invocation);
+            IReadOnlyList<GTypeReference> callTypeArgs = helperName is GenericNameSyntax generic
+                ? this.MapTypeArguments(generic)
+                : null;
 
             GExpression TranslateCall()
             {
@@ -755,8 +767,9 @@ public sealed partial class CSharpToGSharpTranslator
             InvocationExpressionSyntax invocation,
             SimpleNameSyntax helperName)
         {
-            IReadOnlyList<GTypeReference> typeArguments =
-                this.MapInvocationTypeArguments(invocation);
+            IReadOnlyList<GTypeReference> typeArguments = helperName is GenericNameSyntax generic
+                ? this.MapTypeArguments(generic)
+                : null;
             return new ConditionalAccessExpression(
                 this.TranslateExpression(conditionalAccess.Expression),
                 new InvocationExpression(
@@ -1441,9 +1454,13 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateExactCallableArgument(ArgumentSyntax argument)
         {
             ExpressionSyntax expression = argument.Expression;
-            if (expression is AnonymousFunctionExpressionSyntax lambda)
+            if (expression is AnonymousFunctionExpressionSyntax lambda
+                && this.TryGetConvertedDelegateInvoke(lambda, out IMethodSymbol lambdaInvoke))
             {
-                return this.TranslateContextualLambda(lambda);
+                return this.typeMapper.WithMetadataImportCollisionQualification(
+                    () => this.LambdaResultNeedsExactTarget(lambda, lambdaInvoke)
+                        ? this.TranslateLambda(lambda, lambdaInvoke)
+                        : this.TranslateLambda(lambda));
             }
 
             if (this.TryGetMethodGroupArgument(
@@ -1497,27 +1514,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (invoke.ReturnsVoid)
             {
-                // A value-returning statement expression is void-compatible in
-                // C#, but a target-less G# arrow block treats the final expression
-                // as its result. Use the known delegate target only for that shape.
-                ExpressionSyntax trailingExpression = lambda.Body switch
-                {
-                    ExpressionSyntax expression => expression,
-                    BlockSyntax { Statements.Count: > 0 } block
-                        when block.Statements[^1] is ExpressionStatementSyntax statement
-                        => statement.Expression,
-                    _ => null,
-                };
-                if (trailingExpression is null
-                    || trailingExpression is AssignmentExpressionSyntax)
-                {
-                    return false;
-                }
-
-                ITypeSymbol trailingType =
-                    this.context.GetTypeInfo(trailingExpression).Type;
-                return trailingType != null
-                    && trailingType.SpecialType != SpecialType.System_Void;
+                return false;
             }
 
             ITypeSymbol targetResult = invoke.ReturnType;
@@ -1549,16 +1546,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             return results.Any(result =>
             {
-                if (targetResult.TypeKind == TypeKind.Delegate
-                    && (result is AnonymousFunctionExpressionSyntax
-                        || this.context.GetSymbolInfo(result).Symbol
-                            is IMethodSymbol))
-                {
-                    return true;
-                }
-
-                TypeInfo typeInfo = this.context.GetTypeInfo(result);
-                ITypeSymbol resultType = typeInfo.Type ?? typeInfo.ConvertedType;
+                ITypeSymbol resultType = this.context.GetTypeInfo(result).Type;
                 return resultType != null
                     && !SymbolEqualityComparer.IncludeNullability.Equals(
                         resultType,
@@ -3251,306 +3239,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             return result;
         }
-
-        private IReadOnlyList<GTypeReference> MapInvocationTypeArguments(
-            InvocationExpressionSyntax invocation,
-            IMethodSymbol method = null)
-        {
-            GenericNameSyntax explicitName = invocation.Expression switch
-            {
-                GenericNameSyntax generic => generic,
-                MemberAccessExpressionSyntax { Name: GenericNameSyntax generic } => generic,
-                MemberBindingExpressionSyntax { Name: GenericNameSyntax generic } => generic,
-                _ => null,
-            };
-            if (explicitName != null)
-            {
-                return this.MapTypeArguments(explicitName);
-            }
-
-            method ??= this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-            if (method is not { IsGenericMethod: true }
-                || !this.InvocationNeedsTypeInferenceHint(invocation, method))
-            {
-                return null;
-            }
-
-            return method.TypeArguments
-                .Select(type => this.typeMapper.Map(
-                    type,
-                    this.context,
-                    invocation.GetLocation()))
-                .ToList();
-        }
-
-        private bool InvocationNeedsTypeInferenceHint(
-            InvocationExpressionSyntax invocation,
-            IMethodSymbol method)
-        {
-            // Issue #3465: retain ordinary G# inference when every Roslyn method
-            // type parameter is visible through a shape gsc already unifies.
-            // Emit Roslyn's inferred arguments only for facts gsc drops, such as
-            // a non-generic CLR collection's implemented IEnumerable<T>.
-            if (this.context.SemanticModel.GetOperation(invocation)
-                is not IInvocationOperation operation)
-            {
-                return true;
-            }
-
-            var inferred = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            if (operation.TargetMethod.ReducedFrom is { Parameters.Length: > 0 } reduced
-                && operation.Instance is { } receiverOperation
-                && GetInferenceOperandType(receiverOperation) is { } receiverType)
-            {
-                this.CollectGSharpInferableTypeParameters(
-                    reduced.OriginalDefinition.Parameters[0].Type,
-                    receiverType,
-                    method,
-                    inferred);
-            }
-
-            foreach (IArgumentOperation argument in operation.Arguments)
-            {
-                if (argument.ArgumentKind == ArgumentKind.DefaultValue
-                    || argument.Parameter is null
-                    || GetInferenceOperandType(argument.Value)
-                        is not { } argumentType)
-                {
-                    continue;
-                }
-
-                ITypeSymbol parameterType =
-                    argument.Parameter.OriginalDefinition.Type;
-                if (argument.ArgumentKind == ArgumentKind.ParamArray
-                    && parameterType is IArrayTypeSymbol paramsArray
-                    && argumentType is not IArrayTypeSymbol)
-                {
-                    parameterType = paramsArray.ElementType;
-                }
-
-                this.CollectGSharpInferableTypeParameters(
-                    parameterType,
-                    argumentType,
-                    method,
-                    inferred);
-            }
-
-            return method.TypeParameters.Any(parameter =>
-                !inferred.Contains(parameter));
-        }
-
-        private static ITypeSymbol GetInferenceOperandType(IOperation operation)
-        {
-            ITypeSymbol convertedType = operation.Type;
-            while (operation is IConversionOperation { IsImplicit: true } conversion)
-            {
-                operation = conversion.Operand;
-            }
-
-            // Interface/base conversions must expose the source type so the
-            // structural check can spot the missing fact. Lambdas have no
-            // natural Roslyn type, so retain their contextual delegate fallback.
-            return operation.Type ?? convertedType;
-        }
-
-        private void CollectGSharpInferableTypeParameters(
-            ITypeSymbol parameterType,
-            ITypeSymbol argumentType,
-            IMethodSymbol method,
-            HashSet<ISymbol> inferred)
-        {
-            if (parameterType is ITypeParameterSymbol
-                    { TypeParameterKind: TypeParameterKind.Method } typeParameter)
-            {
-                if (typeParameter.Ordinal < method.TypeParameters.Length)
-                {
-                    inferred.Add(method.TypeParameters[typeParameter.Ordinal]);
-                }
-
-                return;
-            }
-
-            if (parameterType is IArrayTypeSymbol parameterArray
-                && argumentType is IArrayTypeSymbol argumentArray
-                && parameterArray.Rank == argumentArray.Rank)
-            {
-                this.CollectGSharpInferableTypeParameters(
-                    parameterArray.ElementType,
-                    argumentArray.ElementType,
-                    method,
-                    inferred);
-                return;
-            }
-
-            if (parameterType is IPointerTypeSymbol parameterPointer
-                && argumentType is IPointerTypeSymbol argumentPointer)
-            {
-                this.CollectGSharpInferableTypeParameters(
-                    parameterPointer.PointedAtType,
-                    argumentPointer.PointedAtType,
-                    method,
-                    inferred);
-                return;
-            }
-
-            if (parameterType is not INamedTypeSymbol parameterNamed)
-            {
-                return;
-            }
-
-            if (parameterNamed.OriginalDefinition.SpecialType
-                    == SpecialType.System_Nullable_T
-                && parameterNamed.TypeArguments.Length == 1)
-            {
-                ITypeSymbol unwrappedArgument = argumentType;
-                if (argumentType is INamedTypeSymbol nullableArgument
-                    && nullableArgument.OriginalDefinition.SpecialType
-                        == SpecialType.System_Nullable_T
-                    && nullableArgument.TypeArguments.Length == 1)
-                {
-                    unwrappedArgument = nullableArgument.TypeArguments[0];
-                }
-
-                this.CollectGSharpInferableTypeParameters(
-                    parameterNamed.TypeArguments[0],
-                    unwrappedArgument,
-                    method,
-                    inferred);
-                return;
-            }
-
-            if (parameterNamed.IsTupleType
-                && argumentType is INamedTypeSymbol
-                    { IsTupleType: true } argumentTuple
-                && parameterNamed.TupleElements.Length
-                    == argumentTuple.TupleElements.Length)
-            {
-                for (int index = 0;
-                    index < parameterNamed.TupleElements.Length;
-                    index++)
-                {
-                    this.CollectGSharpInferableTypeParameters(
-                        parameterNamed.TupleElements[index].Type,
-                        argumentTuple.TupleElements[index].Type,
-                        method,
-                        inferred);
-                }
-
-                return;
-            }
-
-            if (parameterNamed.TypeKind == TypeKind.Delegate
-                && parameterNamed.OriginalDefinition.Locations.All(
-                    location => !location.IsInSource)
-                && parameterNamed.DelegateInvokeMethod is { } parameterInvoke
-                && argumentType is INamedTypeSymbol
-                    { DelegateInvokeMethod: { } argumentInvoke }
-                && parameterInvoke.Parameters.Length
-                    == argumentInvoke.Parameters.Length)
-            {
-                for (int index = 0;
-                    index < parameterInvoke.Parameters.Length;
-                    index++)
-                {
-                    this.CollectGSharpInferableTypeParameters(
-                        parameterInvoke.Parameters[index].Type,
-                        argumentInvoke.Parameters[index].Type,
-                        method,
-                        inferred);
-                }
-
-                this.CollectGSharpInferableTypeParameters(
-                    parameterInvoke.ReturnType,
-                    argumentInvoke.ReturnType,
-                    method,
-                    inferred);
-                return;
-            }
-
-            if (argumentType is IArrayTypeSymbol compatibleArray
-                && parameterNamed.TypeArguments.Length == 1
-                && IsArrayCompatibleInferenceInterface(parameterNamed))
-            {
-                this.CollectGSharpInferableTypeParameters(
-                    parameterNamed.TypeArguments[0],
-                    compatibleArray.ElementType,
-                    method,
-                    inferred);
-                return;
-            }
-
-            INamedTypeSymbol argumentMatch =
-                this.FindGSharpInferenceMatch(parameterNamed, argumentType);
-            if (argumentMatch is null
-                || parameterNamed.TypeArguments.Length
-                    != argumentMatch.TypeArguments.Length)
-            {
-                return;
-            }
-
-            for (int index = 0;
-                index < parameterNamed.TypeArguments.Length;
-                index++)
-            {
-                this.CollectGSharpInferableTypeParameters(
-                    parameterNamed.TypeArguments[index],
-                    argumentMatch.TypeArguments[index],
-                    method,
-                    inferred);
-            }
-        }
-
-        private INamedTypeSymbol FindGSharpInferenceMatch(
-            INamedTypeSymbol parameterType,
-            ITypeSymbol argumentType)
-        {
-            if (argumentType is not INamedTypeSymbol argumentNamed)
-            {
-                return null;
-            }
-
-            if (parameterType.OriginalDefinition.Locations.All(
-                location => !location.IsInSource))
-            {
-                return argumentNamed.TypeArguments.Length
-                    == parameterType.TypeArguments.Length
-                        ? argumentNamed
-                        : null;
-            }
-
-            if (SymbolEqualityComparer.Default.Equals(
-                argumentNamed.OriginalDefinition,
-                parameterType.OriginalDefinition))
-            {
-                return argumentNamed;
-            }
-
-            for (INamedTypeSymbol current = argumentNamed.BaseType;
-                current != null;
-                current = current.BaseType)
-            {
-                if (SymbolEqualityComparer.Default.Equals(
-                    current.OriginalDefinition,
-                    parameterType.OriginalDefinition))
-                {
-                    return current;
-                }
-            }
-
-            return argumentNamed.AllInterfaces.FirstOrDefault(candidate =>
-                SymbolEqualityComparer.Default.Equals(
-                    candidate.OriginalDefinition,
-                    parameterType.OriginalDefinition));
-        }
-
-        private static bool IsArrayCompatibleInferenceInterface(
-            INamedTypeSymbol type) =>
-            type.OriginalDefinition.SpecialType is
-                SpecialType.System_Collections_Generic_IEnumerable_T or
-                SpecialType.System_Collections_Generic_ICollection_T or
-                SpecialType.System_Collections_Generic_IList_T or
-                SpecialType.System_Collections_Generic_IReadOnlyCollection_T or
-                SpecialType.System_Collections_Generic_IReadOnlyList_T;
 
         private ImmutableArray<ITypeSymbol> GetBoundTypeArguments(GenericNameSyntax generic)
         {
