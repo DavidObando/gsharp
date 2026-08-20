@@ -527,9 +527,10 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateConditionalAccessWithLocalAssignmentSeam(
             ConditionalAccessExpressionSyntax conditionalAccess)
         {
-            GExpression receiver = this.SpillOperand(
+            GExpression receiver = this.CaptureReceiverOnce(
                 this.TranslateExpression(conditionalAccess.Expression),
-                conditionalAccess.Expression);
+                conditionalAccess.Expression,
+                "a conditional-access expression here has no enclosing evaluation seam to capture its receiver once.");
             GExpression previousReceiver = this.state.ConditionalReceiverReplacement;
             this.state.ConditionalReceiverReplacement =
                 new NonNullAssertionExpression(receiver);

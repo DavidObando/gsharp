@@ -569,6 +569,17 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
             public sealed class Probe
             {
                 private int trace;
+                private int reads;
+
+                private Probe? Current
+                {
+                    get
+                    {
+                        trace = (trace * 10) + 9;
+                        reads++;
+                        return reads == 2 ? this : null;
+                    }
+                }
 
                 private (int, int) Pair(int value)
                 {
@@ -586,10 +597,8 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
                 {
                     int a = 0;
                     int b = 0;
-                    Probe? missing = null;
-                    Probe? present = this;
-                    _ = missing?.Observe(((a, b) = Pair(1)).Item1);
-                    int? observed = present?.Observe(((a, b) = Pair(2)).Item1);
+                    _ = Current?.Observe(((a, b) = Pair(1)).Item1);
+                    int? observed = Current?.Observe(((a, b) = Pair(2)).Item1);
                     return (trace * 100) + (a * 10) + b + (observed ?? 0);
                 }
             }
@@ -600,7 +609,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
             rendered + Environment.NewLine + "Probe().Run()");
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
-        Assert.Equal(2524, result.Value);
+        Assert.Equal(992524, result.Value);
     }
 
     [Fact]
@@ -710,6 +719,150 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(992522, result.Value);
+    }
+
+    [Fact]
+    public void VoidConditionalInstanceCall_CapturesChangingPropertyReceiverOnce()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+                private int reads;
+
+                private Probe? Current
+                {
+                    get
+                    {
+                        trace = (trace * 10) + 9;
+                        reads++;
+                        return reads == 1 ? this : null;
+                    }
+                }
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                private void Accept((int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    Current?.Accept(((a, b) = Pair(1)));
+                    Current?.Accept(((a, b) = Pair(2)));
+                    return (trace * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(915911, result.Value);
+    }
+
+    [Fact]
+    public void VoidConditionalExtensionCall_CapturesChangingPropertyReceiverOnce()
+    {
+        string rendered = Render("""
+            public static class ProbeExtensions
+            {
+                public static void Accept(this Probe probe, (int, int) pair) =>
+                    probe.Record();
+            }
+
+            public sealed class Probe
+            {
+                private int trace;
+                private int reads;
+
+                private Probe? Current
+                {
+                    get
+                    {
+                        trace = (trace * 10) + 9;
+                        reads++;
+                        return reads == 1 ? this : null;
+                    }
+                }
+
+                private (int, int) Pair(int value)
+                {
+                    trace = (trace * 10) + value;
+                    return (value, value);
+                }
+
+                public void Record()
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    Current?.Accept(((a, b) = Pair(1)));
+                    Current?.Accept(((a, b) = Pair(2)));
+                    return (trace * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(915911, result.Value);
+    }
+
+    [Fact]
+    public void VoidConditionalInstanceCall_CapturesMutableFieldBeforeArguments()
+    {
+        string rendered = Render("""
+            public sealed class Probe
+            {
+                private int trace;
+                private Probe? current;
+
+                private (int, int) Pair()
+                {
+                    trace = (trace * 10) + 1;
+                    current = null;
+                    return (1, 1);
+                }
+
+                private void Accept((int, int) pair)
+                {
+                    trace = (trace * 10) + 5;
+                }
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    current = this;
+                    current?.Accept(((a, b) = Pair()));
+                    return (trace * 100) + (a * 10) + b;
+                }
+            }
+            """);
+
+        TranslationTestValidation.AssertBinds(rendered);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Probe().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1511, result.Value);
     }
 
     [Fact]

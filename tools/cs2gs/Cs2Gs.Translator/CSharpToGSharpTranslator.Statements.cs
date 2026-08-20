@@ -1980,9 +1980,10 @@ public sealed partial class CSharpToGSharpTranslator
         private GStatement TranslateVoidConditionalAccessWithLocalAssignmentSeam(
             ConditionalAccessExpressionSyntax conditionalAccess)
         {
-            GExpression receiver = this.SpillOperand(
+            GExpression receiver = this.CaptureReceiverOnce(
                 this.TranslateExpression(conditionalAccess.Expression),
-                conditionalAccess.Expression);
+                conditionalAccess.Expression,
+                "a void conditional-access statement here has no enclosing evaluation seam to capture its receiver once.");
             GExpression previousReceiver = this.state.ConditionalReceiverReplacement;
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             var statements = new List<GStatement>();
