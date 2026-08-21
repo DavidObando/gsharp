@@ -356,7 +356,7 @@ internal sealed partial class OverloadResolver
     /// Also preserves issue #889's value-discard conversion for <c>func</c>
     /// literals targeting void delegates.
     /// </summary>
-    private bool TryConvertLambdaArgumentWithTarget(
+    internal bool TryConvertLambdaArgumentWithTarget(
         BoundExpression argument,
         TypeSymbol? expectedType,
         TextLocation location,

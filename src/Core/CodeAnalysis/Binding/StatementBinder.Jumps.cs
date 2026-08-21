@@ -348,16 +348,22 @@ internal sealed partial class StatementBinder
             // (C#-style target-typing) before the conversion below.
             // Expression-tree lambdas retain their natural body shape until the
             // expression-tree conversion below applies the delegate target.
-            var targetTypesLambdaReturn = syntax.Expression is LambdaExpressionSyntax
+            var returnExpression = syntax.Expression;
+            while (returnExpression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                returnExpression = parenthesized.Expression;
+            }
+
+            var targetTypesLambdaReturn = returnExpression is LambdaExpressionSyntax
                 && function != null
                 && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(function.Type, out _);
             if ((targetTypesLambdaReturn
-                    || syntax.Expression is SwitchExpressionSyntax
-                    || syntax.Expression is IfExpressionSyntax
-                    || syntax.Expression is IfLetExpressionSyntax
-                    || syntax.Expression is ConditionalExpressionSyntax
-                    || syntax.Expression is BlockExpressionSyntax
-                    || IsNullCoalescingExpression(syntax.Expression))
+                    || returnExpression is SwitchExpressionSyntax
+                    || returnExpression is IfExpressionSyntax
+                    || returnExpression is IfLetExpressionSyntax
+                    || returnExpression is ConditionalExpressionSyntax
+                    || returnExpression is BlockExpressionSyntax
+                    || IsNullCoalescingExpression(returnExpression))
                 && function != null
                 && !function.IsReturnTypeInferred
                 && function.Type != TypeSymbol.Void

@@ -146,6 +146,148 @@ public sealed class Issue3465InferenceTests
     }
 
     [Fact]
+    public void GenericMethod_InfersThroughSourceImplementedClrInterface()
+    {
+        var result = Evaluate("""
+            import System.Collections
+            import System.Collections.Generic
+
+            class Repo[T] : IEnumerable[T] {
+                private let items List[T] = List[T]()
+
+                init(value T) {
+                    items.Add(value)
+                }
+
+                func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+                private func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()
+            }
+
+            func First[T](items IEnumerable[T]) T {
+                for item in items {
+                    return item
+                }
+
+                return default(T)
+            }
+
+            First(items: (Repo[int32](23)))
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(23, result.Value);
+    }
+
+    [Fact]
+    public void SequenceInference_InfersThroughSourceImplementedClrInterface()
+    {
+        var result = Evaluate("""
+            import System.Collections
+            import System.Collections.Generic
+
+            class Repo[T] : IEnumerable[T] {
+                private let items List[T] = List[T]()
+
+                init(value T) {
+                    items.Add(value)
+                }
+
+                func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+                private func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()
+            }
+
+            func First[T](items sequence[T]) T {
+                for item in items {
+                    return item
+                }
+
+                return default(T)
+            }
+
+            First(Repo[int32](29))
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(29, result.Value);
+    }
+
+    [Fact]
+    public void SequenceInference_ConflictingImportedProjections_DoNotInferArbitrarily()
+    {
+        foreach (var typeName in new[]
+        {
+            nameof(Issue3465ConflictingCollectionForward),
+            nameof(Issue3465ConflictingCollectionReverse),
+        })
+        {
+            var result = Evaluate($$"""
+                import GSharp.Core.Tests.CodeAnalysis.Binding
+
+                func First[T](items sequence[T]) T -> default(T)
+
+                First({{typeName}}())
+                """);
+
+            Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0151"));
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+        }
+    }
+
+    [Fact]
+    public void GenericMethod_ConflictingSourceImplementedClrInterfaces_DoNotInferArbitrarily()
+    {
+        foreach (var baseTypes in new[]
+        {
+            "IEnumerable[int32], IEnumerable[string]",
+            "IEnumerable[string], IEnumerable[int32]",
+        })
+        {
+            var result = Evaluate($$"""
+                import System.Collections
+                import System.Collections.Generic
+
+                class Conflict : {{baseTypes}} {
+                    private func (IEnumerable[int32]) GetEnumerator() IEnumerator[int32] ->
+                        List[int32]().GetEnumerator()
+                    private func (IEnumerable[string]) GetEnumerator() IEnumerator[string] ->
+                        List[string]().GetEnumerator()
+                    private func (IEnumerable) GetEnumerator() IEnumerator ->
+                        List[int32]().GetEnumerator()
+                }
+
+                func First[T](items IEnumerable[T]) T -> default(T)
+
+                First(Conflict())
+                """);
+
+            Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0151"));
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+        }
+    }
+
+    [Fact]
+    public void AsyncSequenceInference_ConflictingImportedProjections_DoNotInferArbitrarily()
+    {
+        foreach (var typeName in new[]
+        {
+            nameof(Issue3465ConflictingAsyncCollectionForward),
+            nameof(Issue3465ConflictingAsyncCollectionReverse),
+        })
+        {
+            var result = Evaluate($$"""
+                import GSharp.Core.Tests.CodeAnalysis.Binding
+
+                func First[T](items async sequence[T]) T -> default(T)
+
+                First({{typeName}}())
+                """);
+
+            Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0151"));
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9999");
+        }
+    }
+
+    [Fact]
     public void GenericMethod_InfersThroughTransitiveSourceInterface()
     {
         var result = Evaluate("""
@@ -460,6 +602,52 @@ public sealed class Issue3465InferenceTests
         Assert.Equal(1, result.Value);
     }
 
+    [Fact]
+    public void NestedUntypedLambdaExplicitReturnShape_DisambiguatesOverloadsRegardlessOfOrder()
+    {
+        var overloadOrders = new[]
+        {
+            """
+            func Choose(factory ()->Action[int32]) int32 -> 1
+            func Choose(factory ()->Func[int32, int32]) int32 -> 2
+            """,
+            """
+            func Choose(factory ()->Func[int32, int32]) int32 -> 2
+            func Choose(factory ()->Action[int32]) int32 -> 1
+            """,
+        };
+
+        foreach (var overloads in overloadOrders)
+        {
+            foreach (var call in new[]
+            {
+                "Choose(() -> { return ((value) -> {}) })",
+                "Choose(factory: () -> { return (((value) -> {})) })",
+                "Choose(() -> { return true ? ((value) -> {}) : ((value) -> {}) })",
+                """
+                Choose(() -> {
+                    return switch true {
+                        case true: (value) -> {}
+                        default: (value) -> {}
+                    }
+                })
+                """,
+            })
+            {
+                var result = Evaluate($$"""
+                    import System
+
+                    {{overloads}}
+
+                    {{call}}
+                    """);
+
+                Assert.Empty(result.Diagnostics);
+                Assert.Equal(1, result.Value);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("(value) -> {}")]
     [InlineData("(value) -> { return }")]
@@ -477,6 +665,47 @@ public sealed class Issue3465InferenceTests
         Assert.Equal(1, result.Value);
     }
 
+    [Theory]
+    [InlineData("{ throw Exception(\"stop\") }")]
+    [InlineData("{ for { } }")]
+    public void NonCompletingBlock_IsCompatibleWithValueDelegate(string body)
+    {
+        var result = Evaluate($$"""
+            import System
+
+            func Visit(action (int32)->int32) {}
+
+            func BindOnly() {
+                Visit((value) -> {{body}})
+            }
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Theory]
+    [InlineData("{ throw Exception(\"stop\") }")]
+    [InlineData("{ for { } }")]
+    public void NonCompletingBlock_DoesNotPreferVoidOverload(string body)
+    {
+        var result = Evaluate($$"""
+            import System
+
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {{body}})
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0154" or "GS0155");
+    }
+
     [Fact]
     public void NestedUntypedLambdaInExplicitReturn_DefersThroughWrappers()
     {
@@ -489,8 +718,8 @@ public sealed class Issue3465InferenceTests
 
             var seen = 0
             let flag = true
-            Accept(() -> {
-                return (value) -> { seen = seen + value }
+            Accept(factory: () -> {
+                return (((value) -> { seen = seen + value }))
             })
             Accept(() -> {
                 return flag
@@ -508,6 +737,25 @@ public sealed class Issue3465InferenceTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void NestedUntypedLambda_CoalesceOperandReceivesDelegateTarget()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Accept(factory ()->Action[int32]) {
+                factory()(5)
+            }
+
+            var seen = 0
+            Accept(factory: () -> nil ?? ((value) -> { seen = value }))
+            seen
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
     }
 
     [Fact]
@@ -586,6 +834,17 @@ public sealed class Issue3465InferenceTests
             }
 
             Visitor((value int32) -> { nonexistentName })
+            """,
+            """
+            class Visitor {
+                shared {
+                    func Visit(action (int32)->void) {
+                        action(0)
+                    }
+                }
+            }
+
+            Visitor.Visit((value int32) -> { nonexistentName })
             """,
         };
 
@@ -778,4 +1037,39 @@ public sealed class Issue3465ConflictingCollectionReverse :
     IEnumerator<string> IEnumerable<string>.GetEnumerator() => ((IEnumerable<string>)System.Array.Empty<string>()).GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<string>)this).GetEnumerator();
+}
+
+public sealed class Issue3465ConflictingAsyncCollectionForward :
+    IAsyncEnumerable<int>,
+    IAsyncEnumerable<string>
+{
+    IAsyncEnumerator<int> IAsyncEnumerable<int>.GetAsyncEnumerator(
+        System.Threading.CancellationToken cancellationToken)
+        => new Issue3465EmptyAsyncEnumerator<int>();
+
+    IAsyncEnumerator<string> IAsyncEnumerable<string>.GetAsyncEnumerator(
+        System.Threading.CancellationToken cancellationToken)
+        => new Issue3465EmptyAsyncEnumerator<string>();
+}
+
+public sealed class Issue3465ConflictingAsyncCollectionReverse :
+    IAsyncEnumerable<string>,
+    IAsyncEnumerable<int>
+{
+    IAsyncEnumerator<int> IAsyncEnumerable<int>.GetAsyncEnumerator(
+        System.Threading.CancellationToken cancellationToken)
+        => new Issue3465EmptyAsyncEnumerator<int>();
+
+    IAsyncEnumerator<string> IAsyncEnumerable<string>.GetAsyncEnumerator(
+        System.Threading.CancellationToken cancellationToken)
+        => new Issue3465EmptyAsyncEnumerator<string>();
+}
+
+public sealed class Issue3465EmptyAsyncEnumerator<T> : IAsyncEnumerator<T>
+{
+    public T Current => default!;
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask<bool> MoveNextAsync() => ValueTask.FromResult(false);
 }

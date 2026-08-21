@@ -560,14 +560,14 @@ internal sealed partial class OverloadResolver
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
 
-        // Issue #951: indices of un-typed arrow lambda arguments whose binding
+        // Issue #951: untyped arrow lambdas whose binding
         // is deferred until the callee's parameter types are known, so the
         // target delegate shape can drive lambda-parameter-type inference.
         // Without the deferral the lambda binds with no target, reports GS0304
         // ("cannot infer parameter type"), and aborts the call — even though
         // the parameter (e.g. `Func[int32, int32]` / `(int32) -> int32`)
         // fully determines the lambda's shape.
-        HashSet<int>? deferredArrowLambdaIndices = null;
+        HashSet<LambdaExpressionSyntax>? deferredArrowLambdas = null;
 
         // ADR-0060: argument binding needs the matching parameter to resolve
         // inline `out var`/`out let`/`out _` payloads. For free-function calls
@@ -575,7 +575,6 @@ internal sealed partial class OverloadResolver
         // bind everything with parameter=null (the inline-out form falls back
         // to its declared type) and patch up the type later. The plain
         // lvalue ref/in/out form is parameter-independent.
-        var argIndex = 0;
         foreach (var argument in syntax.Arguments)
         {
             // Issue #343: a named-argument wrapper carries the value expression
@@ -587,14 +586,15 @@ internal sealed partial class OverloadResolver
                 // The first binding pass has no resolved parameter for inline out arguments.
                 boundArgument = bindRefArgumentExpression(refArg, null);
             }
-            else if (argumentNames.IsDefault
-                && bindLambdaWithTarget != null
-                && IsUntypedArrowLambda(argSyntax))
+            else if (bindLambdaWithTarget != null
+                && argSyntax is LambdaExpressionSyntax deferredLambda
+                && IsUntypedArrowLambda(deferredLambda))
             {
                 // Issue #951: defer; bind once the parameter delegate target is
                 // known (per-position loop below). A placeholder carrying the
                 // lambda syntax keeps argument positions aligned.
-                (deferredArrowLambdaIndices ??= new HashSet<int>()).Add(argIndex);
+                (deferredArrowLambdas ??= new HashSet<LambdaExpressionSyntax>())
+                    .Add(deferredLambda);
                 boundArgument = new BoundErrorExpression(argSyntax);
             }
             else
@@ -603,7 +603,6 @@ internal sealed partial class OverloadResolver
             }
 
             boundArguments.Add(boundArgument);
-            argIndex++;
         }
 
         var symbol = Scope.TryLookupSymbol(syntax.Identifier.Text);
@@ -1610,11 +1609,11 @@ internal sealed partial class OverloadResolver
             // If the parameter is not a delegate type, fall back to binding the
             // lambda with no target, which surfaces the established GS0304
             // diagnostic through the regular conversion checks below.
-            if (deferredArrowLambdaIndices != null
-                && deferredArrowLambdaIndices.Remove(i)
+            if (deferredArrowLambdas != null
                 && i < parameterSyntax.Length
                 && parameterSyntax[i] is { } deferredArgument
-                && UnwrapNamedArgumentValue(deferredArgument) is LambdaExpressionSyntax deferredLambda)
+                && UnwrapNamedArgumentValue(deferredArgument) is LambdaExpressionSyntax deferredLambda
+                && deferredArrowLambdas.Remove(deferredLambda))
             {
                 var lambdaLoc = deferredArgument.Location;
                 if (bindLambdaWithTarget != null
@@ -2059,13 +2058,14 @@ internal sealed partial class OverloadResolver
         // fixed parameter (e.g. it landed in a trailing variadic slot) is bound
         // here with no target so the established GS0304 diagnostic surfaces
         // rather than leaving an unbound placeholder.
-        if (deferredArrowLambdaIndices != null)
+        if (deferredArrowLambdas != null)
         {
-            foreach (var idx in deferredArrowLambdaIndices)
+            for (var idx = 0; idx < boundArguments.Count; idx++)
             {
                 if (idx < boundArguments.Count
                     && boundArguments[idx] is BoundErrorExpression placeholder
-                    && placeholder.Syntax is LambdaExpressionSyntax pendingLambda)
+                    && placeholder.Syntax is LambdaExpressionSyntax pendingLambda
+                    && deferredArrowLambdas.Remove(pendingLambda))
                 {
                     boundArguments[idx] = bindExpression(pendingLambda);
                 }
@@ -2328,6 +2328,23 @@ internal sealed partial class OverloadResolver
     private static bool ContainsTargetDependentLambdaInReturns(
         BlockExpressionSyntax block)
     {
+        foreach (var returnStatement in EnumerateExplicitReturns(block))
+        {
+            if (ContainsTargetDependentLambda(
+                Invariant.Required(
+                    returnStatement.Expression,
+                    "explicit value-return enumeration excludes bare returns")))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<ReturnStatementSyntax> EnumerateExplicitReturns(
+        BlockExpressionSyntax block)
+    {
         var stack = new Stack<SyntaxNode>(block.Statements.Cast<SyntaxNode>());
         while (stack.Count > 0)
         {
@@ -2341,11 +2358,7 @@ internal sealed partial class OverloadResolver
 
             if (node is ReturnStatementSyntax { Expression: { } expression })
             {
-                if (ContainsTargetDependentLambda(expression))
-                {
-                    return true;
-                }
-
+                yield return (ReturnStatementSyntax)node;
                 continue;
             }
 
@@ -2354,8 +2367,6 @@ internal sealed partial class OverloadResolver
                 stack.Push(child);
             }
         }
-
-        return false;
     }
 
     /// <summary>

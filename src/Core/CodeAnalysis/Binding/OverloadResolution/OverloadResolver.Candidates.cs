@@ -13,6 +13,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -1209,12 +1210,13 @@ internal sealed partial class OverloadResolver
             return true;
         }
 
-        return IsLambdaReturnShapeCompatible(lambda, target);
+        return IsLambdaReturnShapeCompatible(lambda, target, argument);
     }
 
     private bool IsLambdaReturnShapeCompatible(
         LambdaExpressionSyntax lambda,
-        FunctionTypeSymbol target)
+        FunctionTypeSymbol target,
+        BoundExpression? boundLambda = null)
     {
         if (lambda.Parameters.Count != target.Arity)
         {
@@ -1255,9 +1257,15 @@ internal sealed partial class OverloadResolver
             return !hasValueReturn;
         }
 
+        var bodyNeverCompletesNormally = !hasVoidReturn
+            && !hasValueReturn
+            && lambda.Body is BlockExpressionSyntax { Expression: null } block
+            && (TryBoundLambdaBodyNeverCompletes(boundLambda)
+                || IsObviouslyNonCompleting(block));
         if (hasVoidReturn
             || (lambda.Body is BlockExpressionSyntax { Expression: null }
-                && !hasValueReturn))
+                && !hasValueReturn
+                && !bodyNeverCompletesNormally))
         {
             return false;
         }
@@ -1270,6 +1278,57 @@ internal sealed partial class OverloadResolver
         }
 
         return IsNestedLambdaResultShapeCompatible(lambda.Body, nestedTarget);
+    }
+
+    private static bool TryBoundLambdaBodyNeverCompletes(BoundExpression? argument)
+        => argument != null
+            && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
+            && ControlFlowGraph.AllPathsReturn(Lowerer.Lower(literal.Body));
+
+    private static bool IsObviouslyNonCompleting(BlockExpressionSyntax block)
+        => IsObviouslyNonCompleting(block.Statements.LastOrDefault());
+
+    private static bool IsObviouslyNonCompleting(StatementSyntax? statement)
+        => statement switch
+        {
+            ThrowStatementSyntax => true,
+            BlockStatementSyntax block =>
+                IsObviouslyNonCompleting(block.Statements.LastOrDefault()),
+            IfStatementSyntax conditional when conditional.ElseClause != null =>
+                IsObviouslyNonCompleting(conditional.ThenStatement)
+                && IsObviouslyNonCompleting(conditional.ElseClause.ElseStatement),
+            ForInfiniteStatementSyntax loop =>
+                !ContainsPotentialLoopExit(loop.Body),
+            _ => false,
+        };
+
+    private static bool ContainsPotentialLoopExit(StatementSyntax body)
+    {
+        var stack = new Stack<SyntaxNode>();
+        stack.Push(body);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is BreakStatementSyntax or GotoStatementSyntax)
+            {
+                return true;
+            }
+
+            if (!ReferenceEquals(node, body)
+                && node is LambdaExpressionSyntax
+                    or FunctionLiteralExpressionSyntax
+                    or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
+
+        return false;
     }
 
     private bool IsNestedLambdaResultShapeCompatible(
@@ -1285,8 +1344,15 @@ internal sealed partial class OverloadResolver
         {
             LambdaExpressionSyntax nestedLambda =>
                 IsLambdaReturnShapeCompatible(nestedLambda, target),
-            BlockExpressionSyntax { Expression: { } tail } =>
-                IsNestedLambdaResultShapeCompatible(tail, target),
+            BlockExpressionSyntax block =>
+                EnumerateExplicitReturns(block).All(returnStatement =>
+                    IsNestedLambdaResultShapeCompatible(
+                        Invariant.Required(
+                            returnStatement.Expression,
+                            "explicit value-return enumeration excludes bare returns"),
+                        target))
+                && (block.Expression == null
+                    || IsNestedLambdaResultShapeCompatible(block.Expression, target)),
             ConditionalExpressionSyntax conditional =>
                 IsNestedLambdaResultShapeCompatible(conditional.WhenTrue, target)
                 && IsNestedLambdaResultShapeCompatible(conditional.WhenFalse, target),

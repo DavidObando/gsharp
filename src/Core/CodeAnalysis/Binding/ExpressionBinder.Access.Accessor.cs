@@ -3720,15 +3720,21 @@ internal sealed partial class ExpressionBinder
                 var argLoc = i < parameterSyntax.Length
                     ? parameterSyntax[i]?.Location ?? ce.Location
                     : ce.Location;
-                if (slotSyntax is { } sourceArgument
-                    && OverloadResolver.UnwrapNamedArgumentValue(sourceArgument) is LambdaExpressionSyntax lambda
-                    && method.Parameters[i].RefKind == RefKind.None
-                    && !TypeSymbol.ContainsTypeParameter(expectedType)
-                    && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFunctionType)
-                    && (!LambdaBinder.TryGetFunctionLiteral(permutedArgs[i], out var naturalLiteral)
-                        || !ReferenceEquals(naturalLiteral.FunctionType, targetFunctionType)))
+                var lambdaSyntax = slotSyntax is { } sourceArgument
+                    ? OverloadResolver.UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                    : null;
+                if (method.Parameters[i].RefKind == RefKind.None
+                    && overloads.TryConvertLambdaArgumentWithTarget(
+                        permutedArgs[i],
+                        expectedType,
+                        argLoc,
+                        out var targetTypedLambda,
+                        lambdaSyntax,
+                        method.Parameters[i]))
                 {
-                    convertedArgs.Add(BindExpression(lambda, expectedType));
+                    convertedArgs.Add(Invariant.Required(
+                        targetTypedLambda,
+                        "a successfully target-typed static lambda produces a bound expression"));
                     continue;
                 }
 

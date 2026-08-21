@@ -1647,7 +1647,11 @@ internal sealed partial class ExpressionBinder
 
         var coalesceDiagMark = Diagnostics.Count;
 
-        var boundLeft = BindExpression(syntax.Left);
+        var boundLeft = coalesceTargetType != null
+            && syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            && IsTargetDependentExpressionSyntax(syntax.Left)
+            ? BindExpression(syntax.Left, coalesceTargetType)
+            : BindExpression(syntax.Left);
 
         // ADR-0069 / issue #700: `&&` short-circuits — the right operand is
         // only evaluated when the left operand was true. Thread any
@@ -1686,6 +1690,12 @@ internal sealed partial class ExpressionBinder
                     return BindExpressionWithNarrowing(syntax.Right, rightFrame);
                 });
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse);
+        }
+        else if (coalesceTargetType != null
+            && syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            && IsTargetDependentExpressionSyntax(syntax.Right))
+        {
+            boundRight = BindExpression(syntax.Right, coalesceTargetType);
         }
         else
         {
