@@ -7077,6 +7077,27 @@ public sealed class Binder
 
         if (scope.TryLookupTypeAlias(name, preferredArity, out var aliased, out ambiguousAcrossImportedPackages))
         {
+            // Issue #3466: nested source types may retain a bare lookup key so
+            // their containing type can use the short name. A same-named
+            // top-level imported type is nevertheless the visible meaning of
+            // a bare name brought in by an import; do not let the nested key
+            // capture that reference.
+            if (IsNestedUserType(aliased)
+                && scope.TryLookupImportedClass(name, declaration: null, out var importedTopLevel)
+                && !importedTopLevel.ClassType.IsNested
+                && HasPreferredArity(importedTopLevel.ClassType, preferredArity))
+            {
+                if (ImportedTypeSymbol.TryCreateSemanticAggregate(
+                    importedTopLevel.ClassType,
+                    scope.References,
+                    out var importedAggregate))
+                {
+                    return importedAggregate;
+                }
+
+                return TypeSymbol.FromClrType(importedTopLevel.ClassType);
+            }
+
             return aliased;
         }
 
@@ -7158,6 +7179,30 @@ public sealed class Binder
         }
 
         return null;
+    }
+
+    private static bool IsNestedUserType(TypeSymbol type) =>
+        GetContainingUserType(type) != null;
+
+    private static TypeSymbol? GetContainingUserType(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.ContainingType,
+        EnumSymbol e => e.ContainingType,
+        InterfaceSymbol i => i.ContainingType,
+        _ => null,
+    };
+
+    private static bool HasPreferredArity(Type type, int preferredArity)
+    {
+        if (preferredArity < 0)
+        {
+            return true;
+        }
+
+        int arity = type.IsGenericTypeDefinition
+            ? type.GetGenericArguments().Length
+            : 0;
+        return arity == preferredArity;
     }
 
     /// <summary>

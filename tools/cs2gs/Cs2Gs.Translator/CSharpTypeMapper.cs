@@ -112,6 +112,8 @@ public sealed class CSharpTypeMapper
     /// </summary>
     private Dictionary<string, int> sourceTopLevelSimpleNameCounts;
 
+    private Dictionary<string, int> sourceNestedSimpleNameCounts;
+
     private HashSet<string> sourceDeclaredTypeNames;
 
     /// <summary>
@@ -530,7 +532,7 @@ public sealed class CSharpTypeMapper
         }
     }
 
-    internal string GetOrCreateMetadataTypeAlias(
+    internal string GetOrCreateImportedTypeAlias(
         INamedTypeSymbol named,
         TranslationContext context)
     {
@@ -1106,7 +1108,8 @@ public sealed class CSharpTypeMapper
             // collisions (issue #2509). Ordinary positions retain the
             // source-authored gate so common framework types are not qualified
             // spuriously.
-            bool scanImportedNamespaces = named.Locations.Any(l => l.IsInSource)
+            bool isSourceType = named.Locations.Any(l => l.IsInSource);
+            bool scanImportedNamespaces = isSourceType
                 || this.qualifyMetadataImportCollisions;
             bool ambiguous = this.HasSourceHomonym(named, context)
                 || (scanImportedNamespaces && this.HasImportedNamespaceHomonym(named, context));
@@ -1115,9 +1118,12 @@ public sealed class CSharpTypeMapper
                 return simpleName;
             }
 
-            if (!named.Locations.Any(candidate => candidate.IsInSource))
+            if (!isSourceType && SupportsMetadataTypeAlias(named))
             {
-                return this.GetOrCreateMetadataTypeAlias(named, context);
+                // ponytail: metadata aliases currently bind reliably for
+                // System.*; keep other external metadata namespace-qualified
+                // until arbitrary CLR alias imports bind.
+                return this.GetOrCreateImportedTypeAlias(named, context);
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs
@@ -1130,6 +1136,8 @@ public sealed class CSharpTypeMapper
         // even when no homonym exists.
         if (named.Locations.Any(l => l.IsInSource)
             && !this.HasSourceHomonym(named, context)
+            && !this.HasSourceNestedHomonym(named, context)
+            && !this.HasImportedNamespaceHomonym(named, context)
             && IsWithinContainingType(named, context, location))
         {
             return this.Names(context).GetName(named);
@@ -1172,6 +1180,13 @@ public sealed class CSharpTypeMapper
             .GetEnclosingSymbol(position)?
             .ContainingNamespace;
         return SymbolEqualityComparer.Default.Equals(currentNamespace, containingNamespace);
+    }
+
+    private static bool SupportsMetadataTypeAlias(INamedTypeSymbol named)
+    {
+        string namespaceName = named.ContainingNamespace?.ToDisplayString();
+        return namespaceName == "System"
+            || namespaceName?.StartsWith("System.", System.StringComparison.Ordinal) == true;
     }
 
     private static bool IsWithinContainingType(
@@ -1238,6 +1253,22 @@ public sealed class CSharpTypeMapper
         // declaration is already a distinct homonym.
         int selfCount = named.ContainingType == null
             && named.Locations.Any(l => l.IsInSource)
+                ? 1
+                : 0;
+        return count > selfCount;
+    }
+
+    private bool HasSourceNestedHomonym(INamedTypeSymbol named, TranslationContext context)
+    {
+        this.sourceNestedSimpleNameCounts ??=
+            BuildSourceNestedSimpleNameCounts(context.Compilation);
+        if (!this.sourceNestedSimpleNameCounts.TryGetValue(named.Name, out int count))
+        {
+            return false;
+        }
+
+        int selfCount = named.ContainingType != null
+            && named.Locations.Any(location => location.IsInSource)
                 ? 1
                 : 0;
         return count > selfCount;
@@ -1411,6 +1442,24 @@ public sealed class CSharpTypeMapper
             }
 
             counts.TryGetValue(type.Name, out var existing);
+            counts[type.Name] = existing + 1;
+        }
+
+        return counts;
+    }
+
+    private static Dictionary<string, int> BuildSourceNestedSimpleNameCounts(Compilation compilation)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (INamedTypeSymbol type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
+        {
+            if (type.ContainingType == null
+                || !type.Locations.Any(location => location.IsInSource))
+            {
+                continue;
+            }
+
+            counts.TryGetValue(type.Name, out int existing);
             counts[type.Name] = existing + 1;
         }
 

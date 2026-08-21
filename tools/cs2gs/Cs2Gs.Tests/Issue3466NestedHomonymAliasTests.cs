@@ -106,6 +106,62 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void NestedSameArityMetadataType_DoesNotForceAlias()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Container
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+                }
+
+                public static class Repro
+                {
+                    public static int Length()
+                    {
+                        var builder = new System.Text.StringBuilder("one");
+                        return builder.Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("StringBuilder(\"one\")", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("import TextStringBuilder =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NestedType_WithImportedTopLevelHomonym_RemainsQualified()
+    {
+        string printed = Translate("""
+            using System.Text;
+
+            namespace Demo
+            {
+                public sealed class Container
+                {
+                    public sealed class StringBuilder
+                    {
+                        public int NestedOnly => 3;
+                    }
+
+                    public static int Read()
+                    {
+                        var builder = new StringBuilder();
+                        return builder.NestedOnly;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("Container.StringBuilder()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("TextStringBuilder()", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReadableAlias_AvoidsExistingAliasAndSourceType()
     {
         string printed = Translate("""

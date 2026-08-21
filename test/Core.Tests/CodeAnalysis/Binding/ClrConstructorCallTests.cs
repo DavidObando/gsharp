@@ -63,6 +63,32 @@ var lst = List[int32]()
     }
 
     [Fact]
+    public void ImportedTopLevelType_WithSameArityNestedSourceHomonym_BindsImportedType()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Holder {
+    class Issue3466ImportedService {}
+}
+
+class Consumer {
+    shared {
+        func Read() int32 {
+            let service = Issue3466ImportedService()
+            return service.Value
+        }
+    }
+}
+
+var value = Consumer.Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void DictionaryStringInt_DefaultConstructor_Binds()
     {
         var source = @"
@@ -102,4 +128,14 @@ var sb = StringBuilder(""x"", ""y"", ""z"")
     {
         return EmittedOracle.Evaluate(source);
     }
+}
+
+public sealed class Issue3466ImportedService
+{
+    public Issue3466ImportedService()
+    {
+        this.Value = 7;
+    }
+
+    public int Value { get; }
 }

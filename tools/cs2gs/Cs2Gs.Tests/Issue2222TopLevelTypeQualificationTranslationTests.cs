@@ -100,6 +100,52 @@ namespace Consumer
         Assert.Contains("Second.ChapterInfo()", printed);
     }
 
+    [Fact]
+    public void NestedSameArityType_DoesNotQualifyImportedTopLevelSourceType()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Library.cs", """
+                namespace Library
+                {
+                    public sealed class FakeLibraryService
+                    {
+                        public FakeLibraryService(int count) { }
+                    }
+                }
+                """),
+            ("Caller.cs", """
+                using Library;
+
+                namespace Tests
+                {
+                    public sealed class Container
+                    {
+                        public sealed class FakeLibraryService
+                        {
+                        }
+                    }
+
+                    public static class Caller
+                    {
+                        public static object Make() => new FakeLibraryService(1);
+                    }
+                }
+                """),
+        });
+
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Inline C# source should bind with no errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        string printed = TranslateTargetAndAssertProjectBinds(project, "Caller.cs");
+
+        Assert.Contains("FakeLibraryService(1)", printed);
+        Assert.DoesNotContain("import LibraryFakeLibraryService =", printed);
+        Assert.DoesNotContain("Library.FakeLibraryService(1)", printed);
+    }
+
     /// <summary>
     /// Same simple-name collision, but the second `ChapterInfo` lives in a
     /// REFERENCED ASSEMBLY (compiled to metadata, simulating a translated
@@ -180,7 +226,7 @@ namespace Consumer
     }
 
     [Fact]
-    public void MetadataType_WithSourceHomonym_UsesReadableAlias()
+    public void MetadataType_WithSourceHomonym_IsEmittedQualified()
     {
         MetadataReference libRef = CompileLibrary(
             @"
@@ -245,11 +291,8 @@ namespace Oahu.Core
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
 
-        Assert.Contains(
-            "import BooksDatabaseCodec = Oahu.BooksDatabase.Codec",
-            printed);
-        Assert.Contains("ICollection[BooksDatabaseCodec]", printed);
-        Assert.Contains("(c BooksDatabaseCodec)", printed);
+        Assert.Contains("ICollection[Oahu.BooksDatabase.Codec]", printed);
+        Assert.Contains("(c Oahu.BooksDatabase.Codec)", printed);
 
         RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
             printed,

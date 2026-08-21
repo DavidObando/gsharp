@@ -1951,7 +1951,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (typeSymbol is INamedTypeSymbol { SpecialType: SpecialType.System_Object } systemObject)
             {
                 type = new NamedTypeReference(
-                    this.typeMapper.GetOrCreateMetadataTypeAlias(
+                    this.typeMapper.GetOrCreateImportedTypeAlias(
                         systemObject,
                         this.context));
             }
