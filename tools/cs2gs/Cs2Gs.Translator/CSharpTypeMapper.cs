@@ -260,28 +260,8 @@ public sealed class CSharpTypeMapper
     /// <param name="method">The resolved extension method symbol.</param>
     public void TrackExtensionMethodNamespace(IMethodSymbol method)
     {
-        if (method is null)
-        {
-            return;
-        }
-
-        // Reduced instance-form calls (key.All(predicate)) resolve to a
-        // reduced symbol; unwrap it back to the original static-form method
-        // so ContainingNamespace reflects the extension's declaring type.
-        IMethodSymbol original = method.ReducedFrom ?? method;
-
-        // C# 14 extension blocks compile their members onto a synthetic
-        // marker type nested inside the containing type; unwrap to the
-        // enclosing (real, declared) type so the namespace we record is the
-        // one the user would actually need to import.
-        INamedTypeSymbol containingType = original.ContainingType;
-        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
-        {
-            containingType = declaringType;
-        }
-
-        INamespaceSymbol ns = containingType?.ContainingNamespace;
-        if (ns is null || ns.IsGlobalNamespace)
+        INamespaceSymbol ns = GetExtensionMethodNamespace(method);
+        if (ns is null)
         {
             return;
         }
@@ -507,6 +487,18 @@ public sealed class CSharpTypeMapper
             ?? EmittedNameAllocator.For(compilation);
         var importedNamespaces = new HashSet<INamespaceSymbol>(
             SymbolEqualityComparer.Default);
+        void AddImportedNamespace(string emittedNamespace)
+        {
+            INamespaceSymbol importedNamespace = ResolveEmittedNamespace(
+                compilation,
+                emittedNamespace,
+                names);
+            if (importedNamespace != null)
+            {
+                importedNamespaces.Add(importedNamespace);
+            }
+        }
+
         foreach (ImportDirective import in imports)
         {
             if (import.Alias != null)
@@ -521,38 +513,52 @@ public sealed class CSharpTypeMapper
                 continue;
             }
 
-            INamespaceSymbol importedNamespace = ResolveEmittedNamespace(
-                compilation,
-                import.Name,
-                names);
-            if (importedNamespace != null)
+            AddImportedNamespace(import.Name);
+        }
+
+        // Analyzer rewrites can synthesize imports from member/attribute
+        // shapes that carry no mapped G# type symbol in the C# syntax. Reserve
+        // every possible mapped target namespace up front so alias allocation
+        // cannot depend on which declaration happens to translate first.
+        if (this.AnalyzerApiMode)
+        {
+            foreach (string targetNamespace in Analyzers.RoslynAnalyzerApiMap.EnumerateTargetNamespaces())
             {
-                importedNamespaces.Add(importedNamespace);
+                AddImportedNamespace(targetNamespace);
             }
         }
 
         // Qualified references are shortened and synthesize namespace imports
-        // after translation. Pre-scan every contributing tree so those future
-        // bare names reserve alias candidates before first use.
+        // after translation. Extension calls can do the same without naming
+        // their declaring type at all. Pre-scan every contributing tree so all
+        // those future bare names reserve alias candidates before first use.
         foreach (SyntaxTree tree in contributingTrees)
         {
             SemanticModel semanticModel = compilation.GetSemanticModel(tree);
             foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
             {
-                if (node is not (NameSyntax or MemberAccessExpressionSyntax)
-                    || semanticModel.GetSymbolInfo(node).Symbol is not INamedTypeSymbol type)
+                if (node is not (NameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax))
                 {
                     continue;
                 }
 
-                while (type.ContainingType != null)
+                ISymbol symbol = semanticModel.GetSymbolInfo(node).Symbol;
+                if (symbol is INamedTypeSymbol type)
                 {
-                    type = type.ContainingType;
-                }
+                    while (type.ContainingType != null)
+                    {
+                        type = type.ContainingType;
+                    }
 
-                if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                    if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                    {
+                        importedNamespaces.Add(ns);
+                    }
+                }
+                else if (symbol is IMethodSymbol method
+                    && GetExtensionMethodNamespace(method) is { } extensionNamespace)
                 {
-                    importedNamespaces.Add(ns);
+                    importedNamespaces.Add(extensionNamespace);
                 }
             }
         }
@@ -564,6 +570,37 @@ public sealed class CSharpTypeMapper
                 this.reservedImportedTypeNames.Add(names.GetName(type));
             }
         }
+    }
+
+    private static INamespaceSymbol GetExtensionMethodNamespace(IMethodSymbol method)
+    {
+        if (method is null)
+        {
+            return null;
+        }
+
+        // Reduced instance-form calls (key.All(predicate)) resolve to a
+        // reduced symbol; unwrap it back to the original static-form method
+        // so ContainingNamespace reflects the extension's declaring type.
+        IMethodSymbol original = method.ReducedFrom ?? method;
+        if (!original.IsExtensionMethod)
+        {
+            return null;
+        }
+
+        // C# 14 extension blocks compile their members onto a synthetic
+        // marker type nested inside the containing type; unwrap to the
+        // enclosing (real, declared) type so the namespace we record is the
+        // one the user would actually need to import.
+        INamedTypeSymbol containingType = original.ContainingType;
+        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
+        {
+            containingType = declaringType;
+        }
+
+        return containingType?.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? ns
+            : null;
     }
 
     /// <summary>

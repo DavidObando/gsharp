@@ -167,6 +167,72 @@ target.Value
     }
 
     [Fact]
+    public void ImportedAlias_WithNestedSourceHomonym_BindsImportedTypeAtUnknownArity()
+    {
+        var source = @"
+package Demo
+import ServiceAlias = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedService
+
+class Holder {
+    class ServiceAlias {
+        prop Value int32
+    }
+}
+
+func Create() ServiceAlias {
+    return ServiceAlias()
+}
+
+Create().Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void ImportedAliasLiteral_WithMatchingNestedMembers_BindsImportedType()
+    {
+        var source = @"
+package Demo
+import InitializerAlias = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedInitializer
+
+class Holder {
+    class InitializerAlias {
+        prop Value int32 { get; set; }
+    }
+}
+
+let target = InitializerAlias{Value: 7}
+target.Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
+    public void ImportedGeneric_WithUnknownArity_DoesNotOverrideNestedNonGenericType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class Holder {
+    class List {
+        prop Value int32 { get; set; }
+    }
+}
+
+let target = List{Value: 7}
+target.Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
     public void DictionaryStringInt_DefaultConstructor_Binds()
     {
         var source = @"
@@ -234,6 +300,17 @@ public sealed class Issue3466ImportedGenericService<T>
 }
 
 public sealed class Issue3466ImportedGenericInitializer<T>
+{
+    private int value;
+
+    public int Value
+    {
+        get => this.value + 100;
+        set => this.value = value;
+    }
+}
+
+public sealed class Issue3466ImportedInitializer
 {
     private int value;
 

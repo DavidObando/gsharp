@@ -260,20 +260,89 @@ public sealed class Issue3466NestedHomonymAliasTests
             "Synthesized alias should be reused consistently in type and constructor positions.");
     }
 
+    [Fact]
+    public void ReadableAlias_AvoidsTypeFromLateExtensionImport()
+    {
+        string referencePath = typeof(TextStringBuilder).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(referencePath))
+            .ToArray();
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { referencePath });
+
+        string printed = Translate(
+            "Consumer.cs",
+            new[]
+            {
+                ("Consumer.cs", """
+                    namespace Demo
+                    {
+                        public sealed class StringBuilder
+                        {
+                        }
+
+                        public static class Repro
+                        {
+                            public static System.Text.StringBuilder MakeBuilder()
+                            {
+                                return new System.Text.StringBuilder("one");
+                            }
+
+                            public static int Measure()
+                            {
+                                var builder = MakeBuilder();
+                                return builder.Length + "x".Issue3466Length();
+                            }
+                        }
+                    }
+                    """),
+                ("GlobalUsings.g.cs", "global using Cs2Gs.Tests;\n"),
+            },
+            references,
+            resolver);
+
+        Assert.Contains("import Cs2Gs.Tests", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.True(
+            CountOccurrences(printed, "TextStringBuilder_2") >= 3,
+            "Late import reservation should keep one exact alias in type and constructor positions.");
+    }
+
     private static string Translate(
         string source,
         IReadOnlyList<MetadataReference> references = null,
         ReferenceResolver bindReferences = null)
+        => Translate(
+            "Snippet.cs",
+            new[] { ("Snippet.cs", source) },
+            references,
+            bindReferences);
+
+    private static string Translate(
+        string targetFileName,
+        IReadOnlyList<(string FileName, string Source)> sources,
+        IReadOnlyList<MetadataReference> references = null,
+        ReferenceResolver bindReferences = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Snippet.cs", source) },
+            sources,
             references);
         Assert.True(
             project.BoundWithoutErrors,
             "Snippet should bind with no C# errors: " +
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
-        LoadedDocument document = Assert.Single(project.Documents);
+        LoadedDocument document = Assert.Single(
+            project.Documents,
+            candidate => candidate.FilePath == targetFileName);
         var context = new TranslationContext(
             project.Compilation,
             document.SemanticModel,
@@ -314,4 +383,9 @@ public sealed class Issue3466NestedHomonymAliasTests
 public sealed class TextStringBuilder
 {
     public int Value => 4;
+}
+
+public static class Issue3466LateImportExtensions
+{
+    public static int Issue3466Length(this string value) => value.Length;
 }

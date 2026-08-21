@@ -692,7 +692,8 @@ public sealed class BoundScope
     /// <summary>
     /// Tries to look up an imported class by simple name and preferred generic
     /// arity. Positive arities resolve the matching open generic definition;
-    /// zero or negative arities retain the non-generic lookup behavior.
+    /// zero or negative arities retain the non-generic lookup behavior,
+    /// including a direct <c>import Alias = Namespace.Type</c>.
     /// </summary>
     /// <param name="name">The class name.</param>
     /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
@@ -720,7 +721,18 @@ public sealed class BoundScope
             return false;
         }
 
-        return TryLookupImportedClass(name, declaration, out importedClass);
+        if (TryLookupImportedClass(name, declaration, out importedClass)
+            && !importedClass.ClassType.IsGenericTypeDefinition)
+        {
+            return true;
+        }
+
+        // A bare use site has no CLR type arguments with which to construct
+        // an open generic. Submission lookup can otherwise fall back from
+        // arity 0/-1 to a lone generic definition, unlike namespace imports,
+        // and incorrectly displace a non-generic nested source candidate.
+        importedClass = null;
+        return false;
     }
 
     /// <summary>
@@ -744,6 +756,18 @@ public sealed class BoundScope
             && submissionImports.TryResolveType(References, name, preferredArity: 0, out var submissionType))
         {
             importedClass = new ImportedClassSymbol(submissionType, declaration, references: References);
+            return true;
+        }
+
+        // Issue #2273 / #3466: a direct type alias is itself the visible
+        // imported class name. This must run before namespace-import probing:
+        // treating its target as a namespace ("Target.Name") lets an unrelated
+        // nested source homonym capture type, constructor, and literal sites.
+        if (TryLookupImport(name, out var aliasImport)
+            && aliasImport.IsAlias
+            && References.TryResolveType(aliasImport.Target, out var aliasedType))
+        {
+            importedClass = new ImportedClassSymbol(aliasedType, declaration, references: References);
             return true;
         }
 

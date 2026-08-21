@@ -98,6 +98,34 @@ public sealed class EmittedSessionEngineTests : IDisposable
     }
 
     [Fact]
+    public void PriorGenericType_DoesNotDisplaceCurrentNestedNonGenericAtUnknownArity()
+    {
+        Assert.False(engine.Evaluate("""
+            package Demo
+
+            class Clash[T] {
+                prop Value T { get; set; }
+            }
+            """).HasError);
+
+        var result = engine.Evaluate("""
+            package Demo
+
+            class Holder {
+                class Clash {
+                    prop Value int32 { get; set; }
+                }
+            }
+
+            let value = Clash{Value: 7}
+            value.Value
+            """);
+
+        Assert.False(result.HasError, string.Join("; ", result.Diagnostics));
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
     public void ClosureCapturingHoistedGlobalSharesTheCell()
     {
         Assert.False(engine.Evaluate("var total = 0").HasError);
