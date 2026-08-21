@@ -138,6 +138,35 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void FullyQualifiedMetadataType_InsideNestedHomonymScope_UsesAlias()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Container
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Length()
+                    {
+                        var builder = new System.Text.StringBuilder("one");
+                        return builder.Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("TextStringBuilder(\"one\")", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Container.StringBuilder(\"one\")", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NestedType_WithImportedTopLevelHomonym_RemainsQualified()
     {
         string printed = Translate("""
@@ -324,6 +353,34 @@ public sealed class Issue3466NestedHomonymAliasTests
         Assert.True(
             CountOccurrences(printed, "TextStringBuilder_2") >= 3,
             "Late import reservation should keep one exact alias in type and constructor positions.");
+    }
+
+    [Fact]
+    public void ReadableAlias_AvoidsEmittedMethodTypeParameterName()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class Repro
+                {
+                    public static System.Text.StringBuilder Make<TextStringBuilder>()
+                    {
+                        return new System.Text.StringBuilder("one");
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("func Make[TextStringBuilder]() TextStringBuilder_2", printed, StringComparison.Ordinal);
+        Assert.Contains("return TextStringBuilder_2(\"one\")", printed, StringComparison.Ordinal);
     }
 
     private static string Translate(

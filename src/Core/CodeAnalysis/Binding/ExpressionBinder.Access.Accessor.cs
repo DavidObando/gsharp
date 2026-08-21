@@ -511,6 +511,20 @@ internal sealed partial class ExpressionBinder
             }
             else if (scope.TryLookupTypeAlias(name, out var typeAlias))
             {
+                if (scope.TryLookupImportedClassByArity(
+                        name,
+                        preferredArity: 0,
+                        leftName,
+                        out var importedStaticCandidate)
+                    && !importedStaticCandidate.ClassType.IsNested
+                    && binderCtx.ImportedTypeOverridesSourceType(
+                        typeAlias,
+                        requestedArity: 0,
+                        getCurrentFunction()))
+                {
+                    classSymbol = importedStaticCandidate;
+                }
+
                 // Issue #2394: a same-compilation SOURCE type (enum/struct/
                 // interface) must be checked BEFORE an imported CLR class so
                 // that it wins when both are visible under the same simple
@@ -519,7 +533,7 @@ internal sealed partial class ExpressionBinder
                 // OTHER file could otherwise incorrectly shadow this
                 // compilation's own type here — matching the precedence
                 // already used by Binder.LookupType (type-clause position).
-                if (typeAlias is EnumSymbol foundEnum)
+                else if (typeAlias is EnumSymbol foundEnum)
                 {
                     enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
                 }
@@ -2576,7 +2590,7 @@ internal sealed partial class ExpressionBinder
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
-                && ImportedGenericTypeHasPrecedence(alias, openClrType);
+                && ImportedGenericTypeHasPrecedence(alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
         }
@@ -2664,7 +2678,7 @@ internal sealed partial class ExpressionBinder
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
-                && ImportedGenericTypeHasPrecedence(alias, openClrType);
+                && ImportedGenericTypeHasPrecedence(alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
         }
@@ -2705,10 +2719,16 @@ internal sealed partial class ExpressionBinder
             && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
     }
 
-    private bool ImportedGenericTypeHasPrecedence(TypeSymbol? sourceType, Type? importedType)
+    private bool ImportedGenericTypeHasPrecedence(
+        TypeSymbol? sourceType,
+        Type? importedType,
+        int requestedArity)
         => sourceType != null
             && importedType is { IsNested: false }
-            && binderCtx.ImportedTypeOverridesNestedType(sourceType, getCurrentFunction());
+            && binderCtx.ImportedTypeOverridesSourceType(
+                sourceType,
+                requestedArity,
+                getCurrentFunction());
 
     /// <summary>
     /// Issue #1559: syntax-shape-agnostic dispatcher over the two

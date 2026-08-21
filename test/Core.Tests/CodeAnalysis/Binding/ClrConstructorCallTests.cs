@@ -191,6 +191,33 @@ func Read(value List[int32]) int32 {
     }
 
     [Fact]
+    public void WrongArityNestedSourceHomonym_DoesNotBlockImportedGenericTypeOrNestedType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class Holder {
+    class List {}
+
+    shared {
+        func Count(values List[int32]) int32 {
+            return values.Count
+        }
+
+        func Current(enumerator List[int32].Enumerator) int32 {
+            return enumerator.Current
+        }
+    }
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void ImportedGenericQualifiedType_WithSameArityNestedSourceHomonym_BindsImportedType()
     {
         var source = @"
@@ -261,6 +288,61 @@ target.Value
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
+    public void ImportedGenericLiteral_WithWrongArityNestedSourceHomonym_BindsImportedType()
+    {
+        var source = @"
+package Demo
+import System.Threading
+
+class Holder {
+    class AsyncLocal {
+        prop Value int32 { get; set; }
+    }
+
+    shared {
+        func Read() string {
+            let state = AsyncLocal[string]{Value: ""ok""}
+            return state.Value
+        }
+    }
+}
+
+Holder.Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
+    public void NonGenericStaticReceiver_UsesNestedTypeInsideAndImportedTypeOutside()
+    {
+        var source = @"
+package Demo
+import System
+
+class Holder {
+    class String {
+        shared {
+            prop Empty int32 { get { return 7 } }
+        }
+    }
+
+    shared {
+        func ReadNested() int32 {
+            return String.Empty
+        }
+    }
+}
+
+Holder.ReadNested() * 100 + String.Empty.Length
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(700, result.Value);
     }
 
     [Fact]

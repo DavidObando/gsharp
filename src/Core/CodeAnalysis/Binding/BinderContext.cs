@@ -320,15 +320,20 @@ internal sealed class BinderContext
 
     /// <summary>
     /// Returns whether an imported top-level type should override a
-    /// same-named nested source type at the current binding site.
+    /// same-named source type at the current binding site.
     /// </summary>
     /// <param name="sourceType">The source type found by simple-name lookup.</param>
+    /// <param name="requestedArity">The exact requested arity, or -1 when no arity was specified.</param>
     /// <param name="currentFunction">The function currently being bound, if any.</param>
     /// <returns>
-    /// <see langword="true"/> only when <paramref name="sourceType"/> is nested
-    /// and the binding site is outside its containing lexical scope.
+    /// <see langword="true"/> when the source fallback has the wrong requested
+    /// arity, or when it is nested and the binding site is outside its
+    /// containing lexical scope.
     /// </returns>
-    public bool ImportedTypeOverridesNestedType(TypeSymbol sourceType, FunctionSymbol? currentFunction)
+    public bool ImportedTypeOverridesSourceType(
+        TypeSymbol sourceType,
+        int requestedArity,
+        FunctionSymbol? currentFunction)
     {
         static TypeSymbol? ContainingType(TypeSymbol? type) => type switch
         {
@@ -344,6 +349,18 @@ internal sealed class BinderContext
             InterfaceSymbol i => i.Definition,
             _ => type,
         };
+        static int Arity(TypeSymbol type) => type switch
+        {
+            StructSymbol s when s.IsGenericDefinition => s.TypeParameters.Length,
+            InterfaceSymbol i when i.IsGenericDefinition => i.TypeParameters.Length,
+            DelegateTypeSymbol d when d.IsGenericDefinition => d.TypeParameters.Length,
+            _ => 0,
+        };
+
+        if (requestedArity >= 0 && Arity(sourceType) != requestedArity)
+        {
+            return true;
+        }
 
         var sourceContainer = ContainingType(sourceType);
         if (sourceContainer == null)

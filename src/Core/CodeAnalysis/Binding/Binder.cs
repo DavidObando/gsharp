@@ -4706,7 +4706,7 @@ public sealed class Binder
         }
 
         return !importedType.IsNested
-            && binderCtx.ImportedTypeOverridesNestedType(sourceType, function);
+            && binderCtx.ImportedTypeOverridesSourceType(sourceType, arity, function);
     }
 
     /// <summary>
@@ -7098,7 +7098,7 @@ public sealed class Binder
             // top-level imported type is the visible meaning outside that
             // containing lexical scope, but the nested type keeps its existing
             // short-name meaning inside its container.
-            if (binderCtx.ImportedTypeOverridesNestedType(aliased, function)
+            if (binderCtx.ImportedTypeOverridesSourceType(aliased, preferredArity, function)
                 && scope.TryLookupImportedClassByArity(
                     name,
                     preferredArity,

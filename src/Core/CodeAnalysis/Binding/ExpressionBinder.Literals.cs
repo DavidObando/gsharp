@@ -1154,7 +1154,10 @@ internal sealed partial class ExpressionBinder
                 && hasImportedCandidate
                 && importedCandidate != null
                 && !importedCandidate.ClassType.IsNested
-                && binderCtx.ImportedTypeOverridesNestedType(resolvedStruct, getCurrentFunction());
+                && binderCtx.ImportedTypeOverridesSourceType(
+                    resolvedStruct,
+                    preferredArity,
+                    getCurrentFunction());
             if (!foundAlias || resolvedStruct == null || importedTopLevelTakesPrecedence)
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also

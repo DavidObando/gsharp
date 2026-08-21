@@ -114,6 +114,9 @@ public sealed class CSharpTypeMapper
     private readonly HashSet<string> reservedImportedTypeNames =
         new(System.StringComparer.Ordinal);
 
+    private readonly HashSet<string> reservedTypeParameterNames =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared top-level
     /// type simple names (built lazily on first use), used to decide whether a
@@ -567,6 +570,12 @@ public sealed class CSharpTypeMapper
             SemanticModel semanticModel = compilation.GetSemanticModel(tree);
             foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
             {
+                if (node is TypeParameterSyntax typeParameter
+                    && semanticModel.GetDeclaredSymbol(typeParameter) is ITypeParameterSymbol typeParameterSymbol)
+                {
+                    this.reservedTypeParameterNames.Add(names.GetName(typeParameterSymbol));
+                }
+
                 if (node is not (NameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax))
                 {
                     continue;
@@ -658,6 +667,7 @@ public sealed class CSharpTypeMapper
             System.StringComparer.Ordinal);
         reserved.UnionWith(this.reservedTypeAliases.Keys);
         reserved.UnionWith(this.reservedImportedTypeNames);
+        reserved.UnionWith(this.reservedTypeParameterNames);
         reserved.UnionWith(this.sourceDeclaredTypeNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
@@ -1268,6 +1278,7 @@ public sealed class CSharpTypeMapper
             bool scanImportedNamespaces = isSourceType
                 || this.qualifyMetadataImportCollisions;
             bool ambiguous = this.HasSourceHomonym(named, context)
+                || (!isSourceType && this.HasVisibleSourceNestedHomonym(named, context, location))
                 || (scanImportedNamespaces && this.HasImportedNamespaceHomonym(named, context));
             if (!ambiguous)
             {
@@ -1428,6 +1439,36 @@ public sealed class CSharpTypeMapper
                 ? 1
                 : 0;
         return count > selfCount;
+    }
+
+    private bool HasVisibleSourceNestedHomonym(
+        INamedTypeSymbol named,
+        TranslationContext context,
+        Location location)
+    {
+        if (location?.SourceTree == null)
+        {
+            return false;
+        }
+
+        int position = System.Math.Min(
+            location.SourceSpan.Start,
+            location.SourceTree.GetRoot().FullSpan.End - 1);
+        foreach (ISymbol symbol in context.SemanticModel.LookupNamespacesAndTypes(position, name: named.Name))
+        {
+            if (symbol is INamedTypeSymbol candidate
+                && candidate.Arity == named.Arity
+                && candidate.ContainingType != null
+                && candidate.Locations.Any(candidateLocation => candidateLocation.IsInSource)
+                && !SymbolEqualityComparer.Default.Equals(
+                    candidate.OriginalDefinition,
+                    named.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
