@@ -245,7 +245,7 @@ internal static class RoslynAnalyzerApiMap
     /// from a Roslyn namespace, type, member, or attribute rewrite.
     /// </summary>
     /// <returns>The mapped target namespaces. Duplicates are permitted.</returns>
-    internal static IEnumerable<string> EnumerateTargetNamespaces()
+    public static IEnumerable<string> EnumerateTargetNamespaces()
     {
         foreach (string targetNamespace in NamespaceMap.Values)
         {

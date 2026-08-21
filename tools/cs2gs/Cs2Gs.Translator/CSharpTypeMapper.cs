@@ -580,71 +580,6 @@ public sealed class CSharpTypeMapper
         }
     }
 
-    private static INamespaceSymbol GetExtensionMethodNamespace(IMethodSymbol method)
-    {
-        if (method is null)
-        {
-            return null;
-        }
-
-        // Reduced instance-form calls (key.All(predicate)) resolve to a
-        // reduced symbol; unwrap it back to the original static-form method
-        // so ContainingNamespace reflects the extension's declaring type.
-        IMethodSymbol original = method.ReducedFrom ?? method;
-        if (!original.IsExtensionMethod)
-        {
-            return null;
-        }
-
-        // C# 14 extension blocks compile their members onto a synthetic
-        // marker type nested inside the containing type; unwrap to the
-        // enclosing (real, declared) type so the namespace we record is the
-        // one the user would actually need to import.
-        INamedTypeSymbol containingType = original.ContainingType;
-        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
-        {
-            containingType = declaringType;
-        }
-
-        return containingType?.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? ns
-            : null;
-    }
-
-    private static IReadOnlyDictionary<string, List<string>> BuildAnalyzerTargetTypeNames()
-    {
-        var targetNamespaces = new HashSet<string>(
-            Analyzers.RoslynAnalyzerApiMap.EnumerateTargetNamespaces(),
-            System.StringComparer.Ordinal);
-        var result = targetNamespaces.ToDictionary(
-            targetNamespace => targetNamespace,
-            _ => new List<string>(),
-            System.StringComparer.Ordinal);
-
-        foreach (System.Type type in typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.GetTypes())
-        {
-            if (type.IsNested
-                || !type.IsPublic
-                || type.Namespace is not { } typeNamespace
-                || !result.TryGetValue(typeNamespace, out var names))
-            {
-                continue;
-            }
-
-            string metadataName = type.Name;
-            int arityMarker = metadataName.IndexOf('`');
-            string simpleName = arityMarker >= 0
-                ? metadataName.Substring(0, arityMarker)
-                : metadataName;
-            names.Add(
-                GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
-                    simpleName,
-                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Type));
-        }
-
-        return result;
-    }
-
     /// <summary>
     /// Maps an exact inferred contract while qualifying metadata homonyms
     /// reachable through the current file's imports.
@@ -817,6 +752,71 @@ public sealed class CSharpTypeMapper
                 this.DelegateTypeName(type, context, location),
                 type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
             : new NamedTypeReference(this.DelegateTypeName(type, context, location));
+    }
+
+    private static INamespaceSymbol GetExtensionMethodNamespace(IMethodSymbol method)
+    {
+        if (method is null)
+        {
+            return null;
+        }
+
+        // Reduced instance-form calls (key.All(predicate)) resolve to a
+        // reduced symbol; unwrap it back to the original static-form method
+        // so ContainingNamespace reflects the extension's declaring type.
+        IMethodSymbol original = method.ReducedFrom ?? method;
+        if (!original.IsExtensionMethod)
+        {
+            return null;
+        }
+
+        // C# 14 extension blocks compile their members onto a synthetic
+        // marker type nested inside the containing type; unwrap to the
+        // enclosing (real, declared) type so the namespace we record is the
+        // one the user would actually need to import.
+        INamedTypeSymbol containingType = original.ContainingType;
+        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
+        {
+            containingType = declaringType;
+        }
+
+        return containingType?.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? ns
+            : null;
+    }
+
+    private static IReadOnlyDictionary<string, List<string>> BuildAnalyzerTargetTypeNames()
+    {
+        var targetNamespaces = new HashSet<string>(
+            Analyzers.RoslynAnalyzerApiMap.EnumerateTargetNamespaces(),
+            System.StringComparer.Ordinal);
+        var result = targetNamespaces.ToDictionary(
+            targetNamespace => targetNamespace,
+            _ => new List<string>(),
+            System.StringComparer.Ordinal);
+
+        foreach (System.Type type in typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.GetTypes())
+        {
+            if (type.IsNested
+                || !type.IsPublic
+                || type.Namespace is not { } typeNamespace
+                || !result.TryGetValue(typeNamespace, out var names))
+            {
+                continue;
+            }
+
+            string metadataName = type.Name;
+            int arityMarker = metadataName.IndexOf('`');
+            string simpleName = arityMarker >= 0
+                ? metadataName.Substring(0, arityMarker)
+                : metadataName;
+            names.Add(
+                GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
+                    simpleName,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Type));
+        }
+
+        return result;
     }
 
     private string QualifiedAliasTarget(INamedTypeSymbol type)
