@@ -240,27 +240,6 @@ internal static class RoslynAnalyzerApiMap
     public static bool TryMapType(string metadataName, out Entry entry)
         => TypeMap.TryGetValue(metadataName, out entry);
 
-    /// <summary>
-    /// Enumerates every G# namespace that analyzer translation may synthesize
-    /// from a Roslyn namespace, type, member, or attribute rewrite.
-    /// </summary>
-    /// <returns>The mapped target namespaces. Duplicates are permitted.</returns>
-    public static IEnumerable<string> EnumerateTargetNamespaces()
-    {
-        foreach (string targetNamespace in NamespaceMap.Values)
-        {
-            yield return targetNamespace;
-        }
-
-        foreach (Entry entry in TypeMap.Values)
-        {
-            if (!string.IsNullOrEmpty(entry.GsNamespace))
-            {
-                yield return entry.GsNamespace;
-            }
-        }
-    }
-
     /// <summary>Maps a Roslyn enum member to its G# spelling.</summary>
     /// <param name="enumMetadataName">The declaring enum's metadata name.</param>
     /// <param name="memberName">The enum member.</param>
@@ -276,6 +255,27 @@ internal static class RoslynAnalyzerApiMap
     /// <returns>True when an explicit mapping exists; false means identity.</returns>
     public static bool TryMapMember(string typeMetadataName, string memberName, out Entry entry)
         => MemberMap.TryGetValue((typeMetadataName, memberName), out entry);
+
+    /// <summary>
+    /// Enumerates every G# namespace that analyzer translation may synthesize
+    /// from a Roslyn namespace, type, member, or attribute rewrite.
+    /// </summary>
+    /// <returns>The mapped target namespaces. Duplicates are permitted.</returns>
+    internal static IEnumerable<string> EnumerateTargetNamespaces()
+    {
+        foreach (string targetNamespace in NamespaceMap.Values)
+        {
+            yield return targetNamespace;
+        }
+
+        foreach (Entry entry in TypeMap.Values)
+        {
+            if (!string.IsNullOrEmpty(entry.GsNamespace))
+            {
+                yield return entry.GsNamespace;
+            }
+        }
+    }
 
     /// <summary>A single mapping row.</summary>
     /// <param name="GsNamespace">The G# namespace (types only; null for members).</param>
