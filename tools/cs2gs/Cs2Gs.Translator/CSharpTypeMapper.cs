@@ -43,6 +43,13 @@ public sealed class CSharpTypeMapper
     public const string UnsupportedPlaceholderType = "object";
 
     /// <summary>
+    /// Public top-level type names exposed by every namespace analyzer-mode
+    /// rewrites may synthesize, cached from the G# core assembly.
+    /// </summary>
+    private static readonly System.Lazy<IReadOnlyDictionary<string, List<string>>> AnalyzerTargetTypeNames =
+        new(BuildAnalyzerTargetTypeNames);
+
+    /// <summary>
     /// Issue #2211: every namespace this mapper has shortened a type reference
     /// into (via <see cref="QualifiedTypeName"/>), collected so the translator
     /// can synthesize a matching <c>import</c> for a namespace with no
@@ -522,9 +529,10 @@ public sealed class CSharpTypeMapper
         // cannot depend on which declaration happens to translate first.
         if (this.AnalyzerApiMode)
         {
-            foreach (string targetNamespace in Analyzers.RoslynAnalyzerApiMap.EnumerateTargetNamespaces())
+            foreach (var targetNamespace in AnalyzerTargetTypeNames.Value)
             {
-                AddImportedNamespace(targetNamespace);
+                AddImportedNamespace(targetNamespace.Key);
+                this.reservedImportedTypeNames.UnionWith(targetNamespace.Value);
             }
         }
 
@@ -601,6 +609,40 @@ public sealed class CSharpTypeMapper
         return containingType?.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? ns
             : null;
+    }
+
+    private static IReadOnlyDictionary<string, List<string>> BuildAnalyzerTargetTypeNames()
+    {
+        var targetNamespaces = new HashSet<string>(
+            Analyzers.RoslynAnalyzerApiMap.EnumerateTargetNamespaces(),
+            System.StringComparer.Ordinal);
+        var result = targetNamespaces.ToDictionary(
+            targetNamespace => targetNamespace,
+            _ => new List<string>(),
+            System.StringComparer.Ordinal);
+
+        foreach (System.Type type in typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.GetTypes())
+        {
+            if (type.IsNested
+                || !type.IsPublic
+                || type.Namespace is not { } typeNamespace
+                || !result.TryGetValue(typeNamespace, out var names))
+            {
+                continue;
+            }
+
+            string metadataName = type.Name;
+            int arityMarker = metadataName.IndexOf('`');
+            string simpleName = arityMarker >= 0
+                ? metadataName.Substring(0, arityMarker)
+                : metadataName;
+            names.Add(
+                GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
+                    simpleName,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Type));
+        }
+
+        return result;
     }
 
     /// <summary>
