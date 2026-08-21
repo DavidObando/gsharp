@@ -668,9 +668,7 @@ public sealed class BoundScope
         }
 
         var mangled = name + "`" + arity;
-        if (TryLookupImport(name, out var aliasImport)
-            && aliasImport.IsAlias
-            && References.TryResolveType(aliasImport.Target + "`" + arity, out var aliasedType))
+        if (TryResolveImportedTypeAlias(name, arity, out var aliasedType))
         {
             type = aliasedType;
             return true;
@@ -721,16 +719,42 @@ public sealed class BoundScope
             return false;
         }
 
-        if (TryLookupImportedClass(name, declaration, out importedClass)
-            && !importedClass.ClassType.IsGenericTypeDefinition)
+        // ADR-0156 Phase 2: preserve prior-submission precedence, but reject
+        // its lone-open-generic fallback at a non-generic use site.
+        if (SubmissionImports is { } submissionImports
+            && submissionImports.TryResolveType(References, name, preferredArity, out var submissionType)
+            && !submissionType.IsGenericTypeDefinition)
         {
+            importedClass = new ImportedClassSymbol(
+                submissionType,
+                declaration,
+                references: References);
             return true;
         }
 
-        // A bare use site has no CLR type arguments with which to construct
-        // an open generic. Submission lookup can otherwise fall back from
-        // arity 0/-1 to a lone generic definition, unlike namespace imports,
-        // and incorrectly displace a non-generic nested source candidate.
+        if (TryResolveImportedTypeAlias(name, preferredArity, out var aliasedType))
+        {
+            importedClass = new ImportedClassSymbol(
+                aliasedType,
+                declaration,
+                references: References);
+            return true;
+        }
+
+        foreach (var import in EnumerateImports())
+        {
+            var typeName = import.Target + "." + name;
+            if (References.TryResolveType(typeName, out var type)
+                && !type.IsGenericTypeDefinition)
+            {
+                importedClass = new ImportedClassSymbol(
+                    type,
+                    declaration,
+                    references: References);
+                return true;
+            }
+        }
+
         importedClass = null;
         return false;
     }
@@ -743,46 +767,7 @@ public sealed class BoundScope
     /// <param name="importedClass">The result, if found.</param>
     /// <returns>Whether a class was found or not.</returns>
     public bool TryLookupImportedClass(string name, ExpressionSyntax? declaration, [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
-    {
-        importedClass = null;
-
-        // ADR-0156 Phase 2: a type declared by a prior interactive submission
-        // resolves as an imported class over that submission's emitted
-        // assembly, newest submission first. Consulted before ordinary
-        // imports so a session-defined type shadows a same-named imported
-        // type, mirroring the evaluator scope chain (source lookups have
-        // already had their chance before any caller reaches this method).
-        if (SubmissionImports is { } submissionImports
-            && submissionImports.TryResolveType(References, name, preferredArity: 0, out var submissionType))
-        {
-            importedClass = new ImportedClassSymbol(submissionType, declaration, references: References);
-            return true;
-        }
-
-        // Issue #2273 / #3466: a direct type alias is itself the visible
-        // imported class name. This must run before namespace-import probing:
-        // treating its target as a namespace ("Target.Name") lets an unrelated
-        // nested source homonym capture type, constructor, and literal sites.
-        if (TryLookupImport(name, out var aliasImport)
-            && aliasImport.IsAlias
-            && References.TryResolveType(aliasImport.Target, out var aliasedType))
-        {
-            importedClass = new ImportedClassSymbol(aliasedType, declaration, references: References);
-            return true;
-        }
-
-        foreach (var import in EnumerateImports())
-        {
-            var typeName = import.Target + "." + name;
-            if (References.TryResolveType(typeName, out var type))
-            {
-                importedClass = new ImportedClassSymbol(type, declaration, references: References);
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => TryLookupImportedClassByArity(name, preferredArity: 0, declaration, out importedClass);
 
     /// <summary>
     /// Issue #3334 / ADR-0134: enumerates referenced-assembly CLR types brought
@@ -1602,6 +1587,32 @@ public sealed class BoundScope
     /// </summary>
     private string? GetQualifiedConstructionPackageHint()
         => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint.Value;
+
+    /// <summary>
+    /// Resolves a direct type alias with exact generic-arity semantics.
+    /// Non-positive arities only accept a non-generic target.
+    /// </summary>
+    /// <param name="name">The visible alias name.</param>
+    /// <param name="preferredArity">The requested generic arity.</param>
+    /// <param name="type">The resolved CLR type.</param>
+    /// <returns>Whether the alias targets a type of the requested arity.</returns>
+    private bool TryResolveImportedTypeAlias(
+        string name,
+        int preferredArity,
+        [NotNullWhen(true)] out System.Type? type)
+    {
+        type = null;
+        if (!TryLookupImport(name, out var import) || !import.IsAlias)
+        {
+            return false;
+        }
+
+        string target = preferredArity > 0
+            ? import.Target + "`" + preferredArity
+            : import.Target;
+        return References.TryResolveType(target, out type)
+            && (preferredArity > 0 || !type.IsGenericTypeDefinition);
+    }
 
     /// <summary>
     /// Issue #2455: tries to resolve (<paramref name="name"/>, <paramref name="arity"/>)

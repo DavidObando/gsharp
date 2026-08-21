@@ -14,6 +14,7 @@ using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Cs2Gs.Translator;
 
@@ -506,6 +507,27 @@ public sealed class CSharpTypeMapper
             }
         }
 
+        void AddSymbolNamespace(ISymbol symbol)
+        {
+            if (symbol is INamedTypeSymbol type)
+            {
+                while (type.ContainingType != null)
+                {
+                    type = type.ContainingType;
+                }
+
+                if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                {
+                    importedNamespaces.Add(ns);
+                }
+            }
+            else if (symbol is IMethodSymbol method
+                && GetExtensionMethodNamespace(method) is { } extensionNamespace)
+            {
+                importedNamespaces.Add(extensionNamespace);
+            }
+        }
+
         foreach (ImportDirective import in imports)
         {
             if (import.Alias != null)
@@ -550,23 +572,22 @@ public sealed class CSharpTypeMapper
                     continue;
                 }
 
-                ISymbol symbol = semanticModel.GetSymbolInfo(node).Symbol;
-                if (symbol is INamedTypeSymbol type)
+                SymbolInfo symbolInfo = semanticModel.GetSymbolInfo(node);
+                AddSymbolNamespace(symbolInfo.Symbol);
+                foreach (ISymbol candidate in symbolInfo.CandidateSymbols)
                 {
-                    while (type.ContainingType != null)
-                    {
-                        type = type.ContainingType;
-                    }
-
-                    if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
-                    {
-                        importedNamespaces.Add(ns);
-                    }
+                    AddSymbolNamespace(candidate);
                 }
-                else if (symbol is IMethodSymbol method
-                    && GetExtensionMethodNamespace(method) is { } extensionNamespace)
+
+                IMethodSymbol operationMethod = semanticModel.GetOperation(node) switch
                 {
-                    importedNamespaces.Add(extensionNamespace);
+                    IInvocationOperation invocation => invocation.TargetMethod,
+                    IMethodReferenceOperation methodReference => methodReference.Method,
+                    _ => null,
+                };
+                if (operationMethod != null)
+                {
+                    AddSymbolNamespace(operationMethod);
                 }
             }
         }

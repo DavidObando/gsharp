@@ -1134,6 +1134,13 @@ internal sealed partial class ExpressionBinder
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
             var foundAlias = scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType, out var typeNameAmbiguous);
             var resolvedStruct = resolvedType as StructSymbol;
+            bool hasImportedCandidate =
+                !typeNameAmbiguous
+                && scope.TryLookupImportedClassByArity(
+                    typeName,
+                    preferredArity,
+                    declaration: null,
+                    out var importedCandidate);
 
             // Issue #3466: a nested source type may retain the bare (name,
             // arity) key for references from its containing type. A same-named
@@ -1143,12 +1150,9 @@ internal sealed partial class ExpressionBinder
             bool importedTopLevelTakesPrecedence =
                 foundAlias
                 && resolvedStruct?.ContainingType != null
-                && scope.TryLookupImportedClassByArity(
-                    typeName,
-                    preferredArity,
-                    declaration: null,
-                    out var importedPrecedenceCandidate)
-                && !importedPrecedenceCandidate.ClassType.IsNested;
+                && hasImportedCandidate
+                && importedCandidate != null
+                && !importedCandidate.ClassType.IsNested;
             if (!foundAlias || resolvedStruct == null || importedTopLevelTakesPrecedence)
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
@@ -1169,24 +1173,24 @@ internal sealed partial class ExpressionBinder
                 // possibly be what the literal means — skip straight to
                 // reporting the dedicated ambiguity diagnostic rather than the
                 // generic "cannot find type".
-                if (!typeNameAmbiguous
-                    && syntax.TypeArgumentList == null
-                    && scope.TryLookupImportedClass(typeName, declaration: null, out var importedClass)
-                    && importedClass.ClassType is { IsGenericTypeDefinition: false })
+                if (syntax.TypeArgumentList == null
+                    && hasImportedCandidate
+                    && importedCandidate != null
+                    && importedCandidate.ClassType is { IsGenericTypeDefinition: false })
                 {
-                    if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedClass.ClassType, scope.References, out var importedAggregate))
+                    if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedCandidate.ClassType, scope.References, out var importedAggregate))
                     {
                         structSymbol = importedAggregate;
                     }
                     else
                     {
-                        return BindImportedTypeLiteralExpression(syntax, importedClass.ClassType);
+                        return BindImportedTypeLiteralExpression(syntax, importedCandidate.ClassType);
                     }
                 }
-                else if (!typeNameAmbiguous
-                    && syntax.TypeArgumentList != null
-                    && scope.TryLookupImportedGenericClass(
-                        typeName, syntax.TypeArgumentList.Arguments.Count, out var openImportedType)
+                else if (syntax.TypeArgumentList != null
+                    && hasImportedCandidate
+                    && importedCandidate != null
+                    && importedCandidate.ClassType.IsGenericTypeDefinition
                     && TryResolveClrConstructionTypeArgs(
                         syntax.TypeArgumentList, out var clrTypeArguments, out _, out var hasSymbolicArgument)
                     && !hasSymbolicArgument)
@@ -1194,7 +1198,7 @@ internal sealed partial class ExpressionBinder
                     Type closedImportedType;
                     try
                     {
-                        closedImportedType = openImportedType.MakeGenericType(clrTypeArguments);
+                        closedImportedType = importedCandidate.ClassType.MakeGenericType(clrTypeArguments);
                     }
                     catch (ArgumentException)
                     {

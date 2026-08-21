@@ -261,7 +261,7 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
-    public void ReadableAlias_AvoidsTypeFromLateExtensionImport()
+    public void ReadableAlias_AvoidsTypeFromLateExtensionMethodGroupImport()
     {
         string referencePath = typeof(TextStringBuilder).Assembly.Location;
         IReadOnlyList<MetadataReference> references = CSharpProjectLoader
@@ -289,10 +289,15 @@ public sealed class Issue3466NestedHomonymAliasTests
                                 return new System.Text.StringBuilder("one");
                             }
 
+                            private static int Invoke(System.Func<int> action)
+                            {
+                                return action();
+                            }
+
                             public static int Measure()
                             {
                                 var builder = MakeBuilder();
-                                return builder.Length + "x".Issue3466Length();
+                                return builder.Length + Invoke("x".Issue3466Length);
                             }
                         }
                     }
@@ -388,4 +393,6 @@ public sealed class TextStringBuilder
 public static class Issue3466LateImportExtensions
 {
     public static int Issue3466Length(this string value) => value.Length;
+
+    public static int Issue3466Length(this string value, int offset) => value.Length + offset;
 }

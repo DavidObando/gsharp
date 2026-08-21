@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -171,16 +172,16 @@ target.Value
     {
         var source = @"
 package Demo
-import ServiceAlias = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedService
+import Service = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedService
 
 class Holder {
-    class ServiceAlias {
+    class Service {
         prop Value int32
     }
 }
 
-func Create() ServiceAlias {
-    return ServiceAlias()
+func Create() Service {
+    return Service()
 }
 
 Create().Value
@@ -195,20 +196,65 @@ Create().Value
     {
         var source = @"
 package Demo
-import InitializerAlias = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedInitializer
+import Service = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedInitializer
 
 class Holder {
-    class InitializerAlias {
+    class Service {
         prop Value int32 { get; set; }
     }
 }
 
-let target = InitializerAlias{Value: 7}
+let target = Service{Value: 7}
 target.Value
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(107, result.Value);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public void ImportedAliasLookup_NonPositiveArity_ResolvesExactNonGenericTarget(int preferredArity)
+    {
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { typeof(Issue3466ImportedService).Assembly.Location });
+        var scope = new BoundScope(null, resolver);
+        Assert.True(scope.TryImport(new ImportSymbol(
+            "Service",
+            typeof(Issue3466ImportedService).FullName!,
+            declaration: null)));
+
+        Assert.True(scope.TryLookupImportedClassByArity(
+            "Service",
+            preferredArity,
+            declaration: null,
+            out var imported));
+        Assert.Equal(typeof(Issue3466ImportedService).FullName, imported.ClassType.FullName);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public void ImportedGenericAliasLookup_NonPositiveArity_DoesNotResolveOpenType(int preferredArity)
+    {
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { typeof(Issue3466ImportedGenericService<>).Assembly.Location });
+        var scope = new BoundScope(null, resolver);
+        string target = typeof(Issue3466ImportedGenericService<>).FullName!.Split('`')[0];
+        Assert.True(scope.TryImport(new ImportSymbol("Service", target, declaration: null)));
+
+        Assert.False(scope.TryLookupImportedClassByArity(
+            "Service",
+            preferredArity,
+            declaration: null,
+            out _));
+        Assert.True(scope.TryLookupImportedClassByArity(
+            "Service",
+            preferredArity: 1,
+            declaration: null,
+            out var imported));
+        Assert.True(imported.ClassType.IsGenericTypeDefinition);
     }
 
     [Fact]
