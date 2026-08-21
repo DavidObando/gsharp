@@ -699,7 +699,7 @@ public sealed class BoundScope
     /// <param name="declaration">The declaration.</param>
     /// <param name="importedClass">The result, if found.</param>
     /// <returns>Whether a class was found or not.</returns>
-    public bool TryLookupImportedClass(
+    public bool TryLookupImportedClassByArity(
         string name,
         int preferredArity,
         ExpressionSyntax? declaration,

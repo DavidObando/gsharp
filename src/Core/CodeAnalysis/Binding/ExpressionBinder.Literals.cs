@@ -1143,7 +1143,7 @@ internal sealed partial class ExpressionBinder
             bool importedTopLevelTakesPrecedence =
                 foundAlias
                 && resolvedStruct?.ContainingType != null
-                && scope.TryLookupImportedClass(
+                && scope.TryLookupImportedClassByArity(
                     typeName,
                     preferredArity,
                     declaration: null,

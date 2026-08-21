@@ -410,7 +410,7 @@ internal sealed partial class OverloadResolver
         // qualification, or the qualified-construction package hint — because
         // tryBindClrConstructorCall/TryLookupImportedClass ran unconditionally
         // before the source-type-alias checks further down ever got a chance.
-        bool hasImportedTopLevelType = Scope.TryLookupImportedClass(
+        bool hasImportedTopLevelType = Scope.TryLookupImportedClassByArity(
                 syntax.Identifier.Text,
                 ctorPreferredArity,
                 declaration: null,

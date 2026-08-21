@@ -7083,7 +7083,7 @@ public sealed class Binder
             // a bare name brought in by an import; do not let the nested key
             // capture that reference.
             if (IsNestedUserType(aliased)
-                && scope.TryLookupImportedClass(
+                && scope.TryLookupImportedClassByArity(
                     name,
                     preferredArity,
                     declaration: null,
