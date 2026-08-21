@@ -1086,7 +1086,7 @@ public sealed class BoundScope
     /// "no arity preference" and resolves the arity-0 type first.
     /// </summary>
     /// <param name="name">The alias name.</param>
-    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="preferredArity">The exact generic arity, or -1 for none.</param>
     /// <param name="type">The aliased type, when found.</param>
     /// <returns>Whether an alias exists.</returns>
     public bool TryLookupTypeAlias(string name, int preferredArity, [NotNullWhen(true)] out TypeSymbol? type)
@@ -1268,41 +1268,78 @@ public sealed class BoundScope
             return false;
         }
 
+        var containerDefinition = TypeDefinition(container);
+
         // The nested type is stored under its containing-type-qualified key
         // (e.g. `Outer.Inner` for a doubly-nested type), arity-mangled the same
         // way as in TryDeclareTypeAlias.
-        var qualifiedName = QualifiedTypeName(container) + "." + simpleName;
+        var qualifiedName = QualifiedTypeName(containerDefinition) + "." + simpleName;
 
-        if (preferredArity > 0)
+        if (preferredArity >= 0)
         {
-            var arityKey = MangleArity(qualifiedName, preferredArity);
-            if (TryGetTypeAliasInChain(arityKey, out var arityMatch)
-                && IsNestedDirectlyIn(arityMatch, container))
+            var qualifiedKey = preferredArity == 0
+                ? qualifiedName
+                : MangleArity(qualifiedName, preferredArity);
+            if (TryGetTypeAliasInChain(qualifiedKey, out var qualifiedMatch)
+                && IsNestedDirectlyIn(qualifiedMatch, containerDefinition))
             {
-                type = arityMatch;
+                type = qualifiedMatch;
                 return true;
             }
+
+            var simpleKey = preferredArity == 0
+                ? simpleName
+                : MangleArity(simpleName, preferredArity);
+            if (TryGetTypeAliasInChain(simpleKey, out var simpleMatch)
+                && IsNestedDirectlyIn(simpleMatch, containerDefinition))
+            {
+                type = simpleMatch;
+                return true;
+            }
+
+            return false;
         }
 
-        // Arity-0 (plain) qualified key.
-        if (TryGetTypeAliasInChain(qualifiedName, out var exact)
-            && IsNestedDirectlyIn(exact, container))
+        // Unknown arity: prefer the non-generic nested type.
+        if (TryGetTypeAliasInChain(qualifiedName, out var qualifiedExact)
+            && IsNestedDirectlyIn(qualifiedExact, containerDefinition))
         {
-            type = exact;
+            type = qualifiedExact;
             return true;
         }
 
-        // Lowest-arity same-name generic variant under the qualified key.
+        if (TryGetTypeAliasInChain(simpleName, out var simpleExact)
+            && IsNestedDirectlyIn(simpleExact, containerDefinition))
+        {
+            type = simpleExact;
+            return true;
+        }
+
+        // No arity-0 match: resolve the lowest-arity generic variant.
         TypeSymbol? best = null;
         var bestArity = int.MaxValue;
         foreach (var pair in EnumerateTypeAliasesInChain())
         {
-            if (TryParseAritySuffix(pair.Key, qualifiedName, out var arity)
-                && arity < bestArity
-                && IsNestedDirectlyIn(pair.Value, container))
+            if (TryParseAritySuffix(pair.Key, qualifiedName, out var qualifiedArity)
+                && qualifiedArity < bestArity
+                && IsNestedDirectlyIn(pair.Value, containerDefinition))
             {
                 best = pair.Value;
-                bestArity = arity;
+                bestArity = qualifiedArity;
+            }
+        }
+
+        if (best == null)
+        {
+            foreach (var pair in EnumerateTypeAliasesInChain())
+            {
+                if (TryParseAritySuffix(pair.Key, simpleName, out var simpleArity)
+                    && simpleArity < bestArity
+                    && IsNestedDirectlyIn(pair.Value, containerDefinition))
+                {
+                    best = pair.Value;
+                    bestArity = simpleArity;
+                }
             }
         }
 
@@ -1312,44 +1349,49 @@ public sealed class BoundScope
             return true;
         }
 
-        // No collision: when the nested type's simple name was free, it keeps
-        // the simple key. Accept the simple-key holder when it is in fact a
-        // nested type of `container`.
-        if (preferredArity > 0)
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves an unqualified nested source type through the current lexical
+    /// containing-type chain before global simple-name lookup.
+    /// </summary>
+    /// <param name="currentContainingType">The source type containing the reference.</param>
+    /// <param name="simpleName">The nested type's simple name.</param>
+    /// <param name="preferredArity">The exact requested arity, or -1 when unspecified.</param>
+    /// <param name="type">The resolved nested type, including enclosing generic substitutions.</param>
+    /// <returns>Whether a lexically visible nested type was found.</returns>
+    public bool TryLookupLexicalNestedTypeAlias(
+        TypeSymbol currentContainingType,
+        string simpleName,
+        int preferredArity,
+        [NotNullWhen(true)] out TypeSymbol? type)
+    {
+        for (var current = currentContainingType; current != null; current = TypeContainingType(current))
         {
-            var simpleArityKey = MangleArity(simpleName, preferredArity);
-            if (TryGetTypeAliasInChain(simpleArityKey, out var simpleArityMatch)
-                && IsNestedDirectlyIn(simpleArityMatch, container))
+            var currentDefinition = TypeDefinition(current);
+            if (TryLookupNestedTypeAlias(currentDefinition, simpleName, preferredArity, out var direct))
             {
-                type = simpleArityMatch;
+                type = current is StructSymbol directOwner
+                    ? ApplyEnclosingConstruction(direct, directOwner)
+                    : direct;
+                return true;
+            }
+
+            if (current is StructSymbol currentStruct
+                && TryLookupNestedTypeAliasIncludingInherited(
+                    currentStruct,
+                    simpleName,
+                    preferredArity,
+                    out var inherited,
+                    out var declaringContainer))
+            {
+                type = ApplyEnclosingConstruction(inherited, declaringContainer);
                 return true;
             }
         }
 
-        if (TryGetTypeAliasInChain(simpleName, out var simpleMatch)
-            && IsNestedDirectlyIn(simpleMatch, container))
-        {
-            type = simpleMatch;
-            return true;
-        }
-
-        foreach (var pair in EnumerateTypeAliasesInChain())
-        {
-            if (TryParseAritySuffix(pair.Key, simpleName, out var arity)
-                && arity < bestArity
-                && IsNestedDirectlyIn(pair.Value, container))
-            {
-                best = pair.Value;
-                bestArity = arity;
-            }
-        }
-
-        if (best != null)
-        {
-            type = best;
-            return true;
-        }
-
+        type = null;
         return false;
     }
 
@@ -1383,7 +1425,10 @@ public sealed class BoundScope
                 continue;
             }
 
-            if (!ReferenceEquals(c, container) && IsPrivateNestedType(type))
+            if (!AccessibilityChecker.IsAccessibleFromType(
+                    NestedTypeAccessibility(type),
+                    definition,
+                    container))
             {
                 type = null;
                 declaringContainer = null;
@@ -1561,6 +1606,48 @@ public sealed class BoundScope
         var previous = qualifiedConstructionPackageHint.Value;
         qualifiedConstructionPackageHint.Value = packageName;
         return previous;
+    }
+
+    private TypeSymbol ApplyEnclosingConstruction(TypeSymbol nestedType, StructSymbol declaringContainer)
+    {
+        var enclosingArguments = FlattenConstructedTypeArguments(declaringContainer);
+        if (enclosingArguments.IsDefaultOrEmpty)
+        {
+            return nestedType;
+        }
+
+        return nestedType switch
+        {
+            StructSymbol nestedStruct => StructSymbol.ConstructNested(
+                nestedStruct.Definition ?? nestedStruct,
+                enclosingArguments,
+                References.MapClrTypeToReferences),
+            EnumSymbol nestedEnum => EnumSymbol.ConstructNested(
+                nestedEnum.Definition ?? nestedEnum,
+                enclosingArguments),
+            _ => nestedType,
+        };
+    }
+
+    private static ImmutableArray<TypeSymbol> FlattenConstructedTypeArguments(StructSymbol type)
+    {
+        if (type.EnclosingTypeArguments.IsDefaultOrEmpty && type.TypeArguments.IsDefaultOrEmpty)
+        {
+            return default;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
+        if (!type.EnclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            builder.AddRange(type.EnclosingTypeArguments);
+        }
+
+        if (!type.TypeArguments.IsDefaultOrEmpty)
+        {
+            builder.AddRange(type.TypeArguments);
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>
@@ -2427,7 +2514,26 @@ public sealed class BoundScope
         StructSymbol s => s.ContainingType,
         EnumSymbol e => e.ContainingType,
         InterfaceSymbol i => i.ContainingType,
+        DelegateTypeSymbol d => d.ContainingType,
         _ => null,
+    };
+
+    private static TypeSymbol TypeDefinition(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.Definition ?? s,
+        EnumSymbol e => e.Definition ?? e,
+        InterfaceSymbol i => i.Definition ?? i,
+        DelegateTypeSymbol d => d.Definition ?? d,
+        _ => type,
+    };
+
+    private static Accessibility NestedTypeAccessibility(TypeSymbol type) => type switch
+    {
+        StructSymbol s => s.Accessibility,
+        EnumSymbol e => e.Accessibility,
+        InterfaceSymbol i => i.Accessibility,
+        DelegateTypeSymbol d => d.Accessibility,
+        _ => Accessibility.Private,
     };
 
     /// <summary>
@@ -2884,12 +2990,4 @@ public sealed class BoundScope
 
         return true;
     }
-
-    private static bool IsPrivateNestedType(TypeSymbol type) => type switch
-    {
-        StructSymbol s => s.Accessibility == Accessibility.Private,
-        InterfaceSymbol i => i.Accessibility == Accessibility.Private,
-        EnumSymbol e => e.Accessibility == Accessibility.Private,
-        _ => false,
-    };
 }

@@ -106,7 +106,13 @@ internal sealed partial class ExpressionBinder
         if (syntax.LeftPart is NameExpressionSyntax enclosingNameSyntax
             && syntax.RightPart is not NameExpressionSyntax
             && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.Text) is not VariableSymbol
-            && scope.TryLookupTypeAlias(enclosingNameSyntax.IdentifierToken.Text, out var enclosingAliasType)
+            && binderCtx.TryLookupSourceType(
+                scope,
+                enclosingNameSyntax.IdentifierToken.Text,
+                preferredArity: -1,
+                getCurrentFunction(),
+                out var enclosingAliasType,
+                out _)
             && IsUserAggregateType(enclosingAliasType)
             && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
@@ -509,7 +515,13 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
             }
-            else if (scope.TryLookupTypeAlias(name, out var typeAlias))
+            else if (binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: 0,
+                getCurrentFunction(),
+                out var typeAlias,
+                out _))
             {
                 if (TryResolveImportedTopLevelOverride(
                         name,
@@ -771,7 +783,13 @@ internal sealed partial class ExpressionBinder
         nestedClassSymbol = null;
         StructSymbol? sourceType = null;
         if (syntax.LeftPart is NameExpressionSyntax sourceName
-            && scope.TryLookupTypeAlias(sourceName.IdentifierToken.Text, out var sourceAlias)
+            && binderCtx.TryLookupSourceType(
+                scope,
+                sourceName.IdentifierToken.Text,
+                preferredArity: -1,
+                getCurrentFunction(),
+                out var sourceAlias,
+                out _)
             && sourceAlias is StructSymbol namedSourceType)
         {
             sourceType = namedSourceType;
@@ -924,9 +942,8 @@ internal sealed partial class ExpressionBinder
     /// type whose enclosing type is <paramref name="container"/>.
     /// </summary>
     private bool IsNestedTypeOf(string name, TypeSymbol container) =>
-        scope.TryLookupTypeAlias(name, out var candidate)
-        && IsUserAggregateType(candidate)
-        && ReferenceEquals(GetSymbolContainingType(candidate), container);
+        scope.TryLookupNestedTypeAlias(container, name, preferredArity: -1, out var candidate)
+        && IsUserAggregateType(candidate);
 
     /// <summary>
     /// Issue #1069: returns the leftmost identifier of an accessor-chain segment
@@ -1047,7 +1064,13 @@ internal sealed partial class ExpressionBinder
         // look the index up as a type and report a spurious GS0113).
         if (!TryGetUserTypeChainHead(expr, out var headName)
             || scope.TryLookupSymbol(headName) is VariableSymbol
-            || !scope.TryLookupTypeAlias(headName, out var headCandidate)
+            || !binderCtx.TryLookupSourceType(
+                scope,
+                headName,
+                preferredArity: -1,
+                getCurrentFunction(),
+                out var headCandidate,
+                out _)
             || !IsUserAggregateType(headCandidate))
         {
             return false;
@@ -1078,7 +1101,14 @@ internal sealed partial class ExpressionBinder
         }
 
         var headArity = segments[0].Args.IsDefaultOrEmpty ? -1 : segments[0].Args.Length;
-        if (!scope.TryLookupTypeAlias(segments[0].Name, headArity, out var headDef) || !IsUserAggregateType(headDef))
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                segments[0].Name,
+                headArity,
+                getCurrentFunction(),
+                out var headDef,
+                out _)
+            || !IsUserAggregateType(headDef))
         {
             return false;
         }
@@ -1732,7 +1762,13 @@ internal sealed partial class ExpressionBinder
         interfaceSymbol = null;
         enumSymbol = null;
 
-        if (scope.TryLookupTypeAlias(name, preferredArity: 0, out var typeAlias))
+        if (binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: 0,
+                getCurrentFunction(),
+                out var typeAlias,
+                out _))
         {
             if (TryResolveImportedTopLevelOverride(
                     name,
@@ -2533,7 +2569,13 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!scope.TryLookupTypeAlias(targetName.IdentifierToken.Text, out var alias)
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                targetName.IdentifierToken.Text,
+                index.Indices.Count,
+                getCurrentFunction(),
+                out var alias,
+                out _)
             || alias is not InterfaceSymbol ifaceDef
             || !ifaceDef.IsGenericDefinition)
         {
@@ -2608,7 +2650,13 @@ internal sealed partial class ExpressionBinder
         // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
         // generic receiver fails to resolve. Disambiguate using the bracketed
         // type-argument count so `Box[int32]` selects the arity-1 `Box[T]`.
-        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias, out var typeNameAmbiguous)
+        var userGenericDef = binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: arity,
+                getCurrentFunction(),
+                out var alias,
+                out var typeNameAmbiguous)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
@@ -2696,7 +2744,13 @@ internal sealed partial class ExpressionBinder
         // index-expression overload — select the same-name type whose generic
         // arity matches the supplied type-argument count so `Box[int32]`
         // resolves to `Box[T]` rather than the non-generic `Box`.
-        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias, out var typeNameAmbiguous)
+        var userGenericDef = binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: arity,
+                getCurrentFunction(),
+                out var alias,
+                out var typeNameAmbiguous)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
@@ -2839,7 +2893,13 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether the segment is a pure namespace/package prefix.</returns>
     private bool IsNamespacePrefixSegment(string segment, bool isLeadingSegment = true) =>
         (!isLeadingSegment || scope.TryLookupSymbol(segment) is not VariableSymbol)
-        && !scope.TryLookupTypeAlias(segment, out _)
+        && !binderCtx.TryLookupSourceType(
+            scope,
+            segment,
+            preferredArity: -1,
+            getCurrentFunction(),
+            out _,
+            out _)
         && !(scope.TryLookupImport(segment, out var import) && import.IsAlias)
         && !scope.TryLookupImportedClass(segment, declaration: null, out _);
 

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -317,6 +318,48 @@ internal sealed class BinderContext
     public int CachedImportedExtensionImportCount { get; set; } = -1;
 
     public SyntaxTree? CachedImportedExtensionSyntaxTree { get; set; }
+
+    /// <summary>
+    /// Resolves a source type at the current binding site. Lexically visible
+    /// nested types on the containing type or an accessible base type are
+    /// considered before the compilation-wide simple-name table.
+    /// </summary>
+    /// <param name="scope">The current bound scope.</param>
+    /// <param name="name">The requested simple type name.</param>
+    /// <param name="preferredArity">The exact requested arity, or -1 when unspecified.</param>
+    /// <param name="currentFunction">The function currently being bound, if any.</param>
+    /// <param name="type">The resolved source type.</param>
+    /// <param name="ambiguousAcrossImportedPackages">Whether global source lookup was ambiguous across imported packages.</param>
+    /// <returns>Whether a source type was found.</returns>
+    public bool TryLookupSourceType(
+        BoundScope scope,
+        string name,
+        int preferredArity,
+        FunctionSymbol? currentFunction,
+        [NotNullWhen(true)] out TypeSymbol? type,
+        out bool ambiguousAcrossImportedPackages)
+    {
+        var currentContainingType = CurrentContainingType
+            ?? currentFunction?.ReceiverType
+            ?? currentFunction?.StaticOwnerType
+            ?? currentFunction?.LexicalEnclosingType;
+        if (currentContainingType != null
+            && scope.TryLookupLexicalNestedTypeAlias(
+                currentContainingType,
+                name,
+                preferredArity,
+                out type))
+        {
+            ambiguousAcrossImportedPackages = false;
+            return true;
+        }
+
+        return scope.TryLookupTypeAlias(
+            name,
+            preferredArity,
+            out type,
+            out ambiguousAcrossImportedPackages);
+    }
 
     /// <summary>
     /// Returns whether an imported top-level type should override a

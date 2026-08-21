@@ -147,6 +147,88 @@ class Holder {
     }
 
     [Fact]
+    public void EarlierNestedGenericHomonym_DoesNotAffectLexicalLookupAcrossPositions()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class Other {
+    class List[T] {
+        prop OtherValue int32
+    }
+}
+
+class Holder {
+    class List[T] {
+        prop SourceValue int32 { get; set; }
+
+        shared {
+            prop StaticValue int32 { get; set; }
+        }
+    }
+
+    shared {
+        func Echo(value List[int32]) int32 {
+            return value.SourceValue
+        }
+
+        func Read() int32 {
+            let constructed = List[int32]()
+            let initialized = List[int32]{SourceValue: 7}
+            List[int32].StaticValue = 5
+            List[int32].StaticValue += 1
+            return constructed.SourceValue + Echo(initialized) + List[int32].StaticValue
+        }
+    }
+}
+
+Holder.Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(13, result.Value);
+    }
+
+    [Fact]
+    public void EarlierNestedHomonym_StaticWriteAndColorColorUseLexicalType()
+    {
+        var source = @"
+package Demo
+import System
+
+class Other {
+    class Environment {
+        shared {
+            prop OtherCode int32 { get; set; }
+        }
+    }
+}
+
+class Holder {
+    class Environment {
+        shared {
+            prop Code int32 { get; set; }
+        }
+    }
+
+    var Environment string = ""shadow""
+
+    func Read() int32 {
+        Environment.Code = 7
+        Environment.Code += 1
+        return Environment.Code
+    }
+}
+
+Holder().Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(8, result.Value);
+    }
+
+    [Fact]
     public void InheritedNestedGenericSourceHomonym_TypeAnnotationWinsImportedType()
     {
         var source = @"
@@ -169,6 +251,39 @@ class Derived : Base[int32] {
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void InheritedNestedGenericSourceHomonym_PreservesConstructedBaseSubstitution()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+open class Base[T] {
+    protected class List[U] {
+        prop SourceValue T { get; set; }
+    }
+}
+
+class Derived : Base[int32] {
+    func Read(value List[string]) int32 {
+        return value.SourceValue
+    }
+
+    func Build() int32 {
+        let constructed = List[string]()
+        constructed.SourceValue = 3
+        let initialized = List[string]{SourceValue: 7}
+        return Read(constructed) * 10 + Read(initialized)
+    }
+}
+
+Derived().Build()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(37, result.Value);
     }
 
     [Fact]

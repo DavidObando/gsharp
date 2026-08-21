@@ -80,10 +80,13 @@ internal sealed partial class ExpressionBinder
         TypeSymbol? staticSourceType = null;
         ImportedClassSymbol? staticImportedOverride = null;
         if (staticLeftName != null
-            && scope.TryLookupTypeAlias(
+            && binderCtx.TryLookupSourceType(
+                scope,
                 staticLeftName.IdentifierToken.Text,
                 preferredArity: 0,
-                out staticSourceType))
+                getCurrentFunction(),
+                out staticSourceType,
+                out _))
         {
             _ = TryResolveImportedTopLevelOverride(
                 staticLeftName.IdentifierToken.Text,

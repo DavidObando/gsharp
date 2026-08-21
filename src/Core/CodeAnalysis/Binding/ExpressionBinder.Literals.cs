@@ -1132,7 +1132,13 @@ internal sealed partial class ExpressionBinder
             // non-generic `Foo` and a generic `Foo[T]` can coexist. Without one,
             // prefer the arity-0 type (falling back to a lone generic for inference).
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
-            var foundAlias = scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType, out var typeNameAmbiguous);
+            var foundAlias = binderCtx.TryLookupSourceType(
+                scope,
+                typeName,
+                preferredArity,
+                getCurrentFunction(),
+                out var resolvedType,
+                out var typeNameAmbiguous);
             var resolvedStruct = resolvedType as StructSymbol;
             ImportedClassSymbol? importedCandidate = null;
             bool hasImportedCandidate =

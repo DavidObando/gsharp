@@ -419,7 +419,13 @@ internal sealed partial class OverloadResolver
                 declaration: null,
                 out var importedCtorCandidate)
             && !importedCtorCandidate.ClassType.IsNested;
-        var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
+        var hasSourceConstructibleType = binderCtx.TryLookupSourceType(
+                Scope,
+                syntax.Identifier.Text,
+                ctorPreferredArity,
+                getCurrentFunction(),
+                out var sourceCtorCandidate,
+                out _)
             && sourceCtorCandidate is StructSymbol sourceCtorStruct
             && !(hasImportedTopLevelType
                 && binderCtx.ImportedTypeOverridesSourceType(

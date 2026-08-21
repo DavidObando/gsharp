@@ -4700,7 +4700,13 @@ public sealed class Binder
 
     private bool ImportedGenericTypeHasPrecedence(string name, int arity, Type importedType)
     {
-        if (!scope.TryLookupTypeAlias(name, arity, out var sourceType, out var ambiguousAcrossImportedPackages))
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                arity,
+                function,
+                out var sourceType,
+                out var ambiguousAcrossImportedPackages))
         {
             return !ambiguousAcrossImportedPackages;
         }
@@ -7091,7 +7097,13 @@ public sealed class Binder
                 return TypeSymbol.Void;
         }
 
-        if (scope.TryLookupTypeAlias(name, preferredArity, out var aliased, out ambiguousAcrossImportedPackages))
+        if (binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity,
+                function,
+                out var aliased,
+                out ambiguousAcrossImportedPackages))
         {
             // Issue #3466: nested source types may retain a bare lookup key so
             // their containing type can use the short name. A same-named

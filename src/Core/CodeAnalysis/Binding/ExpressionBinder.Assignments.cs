@@ -622,10 +622,13 @@ internal sealed partial class ExpressionBinder
                 selectorLocation: syntax.Receiver.Location);
         }
 
-        scope.TryLookupTypeAlias(
+        binderCtx.TryLookupSourceType(
+            scope,
             receiverName,
             preferredArity: 0,
-            out var sourceTypeAlias);
+            function,
+            out var sourceTypeAlias,
+            out _);
         ImportedClassSymbol? importedTypeOverride = null;
         if (sourceTypeAlias != null)
         {
