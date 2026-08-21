@@ -98,6 +98,37 @@ public sealed class Issue3465CompilerInferenceEmitTests
         Assert.Equal($"91{Environment.NewLine}", CompileAndRun(source));
     }
 
+    [Fact]
+    public void ConstructorAndExpressionTreeLambdaTargets_CompileVerifyAndRun()
+    {
+        const string source = """
+            package i3465targets
+            import System
+            import System.Linq.Expressions
+
+            class Visitor {
+                init(action (int32)->void) {
+                    Console.Write(1)
+                }
+
+                init(action (int32)->int32) {
+                    Console.Write(2)
+                }
+            }
+
+            func Make() Expression[Func[int32, int32]] {
+                return (value) -> value + 1
+            }
+
+            func Main() {
+                Visitor((value) -> {})
+                Console.WriteLine(Make().Compile()(4))
+            }
+            """;
+
+        Assert.Equal($"15{Environment.NewLine}", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var workDir = Path.Combine(

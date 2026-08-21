@@ -707,6 +707,94 @@ public sealed class Issue3465InferenceTests
     }
 
     [Fact]
+    public void NestedLoopBreak_DoesNotMakeOuterInfiniteLoopComplete()
+    {
+        var result = Evaluate("""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {
+                for {
+                    for { break }
+                }
+            })
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0154" or "GS0155");
+    }
+
+    [Fact]
+    public void OuterLoopBreak_StillMakesLambdaVoidOnly()
+    {
+        var result = Evaluate("""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {
+                for { break }
+            })
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void NestedLabeledLoopBreak_DoesNotMakeOuterInfiniteLoopComplete()
+    {
+        var result = Evaluate("""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {
+                for {
+                    inner: for { break inner }
+                }
+            })
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
+    }
+
+    [Fact]
+    public void LabeledBreakTargetingOuterLoop_MakesLambdaVoidOnly()
+    {
+        var result = Evaluate("""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {
+                outer: for {
+                    for { break outer }
+                }
+            })
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void OverloadedConstructor_ContextuallyBindsUntypedLambda()
+    {
+        var result = Evaluate("""
+            class Visitor {
+                init(action (int32)->void) {}
+                init(action (int32)->int32) {}
+            }
+
+            Visitor((value) -> {})
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
     public void NestedUntypedLambdaInExplicitReturn_DefersThroughWrappers()
     {
         var result = Evaluate("""
@@ -926,6 +1014,24 @@ public sealed class Issue3465InferenceTests
         Assert.Equal(2, result.Value);
     }
 
+    [Fact]
+    public void AsyncValueTaskAndTaskOverloads_ContextuallyAcceptTargetlessLambda()
+    {
+        var result = Evaluate("""
+            import System.Threading.Tasks
+
+            func Choose(action ()->Task[int32]) int32 -> 1
+            func Choose(action ()->ValueTask[int32]) int32 -> 2
+
+            Choose(async () -> { return 7 })
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0154" or "GS0155");
+    }
+
     [Theory]
     [InlineData("Task")]
     [InlineData("ValueTask")]
@@ -993,6 +1099,24 @@ public sealed class Issue3465InferenceTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void ExpressionTreeReturn_ContextuallyBindsUntypedLambda()
+    {
+        var result = Evaluate("""
+            import System
+            import System.Linq.Expressions
+
+            func Make() Expression[Func[int32, int32]] {
+                return (value) -> value + 1
+            }
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
     }
 
     private static IEnumerable<string> LambdaDiagnosticOwnershipSources(string body)

@@ -899,6 +899,14 @@ internal sealed partial class OverloadResolver
                 boundArgument = bindLambdaWithTarget(lambdaArgument, lambdaTarget);
             }
 
+            if (boundArgument is null
+                && lambdaArgument is not null
+                && bindLambdaWithTarget is not null
+                && IsUntypedArrowLambda(lambdaArgument))
+            {
+                boundArgument = new BoundErrorExpression(lambdaArgument);
+            }
+
             boundArgument ??= BindOverloadArgumentValue(argument);
             boundArgumentsBuilder.Add(boundArgument);
         }
@@ -961,7 +969,8 @@ internal sealed partial class OverloadResolver
                 argumentNames,
                 boundArgumentsBuilder.ToImmutable(),
                 out var ambiguous,
-                out var nullSafetyFailure);
+                out var nullSafetyFailure,
+                callSyntax: syntax);
 
             if (selectedFn == null)
             {
@@ -1230,6 +1239,16 @@ internal sealed partial class OverloadResolver
             var argLocation = i < parameterSyntax.Length && parameterSyntax[i] != null
                 ? Invariant.Required(parameterSyntax[i], "an explicit constructor argument has source syntax").Location
                 : syntax.Identifier.Location;
+
+            if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax deferredLambda }
+                && bindLambdaWithTarget != null
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget)
+                && !TypeSymbol.ContainsTypeParameter(deferredTarget))
+            {
+                var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
+                convertedArguments.Add(conversions.BindConversion(argLocation, targeted, paramType));
+                continue;
+            }
 
             if (TryBindConstructorMethodGroup(argument, paramType, argLocation, out var methodGroupArg))
             {

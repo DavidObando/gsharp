@@ -346,17 +346,16 @@ internal sealed partial class StatementBinder
             // `return cond ? … : …` honors the function's declared return type
             // as the target type so the result type can unify to the return type
             // (C#-style target-typing) before the conversion below.
-            // Expression-tree lambdas retain their natural body shape until the
-            // expression-tree conversion below applies the delegate target.
             var returnExpression = syntax.Expression;
             while (returnExpression is ParenthesizedExpressionSyntax parenthesized)
             {
                 returnExpression = parenthesized.Expression;
             }
 
-            var targetTypesLambdaReturn = returnExpression is LambdaExpressionSyntax
-                && function != null
-                && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(function.Type, out _);
+            var targetTypesLambdaReturn = returnExpression is LambdaExpressionSyntax lambdaReturn
+                && (function == null
+                    || !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(function.Type, out _)
+                    || lambdaReturn.Parameters.Any(parameter => parameter.Type == null));
             if ((targetTypesLambdaReturn
                     || returnExpression is SwitchExpressionSyntax
                     || returnExpression is IfExpressionSyntax

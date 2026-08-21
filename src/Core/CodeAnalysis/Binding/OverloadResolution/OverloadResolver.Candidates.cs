@@ -509,9 +509,17 @@ internal sealed partial class OverloadResolver
                 // the argument's actual return type) is preferred — matching
                 // C#'s "better conversion from a method group" rule — instead
                 // of tying and reporting a spurious GS0266.
-                kinds[i] = IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution)
-                    ? ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
-                    : ClassifyUserArgumentConversionKind(argType, paramType);
+                // An async lambda's Task/ValueTask wrapper is supplied by its
+                // candidate target, so equal awaited result shapes rank equally.
+                var lambdaSyntax = callSyntax != null && i < callSyntax.Arguments.Count
+                    ? UnwrapNamedArgumentValue(callSyntax.Arguments[i]) as LambdaExpressionSyntax
+                    : null;
+                kinds[i] = lambdaSyntax?.IsAsync == true
+                    && HasSameAsyncLambdaResultShape(argType, paramType)
+                        ? ClrOverloadResolution.ImplicitConversionKind.Identity
+                        : IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution)
+                            ? ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
+                            : ClassifyUserArgumentConversionKind(argType, paramType);
             }
 
             data.Add(new UserCandidateRankData(cand, kinds, paramTypes, isTailSlot, defaultsUsed, isVariadic));
@@ -1067,6 +1075,19 @@ internal sealed partial class OverloadResolver
                 return false;
             }
 
+            if (lambdaSyntax?.IsAsync == true
+                && bindLambdaWithTarget != null
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var asyncTarget)
+                && !TypeSymbol.ContainsTypeParameter(asyncTarget))
+            {
+                if (!IsContextuallyApplicableAsyncLambda(lambdaSyntax, asyncTarget, paramType))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
             // A target-dependent lambda is represented by an Error-typed
             // placeholder until one candidate supplies its delegate shape.
             // Return-shape/arity checks above are the meaningful applicability
@@ -1194,6 +1215,40 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
+    private bool IsContextuallyApplicableAsyncLambda(
+        LambdaExpressionSyntax lambda,
+        FunctionTypeSymbol target,
+        TypeSymbol parameterType)
+    {
+        var diagnosticMark = Diagnostics.Count;
+        try
+        {
+            var bound = Invariant.Required(
+                bindLambdaWithTarget,
+                "contextual async-lambda applicability requires a lambda binder")(lambda, target);
+            var converted = conversions.BindConversion(lambda.Location, bound, parameterType);
+            return converted is not BoundErrorExpression
+                && !Diagnostics.Skip(diagnosticMark).Any(diagnostic => diagnostic.IsError);
+        }
+        finally
+        {
+            Diagnostics.TruncateTo(diagnosticMark);
+        }
+    }
+
+    private static bool HasSameAsyncLambdaResultShape(TypeSymbol? argumentType, TypeSymbol parameterType)
+    {
+        if (argumentType is not FunctionTypeSymbol argumentFunction
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var targetFunction)
+            || !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(argumentFunction.ReturnType, out var argumentResult)
+            || !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetFunction.ReturnType, out var targetResult))
+        {
+            return false;
+        }
+
+        return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(argumentResult, targetResult);
+    }
+
     // Issue #3465: overload applicability must honor explicit return shape
     // before a lambda has a single contextual target. A `return;` makes the
     // lambda void-only; a `return value` makes it value-returning. Returns in
@@ -1298,18 +1353,31 @@ internal sealed partial class OverloadResolver
                 IsObviouslyNonCompleting(conditional.ThenStatement)
                 && IsObviouslyNonCompleting(conditional.ElseClause.ElseStatement),
             ForInfiniteStatementSyntax loop =>
-                !ContainsPotentialLoopExit(loop.Body),
+                !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
+            LabeledStatementSyntax { Statement: ForInfiniteStatementSyntax loop } labeledLoop =>
+                !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
             _ => false,
         };
 
-    private static bool ContainsPotentialLoopExit(StatementSyntax body)
+    private static bool ContainsPotentialLoopExit(StatementSyntax body, string? loopLabel)
     {
-        var stack = new Stack<SyntaxNode>();
-        stack.Push(body);
+        var stack = new Stack<(SyntaxNode Node, int NestedLoopDepth)>();
+        stack.Push((body, 0));
         while (stack.Count > 0)
         {
-            var node = stack.Pop();
-            if (node is BreakStatementSyntax or GotoStatementSyntax)
+            var (node, nestedLoopDepth) = stack.Pop();
+            if (node is BreakStatementSyntax breakStatement
+                && ((breakStatement.LabelIdentifier == null && nestedLoopDepth == 0)
+                    || (breakStatement.LabelIdentifier != null
+                        && string.Equals(
+                            breakStatement.LabelIdentifier.Text,
+                            loopLabel,
+                            StringComparison.Ordinal))))
+            {
+                return true;
+            }
+
+            if (node is GotoStatementSyntax)
             {
                 return true;
             }
@@ -1322,14 +1390,27 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
+            var childLoopDepth = nestedLoopDepth + (IsLoopSyntax(node) && !ReferenceEquals(node, body) ? 1 : 0);
             foreach (var child in node.GetChildren())
             {
-                stack.Push(child);
+                stack.Push((child, childLoopDepth));
             }
         }
 
         return false;
     }
+
+    private static bool IsLoopSyntax(SyntaxNode node)
+        => node.Kind is SyntaxKind.WhileLetStatement
+            or SyntaxKind.WhileStatement
+            or SyntaxKind.DoWhileStatement
+            or SyntaxKind.ForInfiniteStatement
+            or SyntaxKind.ForEllipsisStatement
+            or SyntaxKind.ForConditionStatement
+            or SyntaxKind.ForClauseStatement
+            or SyntaxKind.ForRangeStatement
+            or SyntaxKind.ForTupleRangeStatement
+            or SyntaxKind.AwaitForRangeStatement;
 
     private bool IsNestedLambdaResultShapeCompatible(
         ExpressionSyntax syntax,
