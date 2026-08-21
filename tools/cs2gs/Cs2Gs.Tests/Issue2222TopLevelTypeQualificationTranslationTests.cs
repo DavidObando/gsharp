@@ -180,7 +180,7 @@ namespace Consumer
     }
 
     [Fact]
-    public void MetadataType_WithSourceHomonym_IsEmittedQualified()
+    public void MetadataType_WithSourceHomonym_UsesReadableAlias()
     {
         MetadataReference libRef = CompileLibrary(
             @"
@@ -245,8 +245,11 @@ namespace Oahu.Core
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
 
-        Assert.Contains("ICollection[Oahu.BooksDatabase.Codec]", printed);
-        Assert.Contains("(c Oahu.BooksDatabase.Codec)", printed);
+        Assert.Contains(
+            "import BooksDatabaseCodec = Oahu.BooksDatabase.Codec",
+            printed);
+        Assert.Contains("ICollection[BooksDatabaseCodec]", printed);
+        Assert.Contains("(c BooksDatabaseCodec)", printed);
 
         RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
             printed,

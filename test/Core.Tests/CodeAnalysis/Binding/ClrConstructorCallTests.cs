@@ -46,6 +46,23 @@ var lst = List[int32]()
     }
 
     [Fact]
+    public void ListInt_WithNestedNonGenericSourceHomonym_BindsImportedGeneric()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class DocInline {
+    class List {}
+}
+
+var lst = List[int32]()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void DictionaryStringInt_DefaultConstructor_Binds()
     {
         var source = @"

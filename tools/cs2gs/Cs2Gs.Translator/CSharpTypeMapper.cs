@@ -104,11 +104,15 @@ public sealed class CSharpTypeMapper
         new(System.StringComparer.Ordinal);
 
     /// <summary>
-    /// Issue #1174: cached per-compilation census of source-declared type simple
-    /// names (built lazily on first use), used to decide whether a source nested
-    /// type's simple name is ambiguous and must be emitted in qualified form.
+    /// Issue #1174: cached per-compilation census of source-declared top-level
+    /// type simple names (built lazily on first use), used to decide whether a
+    /// bare type name is ambiguous and must be emitted in qualified form.
+    /// Nested declarations are excluded because they are not imported by their
+    /// simple names.
     /// </summary>
-    private Dictionary<string, int> sourceSimpleNameCounts;
+    private Dictionary<string, int> sourceTopLevelSimpleNameCounts;
+
+    private HashSet<string> sourceDeclaredTypeNames;
 
     /// <summary>
     /// Issue #2222: the current file's imported namespace names (`using`
@@ -176,7 +180,8 @@ public sealed class CSharpTypeMapper
     public IReadOnlyCollection<string> ShortenedNamespaces => this.shortenedNamespaces;
 
     /// <summary>
-    /// Gets metadata type aliases synthesized to disambiguate source homonyms.
+    /// Gets metadata type aliases synthesized to preserve unambiguous CLR type
+    /// identity.
     /// </summary>
     public IReadOnlyDictionary<string, string> SynthesizedTypeAliases =>
         this.synthesizedTypeAliases;
@@ -530,8 +535,11 @@ public sealed class CSharpTypeMapper
         TranslationContext context)
     {
         string simpleName = this.Names(context).GetName(named);
-        string target = named.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? $"{this.Names(context).GetNamespaceName(ns)}.{simpleName}"
+        string namespaceName = named.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? this.Names(context).GetNamespaceName(ns)
+            : null;
+        string target = namespaceName != null
+            ? $"{namespaceName}.{simpleName}"
             : simpleName;
         foreach (var existing in this.synthesizedTypeAliases)
         {
@@ -550,14 +558,17 @@ public sealed class CSharpTypeMapper
             }
         }
 
-        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
+        this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(
+            context.Compilation,
+            this.Names(context));
         var reserved = new HashSet<string>(
             this.synthesizedTypeAliases.Keys,
             System.StringComparer.Ordinal);
         reserved.UnionWith(this.reservedTypeAliases.Keys);
-        reserved.UnionWith(this.sourceSimpleNameCounts.Keys);
+        reserved.UnionWith(this.sourceDeclaredTypeNames);
 
-        string baseAlias = $"__cs2gs_{target.Replace('.', '_')}";
+        string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
+        string baseAlias = $"{namespaceQualifier}{simpleName}";
         string alias = baseAlias;
         for (var suffix = 2; reserved.Contains(alias); suffix++)
         {
@@ -1087,9 +1098,9 @@ public sealed class CSharpTypeMapper
             // distinct type of the same name sitting in one of the file's
             // actually-imported namespaces — including a referenced assembly,
             // i.e. a translated sibling project surfaced as a metadata
-            // reference). Qualify with the namespace in that case so gsc binds
-            // the reference to the right type instead of whichever homonym
-            // happens to resolve first.
+            // reference). Qualify source types with their namespace and alias
+            // metadata types in that case so gsc binds the reference to the
+            // right type instead of whichever homonym happens to resolve first.
             //
             // Constraint mapping also enables this scan for metadata/metadata
             // collisions (issue #2509). Ordinary positions retain the
@@ -1104,14 +1115,8 @@ public sealed class CSharpTypeMapper
                 return simpleName;
             }
 
-            if (!named.Locations.Any(candidate => candidate.IsInSource)
-                && named.Name == "List"
-                && named.ContainingNamespace?.ToDisplayString()
-                    == "System.Collections.Generic")
+            if (!named.Locations.Any(candidate => candidate.IsInSource))
             {
-                // ponytail: ordinary metadata collision qualification only
-                // needs List<T>; constructor paths request aliases explicitly
-                // when a qualified CLR constructor cannot bind.
                 return this.GetOrCreateMetadataTypeAlias(named, context);
             }
 
@@ -1211,24 +1216,30 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
-    /// Issue #1174: whether another source-declared type shares the simple name of
-    /// <paramref name="named"/>, making the bare name ambiguous in the flat G#
-    /// package scope. The per-compilation simple-name census is built once and
-    /// cached on this mapper instance.
+    /// Issue #1174: whether a source-declared top-level type shares the simple
+    /// name of <paramref name="named"/>, making the bare name ambiguous in the
+    /// flat G# package scope. Nested declarations are excluded from the census:
+    /// they are reachable through their containing type, not through an import.
+    /// The per-compilation simple-name census is built once and cached on this
+    /// mapper instance.
     /// </summary>
     private bool HasSourceHomonym(INamedTypeSymbol named, TranslationContext context)
     {
-        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
-        if (!this.sourceSimpleNameCounts.TryGetValue(named.Name, out var count))
+        this.sourceTopLevelSimpleNameCounts ??=
+            BuildSourceTopLevelSimpleNameCounts(context.Compilation);
+        if (!this.sourceTopLevelSimpleNameCounts.TryGetValue(named.Name, out var count))
         {
             return false;
         }
 
-        // Issue #2307: for a source symbol, one census entry is the symbol
-        // itself, so ambiguity starts at two. A metadata symbol is not in the
-        // source census at all, so even one same-named source declaration is a
-        // distinct homonym and the metadata reference must stay qualified.
-        int selfCount = named.Locations.Any(l => l.IsInSource) ? 1 : 0;
+        // Issue #2307: for a source top-level symbol, one census entry is the
+        // symbol itself, so ambiguity starts at two. Metadata and nested source
+        // symbols are not census entries, so one same-named top-level source
+        // declaration is already a distinct homonym.
+        int selfCount = named.ContainingType == null
+            && named.Locations.Any(l => l.IsInSource)
+                ? 1
+                : 0;
         return count > selfCount;
     }
 
@@ -1388,12 +1399,13 @@ public sealed class CSharpTypeMapper
         return current;
     }
 
-    private static Dictionary<string, int> BuildSourceSimpleNameCounts(Compilation compilation)
+    private static Dictionary<string, int> BuildSourceTopLevelSimpleNameCounts(Compilation compilation)
     {
         var counts = new Dictionary<string, int>();
         foreach (var type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
         {
-            if (!type.Locations.Any(l => l.IsInSource))
+            if (type.ContainingType != null
+                || !type.Locations.Any(l => l.IsInSource))
             {
                 continue;
             }
@@ -1404,6 +1416,14 @@ public sealed class CSharpTypeMapper
 
         return counts;
     }
+
+    private static HashSet<string> BuildSourceDeclaredTypeNames(
+        Compilation compilation,
+        EmittedNameAllocator names) =>
+        EnumerateAllNamedTypes(compilation.GlobalNamespace)
+            .Where(type => type.Locations.Any(location => location.IsInSource))
+            .Select(type => names.GetName(type))
+            .ToHashSet(System.StringComparer.Ordinal);
 
     private static IEnumerable<INamedTypeSymbol> EnumerateAllNamedTypes(INamespaceSymbol ns)
     {

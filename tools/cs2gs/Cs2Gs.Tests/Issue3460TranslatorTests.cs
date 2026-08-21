@@ -245,11 +245,11 @@ namespace Cs2Gs.Tests
         public void SystemObjectEmptyInitializer_RemainsClrObjectConstruction()
         {
             string printed = Translate("""
-                using __cs2gs_System_Object = System.Text.StringBuilder;
+                using SystemObject = System.Text.StringBuilder;
 
                 namespace Demo
                 {
-                    public sealed class __cs2gs_System_Object_2
+                    public sealed class SystemObject_2
                     {
                     }
 
@@ -262,14 +262,14 @@ namespace Cs2Gs.Tests
                 """);
 
             Assert.Contains(
-                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                "import SystemObject = System.Text.StringBuilder",
                 printed,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "import __cs2gs_System_Object_3 = System.Object",
+                "import SystemObject_3 = System.Object",
                 printed,
                 StringComparison.Ordinal);
-            Assert.Contains("__cs2gs_System_Object_3()", printed, StringComparison.Ordinal);
+            Assert.Contains("SystemObject_3()", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("object{}", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
@@ -296,7 +296,7 @@ namespace Cs2Gs.Tests
                     }
                     """),
                 ("B.Partial.cs", """
-                    using __cs2gs_System_Object = System.Text.StringBuilder;
+                    using SystemObject = System.Text.StringBuilder;
 
                     namespace Demo;
 
@@ -307,14 +307,14 @@ namespace Cs2Gs.Tests
                     """));
 
             Assert.Contains(
-                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                "import SystemObject = System.Text.StringBuilder",
                 printed,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "import __cs2gs_System_Object_2 = System.Object",
+                "import SystemObject_2 = System.Object",
                 printed,
                 StringComparison.Ordinal);
-            Assert.Contains("__cs2gs_System_Object_2()", printed, StringComparison.Ordinal);
+            Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -340,7 +340,7 @@ namespace Cs2Gs.Tests
                     }
                     """),
                 ("B.Extensions.cs", """
-                    using __cs2gs_System_Object = System.Text.StringBuilder;
+                    using SystemObject = System.Text.StringBuilder;
 
                     namespace Demo;
 
@@ -351,14 +351,14 @@ namespace Cs2Gs.Tests
                     """));
 
             Assert.Contains(
-                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                "import SystemObject = System.Text.StringBuilder",
                 printed,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "import __cs2gs_System_Object_2 = System.Object",
+                "import SystemObject_2 = System.Object",
                 printed,
                 StringComparison.Ordinal);
-            Assert.Contains("__cs2gs_System_Object_2()", printed, StringComparison.Ordinal);
+            Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
             Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
@@ -395,7 +395,7 @@ namespace Cs2Gs.Tests
                     }
                     """),
                 ("C.Extensions.cs", """
-                    using __cs2gs_System_Object = System.Text.StringBuilder;
+                    using SystemObject = System.Text.StringBuilder;
 
                     namespace Demo;
 
@@ -406,14 +406,14 @@ namespace Cs2Gs.Tests
                     """));
 
             Assert.Contains(
-                "import __cs2gs_System_Object = System.Text.StringBuilder",
+                "import SystemObject = System.Text.StringBuilder",
                 printed,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "import __cs2gs_System_Object_2 = System.Object",
+                "import SystemObject_2 = System.Object",
                 printed,
                 StringComparison.Ordinal);
-            Assert.Contains("__cs2gs_System_Object_2()", printed, StringComparison.Ordinal);
+            Assert.Contains("SystemObject_2()", printed, StringComparison.Ordinal);
             Assert.Contains("class Nested", printed, StringComparison.Ordinal);
             Assert.Contains("func Measure()", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);

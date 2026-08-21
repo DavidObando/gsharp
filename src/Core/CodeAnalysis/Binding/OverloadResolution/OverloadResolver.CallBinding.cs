@@ -412,6 +412,10 @@ internal sealed partial class OverloadResolver
         // before the source-type-alias checks further down ever got a chance.
         var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
             && sourceCtorCandidate is StructSymbol sourceCtorStruct
+            && (ctorPreferredArity < 0
+                || (sourceCtorStruct.IsGenericDefinition
+                    ? sourceCtorStruct.TypeParameters.Length
+                    : 0) == ctorPreferredArity)
             && (sourceCtorStruct.IsClass
                 || sourceCtorStruct.IsInline
                 || sourceCtorStruct.HasPrimaryConstructor

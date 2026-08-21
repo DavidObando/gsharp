@@ -73,7 +73,7 @@ public sealed class Issue2509ConstraintTypeQualificationTranslationTests
     }
 
     [Fact]
-    public void MetadataConstraint_WithSourceHomonym_UsesQualifiedSemanticIdentity()
+    public void MetadataConstraint_WithSourceHomonym_UsesAliasSemanticIdentity()
     {
         MetadataReference contractReference = CompileLibrary(
             """
@@ -108,11 +108,11 @@ public sealed class Issue2509ConstraintTypeQualificationTranslationTests
             "Caller.cs",
             contractReference);
 
-        Assert.Contains("func Add[T A.IContract class init()]", printed, StringComparison.Ordinal);
+        Assert.Contains("func Add[T Contract class init()]", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void MetadataConstraint_WithMetadataHomonym_UsesQualifiedSemanticIdentity()
+    public void MetadataConstraint_WithMetadataHomonym_UsesReadableAlias()
     {
         MetadataReference first = CompileLibrary(
             """
@@ -150,7 +150,8 @@ public sealed class Issue2509ConstraintTypeQualificationTranslationTests
             first,
             second);
 
-        Assert.Contains("func Add[T A.IContract]", printed, StringComparison.Ordinal);
+        Assert.Contains("import AIContract = A.IContract", printed, StringComparison.Ordinal);
+        Assert.Contains("func Add[T AIContract]", printed, StringComparison.Ordinal);
     }
 
     [Fact]

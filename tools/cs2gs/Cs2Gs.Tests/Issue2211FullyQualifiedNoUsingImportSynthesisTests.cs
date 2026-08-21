@@ -148,7 +148,7 @@ namespace Demo
     }
 
     [Fact]
-    public void NestedSourceHomonym_DoesNotQualifyImportedTopLevelGeneric()
+    public void NestedSourceType_DoesNotQualifyImportedTopLevelGeneric()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -170,10 +170,9 @@ namespace Demo
 }");
 
         Assert.Contains("import System.Collections.Generic", printed);
-        Assert.Contains(
-            "import __cs2gs_System_Collections_Generic_List = System.Collections.Generic.List",
-            printed);
-        Assert.Contains("let values = __cs2gs_System_Collections_Generic_List[int32]", printed);
+        Assert.DoesNotContain("import GenericList =", printed);
+        Assert.DoesNotContain("__cs2gs_", printed);
+        Assert.Contains("let values = List[int32]", printed);
         Assert.DoesNotContain("let values = System.Collections.Generic.List", printed);
     }
 
