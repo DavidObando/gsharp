@@ -1134,13 +1134,14 @@ internal sealed partial class ExpressionBinder
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
             var foundAlias = scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType, out var typeNameAmbiguous);
             var resolvedStruct = resolvedType as StructSymbol;
+            ImportedClassSymbol? importedCandidate = null;
             bool hasImportedCandidate =
                 !typeNameAmbiguous
                 && scope.TryLookupImportedClassByArity(
                     typeName,
                     preferredArity,
                     declaration: null,
-                    out var importedCandidate);
+                    out importedCandidate);
 
             // Issue #3466: a nested source type may retain the bare (name,
             // arity) key for references from its containing type. A same-named
