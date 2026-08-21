@@ -20,6 +20,7 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
 {
     private readonly ImmutableArray<Diagnostic>.Builder diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
     private readonly Stack<List<Diagnostic>> duplicateSuppressions = new();
+    private readonly Stack<List<Diagnostic>> transactions = new();
 
     /// <summary>
     /// Gets the number of diagnostics currently held in the bag. Used together
@@ -134,6 +135,13 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         }
     }
 
+    internal Transaction BeginTransaction()
+    {
+        var added = new List<Diagnostic>();
+        transactions.Push(added);
+        return new Transaction(this, added);
+    }
+
     private void Add(Diagnostic diagnostic)
     {
         if (duplicateSuppressions.TryPeek(out var existing))
@@ -149,6 +157,30 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         }
 
         diagnostics.Add(diagnostic);
+        foreach (var transaction in transactions)
+        {
+            transaction.Add(diagnostic);
+        }
+    }
+
+    private void CompleteTransaction(List<Diagnostic> added, bool commit)
+    {
+        if (!ReferenceEquals(transactions.Pop(), added) || commit)
+        {
+            return;
+        }
+
+        for (var addedIndex = added.Count - 1; addedIndex >= 0; addedIndex--)
+        {
+            for (var diagnosticIndex = diagnostics.Count - 1; diagnosticIndex >= 0; diagnosticIndex--)
+            {
+                if (ReferenceEquals(diagnostics[diagnosticIndex], added[addedIndex]))
+                {
+                    diagnostics.RemoveAt(diagnosticIndex);
+                    break;
+                }
+            }
+        }
     }
 
     private static bool AreEquivalent(Diagnostic left, Diagnostic right)
@@ -190,5 +222,39 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         var message = string.Format(descriptor.MessageFormat, messageArguments);
         var diagnostic = new Diagnostic(location, descriptor.Id, severity, message);
         Add(diagnostic);
+    }
+
+    internal sealed class Transaction : IDisposable
+    {
+        private readonly DiagnosticBag owner;
+        private readonly List<Diagnostic> added;
+        private bool completed;
+
+        internal Transaction(DiagnosticBag owner, List<Diagnostic> added)
+        {
+            this.owner = owner;
+            this.added = added;
+        }
+
+        public void Dispose()
+        {
+            Complete(commit: false);
+        }
+
+        internal void Commit()
+        {
+            Complete(commit: true);
+        }
+
+        private void Complete(bool commit)
+        {
+            if (completed)
+            {
+                return;
+            }
+
+            completed = true;
+            owner.CompleteTransaction(added, commit);
+        }
     }
 }
