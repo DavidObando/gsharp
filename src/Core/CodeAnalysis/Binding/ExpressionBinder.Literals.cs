@@ -1145,15 +1145,16 @@ internal sealed partial class ExpressionBinder
 
             // Issue #3466: a nested source type may retain the bare (name,
             // arity) key for references from its containing type. A same-named
-            // top-level CLR type brought into scope by an import is still the
-            // meaning of an unqualified translated object initializer; nested
-            // source references are emitted with their containing type.
+            // top-level CLR type brought into scope by an import wins outside
+            // that containing lexical scope; inside it, the nested source type
+            // retains its existing short-name meaning.
             bool importedTopLevelTakesPrecedence =
                 foundAlias
-                && resolvedStruct?.ContainingType != null
+                && resolvedStruct != null
                 && hasImportedCandidate
                 && importedCandidate != null
-                && !importedCandidate.ClassType.IsNested;
+                && !importedCandidate.ClassType.IsNested
+                && binderCtx.ImportedTypeOverridesNestedType(resolvedStruct, getCurrentFunction());
             if (!foundAlias || resolvedStruct == null || importedTopLevelTakesPrecedence)
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also

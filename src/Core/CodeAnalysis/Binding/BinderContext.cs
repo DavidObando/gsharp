@@ -294,6 +294,14 @@ internal sealed class BinderContext
     public Dictionary<string, TypeParameterSymbol>? CurrentTypeParameters { get; set; }
 
     /// <summary>
+    /// Gets or sets the user type whose declaration body is currently being
+    /// bound. Member bodies normally carry this through their
+    /// <see cref="FunctionSymbol"/>, while member signatures need this ambient
+    /// context before their function symbol exists.
+    /// </summary>
+    public TypeSymbol? CurrentContainingType { get; set; }
+
+    /// <summary>
     /// Gets or sets the cached list of imported static <c>[Extension]</c>
     /// classes for instance-syntax extension-method dispatch (issue #294).
     /// Recomputed when <see cref="CachedImportedExtensionImportCount"/> falls
@@ -309,6 +317,54 @@ internal sealed class BinderContext
     public int CachedImportedExtensionImportCount { get; set; } = -1;
 
     public SyntaxTree? CachedImportedExtensionSyntaxTree { get; set; }
+
+    /// <summary>
+    /// Returns whether an imported top-level type should override a
+    /// same-named nested source type at the current binding site.
+    /// </summary>
+    /// <param name="sourceType">The source type found by simple-name lookup.</param>
+    /// <param name="currentFunction">The function currently being bound, if any.</param>
+    /// <returns>
+    /// <see langword="true"/> only when <paramref name="sourceType"/> is nested
+    /// and the binding site is outside its containing lexical scope.
+    /// </returns>
+    public bool ImportedTypeOverridesNestedType(TypeSymbol sourceType, FunctionSymbol? currentFunction)
+    {
+        static TypeSymbol? ContainingType(TypeSymbol? type) => type switch
+        {
+            StructSymbol s => s.ContainingType,
+            EnumSymbol e => e.ContainingType,
+            InterfaceSymbol i => i.ContainingType,
+            _ => null,
+        };
+        static TypeSymbol Definition(TypeSymbol type) => type switch
+        {
+            StructSymbol s => s.Definition,
+            EnumSymbol e => e.Definition,
+            InterfaceSymbol i => i.Definition,
+            _ => type,
+        };
+
+        var sourceContainer = ContainingType(sourceType);
+        if (sourceContainer == null)
+        {
+            return false;
+        }
+
+        var currentContainer = CurrentContainingType
+            ?? currentFunction?.ReceiverType
+            ?? currentFunction?.StaticOwnerType
+            ?? currentFunction?.LexicalEnclosingType;
+        for (var current = currentContainer; current != null; current = ContainingType(current))
+        {
+            if (ReferenceEquals(Definition(current), Definition(sourceContainer)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Issue #1201: resolves the compilation's non-alias type imports

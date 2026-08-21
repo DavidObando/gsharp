@@ -7079,10 +7079,10 @@ public sealed class Binder
         {
             // Issue #3466: nested source types may retain a bare lookup key so
             // their containing type can use the short name. A same-named
-            // top-level imported type is nevertheless the visible meaning of
-            // a bare name brought in by an import; do not let the nested key
-            // capture that reference.
-            if (IsNestedUserType(aliased)
+            // top-level imported type is the visible meaning outside that
+            // containing lexical scope, but the nested type keeps its existing
+            // short-name meaning inside its container.
+            if (binderCtx.ImportedTypeOverridesNestedType(aliased, function)
                 && scope.TryLookupImportedClassByArity(
                     name,
                     preferredArity,
@@ -7183,17 +7183,6 @@ public sealed class Binder
 
         return null;
     }
-
-    private static bool IsNestedUserType(TypeSymbol type) =>
-        GetContainingUserType(type) != null;
-
-    private static TypeSymbol? GetContainingUserType(TypeSymbol type) => type switch
-    {
-        StructSymbol s => s.ContainingType,
-        EnumSymbol e => e.ContainingType,
-        InterfaceSymbol i => i.ContainingType,
-        _ => null,
-    };
 
     /// <summary>
     /// Issue #525: resolves a class declaration's base-type identifier to an

@@ -212,6 +212,55 @@ target.Value
         Assert.Equal(107, result.Value);
     }
 
+    [Fact]
+    public void NestedSourceHomonym_InContainingScope_TypeAnnotationWinsImportedAlias()
+    {
+        var source = NestedAliasScopeSource() + @"
+func ReadImported(value Service) int32 {
+    return value.Value
+}
+
+let nested = Holder.Service{Value: 7}
+let imported = Service{Value: 7}
+Holder.ReadNested(nested) * 1000 + ReadImported(imported)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7107, result.Value);
+    }
+
+    [Fact]
+    public void NestedSourceHomonym_InContainingScope_ConstructorWinsImportedAlias()
+    {
+        var source = NestedAliasScopeSource() + @"
+func ConstructImported() int32 {
+    let value = Service()
+    return value.Value
+}
+
+Holder.ConstructNested() * 1000 + ConstructImported()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(100, result.Value);
+    }
+
+    [Fact]
+    public void NestedSourceHomonym_InContainingScope_LiteralWinsImportedAlias()
+    {
+        var source = NestedAliasScopeSource() + @"
+func InitializeImported() int32 {
+    let value = Service{Value: 7}
+    return value.Value
+}
+
+Holder.InitializeNested() * 1000 + InitializeImported()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7107, result.Value);
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
@@ -313,6 +362,33 @@ var sb = StringBuilder(""x"", ""y"", ""z"")
         var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
     }
+
+    private static string NestedAliasScopeSource() => @"
+package Demo
+import Service = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedInitializer
+
+class Holder {
+    class Service {
+        prop Value int32 { get; set; }
+    }
+
+    shared {
+        func ReadNested(value Service) int32 {
+            return value.Value
+        }
+
+        func ConstructNested() int32 {
+            let value = Service()
+            return value.Value
+        }
+
+        func InitializeNested() int32 {
+            let value = Service{Value: 7}
+            return value.Value
+        }
+    }
+}
+";
 
     private static EmittedOracleResult Evaluate(string source)
     {

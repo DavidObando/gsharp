@@ -410,6 +410,9 @@ internal sealed partial class OverloadResolver
         // qualification, or the qualified-construction package hint — because
         // tryBindClrConstructorCall/TryLookupImportedClass ran unconditionally
         // before the source-type-alias checks further down ever got a chance.
+        // Issue #3466: a nested source type keeps that precedence only inside
+        // its containing lexical scope; outside it, the imported top-level
+        // homonym remains the visible constructor target.
         bool hasImportedTopLevelType = Scope.TryLookupImportedClassByArity(
                 syntax.Identifier.Text,
                 ctorPreferredArity,
@@ -418,7 +421,8 @@ internal sealed partial class OverloadResolver
             && !importedCtorCandidate.ClassType.IsNested;
         var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
             && sourceCtorCandidate is StructSymbol sourceCtorStruct
-            && !(sourceCtorStruct.ContainingType != null && hasImportedTopLevelType)
+            && !(hasImportedTopLevelType
+                && binderCtx.ImportedTypeOverridesNestedType(sourceCtorStruct, getCurrentFunction()))
             && (ctorPreferredArity < 0
                 || (sourceCtorStruct.IsGenericDefinition
                     ? sourceCtorStruct.TypeParameters.Length
