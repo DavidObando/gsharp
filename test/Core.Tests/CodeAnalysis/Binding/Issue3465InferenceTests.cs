@@ -858,6 +858,39 @@ public sealed class Issue3465InferenceTests
         }
     }
 
+    [Fact]
+    public void ContextuallyReboundLambda_WarningIsReportedOnceAcrossCallPaths()
+    {
+        foreach (var source in LambdaDiagnosticOwnershipSources("""
+            called = called + 1
+            s == nil
+            """))
+        {
+            var result = Evaluate(source);
+
+            Assert.Equal(
+                new[] { "GS0523" },
+                result.Diagnostics.Select(diagnostic => diagnostic.Id));
+            Assert.Equal(1, result.Value);
+        }
+    }
+
+    [Fact]
+    public void ContextuallyReboundLambda_NonTrailingErrorAndWarningAreReportedOnceAcrossCallPaths()
+    {
+        foreach (var source in LambdaDiagnosticOwnershipSources("""
+            undefinedThing()
+            s == nil
+            """))
+        {
+            var result = Evaluate(source);
+
+            Assert.Equal(
+                new[] { "GS0130", "GS0523" },
+                result.Diagnostics.Select(diagnostic => diagnostic.Id).OrderBy(id => id));
+        }
+    }
+
     [Theory]
     [InlineData("Task")]
     [InlineData("ValueTask")]
@@ -960,6 +993,100 @@ public sealed class Issue3465InferenceTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
+    }
+
+    private static IEnumerable<string> LambdaDiagnosticOwnershipSources(string body)
+    {
+        var sources = new[]
+        {
+            """
+            func Visit(action ()->void) {
+                action()
+            }
+
+            var called = 0
+            var s = []int32{1}
+            Visit(() -> {
+                __BODY__
+            })
+            called
+            """,
+            """
+            func Visit(action (int32)->void) {
+                action(0)
+            }
+
+            var called = 0
+            var s = []int32{1}
+            Visit((ignored) -> {
+                __BODY__
+            })
+            called
+            """,
+            """
+            class Visitor {
+                func Visit(action ()->void) {
+                    action()
+                }
+            }
+
+            var called = 0
+            var s = []int32{1}
+            Visitor().Visit(() -> {
+                __BODY__
+            })
+            called
+            """,
+            """
+            class Visitor {
+                init(action ()->void) {
+                    action()
+                }
+            }
+
+            var called = 0
+            var s = []int32{1}
+            Visitor(() -> {
+                __BODY__
+            })
+            called
+            """,
+            """
+            class Visitor {
+                shared {
+                    func Visit(action ()->void) {
+                        action()
+                    }
+                }
+            }
+
+            var called = 0
+            var s = []int32{1}
+            Visitor.Visit(() -> {
+                __BODY__
+            })
+            called
+            """,
+            """
+            import System
+
+            func Accept(factory ()->Action) {
+                factory()()
+            }
+
+            var called = 0
+            var s = []int32{1}
+            Accept(() -> () -> {
+                __BODY__
+            })
+            called
+            """,
+        };
+
+        foreach (var source in sources)
+        {
+            yield return source.Replace("__BODY__", body);
+        }
     }
 
     private static EmittedOracleResult Evaluate(string source)

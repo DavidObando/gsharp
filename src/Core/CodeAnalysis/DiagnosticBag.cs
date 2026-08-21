@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -18,6 +19,7 @@ namespace GSharp.Core.CodeAnalysis;
 public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
 {
     private readonly ImmutableArray<Diagnostic>.Builder diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
+    private readonly Stack<List<Diagnostic>> duplicateSuppressions = new();
 
     /// <summary>
     /// Gets the number of diagnostics currently held in the bag. Used together
@@ -70,7 +72,7 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="diagnostics">The diagnostics bag to copy from.</param>
     public void AddRange(DiagnosticBag diagnostics)
     {
-        this.diagnostics.AddRange(diagnostics.diagnostics);
+        AddRange(diagnostics.diagnostics);
     }
 
     /// <summary>
@@ -81,7 +83,10 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="diagnostics">The diagnostics to copy in.</param>
     public void AddRange(IEnumerable<Diagnostic> diagnostics)
     {
-        this.diagnostics.AddRange(diagnostics);
+        foreach (var diagnostic in diagnostics)
+        {
+            Add(diagnostic);
+        }
     }
 
     /// <summary>
@@ -92,7 +97,73 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
     /// <param name="diagnostic">The diagnostic to add.</param>
     public void Report(Diagnostic diagnostic)
     {
+        Add(diagnostic);
+    }
+
+    /// <summary>
+    /// Runs a contextual rebind while suppressing only diagnostics already
+    /// reported for the same syntax subtree. Each existing diagnostic can
+    /// suppress one exact duplicate, preserving legitimate repeated reports.
+    /// </summary>
+    /// <typeparam name="T">The result type of the binding operation.</typeparam>
+    /// <param name="owner">The syntax subtree whose existing diagnostics own
+    /// any exact duplicates emitted by the rebind.</param>
+    /// <param name="bind">The contextual binding operation.</param>
+    /// <returns>The result of <paramref name="bind"/>.</returns>
+    internal T SuppressDuplicateDiagnosticsIn<T>(TextLocation owner, Func<T> bind)
+    {
+        var existing = diagnostics
+            .Where(diagnostic =>
+                ReferenceEquals(diagnostic.Location.Text, owner.Text)
+                && diagnostic.Location.Span.Start >= owner.Span.Start
+                && diagnostic.Location.Span.End <= owner.Span.End)
+            .ToList();
+        if (existing.Count == 0)
+        {
+            return bind();
+        }
+
+        duplicateSuppressions.Push(existing);
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            duplicateSuppressions.Pop();
+        }
+    }
+
+    private void Add(Diagnostic diagnostic)
+    {
+        if (duplicateSuppressions.TryPeek(out var existing))
+        {
+            for (var i = 0; i < existing.Count; i++)
+            {
+                if (AreEquivalent(existing[i], diagnostic))
+                {
+                    existing.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+
         diagnostics.Add(diagnostic);
+    }
+
+    private static bool AreEquivalent(Diagnostic left, Diagnostic right)
+    {
+        return left.Id == right.Id
+            && left.Severity == right.Severity
+            && left.Message == right.Message
+            && ReferenceEquals(left.Location.Text, right.Location.Text)
+            && left.Location.Span.Start == right.Location.Span.Start
+            && left.Location.Span.Length == right.Location.Span.Length
+            && left.AdditionalLocations.SequenceEqual(right.AdditionalLocations)
+            && left.Properties.Count == right.Properties.Count
+            && left.Properties.All(property =>
+                right.Properties.TryGetValue(property.Key, out var value)
+                && property.Value == value);
     }
 
     private void Report(TextLocation location, DiagnosticDescriptor descriptor, params object[] messageArguments)
@@ -118,6 +189,6 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
     {
         var message = string.Format(descriptor.MessageFormat, messageArguments);
         var diagnostic = new Diagnostic(location, descriptor.Id, severity, message);
-        diagnostics.Add(diagnostic);
+        Add(diagnostic);
     }
 }

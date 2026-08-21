@@ -266,7 +266,9 @@ public sealed class Binder
             getCurrentFunction: () => this.function,
             bindLambdaWithTarget: (syntax, targetType) =>
             {
-                return Lambdas.BindLambdaExpression(syntax, targetType);
+                return Diagnostics.SuppressDuplicateDiagnosticsIn(
+                    syntax.Body.Location,
+                    () => Lambdas.BindLambdaExpression(syntax, targetType));
             },
             bindUserTypeStaticCall: (structSym, ce) =>
             {
