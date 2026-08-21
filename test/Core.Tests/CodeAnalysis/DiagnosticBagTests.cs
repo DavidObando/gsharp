@@ -65,6 +65,23 @@ public class DiagnosticBagTests
     }
 
     [Fact]
+    public void Transaction_RollbackRemovesOnlyDiagnosticsAddedByTransaction()
+    {
+        var location = MakeLocation("source");
+        var existing = new Diagnostic(location, "GS0001", DiagnosticSeverity.Warning, "existing");
+        var rolledBack = new Diagnostic(location, "GS0002", DiagnosticSeverity.Error, "rolled back");
+        var bag = new DiagnosticBag();
+        bag.Report(existing);
+
+        using (bag.BeginTransaction())
+        {
+            bag.Report(rolledBack);
+        }
+
+        Assert.Equal(new[] { existing }, bag);
+    }
+
+    [Fact]
     public void Diagnostic_ToString_Returns_Message()
     {
         var location = MakeLocation("x");
