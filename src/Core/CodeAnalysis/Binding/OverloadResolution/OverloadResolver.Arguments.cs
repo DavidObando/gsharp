@@ -374,6 +374,20 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
+        // Error return also represents valid target-dependent void blocks.
+        // Only body diagnostics prove this eager bind must not run again.
+        if (lambda != null
+            && tryGetFunctionLiteral(argument, out var erroneousLiteral)
+            && erroneousLiteral.FunctionType.ReturnType == TypeSymbol.Error
+            && Diagnostics.Any(diagnostic =>
+                diagnostic.Severity == DiagnosticSeverity.Error
+                && ReferenceEquals(diagnostic.Location.Text, lambda.Body.Location.Text)
+                && diagnostic.Location.Span.Start >= lambda.Body.Location.Span.Start
+                && diagnostic.Location.Span.End <= lambda.Body.Location.Span.End))
+        {
+            return false;
+        }
+
         if (lambda != null
             && !IsLambdaReturnShapeCompatible(argument, expectedType, lambda))
         {

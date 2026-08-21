@@ -507,6 +507,48 @@ public sealed class Issue3465InferenceTests
         Assert.Equal(3, result.Value);
     }
 
+    [Fact]
+    public void InvalidTypedLambdaBody_ReportsDiagnosticsOnceAcrossCallPaths()
+    {
+        var sources = new[]
+        {
+            """
+            func Visit(action (int32)->void) {
+                action(0)
+            }
+
+            Visit((value int32) -> { nonexistentName })
+            """,
+            """
+            class Visitor {
+                func Visit(action (int32)->void) {
+                    action(0)
+                }
+            }
+
+            Visitor().Visit((value int32) -> { nonexistentName })
+            """,
+            """
+            class Visitor {
+                init(action (int32)->void) {
+                    action(0)
+                }
+            }
+
+            Visitor((value int32) -> { nonexistentName })
+            """,
+        };
+
+        foreach (var source in sources)
+        {
+            var result = Evaluate(source);
+
+            Assert.Equal(
+                new[] { "GS0125", "GS0154" },
+                result.Diagnostics.Select(diagnostic => diagnostic.Id).OrderBy(id => id));
+        }
+    }
+
     [Theory]
     [InlineData("Task")]
     [InlineData("ValueTask")]
