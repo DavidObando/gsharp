@@ -2567,12 +2567,19 @@ internal sealed partial class ExpressionBinder
         // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
         // generic receiver fails to resolve. Disambiguate using the bracketed
         // type-argument count so `Box[int32]` selects the arity-1 `Box[T]`.
-        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
+        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias, out var typeNameAmbiguous)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
-        var clrGenericDef = !userGenericDef
+        var clrGenericDef = !typeNameAmbiguous
             && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+        if (userGenericDef)
+        {
+            var importedGenericTakesPrecedence = clrGenericDef
+                && ImportedGenericTypeHasPrecedence(alias, openClrType);
+            userGenericDef = !importedGenericTakesPrecedence;
+            clrGenericDef = importedGenericTakesPrecedence;
+        }
 
         if (!userGenericDef && !clrGenericDef)
         {
@@ -2648,12 +2655,19 @@ internal sealed partial class ExpressionBinder
         // index-expression overload — select the same-name type whose generic
         // arity matches the supplied type-argument count so `Box[int32]`
         // resolves to `Box[T]` rather than the non-generic `Box`.
-        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
+        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias, out var typeNameAmbiguous)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
-        var clrGenericDef = !userGenericDef
+        var clrGenericDef = !typeNameAmbiguous
             && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+        if (userGenericDef)
+        {
+            var importedGenericTakesPrecedence = clrGenericDef
+                && ImportedGenericTypeHasPrecedence(alias, openClrType);
+            userGenericDef = !importedGenericTakesPrecedence;
+            clrGenericDef = importedGenericTakesPrecedence;
+        }
 
         if (!userGenericDef && !clrGenericDef)
         {
@@ -2690,6 +2704,11 @@ internal sealed partial class ExpressionBinder
         return openClrType is not null
             && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
     }
+
+    private bool ImportedGenericTypeHasPrecedence(TypeSymbol? sourceType, Type? importedType)
+        => sourceType != null
+            && importedType is { IsNested: false }
+            && binderCtx.ImportedTypeOverridesNestedType(sourceType, getCurrentFunction());
 
     /// <summary>
     /// Issue #1559: syntax-shape-agnostic dispatcher over the two

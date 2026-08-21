@@ -3652,9 +3652,13 @@ public sealed class Binder
         // set (both are dereferenced unconditionally by the fallthrough
         // identifier-lookup path below too).
         var identifierToken = Invariant.Required(syntax.Identifier, "the single-identifier type-clause form has an Identifier token");
+        var topLevelTypeArgumentCount = syntax.HasTypeArguments
+            ? Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count
+            : 0;
         if (!syntax.HasQualifier &&
             syntax.HasTypeArguments &&
-            scope.TryLookupImportedGenericClass(identifierToken.Text, Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count, out var clrOpenType))
+            scope.TryLookupImportedGenericClass(identifierToken.Text, topLevelTypeArgumentCount, out var clrOpenType) &&
+            ImportedGenericTypeHasPrecedence(identifierToken.Text, topLevelTypeArgumentCount, clrOpenType))
         {
             var topLevelTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
             var clrArgs = new System.Type[topLevelTypeArguments.Count];
@@ -4660,7 +4664,8 @@ public sealed class Binder
         {
             if (arity > 0)
             {
-                if (scope.TryLookupImportedGenericClass(segmentTexts[0], arity, out var imported))
+                if (scope.TryLookupImportedGenericClass(segmentTexts[0], arity, out var imported)
+                    && ImportedGenericTypeHasPrecedence(segmentTexts[0], arity, imported))
                 {
                     return imported;
                 }
@@ -4691,6 +4696,17 @@ public sealed class Binder
         }
 
         return null;
+    }
+
+    private bool ImportedGenericTypeHasPrecedence(string name, int arity, Type importedType)
+    {
+        if (!scope.TryLookupTypeAlias(name, arity, out var sourceType, out var ambiguousAcrossImportedPackages))
+        {
+            return !ambiguousAcrossImportedPackages;
+        }
+
+        return !importedType.IsNested
+            && binderCtx.ImportedTypeOverridesNestedType(sourceType, function);
     }
 
     /// <summary>

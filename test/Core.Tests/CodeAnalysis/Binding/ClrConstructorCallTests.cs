@@ -122,6 +122,75 @@ Consumer.Read()
     }
 
     [Fact]
+    public void NestedGenericSourceHomonym_InContainingScope_TypeAnnotationWinsImportedType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class Holder {
+    class List[T] {
+        prop SourceValue int32
+    }
+
+    shared {
+        func Read(value List[int32]) int32 {
+            return value.SourceValue
+        }
+    }
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void TopLevelGenericSourceHomonym_TypeAnnotationWinsImportedType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class List[T] {
+    prop SourceValue int32
+}
+
+func Read(value List[int32]) int32 {
+    return value.SourceValue
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void NestedGenericSourceHomonym_OutsideContainingScope_TypeAnnotationBindsImportedType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+class Holder {
+    class List[T] {
+        prop SourceValue int32
+    }
+}
+
+func Read(value List[int32]) int32 {
+    return value.Count
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void ImportedGenericQualifiedType_WithSameArityNestedSourceHomonym_BindsImportedType()
     {
         var source = @"
@@ -138,6 +207,33 @@ class Holder {
 
 func Read(value Issue3466ImportedGenericService[int32].Token) int32 {
     return value.ImportedValue
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void NestedGenericQualifiedSourceHomonym_InContainingScope_TypeAnnotationWinsImportedType()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Holder {
+    class Issue3466ImportedGenericService[T] {
+        class Token {
+            prop SourceValue int32
+        }
+    }
+
+    shared {
+        func Read(value Issue3466ImportedGenericService[int32].Token) int32 {
+            return value.SourceValue
+        }
+    }
 }
 
 0
