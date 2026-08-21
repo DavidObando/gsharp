@@ -255,9 +255,14 @@ public sealed class Issue3466NestedHomonymAliasTests
             "import TextStringBuilder = System.Text.StringBuilder",
             printed,
             StringComparison.Ordinal);
-        Assert.True(
-            CountOccurrences(printed, "TextStringBuilder_2") >= 3,
-            "Synthesized alias should be reused consistently in type and constructor positions.");
+        Assert.Contains(
+            "func MakeBuilder() TextStringBuilder_2 {",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "return TextStringBuilder_2(\"one\")",
+            printed,
+            StringComparison.Ordinal);
     }
 
     [Fact]
