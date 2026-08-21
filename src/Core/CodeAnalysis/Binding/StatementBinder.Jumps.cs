@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -346,12 +347,23 @@ internal sealed partial class StatementBinder
             // `return cond ? … : …` honors the function's declared return type
             // as the target type so the result type can unify to the return type
             // (C#-style target-typing) before the conversion below.
-            if ((syntax.Expression is SwitchExpressionSyntax
-                    || syntax.Expression is IfExpressionSyntax
-                    || syntax.Expression is IfLetExpressionSyntax
-                    || syntax.Expression is ConditionalExpressionSyntax
-                    || syntax.Expression is BlockExpressionSyntax
-                    || IsNullCoalescingExpression(syntax.Expression))
+            var returnExpression = syntax.Expression;
+            while (returnExpression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                returnExpression = parenthesized.Expression;
+            }
+
+            var targetTypesLambdaReturn = returnExpression is LambdaExpressionSyntax lambdaReturn
+                && (function == null
+                    || !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(function.Type, out _)
+                    || OverloadResolver.ContainsTargetDependentLambda(lambdaReturn));
+            if ((targetTypesLambdaReturn
+                    || returnExpression is SwitchExpressionSyntax
+                    || returnExpression is IfExpressionSyntax
+                    || returnExpression is IfLetExpressionSyntax
+                    || returnExpression is ConditionalExpressionSyntax
+                    || returnExpression is BlockExpressionSyntax
+                    || IsNullCoalescingExpression(returnExpression))
                 && function != null
                 && !function.IsReturnTypeInferred
                 && function.Type != TypeSymbol.Void

@@ -1165,25 +1165,65 @@ internal sealed partial class ExpressionBinder
     /// <see cref="TypeSymbol.Void"/>-returning lambda.
     /// </summary>
     /// <param name="bodySyntax">The lambda body syntax.</param>
+    /// <param name="targetType">Optional contextual return type for a nested
+    /// lambda used directly as the body or trailing block expression.</param>
     /// <returns>The bound body expression. <see cref="TypeSymbol.Void"/> is
     /// allowed; a missing-trailing-expression block lowers to a
     /// <see cref="BoundBlockExpression"/> whose trailing expression is a
     /// synthesized <see cref="BoundLiteralExpression"/> placeholder of type
     /// <see cref="TypeSymbol.Void"/>.</returns>
-    internal BoundExpression BindLambdaBodyExpression(ExpressionSyntax bodySyntax)
+    internal BoundExpression BindLambdaBodyExpression(ExpressionSyntax bodySyntax, TypeSymbol? targetType = null)
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
+            var trailingTarget = block.Expression != null
+                && IsNestedLambdaExpression(block.Expression)
+                    ? targetType
+                    : null;
             return BindInBlockExpressionScope(() =>
             {
-                return BindLambdaBlockBodyExpression(block);
+                return BindLambdaBlockBodyExpression(block, trailingTarget);
             });
         }
 
-        return BindExpression(bodySyntax, canBeVoid: true);
+        return targetType == null || !IsNestedLambdaExpression(bodySyntax)
+            ? BindExpression(bodySyntax, canBeVoid: true)
+            : BindExpression(bodySyntax, targetType);
     }
 
-    private BoundExpression BindLambdaBlockBodyExpression(BlockExpressionSyntax block)
+    private static bool IsNestedLambdaExpression(ExpressionSyntax syntax)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        return syntax switch
+        {
+            LambdaExpressionSyntax => true,
+            BlockExpressionSyntax { Expression: { } tail } => IsNestedLambdaExpression(tail),
+            ConditionalExpressionSyntax conditional =>
+                IsNestedLambdaExpression(conditional.WhenTrue)
+                || IsNestedLambdaExpression(conditional.WhenFalse),
+            IfExpressionSyntax ifExpression =>
+                IsNestedLambdaExpression(ifExpression.ThenBlock)
+                || (ifExpression.ElseExpression != null
+                    && IsNestedLambdaExpression(ifExpression.ElseExpression)),
+            IfLetExpressionSyntax ifLetExpression =>
+                IsNestedLambdaExpression(ifLetExpression.ThenBlock)
+                || (ifLetExpression.ElseExpression != null
+                    && IsNestedLambdaExpression(ifLetExpression.ElseExpression)),
+            SwitchExpressionSyntax switchExpression =>
+                switchExpression.Arms.Any(arm => IsNestedLambdaExpression(arm.Result)),
+            BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken =>
+                    IsNestedLambdaExpression(binary.Left)
+                    || IsNestedLambdaExpression(binary.Right),
+            _ => false,
+        };
+    }
+
+    private BoundExpression BindLambdaBlockBodyExpression(BlockExpressionSyntax block, TypeSymbol? targetType)
     {
         // Lambda body block: a missing trailing expression means a void
         // lambda. Bind any prefix statements; if there is a trailing
@@ -1209,7 +1249,8 @@ internal sealed partial class ExpressionBinder
             BindBlockExpressionParts(
                 block.Statements,
                 Invariant.Required(block.Expression, "a value-returning lambda block has a trailing expression"),
-                canBeVoid: true);
+                canBeVoid: true,
+                targetType);
         if (boundStatements.Length == 0)
         {
             return trailing;
@@ -1606,7 +1647,11 @@ internal sealed partial class ExpressionBinder
 
         var coalesceDiagMark = Diagnostics.Count;
 
-        var boundLeft = BindExpression(syntax.Left);
+        var boundLeft = coalesceTargetType != null
+            && syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            && IsTargetDependentExpressionSyntax(syntax.Left)
+            ? BindExpression(syntax.Left, coalesceTargetType)
+            : BindExpression(syntax.Left);
 
         // ADR-0069 / issue #700: `&&` short-circuits — the right operand is
         // only evaluated when the left operand was true. Thread any
@@ -1645,6 +1690,12 @@ internal sealed partial class ExpressionBinder
                     return BindExpressionWithNarrowing(syntax.Right, rightFrame);
                 });
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse);
+        }
+        else if (coalesceTargetType != null
+            && syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            && IsTargetDependentExpressionSyntax(syntax.Right))
+        {
+            boundRight = BindExpression(syntax.Right, coalesceTargetType);
         }
         else
         {

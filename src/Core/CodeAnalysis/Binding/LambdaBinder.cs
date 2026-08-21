@@ -78,7 +78,7 @@ internal sealed class LambdaBinder
     private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Action<FunctionSymbol?> setCurrentFunction;
     private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
-    private readonly Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression;
+    private readonly Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
     /// <summary>
@@ -133,7 +133,8 @@ internal sealed class LambdaBinder
     /// annotations on a lambda parameter using the declaration binder's
     /// standard parameter-target validation.</param>
     /// <param name="bindLambdaBodyExpression">ADR-0074 / issue #714:
-    /// optional callback that binds an arrow-lambda body expression.
+    /// optional callback that binds an arrow-lambda body expression, with the
+    /// contextual return type available for nested lambda bodies.
     /// Required only when <see cref="BindLambdaExpression"/> is
     /// invoked; the function-literal pipeline does not need it.</param>
     /// <param name="bindTypeParameterList">Issue #1886: callback that
@@ -154,7 +155,7 @@ internal sealed class LambdaBinder
         Func<FunctionSymbol?> getCurrentFunction,
         Action<FunctionSymbol?> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
-        Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression = null,
+        Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression = null,
         Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -813,15 +814,31 @@ internal sealed class LambdaBinder
         // ADR-0101 follow-up / issue #812: enforce variadic structural rules.
         ValidateVariadicParameterShape(syntax.Parameters);
 
-        // Construct a placeholder synthetic FunctionSymbol whose return type
-        // is being inferred. The placeholder type itself is set to
-        // TypeSymbol.Error so an accidental consumer that ignores
-        // `IsReturnTypeInferred` still sees a poisoned type that suppresses
-        // cascading conversion diagnostics rather than a load-bearing void.
+        var contextualReturnType = targetFunctionType?.ReturnType;
+        if (isAsync && contextualReturnType != null)
+        {
+            contextualReturnType = UnwrapTaskReturnType(contextualReturnType);
+        }
+
+        // A fully target-typed lambda exposes its awaited return type while its
+        // statements bind, allowing explicit return expressions (including
+        // nested lambdas) to receive the same context as declared functions.
+        // Partial generic inference still uses the poisoned placeholder and
+        // infers the return from the body.
         var syntheticName = $"<lambda{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
-        var placeholder = new FunctionSymbol(syntheticName, parameterSymbols.ToImmutable(), TypeSymbol.Error);
+        var placeholderReturnType = !inferReturnTypeFromBody
+            && contextualReturnType != null
+            && !TypeSymbol.ContainsTypeParameter(contextualReturnType)
+            && contextualReturnType.ClrType?.ContainsGenericParameters != true
+            ? contextualReturnType
+            : TypeSymbol.Error;
+
+        var placeholder = new FunctionSymbol(
+            syntheticName,
+            parameterSymbols.ToImmutable(),
+            placeholderReturnType);
         placeholder.IsAsync = isAsync;
-        placeholder.IsReturnTypeInferred = true;
+        placeholder.IsReturnTypeInferred = placeholderReturnType == TypeSymbol.Error;
 
         var outerScope = Scope;
         var outerFunction = getCurrentFunction();
@@ -862,9 +879,16 @@ internal sealed class LambdaBinder
         BoundExpression boundBody;
         try
         {
+            var bodyTargetType = contextualReturnType;
+
+            if (bodyTargetType == TypeSymbol.Void)
+            {
+                bodyTargetType = null;
+            }
+
             boundBody = Invariant.Required(
                 bindLambdaBodyExpression,
-                "lambda binding has a body-expression callback")(syntax.Body);
+                "lambda binding has a body-expression callback")(syntax.Body, bodyTargetType);
             FinalizeNestedFrameLabels();
         }
         finally
@@ -904,13 +928,21 @@ internal sealed class LambdaBinder
         // For async lambdas, the observable function-type (from the caller's
         // perspective) is Task / Task<T>, matching async function literals.
         var observableReturnType = returnType;
+        var asyncReturnsValueTask = false;
         if (isAsync && !isAsyncIteratorReturnType(returnType) && returnType != TypeSymbol.Error)
         {
-            observableReturnType = WrapAsTask(returnType);
+            asyncReturnsValueTask = targetFunctionType != null
+                && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+                    targetFunctionType.ReturnType,
+                    out _,
+                    out var targetUsesValueTask)
+                && targetUsesValueTask;
+            observableReturnType = WrapAsTask(returnType, asyncReturnsValueTask);
         }
 
         var synthetic = new FunctionSymbol(syntheticName, placeholder.Parameters, returnType);
         synthetic.IsAsync = isAsync;
+        synthetic.AsyncReturnsValueTask = asyncReturnsValueTask;
         synthetic.LexicalEnclosingType = placeholder.LexicalEnclosingType;
 
         // ADR-0076 / issue #716: rewrite the bound body so every return
@@ -1844,6 +1876,7 @@ internal sealed class LambdaBinder
 
         var returnTypes = collector.ReturnTypes;
         var hasExplicitReturn = returnTypes.Count > 0;
+        var hasExplicitValueReturn = returnTypes.Any(type => type != TypeSymbol.Void);
         var trailingIsVoidPlaceholder = boundBody is BoundBlockExpression { Expression: BoundLiteralExpression { Type: var trailingLit } }
             && trailingLit == TypeSymbol.Void;
 
@@ -1939,7 +1972,7 @@ internal sealed class LambdaBinder
             // method's signature matches the Action/void-delegate target and
             // the trailing expression is emitted as a value-discarding
             // statement (see EmitTrailingExpression).
-            if (targetReturn == TypeSymbol.Void)
+            if (targetReturn == TypeSymbol.Void && !hasExplicitValueReturn)
             {
                 return TypeSymbol.Void;
             }
@@ -2050,24 +2083,14 @@ internal sealed class LambdaBinder
     // otherwise returns the input unchanged.
     private static TypeSymbol? UnwrapTaskReturnType(TypeSymbol? returnType)
     {
-        if (returnType?.ClrType == null)
+        if (returnType == null)
         {
-            return returnType;
+            return null;
         }
 
-        var clr = returnType.ClrType;
-        if (clr.IsSameAs(typeof(System.Threading.Tasks.Task)))
-        {
-            return TypeSymbol.Void;
-        }
-
-        if (clr.IsGenericType && clr.GetGenericTypeDefinition().IsSameAs(typeof(System.Threading.Tasks.Task<>)))
-        {
-            // The unwrapped awaited type lives in the generic argument slot.
-            return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
-        }
-
-        return returnType;
+        return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(returnType, out var awaited)
+            ? awaited
+            : returnType;
     }
 
     // ADR-0076 / issue #716: rewrites a bound lambda body so each return

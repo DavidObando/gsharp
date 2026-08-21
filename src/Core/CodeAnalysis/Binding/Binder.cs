@@ -266,7 +266,9 @@ public sealed class Binder
             getCurrentFunction: () => this.function,
             bindLambdaWithTarget: (syntax, targetType) =>
             {
-                return Lambdas.BindLambdaExpression(syntax, targetType);
+                return Diagnostics.SuppressDuplicateDiagnosticsIn(
+                    syntax.Location,
+                    () => Lambdas.BindLambdaExpression(syntax, targetType));
             },
             bindUserTypeStaticCall: (structSym, ce) =>
             {
@@ -308,8 +310,8 @@ public sealed class Binder
             ExpressionSyntax syntax,
             TypeSymbol targetType) =>
             Expressions.BindExpression(syntax, targetType);
-        BoundExpression BindLambdaBodyExpressionForLambdas(ExpressionSyntax syntax) =>
-            Expressions.BindLambdaBodyExpression(syntax);
+        BoundExpression BindLambdaBodyExpressionForLambdas(ExpressionSyntax syntax, TypeSymbol? targetType) =>
+            Expressions.BindLambdaBodyExpression(syntax, targetType);
         statements = new StatementBinder(
             binderCtx,
             conversions,
@@ -5305,21 +5307,18 @@ public sealed class Binder
                     InferTypeArguments(pseq.ElementType, aarr.ElementType, substitution);
                     break;
                 default:
-                    var argClrSeq = argumentType?.ClrType;
                     var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
-                    if (argClrSeq != null)
+                    if (TryFindUniqueGenericProjection(
+                        argumentType,
+                        openIEnumerable,
+                        out var sequenceArguments,
+                        out _)
+                        && sequenceArguments.Length == 1)
                     {
-                        var matchedSeq = argClrSeq.IsGenericType && argClrSeq.GetGenericTypeDefinition().IsSameAs(openIEnumerable)
-                            ? argClrSeq
-                            : FindMatchingInterface(argClrSeq, openIEnumerable);
-                        if (matchedSeq != null)
-                        {
-                            var args = matchedSeq.GetGenericArguments();
-                            if (args.Length == 1)
-                            {
-                                InferTypeArguments(pseq.ElementType, TypeSymbol.FromClrType(args[0]), substitution);
-                            }
-                        }
+                        InferTypeArguments(
+                            pseq.ElementType,
+                            sequenceArguments[0],
+                            substitution);
                     }
 
                     break;
@@ -5334,21 +5333,18 @@ public sealed class Binder
                     InferTypeArguments(paseq.ElementType, aaseq.ElementType, substitution);
                     break;
                 default:
-                    var argClrAseq = argumentType?.ClrType;
                     var openIAsyncEnumerable = typeof(System.Collections.Generic.IAsyncEnumerable<>);
-                    if (argClrAseq != null)
+                    if (TryFindUniqueGenericProjection(
+                        argumentType,
+                        openIAsyncEnumerable,
+                        out var asyncSequenceArguments,
+                        out _)
+                        && asyncSequenceArguments.Length == 1)
                     {
-                        var matchedAseq = argClrAseq.IsGenericType && argClrAseq.GetGenericTypeDefinition().IsSameAs(openIAsyncEnumerable)
-                            ? argClrAseq
-                            : FindMatchingInterface(argClrAseq, openIAsyncEnumerable);
-                        if (matchedAseq != null)
-                        {
-                            var args = matchedAseq.GetGenericArguments();
-                            if (args.Length == 1)
-                            {
-                                InferTypeArguments(paseq.ElementType, TypeSymbol.FromClrType(args[0]), substitution);
-                            }
-                        }
+                        InferTypeArguments(
+                            paseq.ElementType,
+                            asyncSequenceArguments[0],
+                            substitution);
                     }
 
                     break;
@@ -5394,37 +5390,21 @@ public sealed class Binder
         TypeSymbol argumentType,
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
     {
-        var argumentClrArguments = GetClrGenericArguments(argumentType);
-        if (!argumentClrArguments.IsDefaultOrEmpty
-            && argumentClrArguments.Length == parameterType.TypeArguments.Length)
+        var foundProjection = false;
+        if (parameterType.OpenDefinition != null
+            && TryFindUniqueGenericProjection(
+                argumentType,
+                parameterType.OpenDefinition,
+                out var mappedArguments,
+                out foundProjection))
         {
-            for (var i = 0; i < parameterType.TypeArguments.Length; i++)
-            {
-                InferTypeArguments(
-                    parameterType.TypeArguments[i],
-                    argumentClrArguments[i],
-                    substitution);
-            }
-
-            return;
-        }
-
-        var argumentClrType = argumentType.ClrType;
-        var matchedInterface = argumentClrType != null
-            && argumentClrType.IsArray
-            && parameterType.OpenDefinition != null
-                ? FindMatchingInterface(argumentClrType, parameterType.OpenDefinition)
-                : null;
-        if (matchedInterface != null)
-        {
-            var matchedArguments = matchedInterface.GetGenericArguments();
-            if (matchedArguments.Length == parameterType.TypeArguments.Length)
+            if (mappedArguments.Length == parameterType.TypeArguments.Length)
             {
                 for (var i = 0; i < parameterType.TypeArguments.Length; i++)
                 {
                     InferTypeArguments(
                         parameterType.TypeArguments[i],
-                        TypeSymbol.FromClrType(matchedArguments[i]),
+                        mappedArguments[i],
                         substitution);
                 }
             }
@@ -5432,7 +5412,8 @@ public sealed class Binder
             return;
         }
 
-        if ((argumentType is SliceTypeSymbol || argumentType is ArrayTypeSymbol)
+        if (!foundProjection
+            && (argumentType is SliceTypeSymbol || argumentType is ArrayTypeSymbol)
             && parameterType.TypeArguments.Length == 1
             && IsArrayCompatibleOpenInterface(parameterType.OpenDefinition))
         {
@@ -5441,6 +5422,178 @@ public sealed class Binder
                 : ((ArrayTypeSymbol)argumentType).ElementType;
             InferTypeArguments(parameterType.TypeArguments[0], elementType, substitution);
         }
+    }
+
+    // Issue #3465: imported argument types can expose a generic parameter
+    // shape through a non-generic concrete type's base class or interfaces.
+    // Example: FieldDefinitionHandleCollection implements
+    // IReadOnlyCollection<FieldDefinitionHandle>.
+    private static bool TryFindUniqueClrGenericProjection(
+        Type clrType,
+        Type openDefinition,
+        out ImmutableArray<TypeSymbol> projection,
+        out bool foundProjection)
+    {
+        projection = ImmutableArray<TypeSymbol>.Empty;
+        foundProjection = false;
+        if (!openDefinition.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        try
+        {
+            var pending = new Stack<Type>();
+            var visited = new HashSet<Type>();
+            pending.Push(clrType);
+            while (pending.Count > 0)
+            {
+                var current = pending.Pop();
+                if (!visited.Add(current))
+                {
+                    continue;
+                }
+
+                if (current.IsGenericType
+                    && current.GetGenericTypeDefinition().IsSameAs(openDefinition))
+                {
+                    var arguments = current.GetGenericArguments()
+                        .Select(TypeSymbol.FromClrType)
+                        .ToImmutableArray();
+                    if (!foundProjection)
+                    {
+                        projection = arguments;
+                        foundProjection = true;
+                    }
+                    else if (!TypeArgumentVectorsEquivalent(projection, arguments))
+                    {
+                        projection = ImmutableArray<TypeSymbol>.Empty;
+                        return false;
+                    }
+                }
+
+                foreach (var iface in current.GetInterfaces())
+                {
+                    pending.Push(iface);
+                }
+
+                if (current.BaseType != null)
+                {
+                    pending.Push(current.BaseType);
+                }
+            }
+
+            return foundProjection;
+        }
+        catch (Exception)
+        {
+            // MLC cross-context or other reflection failure — treat as no match.
+            projection = ImmutableArray<TypeSymbol>.Empty;
+            foundProjection = false;
+            return false;
+        }
+    }
+
+    private static bool TryFindUniqueGenericProjection(
+        TypeSymbol type,
+        Type openDefinition,
+        out ImmutableArray<TypeSymbol> projection,
+        out bool foundProjection)
+    {
+        projection = ImmutableArray<TypeSymbol>.Empty;
+        foundProjection = false;
+        var pending = new Stack<TypeSymbol>();
+        var visited = new HashSet<TypeSymbol>();
+        pending.Push(type);
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            if (!visited.Add(current))
+            {
+                continue;
+            }
+
+            ImmutableArray<TypeSymbol> currentProjection = default;
+            var currentFound = false;
+            var currentAgrees = true;
+            if (current is ImportedTypeSymbol imported
+                && imported.OpenDefinition != null)
+            {
+                currentAgrees =
+                    MemberLookup.TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
+                        imported,
+                        openDefinition,
+                        out currentProjection,
+                        out currentFound);
+            }
+            else if (current.ClrType is { } clrType)
+            {
+                currentAgrees = TryFindUniqueClrGenericProjection(
+                    clrType,
+                    openDefinition,
+                    out currentProjection,
+                    out currentFound);
+            }
+
+            if (currentFound)
+            {
+                if (!currentAgrees)
+                {
+                    projection = ImmutableArray<TypeSymbol>.Empty;
+                    foundProjection = true;
+                    return false;
+                }
+
+                if (!foundProjection)
+                {
+                    projection = currentProjection;
+                    foundProjection = true;
+                }
+                else if (!TypeArgumentVectorsEquivalent(projection, currentProjection))
+                {
+                    projection = ImmutableArray<TypeSymbol>.Empty;
+                    return false;
+                }
+            }
+
+            if (current is StructSymbol currentStruct)
+            {
+                if (currentStruct.BaseClass != null)
+                {
+                    pending.Push(currentStruct.BaseClass);
+                }
+
+                if (currentStruct.ImportedBaseType != null)
+                {
+                    pending.Push(currentStruct.ImportedBaseType);
+                }
+
+                foreach (var iface in currentStruct.Interfaces)
+                {
+                    pending.Push(iface);
+                }
+
+                foreach (var iface in currentStruct.ImplementedClrInterfaces)
+                {
+                    pending.Push(iface);
+                }
+            }
+            else if (current is InterfaceSymbol currentInterface)
+            {
+                foreach (var baseInterface in currentInterface.BaseInterfaces)
+                {
+                    pending.Push(baseInterface);
+                }
+
+                foreach (var baseInterface in currentInterface.BaseClrInterfaces)
+                {
+                    pending.Push(baseInterface);
+                }
+            }
+        }
+
+        return foundProjection;
     }
 
     // Issue #1932: extract the generic definition + constructed type arguments
@@ -5467,33 +5620,81 @@ public sealed class Binder
         }
     }
 
-    // Issue #1932: find the constructed type arguments for `definition` on
-    // `type` itself, or (when `type` is a struct/class) on one of its
-    // implemented interfaces — e.g. matching parameter `IHolder[T]` against
-    // an argument struct/class that implements `IHolder[string]`.
+    // Issue #1932 / #3465: find a unique constructed projection of `definition`
+    // across the complete substituted source base/interface closure.
     private static bool TryFindUserGenericArguments(TypeSymbol type, TypeSymbol definition, out ImmutableArray<TypeSymbol> typeArguments)
     {
-        if (TryGetUserGenericArguments(type, out var ownDefinition, out typeArguments)
-            && ReferenceEquals(ownDefinition, definition))
-        {
-            return true;
-        }
+        typeArguments = ImmutableArray<TypeSymbol>.Empty;
+        var pending = new Stack<TypeSymbol>();
+        var visited = new HashSet<TypeSymbol>();
+        var foundProjection = false;
+        pending.Push(type);
 
-        if (type is StructSymbol s && !s.Interfaces.IsDefaultOrEmpty)
+        while (pending.Count > 0)
         {
-            foreach (var iface in s.Interfaces)
+            var current = pending.Pop();
+            if (!visited.Add(current))
             {
-                if (TryGetUserGenericArguments(iface, out var ifaceDefinition, out var ifaceArgs)
-                    && ReferenceEquals(ifaceDefinition, definition))
+                continue;
+            }
+
+            if (TryGetUserGenericArguments(current, out var currentDefinition, out var currentArguments)
+                && ReferenceEquals(currentDefinition, definition))
+            {
+                if (!foundProjection)
                 {
-                    typeArguments = ifaceArgs;
-                    return true;
+                    typeArguments = currentArguments;
+                    foundProjection = true;
+                }
+                else if (!TypeArgumentVectorsEquivalent(typeArguments, currentArguments))
+                {
+                    typeArguments = ImmutableArray<TypeSymbol>.Empty;
+                    return false;
+                }
+            }
+
+            if (current is StructSymbol currentStruct)
+            {
+                if (currentStruct.BaseClass != null)
+                {
+                    pending.Push(currentStruct.BaseClass);
+                }
+
+                foreach (var iface in currentStruct.Interfaces)
+                {
+                    pending.Push(iface);
+                }
+            }
+            else if (current is InterfaceSymbol currentInterface)
+            {
+                foreach (var baseInterface in currentInterface.BaseInterfaces)
+                {
+                    pending.Push(baseInterface);
                 }
             }
         }
 
-        typeArguments = ImmutableArray<TypeSymbol>.Empty;
-        return false;
+        return foundProjection;
+    }
+
+    private static bool TypeArgumentVectorsEquivalent(
+        ImmutableArray<TypeSymbol> left,
+        ImmutableArray<TypeSymbol> right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!DeclarationBinder.TypeSignaturesEquivalent(left[i], right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // #313: surface the CLR generic arguments of an argument type (e.g. the
@@ -5523,41 +5724,13 @@ public sealed class Binder
         return builder.MoveToImmutable();
     }
 
-    // #611: find the closed generic interface on a CLR type that matches
-    // the given open generic definition (e.g. find `IEnumerable<int>` on
-    // `int[]` given `IEnumerable<>` as the open definition).
-    private static Type? FindMatchingInterface(Type? clrType, Type? openDefinition)
-    {
-        if (clrType == null || openDefinition == null || !openDefinition.IsGenericTypeDefinition)
-        {
-            return null;
-        }
-
-        try
-        {
-            foreach (var iface in clrType.GetInterfaces())
-            {
-                if (iface.IsGenericType && iface.GetGenericTypeDefinition().IsSameAs(openDefinition))
-                {
-                    return iface;
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // MLC cross-context or other reflection failure — treat as no match.
-        }
-
-        return null;
-    }
-
     // Issue #2416: the fixed, closed set of single-type-parameter generic
     // interfaces that the CLR guarantees every single-dimensional array
     // (`T[]`) implements, regardless of whether `T` has been emitted yet.
     // Used to symbolically unify a slice/array argument against an
     // `IEnumerable[T]`-shaped (or equivalent) generic parameter when the
     // array's element type has no `ClrType` (still source-only), so
-    // reflection-based interface lookup (<see cref="FindMatchingInterface"/>)
+    // reflection-based generic-projection lookup
     // isn't available.
     private static bool IsArrayCompatibleOpenInterface(Type? openDefinition)
     {
@@ -5888,7 +6061,25 @@ public sealed class Binder
                         break;
                     }
 
-                    var clr = substitutedArgs[i].ClrType;
+                    // A concrete nullable value type carries the bare
+                    // underlying CLR type on TypeSymbol.ClrType. Use its
+                    // effective Nullable<T> shape when closing an imported
+                    // generic. Preserve the erasure of `T?` for an originally
+                    // unconstrained type parameter, however: unlike a
+                    // struct-constrained `T?`, that annotation is represented
+                    // by T itself even when this call later substitutes a
+                    // value type (issue #1471).
+                    var originalArg = it.TypeArguments[i];
+                    var preserveErasedNullableTypeParameter =
+                        originalArg is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol originalTypeParameter }
+                        && !originalTypeParameter.HasValueTypeConstraint;
+                    var clr = preserveErasedNullableTypeParameter
+                        ? originalArg is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol nullableTypeParameter }
+                            && substitution.TryGetValue(nullableTypeParameter, out var actualType)
+                            && actualType is NullableTypeSymbol
+                            ? NullableLifting.GetEffectiveClrType(substitutedArgs[i])
+                            : substitutedArgs[i].ClrType
+                        : NullableLifting.GetEffectiveClrType(substitutedArgs[i]);
                     if (clr == null)
                     {
                         allClr = false;

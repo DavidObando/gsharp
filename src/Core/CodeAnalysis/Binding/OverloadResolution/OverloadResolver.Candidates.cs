@@ -13,6 +13,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -89,7 +90,8 @@ internal sealed partial class OverloadResolver
             out var ambiguous,
             out var nullSafetyFailure,
             explicitTypeArgCount,
-            boundTypeArguments);
+            boundTypeArguments,
+            ce);
         if (selected != null)
         {
             return selected;
@@ -181,11 +183,12 @@ internal sealed partial class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
+        CallExpressionSyntax callSyntax,
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0)
     {
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
+        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, callSyntax, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
     }
 
     /// <summary>
@@ -202,7 +205,8 @@ internal sealed partial class OverloadResolver
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
-        ImmutableArray<TypeSymbol> explicitTypeArguments = default)
+        ImmutableArray<TypeSymbol> explicitTypeArguments = default,
+        CallExpressionSyntax? callSyntax = null)
     {
         ambiguous = false;
         nullSafetyFailure = null;
@@ -223,6 +227,7 @@ internal sealed partial class OverloadResolver
             argumentCount,
             argumentNames,
             builder,
+            callSyntax,
             out ambiguous,
             out nullSafetyFailure,
             explicitTypeArgCount,
@@ -234,6 +239,7 @@ internal sealed partial class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
+        CallExpressionSyntax? callSyntax,
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
@@ -360,7 +366,8 @@ internal sealed partial class OverloadResolver
                         argumentCount,
                         argumentNames,
                         boundArguments,
-                        GetCandidateSubstitution(cand)))
+                        GetCandidateSubstitution(cand),
+                        callSyntax))
                 {
                     convertible.Add(cand);
                 }
@@ -502,9 +509,17 @@ internal sealed partial class OverloadResolver
                 // the argument's actual return type) is preferred — matching
                 // C#'s "better conversion from a method group" rule — instead
                 // of tying and reporting a spurious GS0266.
-                kinds[i] = IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution)
-                    ? ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
-                    : ClassifyUserArgumentConversionKind(argType, paramType);
+                // An async lambda's Task/ValueTask wrapper is supplied by its
+                // candidate target, so equal awaited result shapes rank equally.
+                var lambdaSyntax = callSyntax != null && i < callSyntax.Arguments.Count
+                    ? GetLambdaArgumentSyntax(callSyntax.Arguments[i])
+                    : null;
+                kinds[i] = lambdaSyntax?.IsAsync == true
+                    && HasSameAsyncLambdaResultShape(argType, paramType)
+                        ? ClrOverloadResolution.ImplicitConversionKind.Identity
+                        : IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution)
+                            ? ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
+                            : ClassifyUserArgumentConversionKind(argType, paramType);
             }
 
             data.Add(new UserCandidateRankData(cand, kinds, paramTypes, isTailSlot, defaultsUsed, isVariadic));
@@ -992,7 +1007,8 @@ internal sealed partial class OverloadResolver
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null,
+        CallExpressionSyntax? callSyntax = null)
     {
         // Generic candidates may carry unsubstituted method type parameters in
         // their signature; rely on the existing #1124 inference filter instead.
@@ -1044,6 +1060,66 @@ internal sealed partial class OverloadResolver
             if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[i], out var deferredSyntax))
             {
                 if (!ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax, paramType))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            var lambdaSyntax = callSyntax != null && i < callSyntax.Arguments.Count
+                ? GetLambdaArgumentSyntax(callSyntax.Arguments[i])
+                : null;
+            if (!IsLambdaReturnShapeCompatible(boundArguments[i], paramType, lambdaSyntax))
+            {
+                return false;
+            }
+
+            if (lambdaSyntax?.IsAsync == true
+                && bindLambdaWithTarget != null
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var asyncTarget)
+                && !TypeSymbol.ContainsTypeParameter(asyncTarget))
+            {
+                if (!IsContextuallyApplicableAsyncLambda(lambdaSyntax, asyncTarget, paramType))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            // A target-dependent lambda is represented by an Error-typed
+            // placeholder until one candidate supplies its delegate shape.
+            // Return-shape/arity checks above are the meaningful applicability
+            // test; do not reject the surviving candidate merely because the
+            // placeholder has no natural function type yet.
+            if (lambdaSyntax != null && argType == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            if (lambdaSyntax != null
+                && argType is FunctionTypeSymbol { ReturnType: var lambdaReturn } argumentFunction
+                && lambdaReturn == TypeSymbol.Error
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var targetFunction))
+            {
+                if (argumentFunction.Arity != targetFunction.Arity)
+                {
+                    return false;
+                }
+
+                var parametersCompatible = true;
+                for (var parameterIndex = 0; parameterIndex < argumentFunction.Arity; parameterIndex++)
+                {
+                    var writtenType = argumentFunction.ParameterTypes[parameterIndex];
+                    var targetType = targetFunction.ParameterTypes[parameterIndex];
+                    parametersCompatible &=
+                        TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(targetType, writtenType)
+                        || Conversion.ClassifyNonStructural(targetType, writtenType).IsImplicit
+                        || conversions.HasUserDefinedImplicitConversion(targetType, writtenType);
+                }
+
+                if (!parametersCompatible)
                 {
                     return false;
                 }
@@ -1137,6 +1213,308 @@ internal sealed partial class OverloadResolver
         }
 
         return true;
+    }
+
+    private bool IsContextuallyApplicableAsyncLambda(
+        LambdaExpressionSyntax lambda,
+        FunctionTypeSymbol target,
+        TypeSymbol parameterType)
+    {
+        var diagnosticMark = Diagnostics.Count;
+        try
+        {
+            var bound = Invariant.Required(
+                bindLambdaWithTarget,
+                "contextual async-lambda applicability requires a lambda binder")(lambda, target);
+            var converted = conversions.BindConversion(lambda.Location, bound, parameterType);
+            return converted is not BoundErrorExpression
+                && !Diagnostics.Skip(diagnosticMark).Any(diagnostic => diagnostic.IsError);
+        }
+        finally
+        {
+            Diagnostics.TruncateTo(diagnosticMark);
+        }
+    }
+
+    private static bool HasSameAsyncLambdaResultShape(TypeSymbol? argumentType, TypeSymbol parameterType)
+    {
+        if (argumentType is not FunctionTypeSymbol argumentFunction
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var targetFunction)
+            || !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(argumentFunction.ReturnType, out var argumentResult)
+            || !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetFunction.ReturnType, out var targetResult))
+        {
+            return false;
+        }
+
+        return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(argumentResult, targetResult);
+    }
+
+    // Issue #3465: overload applicability must honor explicit return shape
+    // before a lambda has a single contextual target. A `return;` makes the
+    // lambda void-only; a `return value` makes it value-returning. Returns in
+    // nested lambdas/functions belong to those nested bodies and are ignored.
+    private bool IsLambdaReturnShapeCompatible(
+        BoundExpression argument,
+        TypeSymbol parameterType,
+        LambdaExpressionSyntax? lambdaSyntax)
+    {
+        var lambda = lambdaSyntax ?? GetLambdaArgumentSyntax(argument.Syntax as ExpressionSyntax);
+        if (lambda == null
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target))
+        {
+            return true;
+        }
+
+        return IsLambdaReturnShapeCompatible(lambda, target, argument);
+    }
+
+    private bool IsLambdaReturnShapeCompatible(
+        LambdaExpressionSyntax lambda,
+        FunctionTypeSymbol target,
+        BoundExpression? boundLambda = null)
+    {
+        if (lambda.Parameters.Count != target.Arity)
+        {
+            return false;
+        }
+
+        var hasVoidReturn = false;
+        var hasValueReturn = false;
+        var stack = new Stack<SyntaxNode>();
+        stack.Push(lambda.Body);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is LambdaExpressionSyntax
+                or FunctionLiteralExpressionSyntax
+                or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax returnStatement)
+            {
+                hasVoidReturn |= returnStatement.Expression == null;
+                hasValueReturn |= returnStatement.Expression != null;
+                continue;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
+
+        var targetReturnsNoValue = target.ReturnType == TypeSymbol.Void
+            || (lambda.IsAsync && IsNonGenericTaskReturnType(target.ReturnType));
+        if (targetReturnsNoValue)
+        {
+            return !hasValueReturn;
+        }
+
+        var bodyNeverCompletesNormally = !hasVoidReturn
+            && !hasValueReturn
+            && lambda.Body is BlockExpressionSyntax { Expression: null } block
+            && (TryBoundLambdaBodyNeverCompletes(boundLambda)
+                || IsObviouslyNonCompleting(block));
+        if (hasVoidReturn
+            || (lambda.Body is BlockExpressionSyntax { Expression: null }
+                && !hasValueReturn
+                && !bodyNeverCompletesNormally))
+        {
+            return false;
+        }
+
+        if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+            target.ReturnType,
+            out var nestedTarget))
+        {
+            return true;
+        }
+
+        return IsNestedLambdaResultShapeCompatible(lambda.Body, nestedTarget);
+    }
+
+    private static bool TryBoundLambdaBodyNeverCompletes(BoundExpression? argument)
+        => argument != null
+            && LambdaBinder.TryGetFunctionLiteral(argument, out var literal)
+            && ControlFlowGraph.AllPathsReturn(Lowerer.Lower(literal.Body));
+
+    private static bool IsObviouslyNonCompleting(BlockExpressionSyntax block)
+        => IsObviouslyNonCompleting(block.Statements.LastOrDefault());
+
+    private static bool IsObviouslyNonCompleting(StatementSyntax? statement)
+        => statement switch
+        {
+            ThrowStatementSyntax => true,
+            BlockStatementSyntax block =>
+                IsObviouslyNonCompleting(block.Statements.LastOrDefault()),
+            IfStatementSyntax conditional when conditional.ElseClause != null =>
+                IsObviouslyNonCompleting(conditional.ThenStatement)
+                && IsObviouslyNonCompleting(conditional.ElseClause.ElseStatement),
+            ForInfiniteStatementSyntax loop =>
+                !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
+            WhileStatementSyntax loop when IsConstantTrue(loop.Condition) =>
+                !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
+            DoWhileStatementSyntax loop when IsConstantTrue(loop.Condition) =>
+                !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
+            LabeledStatementSyntax { Statement: ForInfiniteStatementSyntax loop } labeledLoop =>
+                !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+            LabeledStatementSyntax { Statement: WhileStatementSyntax loop } labeledLoop
+                when IsConstantTrue(loop.Condition) =>
+                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+            LabeledStatementSyntax { Statement: DoWhileStatementSyntax loop } labeledLoop
+                when IsConstantTrue(loop.Condition) =>
+                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+            _ => false,
+        };
+
+    private static bool ContainsPotentialLoopExit(StatementSyntax body, string? loopLabel)
+    {
+        var localGotoLabels = CollectGotoLabels(body);
+        var stack = new Stack<(SyntaxNode Node, int NestedLoopDepth)>();
+        stack.Push((body, 0));
+        while (stack.Count > 0)
+        {
+            var (node, nestedLoopDepth) = stack.Pop();
+            if (node is BreakStatementSyntax breakStatement
+                && ((breakStatement.LabelIdentifier == null && nestedLoopDepth == 0)
+                    || (breakStatement.LabelIdentifier != null
+                        && string.Equals(
+                            breakStatement.LabelIdentifier.Text,
+                            loopLabel,
+                            StringComparison.Ordinal))))
+            {
+                return true;
+            }
+
+            if (node is GotoStatementSyntax gotoStatement
+                && !localGotoLabels.Contains(gotoStatement.LabelIdentifier.Text))
+            {
+                return true;
+            }
+
+            if (!ReferenceEquals(node, body)
+                && node is LambdaExpressionSyntax
+                    or FunctionLiteralExpressionSyntax
+                    or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            var childLoopDepth = nestedLoopDepth + (IsLoopSyntax(node) && !ReferenceEquals(node, body) ? 1 : 0);
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push((child, childLoopDepth));
+            }
+        }
+
+        return false;
+    }
+
+    private static HashSet<string> CollectGotoLabels(StatementSyntax body)
+    {
+        var labels = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<SyntaxNode>();
+        stack.Push(body);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (!ReferenceEquals(node, body)
+                && node is LambdaExpressionSyntax
+                    or FunctionLiteralExpressionSyntax
+                    or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            if (node is LabeledStatementSyntax labeled
+                && !IsLoopSyntax(labeled.Statement))
+            {
+                labels.Add(labeled.LabelIdentifier.Text);
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
+
+        return labels;
+    }
+
+    private static bool IsConstantTrue(ExpressionSyntax condition)
+    {
+        while (condition is ParenthesizedExpressionSyntax parenthesized)
+        {
+            condition = parenthesized.Expression;
+        }
+
+        return condition is LiteralExpressionSyntax { Value: true };
+    }
+
+    private static bool IsLoopSyntax(SyntaxNode node)
+        => node.Kind is SyntaxKind.WhileLetStatement
+            or SyntaxKind.WhileStatement
+            or SyntaxKind.DoWhileStatement
+            or SyntaxKind.ForInfiniteStatement
+            or SyntaxKind.ForEllipsisStatement
+            or SyntaxKind.ForConditionStatement
+            or SyntaxKind.ForClauseStatement
+            or SyntaxKind.ForRangeStatement
+            or SyntaxKind.ForTupleRangeStatement
+            or SyntaxKind.AwaitForRangeStatement;
+
+    private bool IsNestedLambdaResultShapeCompatible(
+        ExpressionSyntax syntax,
+        FunctionTypeSymbol target)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        return syntax switch
+        {
+            LambdaExpressionSyntax nestedLambda =>
+                IsLambdaReturnShapeCompatible(nestedLambda, target),
+            BlockExpressionSyntax block =>
+                EnumerateExplicitReturns(block).All(returnStatement =>
+                    IsNestedLambdaResultShapeCompatible(
+                        Invariant.Required(
+                            returnStatement.Expression,
+                            "explicit value-return enumeration excludes bare returns"),
+                        target))
+                && (block.Expression == null
+                    || IsNestedLambdaResultShapeCompatible(block.Expression, target)),
+            ConditionalExpressionSyntax conditional =>
+                IsNestedLambdaResultShapeCompatible(conditional.WhenTrue, target)
+                && IsNestedLambdaResultShapeCompatible(conditional.WhenFalse, target),
+            IfExpressionSyntax ifExpression =>
+                IsNestedLambdaResultShapeCompatible(ifExpression.ThenBlock, target)
+                && (ifExpression.ElseExpression == null
+                    || IsNestedLambdaResultShapeCompatible(ifExpression.ElseExpression, target)),
+            IfLetExpressionSyntax ifLetExpression =>
+                IsNestedLambdaResultShapeCompatible(ifLetExpression.ThenBlock, target)
+                && (ifLetExpression.ElseExpression == null
+                    || IsNestedLambdaResultShapeCompatible(ifLetExpression.ElseExpression, target)),
+            SwitchExpressionSyntax switchExpression =>
+                switchExpression.Arms.All(arm =>
+                    IsNestedLambdaResultShapeCompatible(arm.Result, target)),
+            BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken =>
+                    IsNestedLambdaResultShapeCompatible(binary.Left, target)
+                    && IsNestedLambdaResultShapeCompatible(binary.Right, target),
+            _ => true,
+        };
+    }
+
+    private static bool IsNonGenericTaskReturnType(TypeSymbol type)
+    {
+        var clr = type?.ClrType;
+        return clr != null
+            && (clr.IsSameAs(typeof(System.Threading.Tasks.Task))
+                || clr.IsSameAs(typeof(System.Threading.Tasks.ValueTask)));
     }
 
     /// <summary>

@@ -668,10 +668,16 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                // Issue #889: arrow/func literal → void-returning delegate.
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, Invariant.Required(parameterSyntax[i], "a void-delegate constructor argument has source syntax").Location, out var voidDelegateArg))
+                // Issues #889/#3465: contextually bind lambda/delegate arguments.
+                if (parameter.RefKind == RefKind.None
+                    && TryConvertLambdaArgumentWithTarget(
+                        argument,
+                        parameter.Type,
+                        Invariant.Required(parameterSyntax[i], "a delegate constructor argument has source syntax").Location,
+                        out var targetTypedLambda,
+                        parameter: parameter))
                 {
-                    boundArguments[i] = Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression");
+                    boundArguments[i] = Invariant.Required(targetTypedLambda, "a successful target-typed lambda conversion produces a bound expression");
                     continue;
                 }
 
@@ -868,9 +874,29 @@ internal sealed partial class OverloadResolver
             // value is bound in source order. We will permute below.
             var argument = UnwrapNamedArgumentValue(syntax.Arguments[ai]);
             ParameterSymbol? parameterForArg = null;
-            if (ctorOverloads.Length == 1 && ai < ctorOverloads[0].Parameters.Length)
+            if (ctorOverloads.Length == 1)
             {
-                parameterForArg = ctorOverloads[0].Parameters[ai];
+                var parameterIndex = ai;
+                if (!argumentNames.IsDefault
+                    && ai < argumentNames.Length
+                    && argumentNames[ai] is { } argumentName)
+                {
+                    parameterIndex = -1;
+                    for (var pi = 0; pi < ctorOverloads[0].Parameters.Length; pi++)
+                    {
+                        if (ctorOverloads[0].Parameters[pi].Name == argumentName)
+                        {
+                            parameterIndex = pi;
+                            break;
+                        }
+                    }
+                }
+
+                if (parameterIndex >= 0
+                    && parameterIndex < ctorOverloads[0].Parameters.Length)
+                {
+                    parameterForArg = ctorOverloads[0].Parameters[parameterIndex];
+                }
             }
 
             BoundExpression? boundArgument = null;
@@ -883,7 +909,7 @@ internal sealed partial class OverloadResolver
                 boundArgument = bindRefArgumentExpression(refArgument, null);
             }
 
-            var lambdaArgument = argument as LambdaExpressionSyntax;
+            var lambdaArgument = GetLambdaArgumentSyntax(argument);
             var lambdaTarget = parameterForArg?.Type as FunctionTypeSymbol;
             if (boundArgument is null
                 && lambdaArgument is not null
@@ -891,6 +917,14 @@ internal sealed partial class OverloadResolver
                 && bindLambdaWithTarget is not null)
             {
                 boundArgument = bindLambdaWithTarget(lambdaArgument, lambdaTarget);
+            }
+
+            if (boundArgument is null
+                && lambdaArgument is not null
+                && bindLambdaWithTarget is not null
+                && IsUntypedArrowLambda(lambdaArgument))
+            {
+                boundArgument = new BoundErrorExpression(lambdaArgument);
             }
 
             boundArgument ??= BindOverloadArgumentValue(argument);
@@ -955,7 +989,8 @@ internal sealed partial class OverloadResolver
                 argumentNames,
                 boundArgumentsBuilder.ToImmutable(),
                 out var ambiguous,
-                out var nullSafetyFailure);
+                out var nullSafetyFailure,
+                callSyntax: syntax);
 
             if (selectedFn == null)
             {
@@ -1225,6 +1260,16 @@ internal sealed partial class OverloadResolver
                 ? Invariant.Required(parameterSyntax[i], "an explicit constructor argument has source syntax").Location
                 : syntax.Identifier.Location;
 
+            if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax deferredLambda }
+                && bindLambdaWithTarget != null
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget)
+                && !TypeSymbol.ContainsTypeParameter(deferredTarget))
+            {
+                var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
+                convertedArguments.Add(conversions.BindConversion(argLocation, targeted, paramType));
+                continue;
+            }
+
             if (TryBindConstructorMethodGroup(argument, paramType, argLocation, out var methodGroupArg))
             {
                 convertedArguments.Add(Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression"));
@@ -1256,10 +1301,16 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                // Issue #889: arrow/func literal → void-returning delegate.
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, paramType, argLocation, out var voidDelegateArg))
+                // Issues #889/#3465: contextually bind lambda/delegate arguments.
+                if (parameter.RefKind == RefKind.None
+                    && TryConvertLambdaArgumentWithTarget(
+                        argument,
+                        paramType,
+                        argLocation,
+                        out var targetTypedLambda,
+                        parameter: parameter))
                 {
-                    convertedArguments.Add(Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression"));
+                    convertedArguments.Add(Invariant.Required(targetTypedLambda, "a successful target-typed lambda conversion produces a bound expression"));
                     continue;
                 }
 
@@ -2308,10 +2359,16 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                // Issue #889: arrow/func literal → void-returning delegate.
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
+                // Issues #889/#3465: contextually bind lambda/delegate arguments.
+                if (parameter.RefKind == RefKind.None
+                    && TryConvertLambdaArgumentWithTarget(
+                        argument,
+                        parameter.Type,
+                        argLocation,
+                        out var targetTypedLambda,
+                        parameter: parameter))
                 {
-                    convertedArgs.Add(Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression"));
+                    convertedArgs.Add(Invariant.Required(targetTypedLambda, "a successful target-typed lambda conversion produces a bound expression"));
                     continue;
                 }
 

@@ -4134,6 +4134,114 @@ internal sealed class MemberLookup
         out ImmutableArray<TypeSymbol> mappedArguments)
         => TryMapThroughImplemented(source, targetOpenDefinition, out mappedArguments);
 
+    /// <summary>
+    /// Maps every occurrence of <paramref name="targetOpenDefinition"/> in an
+    /// imported type's base/interface closure and succeeds only when all
+    /// occurrences project the same symbolic type arguments. This is the
+    /// inference-specific counterpart to
+    /// <see cref="TryMapConstructedTypeArgumentsThroughHierarchy"/>: conversions
+    /// may select a particular closed interface, while inference must not choose
+    /// arbitrarily between conflicting projections.
+    /// </summary>
+    /// <param name="source">Constructed imported source type.</param>
+    /// <param name="targetOpenDefinition">Open generic type being inferred against.</param>
+    /// <param name="mappedArguments">Unique projected symbolic arguments on success.</param>
+    /// <param name="foundProjection">Whether at least one matching projection was found, including conflicting matches.</param>
+    /// <returns><see langword="true"/> when one or more matching projections agree.</returns>
+    internal static bool TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
+        ImportedTypeSymbol source,
+        Type targetOpenDefinition,
+        out ImmutableArray<TypeSymbol> mappedArguments,
+        out bool foundProjection)
+    {
+        mappedArguments = default;
+        foundProjection = false;
+        if (source.OpenDefinition == null)
+        {
+            return false;
+        }
+
+        static bool VectorsEquivalent(
+            ImmutableArray<TypeSymbol> left,
+            ImmutableArray<TypeSymbol> right)
+        {
+            if (left.Length != right.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < left.Length; i++)
+            {
+                if (!DeclarationBinder.TypeSignaturesEquivalent(left[i], right[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        foreach (var candidate in EnumerateOpenInterfacesAndBases(source.OpenDefinition))
+        {
+            Type candidateDefinition;
+            try
+            {
+                if (!candidate.IsGenericType)
+                {
+                    continue;
+                }
+
+                candidateDefinition = candidate.IsGenericTypeDefinition
+                    ? candidate
+                    : candidate.GetGenericTypeDefinition();
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            if (!ClrTypeUtilities.AreSame(candidateDefinition, targetOpenDefinition))
+            {
+                continue;
+            }
+
+            Type[] candidateArguments;
+            try
+            {
+                candidateArguments = candidate.GetGenericArguments();
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
+            foreach (var argument in candidateArguments)
+            {
+                builder.Add(MapOpenClrTypeToSymbolic(
+                    argument,
+                    source.OpenDefinition,
+                    source.TypeArguments));
+            }
+
+            var projectedArguments = builder.MoveToImmutable();
+            if (!foundProjection)
+            {
+                mappedArguments = projectedArguments;
+                foundProjection = true;
+                continue;
+            }
+
+            if (!VectorsEquivalent(mappedArguments, projectedArguments))
+            {
+                mappedArguments = default;
+                return false;
+            }
+        }
+
+        return foundProjection;
+    }
+
     internal static bool TryProjectConstructedHierarchyClrType(
         ImportedTypeSymbol source,
         Type targetOpenDefinition,

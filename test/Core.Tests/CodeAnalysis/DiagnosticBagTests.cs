@@ -42,6 +42,29 @@ public class DiagnosticBagTests
     }
 
     [Fact]
+    public void SuppressDuplicateDiagnosticsIn_ConsumesExistingMultiplicityOnly()
+    {
+        var location = MakeLocation("source");
+        var existing = new Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "same");
+        var repeated = new Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "same");
+        var distinct = new Diagnostic(location, "GS0003", DiagnosticSeverity.Error, "distinct");
+        var bag = new DiagnosticBag();
+        bag.Report(existing);
+
+        bag.SuppressDuplicateDiagnosticsIn(
+            location,
+            () =>
+            {
+                bag.Report(new Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "same"));
+                bag.Report(repeated);
+                bag.Report(distinct);
+                return 0;
+            });
+
+        Assert.Equal(new[] { existing, repeated, distinct }, bag);
+    }
+
+    [Fact]
     public void Diagnostic_ToString_Returns_Message()
     {
         var location = MakeLocation("x");

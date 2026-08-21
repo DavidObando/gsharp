@@ -560,14 +560,14 @@ internal sealed partial class OverloadResolver
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
 
-        // Issue #951: indices of un-typed arrow lambda arguments whose binding
+        // Issue #951: untyped arrow lambdas whose binding
         // is deferred until the callee's parameter types are known, so the
         // target delegate shape can drive lambda-parameter-type inference.
         // Without the deferral the lambda binds with no target, reports GS0304
         // ("cannot infer parameter type"), and aborts the call — even though
         // the parameter (e.g. `Func[int32, int32]` / `(int32) -> int32`)
         // fully determines the lambda's shape.
-        HashSet<int>? deferredArrowLambdaIndices = null;
+        HashSet<LambdaExpressionSyntax>? deferredArrowLambdas = null;
 
         // ADR-0060: argument binding needs the matching parameter to resolve
         // inline `out var`/`out let`/`out _` payloads. For free-function calls
@@ -575,27 +575,28 @@ internal sealed partial class OverloadResolver
         // bind everything with parameter=null (the inline-out form falls back
         // to its declared type) and patch up the type later. The plain
         // lvalue ref/in/out form is parameter-independent.
-        var argIndex = 0;
         foreach (var argument in syntax.Arguments)
         {
             // Issue #343: a named-argument wrapper carries the value expression
             // we want to bind; unwrap it so the value is bound on its own.
             var argSyntax = UnwrapNamedArgumentValue(argument);
+            var lambdaSyntax = GetLambdaArgumentSyntax(argSyntax);
             BoundExpression boundArgument;
             if (argSyntax is RefArgumentExpressionSyntax refArg)
             {
                 // The first binding pass has no resolved parameter for inline out arguments.
                 boundArgument = bindRefArgumentExpression(refArg, null);
             }
-            else if (argumentNames.IsDefault
-                && bindLambdaWithTarget != null
-                && IsUntypedArrowLambda(argSyntax))
+            else if (bindLambdaWithTarget != null
+                && lambdaSyntax is { } deferredLambda
+                && IsUntypedArrowLambda(deferredLambda))
             {
                 // Issue #951: defer; bind once the parameter delegate target is
                 // known (per-position loop below). A placeholder carrying the
                 // lambda syntax keeps argument positions aligned.
-                (deferredArrowLambdaIndices ??= new HashSet<int>()).Add(argIndex);
-                boundArgument = new BoundErrorExpression(argSyntax);
+                (deferredArrowLambdas ??= new HashSet<LambdaExpressionSyntax>())
+                    .Add(deferredLambda);
+                boundArgument = new BoundErrorExpression(deferredLambda);
             }
             else
             {
@@ -603,7 +604,6 @@ internal sealed partial class OverloadResolver
             }
 
             boundArguments.Add(boundArgument);
-            argIndex++;
         }
 
         var symbol = Scope.TryLookupSymbol(syntax.Identifier.Text);
@@ -1290,7 +1290,7 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, out var nullSafetyFailure, syntax.TypeArgumentList?.Arguments.Count ?? 0);
+            var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, syntax, out var overloadAmbiguous, out var nullSafetyFailure, syntax.TypeArgumentList?.Arguments.Count ?? 0);
             if (selected == null)
             {
                 if (nullSafetyFailure != null)
@@ -1610,11 +1610,11 @@ internal sealed partial class OverloadResolver
             // If the parameter is not a delegate type, fall back to binding the
             // lambda with no target, which surfaces the established GS0304
             // diagnostic through the regular conversion checks below.
-            if (deferredArrowLambdaIndices != null
-                && deferredArrowLambdaIndices.Remove(i)
+            if (deferredArrowLambdas != null
                 && i < parameterSyntax.Length
                 && parameterSyntax[i] is { } deferredArgument
-                && UnwrapNamedArgumentValue(deferredArgument) is LambdaExpressionSyntax deferredLambda)
+                && GetLambdaArgumentSyntax(deferredArgument) is { } deferredLambda
+                && deferredArrowLambdas.Remove(deferredLambda))
             {
                 var lambdaLoc = deferredArgument.Location;
                 if (bindLambdaWithTarget != null
@@ -1630,6 +1630,27 @@ internal sealed partial class OverloadResolver
                 }
 
                 boundArguments[i] = argument = bindExpression(deferredLambda);
+            }
+
+            var lambdaTargetLoc = i < parameterSyntax.Length
+                ? parameterSyntax[i]?.Location ?? syntax.Identifier.Location
+                : syntax.Identifier.Location;
+            var lambdaSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } sourceArgument
+                ? GetLambdaArgumentSyntax(sourceArgument)
+                : null;
+            if (parameter.RefKind == RefKind.None
+                && TryConvertLambdaArgumentWithTarget(
+                    argument,
+                    expectedType,
+                    lambdaTargetLoc,
+                    out var targetTypedLambda,
+                    lambdaSyntax,
+                    parameter))
+            {
+                boundArguments[i] = Invariant.Required(
+                    targetTypedLambda,
+                    "a successfully target-typed lambda produces a bound expression");
+                continue;
             }
 
             // ADR-0100 / issue #795: materialise a bare-`default`
@@ -1914,9 +1935,14 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, targetType, voidDelegateLoc, out var voidDelegateArg))
+                if (TryConvertLambdaArgumentWithTarget(
+                    argument,
+                    targetType,
+                    voidDelegateLoc,
+                    out var targetTypedLambdaArg,
+                    parameter: parameter))
                 {
-                    boundArguments[i] = Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression");
+                    boundArguments[i] = Invariant.Required(targetTypedLambdaArg, "a successful target-typed lambda conversion produces a bound expression");
                     continue;
                 }
 
@@ -2033,13 +2059,14 @@ internal sealed partial class OverloadResolver
         // fixed parameter (e.g. it landed in a trailing variadic slot) is bound
         // here with no target so the established GS0304 diagnostic surfaces
         // rather than leaving an unbound placeholder.
-        if (deferredArrowLambdaIndices != null)
+        if (deferredArrowLambdas != null)
         {
-            foreach (var idx in deferredArrowLambdaIndices)
+            for (var idx = 0; idx < boundArguments.Count; idx++)
             {
                 if (idx < boundArguments.Count
                     && boundArguments[idx] is BoundErrorExpression placeholder
-                    && placeholder.Syntax is LambdaExpressionSyntax pendingLambda)
+                    && placeholder.Syntax is LambdaExpressionSyntax pendingLambda
+                    && deferredArrowLambdas.Remove(pendingLambda))
                 {
                     boundArguments[idx] = bindExpression(pendingLambda);
                 }
@@ -2243,20 +2270,102 @@ internal sealed partial class OverloadResolver
     /// untyped parameter slot.</returns>
     private static bool IsUntypedArrowLambda(ExpressionSyntax inner)
     {
+        inner = UnwrapArgumentValueWrappers(inner);
         if (inner is not LambdaExpressionSyntax lambda)
         {
             return false;
         }
 
-        for (var i = 0; i < lambda.Parameters.Count; i++)
+        return ContainsTargetDependentLambda(lambda);
+    }
+
+    internal static bool ContainsTargetDependentLambda(ExpressionSyntax syntax)
+    {
+        syntax = UnwrapArgumentValueWrappers(syntax);
+
+        if (syntax is LambdaExpressionSyntax lambda)
         {
-            if (lambda.Parameters[i].Type == null)
+            for (var i = 0; i < lambda.Parameters.Count; i++)
+            {
+                if (lambda.Parameters[i].Type == null)
+                {
+                    return true;
+                }
+            }
+
+            return ContainsTargetDependentLambda(lambda.Body);
+        }
+
+        return syntax switch
+        {
+            BlockExpressionSyntax block =>
+                (block.Expression != null
+                    && ContainsTargetDependentLambda(block.Expression))
+                || ContainsTargetDependentLambdaInReturns(block),
+            ConditionalExpressionSyntax conditional =>
+                ContainsTargetDependentLambda(conditional.WhenTrue)
+                || ContainsTargetDependentLambda(conditional.WhenFalse),
+            IfExpressionSyntax ifExpression =>
+                ContainsTargetDependentLambda(ifExpression.ThenBlock)
+                || (ifExpression.ElseExpression != null
+                    && ContainsTargetDependentLambda(ifExpression.ElseExpression)),
+            IfLetExpressionSyntax ifLetExpression =>
+                ContainsTargetDependentLambda(ifLetExpression.ThenBlock)
+                || (ifLetExpression.ElseExpression != null
+                    && ContainsTargetDependentLambda(ifLetExpression.ElseExpression)),
+            SwitchExpressionSyntax switchExpression =>
+                switchExpression.Arms.Any(arm =>
+                    ContainsTargetDependentLambda(arm.Result)),
+            BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken =>
+                    ContainsTargetDependentLambda(binary.Left)
+                    || ContainsTargetDependentLambda(binary.Right),
+            _ => false,
+        };
+    }
+
+    private static bool ContainsTargetDependentLambdaInReturns(
+        BlockExpressionSyntax block)
+    {
+        foreach (var returnStatement in EnumerateExplicitReturns(block))
+        {
+            if (ContainsTargetDependentLambda(
+                Invariant.Required(
+                    returnStatement.Expression,
+                    "explicit value-return enumeration excludes bare returns")))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static IEnumerable<ReturnStatementSyntax> EnumerateExplicitReturns(
+        BlockExpressionSyntax block)
+    {
+        var stack = new Stack<SyntaxNode>(block.Statements.Cast<SyntaxNode>());
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is LambdaExpressionSyntax
+                or FunctionLiteralExpressionSyntax
+                or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax { Expression: { } expression })
+            {
+                yield return (ReturnStatementSyntax)node;
+                continue;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
     }
 
     /// <summary>
