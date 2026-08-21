@@ -512,7 +512,7 @@ internal sealed partial class OverloadResolver
                 // An async lambda's Task/ValueTask wrapper is supplied by its
                 // candidate target, so equal awaited result shapes rank equally.
                 var lambdaSyntax = callSyntax != null && i < callSyntax.Arguments.Count
-                    ? UnwrapNamedArgumentValue(callSyntax.Arguments[i]) as LambdaExpressionSyntax
+                    ? GetLambdaArgumentSyntax(callSyntax.Arguments[i])
                     : null;
                 kinds[i] = lambdaSyntax?.IsAsync == true
                     && HasSameAsyncLambdaResultShape(argType, paramType)
@@ -1068,7 +1068,7 @@ internal sealed partial class OverloadResolver
             }
 
             var lambdaSyntax = callSyntax != null && i < callSyntax.Arguments.Count
-                ? UnwrapNamedArgumentValue(callSyntax.Arguments[i]) as LambdaExpressionSyntax
+                ? GetLambdaArgumentSyntax(callSyntax.Arguments[i])
                 : null;
             if (!IsLambdaReturnShapeCompatible(boundArguments[i], paramType, lambdaSyntax))
             {
@@ -1258,7 +1258,7 @@ internal sealed partial class OverloadResolver
         TypeSymbol parameterType,
         LambdaExpressionSyntax? lambdaSyntax)
     {
-        var lambda = lambdaSyntax ?? argument.Syntax as LambdaExpressionSyntax;
+        var lambda = lambdaSyntax ?? GetLambdaArgumentSyntax(argument.Syntax as ExpressionSyntax);
         if (lambda == null
             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target))
         {
@@ -1354,13 +1354,24 @@ internal sealed partial class OverloadResolver
                 && IsObviouslyNonCompleting(conditional.ElseClause.ElseStatement),
             ForInfiniteStatementSyntax loop =>
                 !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
+            WhileStatementSyntax loop when IsConstantTrue(loop.Condition) =>
+                !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
+            DoWhileStatementSyntax loop when IsConstantTrue(loop.Condition) =>
+                !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
             LabeledStatementSyntax { Statement: ForInfiniteStatementSyntax loop } labeledLoop =>
                 !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+            LabeledStatementSyntax { Statement: WhileStatementSyntax loop } labeledLoop
+                when IsConstantTrue(loop.Condition) =>
+                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+            LabeledStatementSyntax { Statement: DoWhileStatementSyntax loop } labeledLoop
+                when IsConstantTrue(loop.Condition) =>
+                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
             _ => false,
         };
 
     private static bool ContainsPotentialLoopExit(StatementSyntax body, string? loopLabel)
     {
+        var localGotoLabels = CollectGotoLabels(body);
         var stack = new Stack<(SyntaxNode Node, int NestedLoopDepth)>();
         stack.Push((body, 0));
         while (stack.Count > 0)
@@ -1377,7 +1388,8 @@ internal sealed partial class OverloadResolver
                 return true;
             }
 
-            if (node is GotoStatementSyntax)
+            if (node is GotoStatementSyntax gotoStatement
+                && !localGotoLabels.Contains(gotoStatement.LabelIdentifier.Text))
             {
                 return true;
             }
@@ -1398,6 +1410,47 @@ internal sealed partial class OverloadResolver
         }
 
         return false;
+    }
+
+    private static HashSet<string> CollectGotoLabels(StatementSyntax body)
+    {
+        var labels = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<SyntaxNode>();
+        stack.Push(body);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (!ReferenceEquals(node, body)
+                && node is LambdaExpressionSyntax
+                    or FunctionLiteralExpressionSyntax
+                    or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            if (node is LabeledStatementSyntax labeled
+                && !IsLoopSyntax(labeled.Statement))
+            {
+                labels.Add(labeled.LabelIdentifier.Text);
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
+
+        return labels;
+    }
+
+    private static bool IsConstantTrue(ExpressionSyntax condition)
+    {
+        while (condition is ParenthesizedExpressionSyntax parenthesized)
+        {
+            condition = parenthesized.Expression;
+        }
+
+        return condition is LiteralExpressionSyntax { Value: true };
     }
 
     private static bool IsLoopSyntax(SyntaxNode node)

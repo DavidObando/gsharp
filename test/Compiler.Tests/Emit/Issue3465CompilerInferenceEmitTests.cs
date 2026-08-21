@@ -129,6 +129,43 @@ public sealed class Issue3465CompilerInferenceEmitTests
         Assert.Equal($"15{Environment.NewLine}", CompileAndRun(source));
     }
 
+    [Fact]
+    public void NamedConstructorAndNestedExpressionTreeLambdaTargets_CompileVerifyAndRun()
+    {
+        const string source = """
+            package i3465followup
+            import System
+            import System.Linq.Expressions
+
+            class Visitor {
+                init(transform (int32)->int32, action (string)->void) {
+                    Console.Write(transform(4))
+                    action("ok")
+                }
+            }
+
+            func Make() Expression[Func[Func[int32, int32]]] {
+                return () -> (value) -> value + 1
+            }
+
+            func MakeTyped() Expression[Func[int32, Func[int32, int32]]] {
+                return (outer int32) -> (value) -> value + 2
+            }
+
+            func Main() {
+                Visitor(
+                    action: (text) -> Console.Write(text),
+                    transform: (value) -> value + 1)
+                Console.WriteLine(Make().Compile()()(4))
+                Console.WriteLine(MakeTyped().Compile()(0)(4))
+            }
+            """;
+
+        Assert.Equal(
+            $"5ok5{Environment.NewLine}6{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var workDir = Path.Combine(

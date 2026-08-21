@@ -267,7 +267,7 @@ public sealed class Binder
             bindLambdaWithTarget: (syntax, targetType) =>
             {
                 return Diagnostics.SuppressDuplicateDiagnosticsIn(
-                    syntax.Body.Location,
+                    syntax.Location,
                     () => Lambdas.BindLambdaExpression(syntax, targetType));
             },
             bindUserTypeStaticCall: (structSym, ce) =>
@@ -6074,7 +6074,11 @@ public sealed class Binder
                         originalArg is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol originalTypeParameter }
                         && !originalTypeParameter.HasValueTypeConstraint;
                     var clr = preserveErasedNullableTypeParameter
-                        ? substitutedArgs[i].ClrType
+                        ? originalArg is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol nullableTypeParameter }
+                            && substitution.TryGetValue(nullableTypeParameter, out var actualType)
+                            && actualType is NullableTypeSymbol
+                            ? NullableLifting.GetEffectiveClrType(substitutedArgs[i])
+                            : substitutedArgs[i].ClrType
                         : NullableLifting.GetEffectiveClrType(substitutedArgs[i]);
                     if (clr == null)
                     {

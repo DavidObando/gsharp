@@ -432,12 +432,12 @@ internal sealed partial class OverloadResolver
             var argSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } parameterExpression
                 ? UnwrapNamedArgumentValue(parameterExpression)
                 : null;
-            if (argSyntax != null
+            if (GetLambdaArgumentSyntax(argSyntax) is { } lambdaSyntax
                 && bindLambdaWithTarget != null
-                && IsUntypedArrowLambda(argSyntax)
+                && IsUntypedArrowLambda(lambdaSyntax)
                 && functionType.ParameterTypes[i] is FunctionTypeSymbol lambdaTarget)
             {
-                argument = bindLambdaWithTarget((LambdaExpressionSyntax)argSyntax, lambdaTarget);
+                argument = bindLambdaWithTarget(lambdaSyntax, lambdaTarget);
             }
 
             convertedBuilder.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]));
@@ -660,12 +660,12 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            if (argumentSyntax != null
+            if (GetLambdaArgumentSyntax(argumentSyntax) is { } lambdaSyntax
                 && bindLambdaWithTarget != null
-                && IsUntypedArrowLambda(argumentSyntax)
+                && IsUntypedArrowLambda(lambdaSyntax)
                 && parameter.Type is FunctionTypeSymbol lambdaTarget)
             {
-                argument = bindLambdaWithTarget((LambdaExpressionSyntax)argumentSyntax, lambdaTarget);
+                argument = bindLambdaWithTarget(lambdaSyntax, lambdaTarget);
             }
 
             converted.Add(conversions.BindConversion(argumentLocation, argument, parameter.Type));
@@ -1268,7 +1268,7 @@ internal sealed partial class OverloadResolver
                 ? permutedSyntax[i]?.Location ?? ce.Location
                 : ce.Location;
             var lambdaSyntax = i < permutedSyntax.Length && permutedSyntax[i] is { } sourceArgument
-                ? UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
             if (extension.Parameters[i + 1].RefKind == RefKind.None
                 && TryConvertLambdaArgumentWithTarget(
@@ -1717,7 +1717,7 @@ internal sealed partial class OverloadResolver
             var argSyntaxForLocation = i < permutedSyntax.Length ? permutedSyntax[i] : null;
             var argLoc = argSyntaxForLocation?.Location ?? ce.Location;
             var lambdaSyntax = argSyntaxForLocation is { } sourceArgument
-                ? UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
             if (parameter.RefKind == RefKind.None
                 && TryConvertLambdaArgumentWithTarget(

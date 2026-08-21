@@ -580,6 +580,7 @@ internal sealed partial class OverloadResolver
             // Issue #343: a named-argument wrapper carries the value expression
             // we want to bind; unwrap it so the value is bound on its own.
             var argSyntax = UnwrapNamedArgumentValue(argument);
+            var lambdaSyntax = GetLambdaArgumentSyntax(argSyntax);
             BoundExpression boundArgument;
             if (argSyntax is RefArgumentExpressionSyntax refArg)
             {
@@ -587,7 +588,7 @@ internal sealed partial class OverloadResolver
                 boundArgument = bindRefArgumentExpression(refArg, null);
             }
             else if (bindLambdaWithTarget != null
-                && argSyntax is LambdaExpressionSyntax deferredLambda
+                && lambdaSyntax is { } deferredLambda
                 && IsUntypedArrowLambda(deferredLambda))
             {
                 // Issue #951: defer; bind once the parameter delegate target is
@@ -595,7 +596,7 @@ internal sealed partial class OverloadResolver
                 // lambda syntax keeps argument positions aligned.
                 (deferredArrowLambdas ??= new HashSet<LambdaExpressionSyntax>())
                     .Add(deferredLambda);
-                boundArgument = new BoundErrorExpression(argSyntax);
+                boundArgument = new BoundErrorExpression(deferredLambda);
             }
             else
             {
@@ -1612,7 +1613,7 @@ internal sealed partial class OverloadResolver
             if (deferredArrowLambdas != null
                 && i < parameterSyntax.Length
                 && parameterSyntax[i] is { } deferredArgument
-                && UnwrapNamedArgumentValue(deferredArgument) is LambdaExpressionSyntax deferredLambda
+                && GetLambdaArgumentSyntax(deferredArgument) is { } deferredLambda
                 && deferredArrowLambdas.Remove(deferredLambda))
             {
                 var lambdaLoc = deferredArgument.Location;
@@ -1635,7 +1636,7 @@ internal sealed partial class OverloadResolver
                 ? parameterSyntax[i]?.Location ?? syntax.Identifier.Location
                 : syntax.Identifier.Location;
             var lambdaSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } sourceArgument
-                ? UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
             if (parameter.RefKind == RefKind.None
                 && TryConvertLambdaArgumentWithTarget(
@@ -2269,6 +2270,7 @@ internal sealed partial class OverloadResolver
     /// untyped parameter slot.</returns>
     private static bool IsUntypedArrowLambda(ExpressionSyntax inner)
     {
+        inner = UnwrapArgumentValueWrappers(inner);
         if (inner is not LambdaExpressionSyntax lambda)
         {
             return false;
@@ -2277,12 +2279,9 @@ internal sealed partial class OverloadResolver
         return ContainsTargetDependentLambda(lambda);
     }
 
-    private static bool ContainsTargetDependentLambda(ExpressionSyntax syntax)
+    internal static bool ContainsTargetDependentLambda(ExpressionSyntax syntax)
     {
-        while (syntax is ParenthesizedExpressionSyntax parenthesized)
-        {
-            syntax = parenthesized.Expression;
-        }
+        syntax = UnwrapArgumentValueWrappers(syntax);
 
         if (syntax is LambdaExpressionSyntax lambda)
         {

@@ -874,9 +874,29 @@ internal sealed partial class OverloadResolver
             // value is bound in source order. We will permute below.
             var argument = UnwrapNamedArgumentValue(syntax.Arguments[ai]);
             ParameterSymbol? parameterForArg = null;
-            if (ctorOverloads.Length == 1 && ai < ctorOverloads[0].Parameters.Length)
+            if (ctorOverloads.Length == 1)
             {
-                parameterForArg = ctorOverloads[0].Parameters[ai];
+                var parameterIndex = ai;
+                if (!argumentNames.IsDefault
+                    && ai < argumentNames.Length
+                    && argumentNames[ai] is { } argumentName)
+                {
+                    parameterIndex = -1;
+                    for (var pi = 0; pi < ctorOverloads[0].Parameters.Length; pi++)
+                    {
+                        if (ctorOverloads[0].Parameters[pi].Name == argumentName)
+                        {
+                            parameterIndex = pi;
+                            break;
+                        }
+                    }
+                }
+
+                if (parameterIndex >= 0
+                    && parameterIndex < ctorOverloads[0].Parameters.Length)
+                {
+                    parameterForArg = ctorOverloads[0].Parameters[parameterIndex];
+                }
             }
 
             BoundExpression? boundArgument = null;
@@ -889,7 +909,7 @@ internal sealed partial class OverloadResolver
                 boundArgument = bindRefArgumentExpression(refArgument, null);
             }
 
-            var lambdaArgument = argument as LambdaExpressionSyntax;
+            var lambdaArgument = GetLambdaArgumentSyntax(argument);
             var lambdaTarget = parameterForArg?.Type as FunctionTypeSymbol;
             if (boundArgument is null
                 && lambdaArgument is not null

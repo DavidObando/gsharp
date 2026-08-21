@@ -53,6 +53,26 @@ public sealed class BinderSubstituteTypeNullableTests
         Assert.Equal(typeof(List<int>), substituted.ClrType);
     }
 
+    [Fact]
+    public void ImportedGeneric_UnconstrainedNullableTypeParameter_PreservesNullableActualType()
+    {
+        var typeParameter = TypeParameter();
+        var openDefinition = typeof(List<>);
+        var imported = ImportedTypeSymbol.GetConstructed(
+            openDefinition.MakeGenericType(typeof(object)),
+            openDefinition,
+            ImmutableArray.Create<TypeSymbol>(NullableTypeSymbol.Get(typeParameter)));
+
+        var substituted = Binder.SubstituteType(
+            imported,
+            new Dictionary<TypeParameterSymbol, TypeSymbol>
+            {
+                [typeParameter] = NullableTypeSymbol.Get(TypeSymbol.Int32),
+            });
+
+        Assert.Equal(typeof(List<int?>), substituted.ClrType);
+    }
+
     private static TypeParameterSymbol TypeParameter()
         => new("T", 0, TypeParameterConstraint.Any, TypeParameterVariance.None);
 }

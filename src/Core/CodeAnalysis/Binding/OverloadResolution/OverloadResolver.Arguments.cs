@@ -365,7 +365,7 @@ internal sealed partial class OverloadResolver
         ParameterSymbol? parameter = null)
     {
         result = null;
-        var lambda = lambdaSyntax ?? argument.Syntax as LambdaExpressionSyntax;
+        var lambda = lambdaSyntax ?? GetLambdaArgumentSyntax(argument.Syntax as ExpressionSyntax);
         if (expectedType == null
             || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _)
             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFnType)
@@ -486,6 +486,34 @@ internal sealed partial class OverloadResolver
     /// <returns>The wrapped value expression when named, otherwise the node itself.</returns>
     public static ExpressionSyntax UnwrapNamedArgumentValue(ExpressionSyntax argument)
         => argument is NamedArgumentExpressionSyntax named ? named.Expression : argument;
+
+    /// <summary>
+    /// Returns a call argument's canonical value expression for syntax-kind
+    /// checks. Named-argument and parenthesis wrappers do not change whether
+    /// the payload is a lambda.
+    /// </summary>
+    internal static ExpressionSyntax UnwrapArgumentValueWrappers(ExpressionSyntax argument)
+    {
+        while (true)
+        {
+            switch (argument)
+            {
+                case NamedArgumentExpressionSyntax named:
+                    argument = named.Expression;
+                    continue;
+                case ParenthesizedExpressionSyntax parenthesized:
+                    argument = parenthesized.Expression;
+                    continue;
+                default:
+                    return argument;
+            }
+        }
+    }
+
+    internal static LambdaExpressionSyntax? GetLambdaArgumentSyntax(ExpressionSyntax? argument)
+        => argument == null
+            ? null
+            : UnwrapArgumentValueWrappers(argument) as LambdaExpressionSyntax;
 
     /// <summary>
     /// Issue #1238: eagerly binds a (named-argument-unwrapped) call/constructor

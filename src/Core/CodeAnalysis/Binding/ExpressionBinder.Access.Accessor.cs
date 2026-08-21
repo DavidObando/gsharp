@@ -3721,7 +3721,7 @@ internal sealed partial class ExpressionBinder
                     ? parameterSyntax[i]?.Location ?? ce.Location
                     : ce.Location;
                 var lambdaSyntax = slotSyntax is { } sourceArgument
-                    ? OverloadResolver.UnwrapNamedArgumentValue(sourceArgument) as LambdaExpressionSyntax
+                    ? OverloadResolver.GetLambdaArgumentSyntax(sourceArgument)
                     : null;
                 if (method.Parameters[i].RefKind == RefKind.None
                     && overloads.TryConvertLambdaArgumentWithTarget(

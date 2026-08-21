@@ -668,6 +668,8 @@ public sealed class Issue3465InferenceTests
     [Theory]
     [InlineData("{ throw Exception(\"stop\") }")]
     [InlineData("{ for { } }")]
+    [InlineData("{ while true { } }")]
+    [InlineData("{ do { } while true }")]
     public void NonCompletingBlock_IsCompatibleWithValueDelegate(string body)
     {
         var result = Evaluate($$"""
@@ -689,6 +691,8 @@ public sealed class Issue3465InferenceTests
     [Theory]
     [InlineData("{ throw Exception(\"stop\") }")]
     [InlineData("{ for { } }")]
+    [InlineData("{ while true { } }")]
+    [InlineData("{ do { } while true }")]
     public void NonCompletingBlock_DoesNotPreferVoidOverload(string body)
     {
         var result = Evaluate($$"""
@@ -716,6 +720,27 @@ public sealed class Issue3465InferenceTests
             Choose((value) -> {
                 for {
                     for { break }
+                }
+            })
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0154" or "GS0155");
+    }
+
+    [Fact]
+    public void InternalGoto_DoesNotMakeInfiniteLoopComplete()
+    {
+        var result = Evaluate("""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {
+                for {
+                    goto repeat
+                    repeat: let copy = value
                 }
             })
             """);
@@ -777,6 +802,24 @@ public sealed class Issue3465InferenceTests
         Assert.Equal(1, result.Value);
     }
 
+    [Theory]
+    [InlineData("while true { break }")]
+    [InlineData("do { break } while true")]
+    public void ConstantTrueLoopWithOwnedBreak_MakesLambdaVoidOnly(string loop)
+    {
+        var result = Evaluate($$"""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose((value) -> {
+                {{loop}}
+            })
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
     [Fact]
     public void OverloadedConstructor_ContextuallyBindsUntypedLambda()
     {
@@ -792,6 +835,27 @@ public sealed class Issue3465InferenceTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void ConstructorNamedArguments_ContextuallyBindLambdaToAssociatedParameter()
+    {
+        var result = Evaluate("""
+            class Visitor {
+                init(transform (int32)->int32, action (string)->void) {
+                    action("ok")
+                }
+            }
+
+            var seen = ""
+            Visitor(
+                action: (text) -> { seen = text },
+                transform: (value) -> value + 1)
+            seen
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
     }
 
     [Fact]
@@ -979,6 +1043,21 @@ public sealed class Issue3465InferenceTests
         }
     }
 
+    [Fact]
+    public void ContextuallyReboundLambda_DuplicateParameterIsReportedOnce()
+    {
+        var result = Evaluate("""
+            func Visit(action (int32, int32)->void) {}
+
+            Visit((value int32, value int32) -> 1)
+            0
+            """);
+
+        Assert.Equal(
+            new[] { "GS0101" },
+            result.Diagnostics.Select(diagnostic => diagnostic.Id));
+    }
+
     [Theory]
     [InlineData("Task")]
     [InlineData("ValueTask")]
@@ -1024,6 +1103,26 @@ public sealed class Issue3465InferenceTests
             func Choose(action ()->ValueTask[int32]) int32 -> 2
 
             Choose(async () -> { return 7 })
+            """);
+
+        Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id is "GS0154" or "GS0155");
+    }
+
+    [Theory]
+    [InlineData("Choose((async () -> { return 7 }))")]
+    [InlineData("Choose(action: ((async () -> { return 7 })))")]
+    public void WrappedAsyncValueTaskAndTaskOverloads_ContextuallyAcceptTargetlessLambda(string call)
+    {
+        var result = Evaluate($$"""
+            import System.Threading.Tasks
+
+            func Choose(action ()->Task[int32]) int32 -> 1
+            func Choose(action ()->ValueTask[int32]) int32 -> 2
+
+            {{call}}
             """);
 
         Assert.Equal(1, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0266"));
@@ -1110,6 +1209,30 @@ public sealed class Issue3465InferenceTests
 
             func Make() Expression[Func[int32, int32]] {
                 return (value) -> value + 1
+            }
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Theory]
+    [InlineData(
+        "Expression[Func[Func[int32, int32]]]",
+        "() -> (value) -> value + 1")]
+    [InlineData(
+        "Expression[Func[int32, Func[int32, int32]]]",
+        "(outer int32) -> (value) -> value + 1")]
+    public void ExpressionTreeReturn_PropagatesNestedLambdaTarget(string returnType, string lambda)
+    {
+        var result = Evaluate($$"""
+            import System
+            import System.Linq.Expressions
+
+            func Make() {{returnType}} {
+                return {{lambda}}
             }
 
             0
