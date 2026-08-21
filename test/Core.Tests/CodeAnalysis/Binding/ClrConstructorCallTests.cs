@@ -89,6 +89,84 @@ var value = Consumer.Read()
     }
 
     [Fact]
+    public void ImportedGenericType_WithSameArityNestedSourceHomonym_BindsImportedType()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Holder {
+    class Issue3466ImportedGenericService[T] {
+        prop Value T
+    }
+}
+
+class Consumer {
+    shared {
+        func Create() Issue3466ImportedGenericService[int32] {
+            return Issue3466ImportedGenericService[int32](7)
+        }
+
+        func Read() int32 {
+            return Create().Value
+        }
+    }
+}
+
+Consumer.Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void ImportedGenericQualifiedType_WithSameArityNestedSourceHomonym_BindsImportedType()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Holder {
+    class Issue3466ImportedGenericService[T] {
+        class Token {
+            prop SourceValue int32
+        }
+    }
+}
+
+func Read(value Issue3466ImportedGenericService[int32].Token) int32 {
+    return value.ImportedValue
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ImportedGenericLiteral_WithMatchingNestedMembers_BindsImportedType()
+    {
+        var source = @"
+package Demo
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class Holder {
+    class Issue3466ImportedGenericInitializer[T] {
+        prop Value int32 { get; set; }
+    }
+}
+
+let target = Issue3466ImportedGenericInitializer[string]{Value: 7}
+target.Value
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(107, result.Value);
+    }
+
+    [Fact]
     public void DictionaryStringInt_DefaultConstructor_Binds()
     {
         var source = @"
@@ -138,4 +216,30 @@ public sealed class Issue3466ImportedService
     }
 
     public int Value { get; }
+}
+
+public sealed class Issue3466ImportedGenericService<T>
+{
+    public Issue3466ImportedGenericService(T value)
+    {
+        this.Value = value;
+    }
+
+    public T Value { get; }
+
+    public sealed class Token
+    {
+        public int ImportedValue => 11;
+    }
+}
+
+public sealed class Issue3466ImportedGenericInitializer<T>
+{
+    private int value;
+
+    public int Value
+    {
+        get => this.value + 100;
+        set => this.value = value;
+    }
 }

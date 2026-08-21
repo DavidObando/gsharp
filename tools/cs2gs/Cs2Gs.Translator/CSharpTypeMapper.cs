@@ -103,6 +103,9 @@ public sealed class CSharpTypeMapper
     private readonly Dictionary<string, HashSet<string>> reservedTypeAliases =
         new(System.StringComparer.Ordinal);
 
+    private readonly HashSet<string> reservedImportedTypeNames =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared top-level
     /// type simple names (built lazily on first use), used to decide whether a
@@ -489,25 +492,77 @@ public sealed class CSharpTypeMapper
         this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
 
     /// <summary>
-    /// Reserves aliases already present in the final translated import set.
+    /// Reserves aliases and bare type names already present in the final
+    /// translated import set.
     /// </summary>
     /// <param name="imports">Imports collected from the active and merged source trees.</param>
-    internal void ReserveImportAliases(IEnumerable<ImportDirective> imports)
+    /// <param name="contributingTrees">Source trees whose declarations contribute to the emitted document.</param>
+    /// <param name="compilation">The source compilation.</param>
+    internal void ReserveImportNames(
+        IEnumerable<ImportDirective> imports,
+        IEnumerable<SyntaxTree> contributingTrees,
+        Compilation compilation)
     {
+        EmittedNameAllocator names = this.nameAllocator
+            ?? EmittedNameAllocator.For(compilation);
+        var importedNamespaces = new HashSet<INamespaceSymbol>(
+            SymbolEqualityComparer.Default);
         foreach (ImportDirective import in imports)
         {
-            if (import.Alias == null)
+            if (import.Alias != null)
             {
+                if (!this.reservedTypeAliases.TryGetValue(import.Alias, out var targets))
+                {
+                    targets = new HashSet<string>(System.StringComparer.Ordinal);
+                    this.reservedTypeAliases.Add(import.Alias, targets);
+                }
+
+                targets.Add(import.Name);
                 continue;
             }
 
-            if (!this.reservedTypeAliases.TryGetValue(import.Alias, out var targets))
+            INamespaceSymbol importedNamespace = ResolveEmittedNamespace(
+                compilation,
+                import.Name,
+                names);
+            if (importedNamespace != null)
             {
-                targets = new HashSet<string>(System.StringComparer.Ordinal);
-                this.reservedTypeAliases.Add(import.Alias, targets);
+                importedNamespaces.Add(importedNamespace);
             }
+        }
 
-            targets.Add(import.Name);
+        // Qualified references are shortened and synthesize namespace imports
+        // after translation. Pre-scan every contributing tree so those future
+        // bare names reserve alias candidates before first use.
+        foreach (SyntaxTree tree in contributingTrees)
+        {
+            SemanticModel semanticModel = compilation.GetSemanticModel(tree);
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+            {
+                if (node is not (NameSyntax or MemberAccessExpressionSyntax)
+                    || semanticModel.GetSymbolInfo(node).Symbol is not INamedTypeSymbol type)
+                {
+                    continue;
+                }
+
+                while (type.ContainingType != null)
+                {
+                    type = type.ContainingType;
+                }
+
+                if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                {
+                    importedNamespaces.Add(ns);
+                }
+            }
+        }
+
+        foreach (INamespaceSymbol importedNamespace in importedNamespaces)
+        {
+            foreach (INamedTypeSymbol type in importedNamespace.GetTypeMembers())
+            {
+                this.reservedImportedTypeNames.Add(names.GetName(type));
+            }
         }
     }
 
@@ -567,6 +622,7 @@ public sealed class CSharpTypeMapper
             this.synthesizedTypeAliases.Keys,
             System.StringComparer.Ordinal);
         reserved.UnionWith(this.reservedTypeAliases.Keys);
+        reserved.UnionWith(this.reservedImportedTypeNames);
         reserved.UnionWith(this.sourceDeclaredTypeNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
@@ -1421,6 +1477,25 @@ public sealed class CSharpTypeMapper
         foreach (string part in StripGlobalPrefix(dottedName).Split('.'))
         {
             current = current.GetNamespaceMembers().FirstOrDefault(n => n.Name == part);
+            if (current is null)
+            {
+                return null;
+            }
+        }
+
+        return current;
+    }
+
+    private static INamespaceSymbol ResolveEmittedNamespace(
+        Compilation compilation,
+        string dottedName,
+        EmittedNameAllocator names)
+    {
+        INamespaceSymbol current = compilation.GlobalNamespace;
+        foreach (string part in StripGlobalPrefix(dottedName).Split('.'))
+        {
+            current = current.GetNamespaceMembers()
+                .FirstOrDefault(candidate => names.GetName(candidate) == part);
             if (current is null)
             {
                 return null;

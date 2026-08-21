@@ -7083,9 +7083,12 @@ public sealed class Binder
             // a bare name brought in by an import; do not let the nested key
             // capture that reference.
             if (IsNestedUserType(aliased)
-                && scope.TryLookupImportedClass(name, declaration: null, out var importedTopLevel)
-                && !importedTopLevel.ClassType.IsNested
-                && HasPreferredArity(importedTopLevel.ClassType, preferredArity))
+                && scope.TryLookupImportedClass(
+                    name,
+                    preferredArity,
+                    declaration: null,
+                    out var importedTopLevel)
+                && !importedTopLevel.ClassType.IsNested)
             {
                 if (ImportedTypeSymbol.TryCreateSemanticAggregate(
                     importedTopLevel.ClassType,
@@ -7191,19 +7194,6 @@ public sealed class Binder
         InterfaceSymbol i => i.ContainingType,
         _ => null,
     };
-
-    private static bool HasPreferredArity(Type type, int preferredArity)
-    {
-        if (preferredArity < 0)
-        {
-            return true;
-        }
-
-        int arity = type.IsGenericTypeDefinition
-            ? type.GetGenericArguments().Length
-            : 0;
-        return arity == preferredArity;
-    }
 
     /// <summary>
     /// Issue #525: resolves a class declaration's base-type identifier to an

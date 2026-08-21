@@ -412,13 +412,10 @@ internal sealed partial class OverloadResolver
         // before the source-type-alias checks further down ever got a chance.
         bool hasImportedTopLevelType = Scope.TryLookupImportedClass(
                 syntax.Identifier.Text,
+                ctorPreferredArity,
                 declaration: null,
                 out var importedCtorCandidate)
-            && !importedCtorCandidate.ClassType.IsNested
-            && (ctorPreferredArity < 0
-                || (importedCtorCandidate.ClassType.IsGenericTypeDefinition
-                    ? importedCtorCandidate.ClassType.GetGenericArguments().Length
-                    : 0) == ctorPreferredArity);
+            && !importedCtorCandidate.ClassType.IsNested;
         var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
             && sourceCtorCandidate is StructSymbol sourceCtorStruct
             && !(sourceCtorStruct.ContainingType != null && hasImportedTopLevelType)

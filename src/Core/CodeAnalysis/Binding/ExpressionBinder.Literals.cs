@@ -1133,7 +1133,23 @@ internal sealed partial class ExpressionBinder
             // prefer the arity-0 type (falling back to a lone generic for inference).
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
             var foundAlias = scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType, out var typeNameAmbiguous);
-            if (!foundAlias || !(resolvedType is StructSymbol resolvedStruct))
+            var resolvedStruct = resolvedType as StructSymbol;
+
+            // Issue #3466: a nested source type may retain the bare (name,
+            // arity) key for references from its containing type. A same-named
+            // top-level CLR type brought into scope by an import is still the
+            // meaning of an unqualified translated object initializer; nested
+            // source references are emitted with their containing type.
+            bool importedTopLevelTakesPrecedence =
+                foundAlias
+                && resolvedStruct?.ContainingType != null
+                && scope.TryLookupImportedClass(
+                    typeName,
+                    preferredArity,
+                    declaration: null,
+                    out var importedPrecedenceCandidate)
+                && !importedPrecedenceCandidate.ClassType.IsNested;
+            if (!foundAlias || resolvedStruct == null || importedTopLevelTakesPrecedence)
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
                 // targets an IMPORTED reference-type class (a BCL class such as

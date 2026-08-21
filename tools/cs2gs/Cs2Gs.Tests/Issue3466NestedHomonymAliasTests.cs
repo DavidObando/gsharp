@@ -3,10 +3,14 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Symbols;
+using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -203,10 +207,63 @@ public sealed class Issue3466NestedHomonymAliasTests
         Assert.Equal(2, CountOccurrences(printed, "GenericList_3[int32]()"));
     }
 
-    private static string Translate(string source)
+    [Fact]
+    public void ReadableAlias_AvoidsImportedBareTypeName()
+    {
+        string referencePath = typeof(TextStringBuilder).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(referencePath))
+            .ToArray();
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { referencePath });
+
+        string printed = Translate(
+            """
+            using Cs2Gs.Tests;
+
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class Repro
+                {
+                    public static int Measure()
+                    {
+                        System.Text.StringBuilder builder =
+                            new System.Text.StringBuilder("one");
+                        TextStringBuilder imported = new TextStringBuilder();
+                        return builder.Length + imported.Value;
+                    }
+                }
+            }
+            """,
+            references,
+            resolver);
+
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.True(
+            CountOccurrences(printed, "TextStringBuilder_2") >= 3,
+            "Synthesized alias should be reused consistently in type and constructor positions.");
+    }
+
+    private static string Translate(
+        string source,
+        IReadOnlyList<MetadataReference> references = null,
+        ReferenceResolver bindReferences = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Snippet.cs", source) });
+            new[] { ("Snippet.cs", source) },
+            references);
         Assert.True(
             project.BoundWithoutErrors,
             "Snippet should bind with no C# errors: " +
@@ -224,7 +281,15 @@ public sealed class Issue3466NestedHomonymAliasTests
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        TranslationTestValidation.AssertBinds(printed);
+        if (bindReferences == null)
+        {
+            TranslationTestValidation.AssertBinds(printed);
+        }
+        else
+        {
+            TranslationTestValidation.AssertBinds(bindReferences, printed);
+        }
+
         return printed;
     }
 
@@ -240,4 +305,9 @@ public sealed class Issue3466NestedHomonymAliasTests
 
         return count;
     }
+}
+
+public sealed class TextStringBuilder
+{
+    public int Value => 4;
 }

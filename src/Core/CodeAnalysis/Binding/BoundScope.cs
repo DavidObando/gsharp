@@ -690,6 +690,40 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Tries to look up an imported class by simple name and preferred generic
+    /// arity. Positive arities resolve the matching open generic definition;
+    /// zero or negative arities retain the non-generic lookup behavior.
+    /// </summary>
+    /// <param name="name">The class name.</param>
+    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="declaration">The declaration.</param>
+    /// <param name="importedClass">The result, if found.</param>
+    /// <returns>Whether a class was found or not.</returns>
+    public bool TryLookupImportedClass(
+        string name,
+        int preferredArity,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
+    {
+        if (preferredArity > 0)
+        {
+            if (TryLookupImportedGenericClass(name, preferredArity, out var importedGeneric))
+            {
+                importedClass = new ImportedClassSymbol(
+                    importedGeneric,
+                    declaration,
+                    references: References);
+                return true;
+            }
+
+            importedClass = null;
+            return false;
+        }
+
+        return TryLookupImportedClass(name, declaration, out importedClass);
+    }
+
+    /// <summary>
     /// Tries to lookup an imported class.
     /// </summary>
     /// <param name="name">The class name.</param>
