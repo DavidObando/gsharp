@@ -460,6 +460,56 @@ public sealed class Issue3465InferenceTests
         Assert.Equal(1, result.Value);
     }
 
+    [Theory]
+    [InlineData("(value) -> {}")]
+    [InlineData("(value) -> { return }")]
+    [InlineData("(value) -> { let copy = value }")]
+    public void UntypedNoValueBlock_DisambiguatesToVoidOverload(string lambda)
+    {
+        var result = Evaluate($$"""
+            func Choose(action (int32)->void) int32 -> 1
+            func Choose(action (int32)->int32) int32 -> 2
+
+            Choose({{lambda}})
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void NestedUntypedLambdaInExplicitReturn_DefersThroughWrappers()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Accept(factory ()->Action[int32]) {
+                factory()(2)
+            }
+
+            var seen = 0
+            let flag = true
+            Accept(() -> {
+                return (value) -> { seen = seen + value }
+            })
+            Accept(() -> {
+                return flag
+                    ? ((value) -> { seen = seen + value })
+                    : ((value) -> { seen = seen + 100 })
+            })
+            Accept(() -> {
+                return switch flag {
+                    case true: (value) -> { seen = seen + value }
+                    default: (value) -> { seen = seen + 100 }
+                }
+            })
+            seen
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
     [Fact]
     public void VoidTarget_RejectsExplicitValueReturnWithoutEmitterFailure()
     {

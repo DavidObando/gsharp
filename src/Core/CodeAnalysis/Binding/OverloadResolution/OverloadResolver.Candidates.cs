@@ -1256,11 +1256,8 @@ internal sealed partial class OverloadResolver
         }
 
         if (hasVoidReturn
-            || (lambda.Body is BlockExpressionSyntax
-                {
-                    Expression: null,
-                    Statements.Length: 0,
-                }))
+            || (lambda.Body is BlockExpressionSyntax { Expression: null }
+                && !hasValueReturn))
         {
             return false;
         }

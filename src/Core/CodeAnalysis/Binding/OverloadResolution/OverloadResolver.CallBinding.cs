@@ -2299,8 +2299,10 @@ internal sealed partial class OverloadResolver
 
         return syntax switch
         {
-            BlockExpressionSyntax { Expression: { } tail } =>
-                ContainsTargetDependentLambda(tail),
+            BlockExpressionSyntax block =>
+                (block.Expression != null
+                    && ContainsTargetDependentLambda(block.Expression))
+                || ContainsTargetDependentLambdaInReturns(block),
             ConditionalExpressionSyntax conditional =>
                 ContainsTargetDependentLambda(conditional.WhenTrue)
                 || ContainsTargetDependentLambda(conditional.WhenFalse),
@@ -2321,6 +2323,39 @@ internal sealed partial class OverloadResolver
                     || ContainsTargetDependentLambda(binary.Right),
             _ => false,
         };
+    }
+
+    private static bool ContainsTargetDependentLambdaInReturns(
+        BlockExpressionSyntax block)
+    {
+        var stack = new Stack<SyntaxNode>(block.Statements.Cast<SyntaxNode>());
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (node is LambdaExpressionSyntax
+                or FunctionLiteralExpressionSyntax
+                or FunctionDeclarationSyntax)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax { Expression: { } expression })
+            {
+                if (ContainsTargetDependentLambda(expression))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                stack.Push(child);
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
