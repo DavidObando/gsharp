@@ -230,10 +230,14 @@ public sealed class Issue3466NestedHomonymAliasTests
 
                 public static class Repro
                 {
+                    public static System.Text.StringBuilder MakeBuilder()
+                    {
+                        return new System.Text.StringBuilder("one");
+                    }
+
                     public static int Measure()
                     {
-                        System.Text.StringBuilder builder =
-                            new System.Text.StringBuilder("one");
+                        var builder = MakeBuilder();
                         TextStringBuilder imported = new TextStringBuilder();
                         return builder.Length + imported.Value;
                     }
