@@ -511,28 +511,19 @@ internal sealed partial class ExpressionBinder
             }
             else if (scope.TryLookupTypeAlias(name, out var typeAlias))
             {
-                if (scope.TryLookupImportedClassByArity(
+                if (TryResolveImportedTopLevelOverride(
                         name,
-                        preferredArity: 0,
-                        leftName,
-                        out var importedStaticCandidate)
-                    && !importedStaticCandidate.ClassType.IsNested
-                    && binderCtx.ImportedTypeOverridesSourceType(
                         typeAlias,
                         requestedArity: 0,
-                        getCurrentFunction()))
+                        leftName,
+                        out var importedStaticCandidate))
                 {
                     classSymbol = importedStaticCandidate;
                 }
 
-                // Issue #2394: a same-compilation SOURCE type (enum/struct/
-                // interface) must be checked BEFORE an imported CLR class so
-                // that it wins when both are visible under the same simple
-                // name. Imports are bound compilation-wide (not scoped per
-                // file), so a same-simple-name CLR type imported via some
-                // OTHER file could otherwise incorrectly shadow this
-                // compilation's own type here — matching the precedence
-                // already used by Binder.LookupType (type-clause position).
+                // Top-level source types win globally; nested source types win
+                // only inside their containing lexical type. Outside that
+                // container, a same-arity imported top-level type wins.
                 else if (typeAlias is EnumSymbol foundEnum)
                 {
                     enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
@@ -1741,12 +1732,19 @@ internal sealed partial class ExpressionBinder
         interfaceSymbol = null;
         enumSymbol = null;
 
-        // Issue #2394: check the same-compilation SOURCE type (struct/enum)
-        // BEFORE the imported CLR class so it wins on a same-simple-name
-        // collision — matching Binder.LookupType's precedence and the
-        // read-path fix above in BindAccessorExpression.
-        if (scope.TryLookupTypeAlias(name, out var typeAlias))
+        if (scope.TryLookupTypeAlias(name, preferredArity: 0, out var typeAlias))
         {
+            if (TryResolveImportedTopLevelOverride(
+                    name,
+                    typeAlias,
+                    requestedArity: 0,
+                    leftName,
+                    out var importedOverride))
+            {
+                importedClassSymbol = importedOverride;
+                return true;
+            }
+
             if (typeAlias is StructSymbol foundStruct)
             {
                 userStructSymbol = foundStruct;
@@ -1779,6 +1777,35 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Applies the shared lexical source/import precedence for a simple type receiver.
+    /// </summary>
+    private bool TryResolveImportedTopLevelOverride(
+        string name,
+        TypeSymbol sourceType,
+        int requestedArity,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedType)
+    {
+        if (scope.TryLookupImportedClassByArity(
+                name,
+                requestedArity,
+                declaration,
+                out var candidate)
+            && !candidate.ClassType.IsNested
+            && binderCtx.ImportedTypeOverridesSourceType(
+                sourceType,
+                requestedArity,
+                getCurrentFunction()))
+        {
+            importedType = candidate;
+            return true;
+        }
+
+        importedType = null;
         return false;
     }
 

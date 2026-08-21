@@ -346,6 +346,60 @@ Holder.ReadNested() * 100 + String.Empty.Length
     }
 
     [Fact]
+    public void ColorColorStaticReceiver_UsesImportedTypeOutsideNestedHomonymContainer()
+    {
+        var source = @"
+package Demo
+import System
+
+class Holder {
+    class String {
+        shared {
+            prop Empty int32 { get { return 7 } }
+        }
+    }
+}
+
+class Consumer {
+    var String string = ""value""
+
+    func Read() string {
+        return String.Empty
+    }
+}
+
+Consumer().Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(string.Empty, result.Value);
+    }
+
+    [Fact]
+    public void StaticWrites_UseImportedTypeOutsideNestedHomonymContainer()
+    {
+        var source = @"
+package Demo
+import System
+
+class Holder {
+    class Environment {
+        shared {
+            prop ExitCode string { get { return ""nested"" } }
+        }
+    }
+}
+
+Environment.ExitCode = 0
+Environment.ExitCode += 0
+Environment.ExitCode
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
     public void ImportedAlias_WithNestedSourceHomonym_BindsImportedTypeAtUnknownArity()
     {
         var source = @"

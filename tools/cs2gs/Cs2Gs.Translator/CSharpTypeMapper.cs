@@ -644,7 +644,8 @@ public sealed class CSharpTypeMapper
             : simpleName;
         foreach (var existing in this.synthesizedTypeAliases)
         {
-            if (existing.Value == target)
+            if (existing.Value == target
+                && !this.reservedTypeParameterNames.Contains(existing.Key))
             {
                 return existing.Key;
             }
@@ -653,7 +654,8 @@ public sealed class CSharpTypeMapper
         foreach (var reservedAlias in this.reservedTypeAliases)
         {
             if (reservedAlias.Value.Count == 1
-                && reservedAlias.Value.Contains(target))
+                && reservedAlias.Value.Contains(target)
+                && !this.reservedTypeParameterNames.Contains(reservedAlias.Key))
             {
                 return reservedAlias.Key;
             }

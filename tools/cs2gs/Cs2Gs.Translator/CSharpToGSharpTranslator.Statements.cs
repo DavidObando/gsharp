@@ -1721,7 +1721,13 @@ public sealed partial class CSharpToGSharpTranslator
                 dispatch = new IfStatement(typeTest, new BlockStatement(branchStatements), new BlockStatement(new List<GStatement> { dispatch }));
             }
 
-            GTypeReference mergedType = this.ComputeMergedCatchType(catchTypeSymbols, mergeStartIndex);
+            CatchClauseSyntax lastClause = node.Catches[node.Catches.Count - 1];
+            Location mergedTypeLocation = lastClause.Declaration?.Type.GetLocation()
+                ?? lastClause.GetLocation();
+            GTypeReference mergedType = this.ComputeMergedCatchType(
+                catchTypeSymbols,
+                mergeStartIndex,
+                mergedTypeLocation);
             return new CatchClause(sharedBinder, mergedType, new BlockStatement(new List<GStatement> { dispatch }));
         }
 
@@ -1732,7 +1738,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// without the outer G# catch itself narrowing anything away);
         /// <c>System.Exception</c> otherwise (always safe, if less precise).
         /// </summary>
-        private GTypeReference ComputeMergedCatchType(ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
+        private GTypeReference ComputeMergedCatchType(
+            ITypeSymbol[] catchTypeSymbols,
+            int mergeStartIndex,
+            Location location)
         {
             int lastIndex = catchTypeSymbols.Length - 1;
             ITypeSymbol lastType = catchTypeSymbols[lastIndex];
@@ -1747,10 +1756,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (lastIsCommonSupertype)
             {
-                return this.typeMapper.Map(lastType, this.context, Location.None);
+                return this.typeMapper.Map(lastType, this.context, location);
             }
 
-            return new NamedTypeReference("Exception");
+            ITypeSymbol systemException = this.context.Compilation.GetTypeByMetadataName("System.Exception");
+            return systemException != null
+                ? this.typeMapper.Map(systemException, this.context, location)
+                : new NamedTypeReference("Exception");
         }
 
         /// <summary>

@@ -76,18 +76,27 @@ internal sealed partial class ExpressionBinder
         TypeSymbol? importedEventTarget = null;
         BindingFlags flags;
 
-        // Issue #2394: check the same-compilation SOURCE type (struct/
-        // interface) receiver BEFORE the imported-CLR-class receiver, matching
-        // Binder.LookupType's precedence. Without this, a same-simple-name
-        // imported CLR type visible via SOME OTHER file's import (imports are
-        // compilation-wide, not file-scoped) could win over the receiver's
-        // own compilation's source type for a static event/field compound
-        // assignment, mirroring the BindAccessorExpression read-path bug.
         var staticLeftName = accessor.LeftPart as NameExpressionSyntax;
+        TypeSymbol? staticSourceType = null;
+        ImportedClassSymbol? staticImportedOverride = null;
+        if (staticLeftName != null
+            && scope.TryLookupTypeAlias(
+                staticLeftName.IdentifierToken.Text,
+                preferredArity: 0,
+                out staticSourceType))
+        {
+            _ = TryResolveImportedTopLevelOverride(
+                staticLeftName.IdentifierToken.Text,
+                staticSourceType,
+                requestedArity: 0,
+                staticLeftName,
+                out staticImportedOverride);
+        }
+
         if (staticLeftName != null
             && EventReceiverNameCanBindAsType(staticLeftName, eventNameSyntax)
-            && scope.TryLookupTypeAlias(staticLeftName.IdentifierToken.Text, out var staticTypeAlias)
-            && staticTypeAlias is StructSymbol staticStruct)
+            && staticImportedOverride == null
+            && staticSourceType is StructSymbol staticStruct)
         {
             // Issue #263: static event subscription on a user-defined type.
             // Try matching an event first; if no match, fall through to
@@ -128,9 +137,9 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
         }
-        else if (accessor.LeftPart is NameExpressionSyntax ifaceLeftName
-            && scope.TryLookupTypeAlias(ifaceLeftName.IdentifierToken.Text, out var ifaceTypeAlias)
-            && ifaceTypeAlias is InterfaceSymbol staticInterface)
+        else if (staticLeftName != null
+            && staticImportedOverride == null
+            && staticSourceType is InterfaceSymbol staticInterface)
         {
             // ADR-0089 / issue #1030: `IName.StaticField op= rhs` — compound
             // assignment to a (non-generic) interface static field.
@@ -143,11 +152,15 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
             return new BoundErrorExpression(null);
         }
-        else if (accessor.LeftPart is NameExpressionSyntax leftName
-            && EventReceiverNameCanBindAsType(leftName, eventNameSyntax)
-            && scope.TryLookupImportedClass(leftName.IdentifierToken.Text, leftName, out var importedClass))
+        else if (staticLeftName != null
+            && EventReceiverNameCanBindAsType(staticLeftName, eventNameSyntax)
+            && (staticImportedOverride != null
+                || scope.TryLookupImportedClass(
+                    staticLeftName.IdentifierToken.Text,
+                    staticLeftName,
+                    out staticImportedOverride)))
         {
-            receiverClrType = importedClass.ClassType;
+            receiverClrType = staticImportedOverride.ClassType;
             flags = BindingFlags.Public | BindingFlags.Static;
         }
         else if ((accessor.LeftPart is IndexExpressionSyntax || accessor.LeftPart is GenericNameExpressionSyntax)
@@ -375,13 +388,26 @@ internal sealed partial class ExpressionBinder
 
         if (eventInfo == null)
         {
-            // Issue #648 (generalized by #2154): compound assignment fallback for
-            // chained CLR member access (e.g. `obj.Prop += 1`, `obj.Prop *= 2` where
-            // Prop is a field/property, not an event).
+            // Issue #648 (generalized by #2154): compound assignment fallback
+            // for CLR fields/properties, through either an instance receiver
+            // (`obj.Prop += 1`) or an imported static type (`Type.Prop += 1`).
             if (boundReceiver != null && receiverClrType != null)
             {
                 var clrCompound = TryBindChainedClrCompoundAssignment(
                     boundReceiver, receiverClrType, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);
+                if (clrCompound != null)
+                {
+                    return clrCompound;
+                }
+            }
+            else if (receiverClrType != null)
+            {
+                var clrCompound = TryBindStaticClrCompoundAssignment(
+                    receiverClrType,
+                    eventName,
+                    eventNameSyntax,
+                    syntax,
+                    baseOpSyntaxKind);
                 if (clrCompound != null)
                 {
                     return clrCompound;

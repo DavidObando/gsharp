@@ -1195,7 +1195,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 translatedArguments.Add(this.CoerceMaterializedArgument(
                     new ArrayLiteralExpression(elementType, paramsValues),
-                    paramsCollectionArg.Parameter.Type));
+                    paramsCollectionArg.Parameter.Type,
+                    callSyntax.GetLocation()));
                 return translatedArguments;
             }
 
@@ -1221,7 +1222,8 @@ public sealed partial class CSharpToGSharpTranslator
                 ? collectionArgument
                 : this.CoerceMaterializedArgument(
                     collectionArgument,
-                    paramsCollectionArg.Parameter.Type));
+                    paramsCollectionArg.Parameter.Type,
+                    callSyntax.GetLocation()));
             return translatedArguments;
         }
 
@@ -1327,7 +1329,8 @@ public sealed partial class CSharpToGSharpTranslator
             return coerceToParameterType
                 ? this.CoerceMaterializedArgument(
                     defaultValue,
-                    argumentOperation.Parameter.Type)
+                    argumentOperation.Parameter.Type,
+                    callSyntax.GetLocation())
                 : defaultValue;
         }
 
@@ -2125,7 +2128,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                 materialized.Add(this.CoerceMaterializedArgument(
                     defaultValue,
-                    parameter.Type));
+                    parameter.Type,
+                    creationNode.GetLocation()));
             }
 
             return materialized;
@@ -2133,7 +2137,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression CoerceMaterializedArgument(
             GExpression value,
-            ITypeSymbol parameterType)
+            ITypeSymbol parameterType,
+            Location location)
         {
             if (!parameterType.IsReferenceType)
             {
@@ -2143,7 +2148,7 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference mappedType = this.typeMapper.Map(
                 parameterType,
                 this.context,
-                Location.None);
+                location);
             if (value is LiteralExpression { Kind: LiteralKind.Null }
                 || value is IdentifierExpression { Name: "nil" })
             {

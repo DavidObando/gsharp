@@ -383,6 +383,40 @@ public sealed class Issue3466NestedHomonymAliasTests
         Assert.Contains("return TextStringBuilder_2(\"one\")", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExistingAlias_IsNotReusedWhenMethodTypeParameterShadowsIt()
+    {
+        string printed = Translate("""
+            using TextStringBuilder = System.Text.StringBuilder;
+
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class Repro
+                {
+                    public static System.Text.StringBuilder Make<TextStringBuilder>()
+                    {
+                        return new System.Text.StringBuilder("one");
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("func Make[TextStringBuilder]() TextStringBuilder_2", printed, StringComparison.Ordinal);
+        Assert.Contains("return TextStringBuilder_2(\"one\")", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(
         string source,
         IReadOnlyList<MetadataReference> references = null,

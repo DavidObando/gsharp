@@ -261,6 +261,47 @@ namespace Demo
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "-1");
     }
 
+    [Fact]
+    public void MergedCatch_InsideNestedExceptionHomonym_PreservesSystemExceptionIdentity()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public sealed class Exception
+                    {
+                    }
+
+                    public int Run(bool retryable)
+                    {
+                        try
+                        {
+                            throw new ArgumentException("boom");
+                        }
+                        catch (System.ArgumentException) when (retryable)
+                        {
+                            return 1;
+                        }
+                        catch (System.Exception)
+                        {
+                            return 2;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import SystemException_2 = System.Exception", printed);
+        Assert.Contains("catch (__caught SystemException_2)", printed);
+        Assert.DoesNotContain("catch (__caught Exception)", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "2");
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
