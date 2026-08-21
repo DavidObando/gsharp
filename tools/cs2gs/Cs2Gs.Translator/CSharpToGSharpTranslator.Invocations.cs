@@ -1956,7 +1956,8 @@ public sealed partial class CSharpToGSharpTranslator
                 type = new NamedTypeReference(
                     this.typeMapper.GetOrCreateImportedTypeAlias(
                         systemObject,
-                        this.context));
+                        this.context,
+                        creationNode.GetLocation()));
             }
 
             bool hasCtorArgs = arguments.Count > 0;

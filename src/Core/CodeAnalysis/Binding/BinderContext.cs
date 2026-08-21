@@ -327,8 +327,8 @@ internal sealed class BinderContext
     /// <param name="currentFunction">The function currently being bound, if any.</param>
     /// <returns>
     /// <see langword="true"/> when the source fallback has the wrong requested
-    /// arity, or when it is nested and the binding site is outside its
-    /// containing lexical scope.
+    /// arity, or when it is nested and the binding site is outside both its
+    /// containing lexical scope and an accessible derived-type scope.
     /// </returns>
     public bool ImportedTypeOverridesSourceType(
         TypeSymbol sourceType,
@@ -340,6 +340,7 @@ internal sealed class BinderContext
             StructSymbol s => s.ContainingType,
             EnumSymbol e => e.ContainingType,
             InterfaceSymbol i => i.ContainingType,
+            DelegateTypeSymbol d => d.ContainingType,
             _ => null,
         };
         static TypeSymbol Definition(TypeSymbol type) => type switch
@@ -347,7 +348,16 @@ internal sealed class BinderContext
             StructSymbol s => s.Definition,
             EnumSymbol e => e.Definition,
             InterfaceSymbol i => i.Definition,
+            DelegateTypeSymbol d => d.Definition ?? d,
             _ => type,
+        };
+        static Accessibility TypeAccessibility(TypeSymbol type) => type switch
+        {
+            StructSymbol s => s.Accessibility,
+            EnumSymbol e => e.Accessibility,
+            InterfaceSymbol i => i.Accessibility,
+            DelegateTypeSymbol d => d.Accessibility,
+            _ => Accessibility.Private,
         };
         static int Arity(TypeSymbol type) => type switch
         {
@@ -377,6 +387,26 @@ internal sealed class BinderContext
             if (ReferenceEquals(Definition(current), Definition(sourceContainer)))
             {
                 return false;
+            }
+
+            if (current is not StructSymbol currentStruct
+                || sourceContainer is not StructSymbol sourceStruct)
+            {
+                continue;
+            }
+
+            for (StructSymbol? baseType = currentStruct.BaseClass;
+                baseType != null;
+                baseType = baseType.BaseClass)
+            {
+                if (ReferenceEquals(Definition(baseType), Definition(sourceStruct))
+                    && AccessibilityChecker.IsAccessibleFromType(
+                        TypeAccessibility(sourceType),
+                        sourceStruct,
+                        currentStruct))
+                {
+                    return false;
+                }
             }
         }
 

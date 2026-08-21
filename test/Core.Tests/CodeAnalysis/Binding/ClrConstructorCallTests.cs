@@ -147,6 +147,56 @@ class Holder {
     }
 
     [Fact]
+    public void InheritedNestedGenericSourceHomonym_TypeAnnotationWinsImportedType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+open class Base[T] {
+    protected class List[U] {
+        prop SourceValue int32
+    }
+}
+
+class Derived : Base[int32] {
+    func Read(value List[int32]) int32 {
+        return value.SourceValue
+    }
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void InaccessibleInheritedNestedGenericSourceHomonym_DoesNotOverrideImportedType()
+    {
+        var source = @"
+package Demo
+import System.Collections.Generic
+
+open class Base {
+    private class List[T] {
+        prop SourceValue int32
+    }
+}
+
+class Derived : Base {
+    func Read(value List[int32]) int32 {
+        return value.Count
+    }
+}
+
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void TopLevelGenericSourceHomonym_TypeAnnotationWinsImportedType()
     {
         var source = @"

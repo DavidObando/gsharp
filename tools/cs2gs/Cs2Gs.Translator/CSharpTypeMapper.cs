@@ -633,8 +633,32 @@ public sealed class CSharpTypeMapper
 
     internal string GetOrCreateImportedTypeAlias(
         INamedTypeSymbol named,
-        TranslationContext context)
+        TranslationContext context,
+        Location location)
     {
+        static bool HasVisibleSourceTypeName(
+            string name,
+            TranslationContext context,
+            Location location)
+        {
+            if (location?.SourceTree == null)
+            {
+                return false;
+            }
+
+            int position = System.Math.Min(
+                location.SourceSpan.Start,
+                location.SourceTree.GetRoot().FullSpan.End - 1);
+            SemanticModel semanticModel = ReferenceEquals(
+                context.SemanticModel.SyntaxTree,
+                location.SourceTree)
+                    ? context.SemanticModel
+                    : context.Compilation.GetSemanticModel(location.SourceTree);
+            return semanticModel.LookupNamespacesAndTypes(position, name: name)
+                .OfType<INamedTypeSymbol>()
+                .Any(type => type.Locations.Any(candidate => candidate.IsInSource));
+        }
+
         string simpleName = this.Names(context).GetName(named);
         string namespaceName = named.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? this.Names(context).GetNamespaceName(ns)
@@ -642,22 +666,24 @@ public sealed class CSharpTypeMapper
         string target = namespaceName != null
             ? $"{namespaceName}.{simpleName}"
             : simpleName;
-        foreach (var existing in this.synthesizedTypeAliases)
-        {
-            if (existing.Value == target
-                && !this.reservedTypeParameterNames.Contains(existing.Key))
-            {
-                return existing.Key;
-            }
-        }
-
         foreach (var reservedAlias in this.reservedTypeAliases)
         {
             if (reservedAlias.Value.Count == 1
                 && reservedAlias.Value.Contains(target)
-                && !this.reservedTypeParameterNames.Contains(reservedAlias.Key))
+                && !this.reservedTypeParameterNames.Contains(reservedAlias.Key)
+                && !HasVisibleSourceTypeName(reservedAlias.Key, context, location))
             {
                 return reservedAlias.Key;
+            }
+        }
+
+        foreach (var existing in this.synthesizedTypeAliases)
+        {
+            if (existing.Value == target
+                && !this.reservedTypeParameterNames.Contains(existing.Key)
+                && !HasVisibleSourceTypeName(existing.Key, context, location))
+            {
+                return existing.Key;
             }
         }
 
@@ -1292,7 +1318,7 @@ public sealed class CSharpTypeMapper
                 // ponytail: metadata aliases currently bind reliably for
                 // System.*; keep other external metadata namespace-qualified
                 // until arbitrary CLR alias imports bind.
-                return this.GetOrCreateImportedTypeAlias(named, context);
+                return this.GetOrCreateImportedTypeAlias(named, context, location);
             }
 
             return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs

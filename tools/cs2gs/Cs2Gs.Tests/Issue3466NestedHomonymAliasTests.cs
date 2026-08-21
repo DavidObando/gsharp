@@ -417,6 +417,57 @@ public sealed class Issue3466NestedHomonymAliasTests
         Assert.Contains("return TextStringBuilder_2(\"one\")", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExistingAlias_IsNotReusedWhenVisibleNestedSourceTypeShadowsIt()
+    {
+        string printed = Translate("""
+            using StringBuilder = System.Text.StringBuilder;
+
+            namespace Demo
+            {
+                public static class Before
+                {
+                    public static int Length()
+                    {
+                        return new StringBuilder("before").Length;
+                    }
+                }
+
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Length()
+                    {
+                        return new System.Text.StringBuilder("nested").Length;
+                    }
+                }
+
+                public static class After
+                {
+                    public static int Length()
+                    {
+                        return new StringBuilder("after").Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import StringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            CountOccurrences(
+                printed,
+                "import TextStringBuilder = System.Text.StringBuilder"));
+        Assert.Equal(2, CountOccurrences(printed, "return StringBuilder(\""));
+        Assert.Contains("TextStringBuilder(\"nested\")", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(
         string source,
         IReadOnlyList<MetadataReference> references = null,
