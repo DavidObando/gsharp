@@ -501,6 +501,10 @@ public sealed class CSharpTypeMapper
             ?? EmittedNameAllocator.For(compilation);
         var importedNamespaces = new HashSet<INamespaceSymbol>(
             SymbolEqualityComparer.Default);
+        var mappedMethods = new HashSet<IMethodSymbol>(
+            SymbolEqualityComparer.Default);
+        var mappedTypes = new HashSet<ITypeSymbol>(
+            SymbolEqualityComparer.Default);
         void AddImportedNamespace(string emittedNamespace)
         {
             INamespaceSymbol importedNamespace = ResolveEmittedNamespace(
@@ -531,6 +535,116 @@ public sealed class CSharpTypeMapper
                 && GetExtensionMethodNamespace(method) is { } extensionNamespace)
             {
                 importedNamespaces.Add(extensionNamespace);
+            }
+        }
+
+        void AddMappedMethodSignatureNamespaces(IMethodSymbol method)
+        {
+            if (method == null || !mappedMethods.Add(method))
+            {
+                return;
+            }
+
+            if (!method.ReturnsVoid)
+            {
+                AddMappedTypeNamespaces(method.ReturnType);
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters)
+            {
+                AddMappedTypeNamespaces(parameter.Type);
+            }
+
+            foreach (ITypeSymbol typeArgument in method.TypeArguments)
+            {
+                AddMappedTypeNamespaces(typeArgument);
+            }
+        }
+
+        void AddMappedTypeNamespaces(ITypeSymbol type)
+        {
+            if (type == null
+                || type.TypeKind is TypeKind.Dynamic or TypeKind.Error
+                || !mappedTypes.Add(type))
+            {
+                return;
+            }
+
+            switch (type)
+            {
+                case IArrayTypeSymbol array:
+                    AddMappedTypeNamespaces(array.ElementType);
+                    return;
+                case IPointerTypeSymbol pointer:
+                    AddMappedTypeNamespaces(pointer.PointedAtType);
+                    return;
+                case IFunctionPointerTypeSymbol functionPointer:
+                    AddMappedMethodSignatureNamespaces(functionPointer.Signature);
+                    return;
+                case ITypeParameterSymbol:
+                    return;
+            }
+
+            if (type is not INamedTypeSymbol named)
+            {
+                return;
+            }
+
+            if (MapPredefinedName(named.SpecialType) != null
+                || IsSystemIndexOrRange(named))
+            {
+                return;
+            }
+
+            if (named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            {
+                AddMappedTypeNamespaces(named.TypeArguments[0]);
+                return;
+            }
+
+            if (named.IsTupleType)
+            {
+                foreach (IFieldSymbol element in named.TupleElements)
+                {
+                    AddMappedTypeNamespaces(element.Type);
+                }
+
+                return;
+            }
+
+            if (named.IsAnonymousType)
+            {
+                foreach (IPropertySymbol property in named.GetMembers().OfType<IPropertySymbol>())
+                {
+                    AddMappedTypeNamespaces(property.Type);
+                }
+
+                return;
+            }
+
+            if (named.TypeKind == TypeKind.Delegate
+                && named.DelegateInvokeMethod is { } invoke
+                && !IsSourceDeclaredDelegate(named))
+            {
+                AddMappedMethodSignatureNamespaces(invoke);
+                return;
+            }
+
+            foreach (ITypeSymbol typeArgument in named.TypeArguments)
+            {
+                AddMappedTypeNamespaces(typeArgument);
+            }
+
+            if (named.ContainingType != null)
+            {
+                AddMappedTypeNamespaces(named.ContainingType);
+            }
+
+            if (!this.AnalyzerApiMode
+                || !Analyzers.RoslynAnalyzerApiMap.IsRoslynNamespace(
+                    named.ContainingNamespace?.ToDisplayString()))
+            {
+                AddSymbolNamespace(named);
             }
         }
 
@@ -565,9 +679,10 @@ public sealed class CSharpTypeMapper
         }
 
         // Qualified references are shortened and synthesize namespace imports
-        // after translation. Extension calls can do the same without naming
-        // their declaring type at all. Pre-scan every contributing tree so all
-        // those future bare names reserve alias candidates before first use.
+        // after translation. Calls, target-typed construction, defaults, and
+        // method-group adapters can also map signature types absent from syntax.
+        // Pre-scan those emitted shapes so future bare names reserve alias
+        // candidates before first use.
         foreach (SyntaxTree tree in contributingTrees)
         {
             SemanticModel semanticModel = compilation.GetSemanticModel(tree);
@@ -589,7 +704,10 @@ public sealed class CSharpTypeMapper
                     }
                 }
 
-                if (node is not (NameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax))
+                if (node is not (NameSyntax
+                    or MemberAccessExpressionSyntax
+                    or InvocationExpressionSyntax
+                    or BaseObjectCreationExpressionSyntax))
                 {
                     continue;
                 }
@@ -601,15 +719,36 @@ public sealed class CSharpTypeMapper
                     AddSymbolNamespace(candidate);
                 }
 
-                IMethodSymbol operationMethod = semanticModel.GetOperation(node) switch
+                switch (semanticModel.GetOperation(node))
                 {
-                    IInvocationOperation invocation => invocation.TargetMethod,
-                    IMethodReferenceOperation methodReference => methodReference.Method,
-                    _ => null,
-                };
-                if (operationMethod != null)
-                {
-                    AddSymbolNamespace(operationMethod);
+                    case IInvocationOperation invocation:
+                        AddSymbolNamespace(invocation.TargetMethod);
+                        AddMappedMethodSignatureNamespaces(invocation.TargetMethod);
+                        break;
+                    case IObjectCreationOperation creation:
+                        AddMappedTypeNamespaces(
+                            creation.Constructor?.ContainingType ?? creation.Type);
+                        AddMappedMethodSignatureNamespaces(creation.Constructor);
+                        break;
+                    case IDelegateCreationOperation delegateCreation:
+                        AddMappedTypeNamespaces(delegateCreation.Type);
+                        if (delegateCreation.Target is IMethodReferenceOperation delegateTarget)
+                        {
+                            AddSymbolNamespace(delegateTarget.Method);
+                            AddMappedMethodSignatureNamespaces(delegateTarget.Method);
+                        }
+
+                        break;
+                    case IMethodReferenceOperation methodReference:
+                        AddSymbolNamespace(methodReference.Method);
+                        AddMappedMethodSignatureNamespaces(methodReference.Method);
+                        if (semanticModel.GetTypeInfo(node).ConvertedType
+                            is INamedTypeSymbol { DelegateInvokeMethod: { } targetInvoke })
+                        {
+                            AddMappedMethodSignatureNamespaces(targetInvoke);
+                        }
+
+                        break;
                 }
             }
         }

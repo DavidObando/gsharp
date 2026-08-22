@@ -948,6 +948,101 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void OptionalMethodArguments_ReserveLateParameterTypeImport()
+    {
+        string referencePath = typeof(Signatures.OptionalSignatureMethod).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(referencePath))
+            .ToArray();
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { referencePath });
+
+        string printed = Translate(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Read()
+                    {
+                        return global::Signatures.OptionalSignatureMethod.Read();
+                    }
+                }
+            }
+            """,
+            references,
+            resolver);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OptionalSignatureMethod.Read(default(TextStringBuilder_2), default(TextStringBuilder), List[int32]())",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OptionalConstructorArguments_ReserveLateParameterTypeImport()
+    {
+        string referencePath = typeof(Signatures.OptionalSignatureConstructor).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(referencePath))
+            .ToArray();
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { referencePath });
+
+        string printed = Translate(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Read()
+                    {
+                        return new global::Signatures.OptionalSignatureConstructor
+                        {
+                            Marker = 1,
+                        }.Value;
+                    }
+                }
+            }
+            """,
+            references,
+            resolver);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OptionalSignatureConstructor(default(TextStringBuilder_2), default(TextStringBuilder))",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OptionalEnumConstructorArgument_UsesLocatedAliasForMemberAndConversion()
     {
         string referencePath = typeof(Issue3466OptionalDayOfWeek).Assembly.Location;
