@@ -658,6 +658,86 @@ Holder.InitializeNested() * 1000 + InitializeImported()
         Assert.Equal(7107, result.Value);
     }
 
+    [Fact]
+    public void NestedSourceHomonym_StaticReadWinsImportedAliasInsideAndAliasWinsOutside()
+    {
+        var source = @"
+package Demo
+import Environment = System.Environment
+
+class Holder {
+    class Environment {
+        shared {
+            prop NewLine string { get { return ""nested"" } }
+        }
+    }
+
+    shared {
+        func ReadNested() string {
+            return Environment.NewLine
+        }
+    }
+}
+
+func ReadImported() string {
+    return Environment.NewLine
+}
+
+Holder.ReadNested() + ""|"" + ReadImported()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("nested|" + System.Environment.NewLine, result.Value);
+    }
+
+    [Fact]
+    public void TopLevelSourceHomonym_StaticReadWinsImportedAlias()
+    {
+        var source = @"
+package Demo
+import Environment = System.Environment
+
+class Environment {
+    shared {
+        prop NewLine string { get { return ""source"" } }
+    }
+}
+
+Environment.NewLine
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("source", result.Value);
+    }
+
+    [Fact]
+    public void NestedSourceHomonym_ColorColorStaticReadWinsImportedAlias()
+    {
+        var source = @"
+package Demo
+import Environment = System.Environment
+
+class Holder {
+    class Environment {
+        shared {
+            prop NewLine string { get { return ""nested"" } }
+        }
+    }
+
+    var Environment string = ""shadow""
+
+    func Read() string {
+        return Environment.NewLine
+    }
+}
+
+Holder().Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("nested", result.Value);
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]

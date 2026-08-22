@@ -474,47 +474,6 @@ internal sealed partial class ExpressionBinder
                 // field read and continues the chain on that value.
                 return BindAccessorStep(submissionHead, null, rightPart);
             }
-            else if (scope.TryLookupImport(name, out var matchedImport)
-                && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
-            {
-                classSymbol = typeFromImport;
-            }
-            else if (scope.TryLookupImport(name, out var matchedTypeAliasImport)
-                && matchedTypeAliasImport.IsAlias
-                && lookupType(name) is TypeSymbol aliasedType)
-            {
-                // Issue #2273: `import R = Namespace.Type` where the aliased
-                // target is a same-compilation SOURCE type (a class/struct,
-                // enum, or interface declared elsewhere in this compilation —
-                // e.g. the conventional resx `import R = ...Properties.Resources`
-                // pattern) rather than a CLR type. `TryBindImportAccessor` above
-                // only resolves CLR alias targets via the reference resolver, so
-                // a source-type alias falls through to here; `lookupType` (bound
-                // to `Binder.LookupType`) now also resolves an alias's target
-                // through the same import, so it recovers the aliased type
-                // symbol directly.
-                if (aliasedType is EnumSymbol foundAliasEnum)
-                {
-                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundAliasEnum);
-                }
-                else if (aliasedType is StructSymbol foundAliasStruct)
-                {
-                    userStructSymbol = foundAliasStruct;
-                }
-                else if (aliasedType is InterfaceSymbol foundAliasInterface)
-                {
-                    userInterfaceSymbol = foundAliasInterface;
-                }
-                else if (aliasedType.ClrType != null)
-                {
-                    classSymbol = new ImportedClassSymbol(aliasedType.ClrType, leftName, references: scope.References);
-                }
-                else
-                {
-                    Diagnostics.ReportUnableToFindType(leftName.Location, name);
-                    return new BoundErrorExpression(null);
-                }
-            }
             else if (binderCtx.TryLookupSourceType(
                 scope,
                 name,
@@ -549,6 +508,47 @@ internal sealed partial class ExpressionBinder
                     // ADR-0089 / issue #1030: `IName.StaticField` — qualified
                     // access to an interface static field (storage or const).
                     userInterfaceSymbol = foundInterface;
+                }
+                else
+                {
+                    Diagnostics.ReportUnableToFindType(leftName.Location, name);
+                    return new BoundErrorExpression(null);
+                }
+            }
+            else if (scope.TryLookupImport(name, out var matchedImport)
+                && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
+            {
+                classSymbol = typeFromImport;
+            }
+            else if (scope.TryLookupImport(name, out var matchedTypeAliasImport)
+                && matchedTypeAliasImport.IsAlias
+                && lookupType(name) is TypeSymbol aliasedType)
+            {
+                // Issue #2273: `import R = Namespace.Type` where the aliased
+                // target is a same-compilation SOURCE type (a class/struct,
+                // enum, or interface declared elsewhere in this compilation —
+                // e.g. the conventional resx `import R = ...Properties.Resources`
+                // pattern) rather than a CLR type. `TryBindImportAccessor` above
+                // only resolves CLR alias targets via the reference resolver, so
+                // a source-type alias falls through to here; `lookupType` (bound
+                // to `Binder.LookupType`) now also resolves an alias's target
+                // through the same import, so it recovers the aliased type
+                // symbol directly.
+                if (aliasedType is EnumSymbol foundAliasEnum)
+                {
+                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundAliasEnum);
+                }
+                else if (aliasedType is StructSymbol foundAliasStruct)
+                {
+                    userStructSymbol = foundAliasStruct;
+                }
+                else if (aliasedType is InterfaceSymbol foundAliasInterface)
+                {
+                    userInterfaceSymbol = foundAliasInterface;
+                }
+                else if (aliasedType.ClrType != null)
+                {
+                    classSymbol = new ImportedClassSymbol(aliasedType.ClrType, leftName, references: scope.References);
                 }
                 else
                 {
