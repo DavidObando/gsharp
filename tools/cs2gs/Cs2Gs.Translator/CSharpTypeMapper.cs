@@ -717,6 +717,18 @@ public sealed class CSharpTypeMapper
                     }
                 }
 
+                if (node is AnonymousFunctionExpressionSyntax anonymousFunction)
+                {
+                    // Inferred lambda and anonymous-method signatures can emit
+                    // target types that have no corresponding type syntax.
+                    IMethodSymbol targetInvoke =
+                        (semanticModel.GetTypeInfo(anonymousFunction).ConvertedType as INamedTypeSymbol)
+                            ?.DelegateInvokeMethod
+                        ?? (semanticModel.GetOperation(anonymousFunction) as IAnonymousFunctionOperation)
+                            ?.Symbol;
+                    AddMappedMethodSignatureNamespaces(targetInvoke);
+                }
+
                 // These lowerings emit operation/type-info types explicitly.
                 // Ordinary expressions remain unreserved to avoid alias churn.
                 bool mapsOperationType = node switch

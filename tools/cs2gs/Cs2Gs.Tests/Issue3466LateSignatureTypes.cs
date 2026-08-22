@@ -13,6 +13,10 @@ namespace Models
 
 namespace Signatures
 {
+#nullable enable
+    public delegate Models.TextStringBuilder? Handler(Models.TextStringBuilder value);
+#nullable restore
+
     public sealed class TargetTypedDefaults
     {
         public Models.TextStringBuilder Value { get; set; }

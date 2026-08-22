@@ -1056,6 +1056,92 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void LambdaTargetSignature_ReservesLateParameterAndReturnTypeImport()
+    {
+        string printed = TranslateWithTestAssemblyReference("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static global::System.Text.StringBuilder MakeBuilder()
+                    {
+                        return new global::System.Text.StringBuilder("one");
+                    }
+
+                    public static int Read()
+                    {
+                        global::Signatures.Handler handler = value => value;
+                        return MakeBuilder().Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "let handler ((TextStringBuilder) -> TextStringBuilder?)? = (value TextStringBuilder) -> value",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnonymousMethodTargetSignature_ReservesLateParameterAndReturnTypeImport()
+    {
+        string printed = TranslateWithTestAssemblyReference("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static global::System.Text.StringBuilder MakeBuilder()
+                    {
+                        return new global::System.Text.StringBuilder("one");
+                    }
+
+                    public static int Read()
+                    {
+                        global::Signatures.Handler handler = delegate
+                        {
+                            return null;
+                        };
+                        return MakeBuilder().Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "let handler ((TextStringBuilder) -> TextStringBuilder?)? = (__anon0 TextStringBuilder) -> {",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("return nil", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OptionalMethodArguments_ReserveLateParameterTypeImport()
     {
         string printed = TranslateWithTestAssemblyReference("""
