@@ -648,6 +648,20 @@ public sealed class CSharpTypeMapper
             }
         }
 
+        void AddMappedOperationTypeNamespaces(
+            SyntaxNode node,
+            IOperation operation,
+            SemanticModel semanticModel)
+        {
+            AddMappedTypeNamespaces(operation?.Type);
+            if (node is ExpressionSyntax expression)
+            {
+                TypeInfo typeInfo = semanticModel.GetTypeInfo(expression);
+                AddMappedTypeNamespaces(typeInfo.Type);
+                AddMappedTypeNamespaces(typeInfo.ConvertedType);
+            }
+        }
+
         foreach (ImportDirective import in imports)
         {
             if (import.Alias != null)
@@ -679,10 +693,9 @@ public sealed class CSharpTypeMapper
         }
 
         // Qualified references are shortened and synthesize namespace imports
-        // after translation. Calls, target-typed construction, defaults, and
-        // method-group adapters can also map signature types absent from syntax.
-        // Pre-scan those emitted shapes so future bare names reserve alias
-        // candidates before first use.
+        // after translation. Calls and selected operation-bound expressions can
+        // also map types absent from syntax. Pre-scan only those emitted shapes
+        // so future bare names reserve alias candidates before first use.
         foreach (SyntaxTree tree in contributingTrees)
         {
             SemanticModel semanticModel = compilation.GetSemanticModel(tree);
@@ -704,10 +717,39 @@ public sealed class CSharpTypeMapper
                     }
                 }
 
-                if (node is not (NameSyntax
+                // These lowerings emit operation/type-info types explicitly.
+                // Ordinary expressions remain unreserved to avoid alias churn.
+                bool mapsOperationType = node switch
+                {
+                    AnonymousObjectCreationExpressionSyntax
+                        or ConditionalExpressionSyntax
+                        or CollectionExpressionSyntax
+                        or DefaultExpressionSyntax
+                        or ImplicitArrayCreationExpressionSyntax
+                        or ImplicitObjectCreationExpressionSyntax
+                        or ImplicitStackAllocArrayCreationExpressionSyntax
+                        or SwitchExpressionSyntax
+                        or ThrowExpressionSyntax => true,
+                    LiteralExpressionSyntax literal =>
+                        literal.IsKind(SyntaxKind.DefaultLiteralExpression),
+                    _ => false,
+                };
+                bool mapsSymbolNamespace = node is NameSyntax
                     or MemberAccessExpressionSyntax
                     or InvocationExpressionSyntax
-                    or BaseObjectCreationExpressionSyntax))
+                    or BaseObjectCreationExpressionSyntax;
+                if (!mapsOperationType && !mapsSymbolNamespace)
+                {
+                    continue;
+                }
+
+                IOperation operation = semanticModel.GetOperation(node);
+                if (mapsOperationType)
+                {
+                    AddMappedOperationTypeNamespaces(node, operation, semanticModel);
+                }
+
+                if (!mapsSymbolNamespace)
                 {
                     continue;
                 }
@@ -719,7 +761,7 @@ public sealed class CSharpTypeMapper
                     AddSymbolNamespace(candidate);
                 }
 
-                switch (semanticModel.GetOperation(node))
+                switch (operation)
                 {
                     case IInvocationOperation invocation:
                         AddSymbolNamespace(invocation.TargetMethod);

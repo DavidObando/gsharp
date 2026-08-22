@@ -13,6 +13,19 @@ namespace Models
 
 namespace Signatures
 {
+    public sealed class TargetTypedDefaults
+    {
+        public Models.TextStringBuilder Value { get; set; }
+
+        public Models.TextStringBuilder[] Values { get; set; }
+
+        public Models.TextStringBuilder this[int index]
+        {
+            get => this.Value;
+            set => this.Value = value;
+        }
+    }
+
     public static class OptionalSignatureMethod
     {
         public static int Read(

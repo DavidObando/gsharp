@@ -948,18 +948,117 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void TargetTypedDefaultPropertyAndIndexerAssignments_ReserveLateTargetTypeImport()
+    {
+        string printed = TranslateWithTestAssemblyReference("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Read(global::Signatures.TargetTypedDefaults api)
+                    {
+                        var builder = new global::System.Text.StringBuilder("one");
+                        api.Value = default;
+                        api[0] = default;
+                        return builder.Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(printed, "default(TextStringBuilder)"));
+    }
+
+    [Fact]
+    public void ConditionalNullArm_ReservesLateResultTypeImport()
+    {
+        string printed = TranslateWithTestAssemblyReference("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Read(
+                        global::Signatures.TargetTypedDefaults api,
+                        bool chooseValue)
+                    {
+                        var builder = new global::System.Text.StringBuilder("one");
+                        var selected = chooseValue ? api.Value : null;
+                        return builder.Length + (selected == null ? 1 : 0);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("default(TextStringBuilder?)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TargetTypedCollectionPropertyAssignment_ReservesLateElementTypeImport()
+    {
+        string printed = TranslateWithTestAssemblyReference("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class StringBuilder
+                    {
+                    }
+
+                    public static int Read(global::Signatures.TargetTypedDefaults api)
+                    {
+                        var builder = new global::System.Text.StringBuilder("one");
+                        api.Values = [api.Value];
+                        return builder.Length + api.Values.Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import Models", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[]TextStringBuilder{api.Value!!}",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OptionalMethodArguments_ReserveLateParameterTypeImport()
     {
-        string referencePath = typeof(Signatures.OptionalSignatureMethod).Assembly.Location;
-        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
-            .RuntimeReferences()
-            .Append(MetadataReference.CreateFromFile(referencePath))
-            .ToArray();
-        using var resolver = ReferenceResolver.WithReferences(
-            new[] { referencePath });
-
-        string printed = Translate(
-            """
+        string printed = TranslateWithTestAssemblyReference("""
             namespace Demo
             {
                 public sealed class Holder
@@ -974,9 +1073,7 @@ public sealed class Issue3466NestedHomonymAliasTests
                     }
                 }
             }
-            """,
-            references,
-            resolver);
+            """);
 
         Assert.Contains("import Models", printed, StringComparison.Ordinal);
         Assert.Contains(
@@ -996,16 +1093,7 @@ public sealed class Issue3466NestedHomonymAliasTests
     [Fact]
     public void OptionalConstructorArguments_ReserveLateParameterTypeImport()
     {
-        string referencePath = typeof(Signatures.OptionalSignatureConstructor).Assembly.Location;
-        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
-            .RuntimeReferences()
-            .Append(MetadataReference.CreateFromFile(referencePath))
-            .ToArray();
-        using var resolver = ReferenceResolver.WithReferences(
-            new[] { referencePath });
-
-        string printed = Translate(
-            """
+        string printed = TranslateWithTestAssemblyReference("""
             namespace Demo
             {
                 public sealed class Holder
@@ -1023,9 +1111,7 @@ public sealed class Issue3466NestedHomonymAliasTests
                     }
                 }
             }
-            """,
-            references,
-            resolver);
+            """);
 
         Assert.Contains("import Models", printed, StringComparison.Ordinal);
         Assert.Contains(
@@ -1045,16 +1131,7 @@ public sealed class Issue3466NestedHomonymAliasTests
     [Fact]
     public void OptionalEnumConstructorArgument_UsesLocatedAliasForMemberAndConversion()
     {
-        string referencePath = typeof(Issue3466OptionalDayOfWeek).Assembly.Location;
-        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
-            .RuntimeReferences()
-            .Append(MetadataReference.CreateFromFile(referencePath))
-            .ToArray();
-        using var resolver = ReferenceResolver.WithReferences(
-            new[] { referencePath });
-
-        string printed = Translate(
-            """
+        string printed = TranslateWithTestAssemblyReference("""
             namespace Demo
             {
                 public sealed class Holder
@@ -1073,9 +1150,7 @@ public sealed class Issue3466NestedHomonymAliasTests
                     }
                 }
             }
-            """,
-            references,
-            resolver);
+            """);
 
         Assert.Contains(
             "import SystemDayOfWeek = System.DayOfWeek",
@@ -1153,6 +1228,18 @@ public sealed class Issue3466NestedHomonymAliasTests
             "SystemInvalidOperationException(\"Unmatched switch expression value.\")",
             printed,
             StringComparison.Ordinal);
+    }
+
+    private static string TranslateWithTestAssemblyReference(string source)
+    {
+        string referencePath = typeof(Signatures.TargetTypedDefaults).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(referencePath))
+            .ToArray();
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { referencePath });
+        return Translate(source, references, resolver);
     }
 
     private static string Translate(
