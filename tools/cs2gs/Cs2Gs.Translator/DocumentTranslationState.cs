@@ -274,8 +274,8 @@ internal sealed class DocumentTranslationState
     // to `throw <caughtVar>` (ADR-0115 §B).
     public string CurrentCatchVariable { get; set; }
 
-    // Synthetic merged-catch binders active while nested catch bodies translate.
-    public HashSet<string> ActiveMergedCatchBinders { get; } =
+    // Synthetic catch binders active while nested catch bodies translate.
+    public HashSet<string> ActiveSyntheticCatchBinders { get; } =
         new HashSet<string>(StringComparer.Ordinal);
 }
 

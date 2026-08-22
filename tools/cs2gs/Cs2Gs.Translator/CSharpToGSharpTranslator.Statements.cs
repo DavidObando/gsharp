@@ -1598,6 +1598,7 @@ public sealed partial class CSharpToGSharpTranslator
                 CatchClauseSyntax catchClause = node.Catches[catchIndex];
                 string variableName = null;
                 GTypeReference exceptionType = null;
+                bool hasSyntheticBinder = false;
                 if (catchClause.Declaration != null)
                 {
                     ITypeSymbol typeSymbol = catchTypeSymbols[catchIndex];
@@ -1611,7 +1612,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         // `catch (Exception)` with no binding: synthesize one so the
                         // G# typed-catch form (which requires a binder) is well-formed.
-                        variableName = "ex";
+                        hasSyntheticBinder = true;
                     }
                 }
                 else
@@ -1620,9 +1621,17 @@ public sealed partial class CSharpToGSharpTranslator
                     // equivalent: the parser requires the parenthesized typed-binder
                     // form `catch (e Exception) { }`. Synthesize a binder over the
                     // root `System.Exception` so the catch-all round-trips (ADR-0115).
-                    variableName = "ex";
+                    hasSyntheticBinder = true;
                     exceptionType = this.MapSystemException(
                         catchClause.GetLocation());
+                }
+
+                if (hasSyntheticBinder)
+                {
+                    variableName = this.AllocateSyntheticCatchBinder(
+                        catchClause,
+                        new[] { catchClause });
+                    this.state.ActiveSyntheticCatchBinders.Add(variableName);
                 }
 
                 string previousCatch = this.state.CurrentCatchVariable;
@@ -1658,6 +1667,10 @@ public sealed partial class CSharpToGSharpTranslator
                 finally
                 {
                     this.state.CurrentCatchVariable = previousCatch;
+                    if (hasSyntheticBinder)
+                    {
+                        this.state.ActiveSyntheticCatchBinders.Remove(variableName);
+                    }
                 }
             }
 
@@ -1687,17 +1700,20 @@ public sealed partial class CSharpToGSharpTranslator
         /// <c>try</c>. The merged catch is typed at the narrowest type provably
         /// safe for every merged clause (the last clause's type, when it is a
         /// supertype of all the others; <c>System.Exception</c> otherwise), and
-        /// its body dispatches on <c>ex is OriginalType</c> (G#'s Kotlin-style
-        /// smart cast narrows <c>ex</c> inside each branch, ADR-0069) plus each
-        /// clause's own filter, in source order, falling through to the next
-        /// clause when a type test or filter fails and rethrowing if none of
-        /// the merged clauses match (should not happen if the merge boundary is
-        /// correct, but is a safe fallback).
+        /// its body dispatches on a synthetic binder's
+        /// <c>is OriginalType</c> test (G#'s Kotlin-style smart cast narrows the
+        /// binder inside each branch, ADR-0069) plus each clause's own filter,
+        /// in source order, falling through to the next clause when a type test
+        /// or filter fails and rethrowing if none of the merged clauses match
+        /// (should not happen if the merge boundary is correct, but is a safe
+        /// fallback).
         /// </summary>
         private CatchClause BuildMergedFilteredCatch(TryStatementSyntax node, ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
         {
-            string sharedBinder = this.AllocateMergedCatchBinder(node, mergeStartIndex);
-            this.state.ActiveMergedCatchBinders.Add(sharedBinder);
+            string sharedBinder = this.AllocateSyntheticCatchBinder(
+                node,
+                node.Catches.Skip(mergeStartIndex));
+            this.state.ActiveSyntheticCatchBinders.Add(sharedBinder);
             try
             {
                 return this.BuildMergedFilteredCatchCore(
@@ -1708,7 +1724,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                this.state.ActiveMergedCatchBinders.Remove(sharedBinder);
+                this.state.ActiveSyntheticCatchBinders.Remove(sharedBinder);
             }
         }
 
@@ -1759,10 +1775,12 @@ public sealed partial class CSharpToGSharpTranslator
                 // The allocated binder cannot collide with source names, so
                 // this also carries the narrowed type into closures capturing
                 // the rebind, unlike the shared binder.
-                var branchStatements = new List<GStatement>
+                var branchStatements = new List<GStatement>();
+                if (!string.Equals(originalName, sharedBinder, StringComparison.Ordinal))
                 {
-                    new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr),
-                };
+                    branchStatements.Add(
+                        new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr));
+                }
 
                 GStatement matched = filter != null
                     ? new IfStatement(filter, body, new BlockStatement(new List<GStatement> { dispatch }))
@@ -1783,24 +1801,26 @@ public sealed partial class CSharpToGSharpTranslator
             return new CatchClause(sharedBinder, mergedType, new BlockStatement(new List<GStatement> { dispatch }));
         }
 
-        private string AllocateMergedCatchBinder(TryStatementSyntax node, int mergeStartIndex)
+        private string AllocateSyntheticCatchBinder(
+            SyntaxNode scope,
+            IEnumerable<CatchClauseSyntax> catchClauses)
         {
             SemanticModel semanticModel = ReferenceEquals(
                 this.context.SemanticModel.SyntaxTree,
-                node.SyntaxTree)
+                scope.SyntaxTree)
                     ? this.context.SemanticModel
-                    : this.context.Compilation.GetSemanticModel(node.SyntaxTree);
+                    : this.context.Compilation.GetSemanticModel(scope.SyntaxTree);
             var occupied = new HashSet<string>(
-                this.state.ActiveMergedCatchBinders,
+                this.state.ActiveSyntheticCatchBinders,
                 StringComparer.Ordinal);
-            foreach (ISymbol symbol in semanticModel.LookupSymbols(node.SpanStart))
+            foreach (ISymbol symbol in semanticModel.LookupSymbols(scope.SpanStart))
             {
                 occupied.Add(this.EmittedName(symbol, symbol.Name));
             }
 
-            for (int i = mergeStartIndex; i < node.Catches.Count; i++)
+            foreach (CatchClauseSyntax catchClause in catchClauses)
             {
-                foreach (SyntaxNode declaration in node.Catches[i].DescendantNodesAndSelf())
+                foreach (SyntaxNode declaration in catchClause.DescendantNodesAndSelf())
                 {
                     if (semanticModel.GetDeclaredSymbol(declaration) is ISymbol symbol)
                     {

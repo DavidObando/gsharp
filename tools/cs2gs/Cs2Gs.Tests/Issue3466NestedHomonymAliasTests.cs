@@ -730,7 +730,7 @@ public sealed class Issue3466NestedHomonymAliasTests
             "import SystemException_2 = System.Exception",
             printed,
             StringComparison.Ordinal);
-        Assert.Contains("catch (ex SystemException_2)", printed, StringComparison.Ordinal);
+        Assert.Contains("catch (__caught SystemException_2)", printed, StringComparison.Ordinal);
     }
 
     [Fact]

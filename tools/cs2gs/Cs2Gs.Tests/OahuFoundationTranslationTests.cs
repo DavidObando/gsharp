@@ -509,7 +509,7 @@ namespace Demo
     /// <summary>
     /// ADR-0115 §B: a bare catch-all `catch { }` (no declaration) has no G# form;
     /// the translator synthesizes the required typed binder
-    /// `catch (ex Exception) { }`.
+    /// `catch (__caught Exception) { }`.
     /// </summary>
     [Fact]
     public void CatchAll_SynthesizesTypedBinder()
@@ -533,7 +533,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (ex Exception)", printed);
+        Assert.Contains("catch (__caught Exception)", printed);
     }
 
     /// <summary>
