@@ -1330,7 +1330,12 @@ public sealed class CSharpTypeMapper
         {
             this.TrackShortenedNamespace(named);
             string simpleName = this.Names(context).GetName(named);
-            if (IsDeclaredInContainingNamespace(named, context, location))
+            bool visibleNestedHomonym = this.HasVisibleSourceNestedHomonym(
+                named,
+                context,
+                location);
+            if (IsDeclaredInContainingNamespace(named, context, location)
+                && !visibleNestedHomonym)
             {
                 return simpleName;
             }
@@ -1354,7 +1359,7 @@ public sealed class CSharpTypeMapper
             bool scanImportedNamespaces = isSourceType
                 || this.qualifyMetadataImportCollisions;
             bool ambiguous = this.HasSourceHomonym(named, context)
-                || (!isSourceType && this.HasVisibleSourceNestedHomonym(named, context, location))
+                || visibleNestedHomonym
                 || (scanImportedNamespaces && this.HasImportedNamespaceHomonym(named, context));
             if (!ambiguous)
             {

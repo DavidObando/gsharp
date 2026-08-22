@@ -655,6 +655,45 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void SameNamespaceTopLevelType_InsideNestedHomonymScope_StaysQualified()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Target
+                {
+                }
+
+                public sealed class Holder
+                {
+                    public sealed class Target
+                    {
+                    }
+
+                    public static global::Demo.Target MakeNestedScope()
+                    {
+                        return new global::Demo.Target();
+                    }
+                }
+
+                public static class Consumer
+                {
+                    public static global::Demo.Target MakeSafe()
+                    {
+                        return new global::Demo.Target();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("func MakeNestedScope() Demo.Target", printed, StringComparison.Ordinal);
+        Assert.Contains("return Demo.Target()", printed, StringComparison.Ordinal);
+        Assert.Contains("func MakeSafe() Target", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func MakeSafe() Demo.Target", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("import DemoTarget =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OptionalEnumConstructorArgument_UsesLocatedAliasForMemberAndConversion()
     {
         string referencePath = typeof(Issue3466OptionalDayOfWeek).Assembly.Location;
