@@ -468,6 +468,119 @@ public sealed class Issue3466NestedHomonymAliasTests
         Assert.Contains("TextStringBuilder(\"nested\")", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void OptionalEnumConstructorArgument_UsesLocatedAliasForMemberAndConversion()
+    {
+        string referencePath = typeof(Issue3466OptionalDayOfWeek).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(referencePath))
+            .ToArray();
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { referencePath });
+
+        string printed = Translate(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public enum DayOfWeek
+                    {
+                        Local,
+                    }
+
+                    public static int Read()
+                    {
+                        return new global::Cs2Gs.Tests.Issue3466OptionalDayOfWeek
+                        {
+                            Marker = 1,
+                        }.Value;
+                    }
+                }
+            }
+            """,
+            references,
+            resolver);
+
+        Assert.Contains(
+            "import SystemDayOfWeek = System.DayOfWeek",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SystemDayOfWeek(SystemDayOfWeek.Monday)",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BareCatch_MapsSystemExceptionAtCatchLocation()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class Exception
+                    {
+                    }
+
+                    public static int Read()
+                    {
+                        try
+                        {
+                            throw new global::System.InvalidOperationException();
+                        }
+                        catch
+                        {
+                            return 7;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import SystemException_2 = System.Exception",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("catch (ex SystemException_2)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SynthesizedSwitchThrow_MapsSystemInvalidOperationExceptionAtSourceLocation()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class InvalidOperationException
+                    {
+                    }
+
+                    public static int Read(bool value)
+                    {
+                        return value switch
+                        {
+                            true => 1,
+                            false => 0,
+                        };
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import SystemInvalidOperationException = System.InvalidOperationException",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SystemInvalidOperationException(\"Unmatched switch expression value.\")",
+            printed,
+            StringComparison.Ordinal);
+    }
+
     private static string Translate(
         string source,
         IReadOnlyList<MetadataReference> references = null,
@@ -542,4 +655,16 @@ public static class Issue3466LateImportExtensions
     public static int Issue3466Length(this string value) => value.Length;
 
     public static int Issue3466Length(this string value, int offset) => value.Length + offset;
+}
+
+public sealed class Issue3466OptionalDayOfWeek
+{
+    public Issue3466OptionalDayOfWeek(DayOfWeek day = DayOfWeek.Monday)
+    {
+        this.Value = (int)day;
+    }
+
+    public int Value { get; }
+
+    public int Marker { get; set; }
 }

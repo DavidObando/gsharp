@@ -88,7 +88,7 @@ internal sealed partial class ExpressionBinder
                 out staticSourceType,
                 out _))
         {
-            _ = TryResolveImportedTopLevelOverride(
+            _ = TryResolveImportedTypeOverride(
                 staticLeftName.IdentifierToken.Text,
                 staticSourceType,
                 requestedArity: 0,

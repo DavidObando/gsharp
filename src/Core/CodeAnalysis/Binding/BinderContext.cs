@@ -354,29 +354,63 @@ internal sealed class BinderContext
             return true;
         }
 
-        return scope.TryLookupTypeAlias(
+        bool foundSource = scope.TryLookupTypeAlias(
             name,
             preferredArity,
             out type,
             out ambiguousAcrossImportedPackages);
+        if (foundSource
+            && type is { } sourceType
+            && ImportedTypeOverridesSourceType(
+                scope,
+                name,
+                sourceType,
+                preferredArity,
+                currentFunction,
+                importedType: null)
+            && scope.TryResolveExplicitSourceTypeAlias(
+                name,
+                preferredArity,
+                out var aliasedSourceType))
+        {
+            type = aliasedSourceType;
+            ambiguousAcrossImportedPackages = false;
+            return true;
+        }
+
+        if (foundSource || ambiguousAcrossImportedPackages)
+        {
+            return foundSource;
+        }
+
+        return scope.TryResolveExplicitSourceTypeAlias(
+            name,
+            preferredArity,
+            out type);
     }
 
     /// <summary>
-    /// Returns whether an imported top-level type should override a
-    /// same-named source type at the current binding site.
+    /// Returns whether an imported type should override a same-named source
+    /// type at the current binding site.
     /// </summary>
+    /// <param name="scope">The current bound scope.</param>
+    /// <param name="importedName">The imported name used at the binding site.</param>
     /// <param name="sourceType">The source type found by simple-name lookup.</param>
     /// <param name="requestedArity">The exact requested arity, or -1 when no arity was specified.</param>
     /// <param name="currentFunction">The function currently being bound, if any.</param>
+    /// <param name="importedType">The resolved CLR import target, if any.</param>
     /// <returns>
-    /// <see langword="true"/> when the source fallback has the wrong requested
-    /// arity, or when it is nested and the binding site is outside both its
-    /// containing lexical scope and an accessible derived-type scope.
+    /// <see langword="true"/> when an explicit alias exists, or the resolved
+    /// CLR target is top-level, and the source fallback has the wrong requested
+    /// arity or is nested outside its lexical/accessibility scope.
     /// </returns>
     public bool ImportedTypeOverridesSourceType(
+        BoundScope scope,
+        string importedName,
         TypeSymbol sourceType,
         int requestedArity,
-        FunctionSymbol? currentFunction)
+        FunctionSymbol? currentFunction,
+        Type? importedType)
     {
         static TypeSymbol? ContainingType(TypeSymbol? type) => type switch
         {
@@ -409,6 +443,13 @@ internal sealed class BinderContext
             DelegateTypeSymbol d when d.IsGenericDefinition => d.TypeParameters.Length,
             _ => 0,
         };
+
+        bool explicitAlias = scope.TryLookupImport(importedName, out var import)
+            && import.IsAlias;
+        if (!explicitAlias && importedType is not { IsNested: false })
+        {
+            return false;
+        }
 
         if (requestedArity >= 0 && Arity(sourceType) != requestedArity)
         {

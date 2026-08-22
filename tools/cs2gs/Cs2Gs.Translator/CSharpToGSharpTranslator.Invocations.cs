@@ -1784,7 +1784,10 @@ public sealed partial class CSharpToGSharpTranslator
                     && literalSource != literalTarget
                     && !this.TargetsConcreteNumericParameter(argument))
                 {
-                    return this.CoerceOperandTo(translated, literalInfo.ConvertedType);
+                    return this.CoerceOperandTo(
+                        translated,
+                        literalInfo.ConvertedType,
+                        expression.GetLocation());
                 }
 
                 return this.CoerceConstantToUnsigned(expression, translated);
@@ -1795,7 +1798,10 @@ public sealed partial class CSharpToGSharpTranslator
                 TryGetNumericKind(info.ConvertedType, out SpecialType convertedUnderlying) &&
                 sourceUnderlying != convertedUnderlying)
             {
-                return this.CoerceOperandTo(translated, info.ConvertedType);
+                return this.CoerceOperandTo(
+                    translated,
+                    info.ConvertedType,
+                    expression.GetLocation());
             }
 
             return translated;
@@ -2143,7 +2149,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (!parameterType.IsReferenceType)
             {
-                return this.CoerceOperandTo(value, parameterType);
+                return this.CoerceOperandTo(value, parameterType, location);
             }
 
             GTypeReference mappedType = this.typeMapper.Map(

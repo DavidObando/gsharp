@@ -392,7 +392,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && rightIsIntegral
                 && this.IntegralConstantFits(binary.Right, leftUnderlying))
             {
-                right = this.CoerceOperandTo(right, leftType);
+                right = this.CoerceOperandTo(
+                    right,
+                    leftType,
+                    binary.Right.GetLocation());
                 return new BinaryExpression(left, op, right);
             }
 
@@ -402,7 +405,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && rightIsIntegral
                 && this.IntegralConstantFits(binary.Left, rightUnderlying))
             {
-                left = this.CoerceOperandTo(left, rightType);
+                left = this.CoerceOperandTo(
+                    left,
+                    rightType,
+                    binary.Left.GetLocation());
                 return new BinaryExpression(left, op, right);
             }
 
@@ -419,13 +425,19 @@ public sealed partial class CSharpToGSharpTranslator
             if (TryGetNumericKind(leftConverted, out SpecialType leftConvUnderlying) &&
                 leftConvUnderlying != leftUnderlying)
             {
-                left = this.CoerceOperandTo(left, leftConverted);
+                left = this.CoerceOperandTo(
+                    left,
+                    leftConverted,
+                    binary.Left.GetLocation());
             }
 
             if (TryGetNumericKind(rightConverted, out SpecialType rightConvUnderlying) &&
                 rightConvUnderlying != rightUnderlying)
             {
-                right = this.CoerceOperandTo(right, rightConverted);
+                right = this.CoerceOperandTo(
+                    right,
+                    rightConverted,
+                    binary.Right.GetLocation());
             }
 
             return new BinaryExpression(left, op, right);
@@ -706,7 +718,10 @@ public sealed partial class CSharpToGSharpTranslator
                 TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
                 leftUnderlying != rightUnderlying)
             {
-                return this.CoerceOperandTo(rhs, UnwrapNullable(leftType));
+                return this.CoerceOperandTo(
+                    rhs,
+                    UnwrapNullable(leftType),
+                    assignment.Right.GetLocation());
             }
 
             return rhs;
@@ -728,7 +743,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol int32Type =
                     this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(length, int32Type);
+                return this.CoerceOperandTo(
+                    length,
+                    int32Type,
+                    lengthSyntax.GetLocation());
             }
 
             return length;
@@ -772,7 +790,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol int32Type =
                     this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(index, int32Type);
+                return this.CoerceOperandTo(
+                    index,
+                    int32Type,
+                    indexSyntax.GetLocation());
             }
 
             return index;
@@ -790,7 +811,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol int32Type =
                     this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(index, int32Type);
+                return this.CoerceOperandTo(
+                    index,
+                    int32Type,
+                    indexSyntax.GetLocation());
             }
 
             return index;
@@ -1021,7 +1045,10 @@ public sealed partial class CSharpToGSharpTranslator
                 if (TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
                     rightUnderlying != resultUnderlying)
                 {
-                    right = this.CoerceOperandTo(right, UnwrapNullable(resultType));
+                    right = this.CoerceOperandTo(
+                        right,
+                        UnwrapNullable(resultType),
+                        binary.Right.GetLocation());
                 }
             }
 
@@ -1130,13 +1157,19 @@ public sealed partial class CSharpToGSharpTranslator
                 if (TryGetNumericKind(trueType, out SpecialType trueUnderlying) &&
                     trueUnderlying != resultUnderlying)
                 {
-                    whenTrue = this.CoerceOperandTo(whenTrue, resultType);
+                    whenTrue = this.CoerceOperandTo(
+                        whenTrue,
+                        resultType,
+                        conditional.WhenTrue.GetLocation());
                 }
 
                 if (TryGetNumericKind(falseType, out SpecialType falseUnderlying) &&
                     falseUnderlying != resultUnderlying)
                 {
-                    whenFalse = this.CoerceOperandTo(whenFalse, resultType);
+                    whenFalse = this.CoerceOperandTo(
+                        whenFalse,
+                        resultType,
+                        conditional.WhenFalse.GetLocation());
                 }
             }
 
@@ -1187,16 +1220,19 @@ public sealed partial class CSharpToGSharpTranslator
         // be a reference type or a nullable value type"); the canonical G# form is
         // the width-bearing conversion-call `T(expr)`. Only a reference type or a
         // nullable value type target (where `as` is valid) keeps the `as` form.
-        private GExpression CoerceOperandTo(GExpression expression, ITypeSymbol targetType)
+        private GExpression CoerceOperandTo(
+            GExpression expression,
+            ITypeSymbol targetType,
+            Location location)
         {
             if (IsNonNullableValueType(targetType))
             {
                 GTypeReference conversionTarget = this.typeMapper.Map(
-                    targetType, this.context, Location.None);
+                    targetType, this.context, location);
                 return new ConversionExpression(conversionTarget, expression);
             }
 
-            GTypeReference target = this.typeMapper.Map(targetType, this.context, Location.None);
+            GTypeReference target = this.typeMapper.Map(targetType, this.context, location);
             return new ParenthesizedExpression(
                 new BinaryExpression(expression, "as", new TypeExpression(target)));
         }
@@ -1585,7 +1621,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // form `catch (e Exception) { }`. Synthesize a binder over the
                     // root `System.Exception` so the catch-all round-trips (ADR-0115).
                     variableName = "ex";
-                    exceptionType = new NamedTypeReference("Exception");
+                    exceptionType = this.MapSystemException(
+                        catchClause.GetLocation());
                 }
 
                 string previousCatch = this.state.CurrentCatchVariable;
@@ -1679,7 +1716,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol typeSymbol = catchTypeSymbols[i];
                 GTypeReference clauseType = typeSymbol != null
                     ? this.typeMapper.Map(typeSymbol, this.context, clause.GetLocation())
-                    : new NamedTypeReference("Exception");
+                    : this.MapSystemException(clause.GetLocation());
                 string originalName = clause.Declaration != null && !string.IsNullOrEmpty(clause.Declaration.Identifier.ValueText)
                     ? this.EmittedName(clause.Declaration, clause.Declaration.Identifier)
                     : sharedBinder;
@@ -1759,7 +1796,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.typeMapper.Map(lastType, this.context, location);
             }
 
-            ITypeSymbol systemException = this.context.Compilation.GetTypeByMetadataName("System.Exception");
+            return this.MapSystemException(location);
+        }
+
+        private GTypeReference MapSystemException(Location location)
+        {
+            ITypeSymbol systemException =
+                this.context.Compilation.GetTypeByMetadataName("System.Exception");
             return systemException != null
                 ? this.typeMapper.Map(systemException, this.context, location)
                 : new NamedTypeReference("Exception");

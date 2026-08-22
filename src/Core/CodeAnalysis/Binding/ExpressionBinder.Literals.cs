@@ -1150,21 +1150,23 @@ internal sealed partial class ExpressionBinder
                     out importedCandidate);
 
             // Issue #3466: a nested source type may retain the bare (name,
-            // arity) key for references from its containing type. A same-named
-            // top-level CLR type brought into scope by an import wins outside
-            // that containing lexical scope; inside it, the nested source type
-            // retains its existing short-name meaning.
-            bool importedTopLevelTakesPrecedence =
+            // arity) key for references from its containing type. Outside that
+            // lexical scope, an explicit alias or same-named top-level CLR
+            // import wins; inside it, the nested source type retains its
+            // existing short-name meaning.
+            bool importedTypeTakesPrecedence =
                 foundAlias
                 && resolvedStruct != null
                 && hasImportedCandidate
                 && importedCandidate != null
-                && !importedCandidate.ClassType.IsNested
                 && binderCtx.ImportedTypeOverridesSourceType(
+                    scope,
+                    typeName,
                     resolvedStruct,
                     preferredArity,
-                    getCurrentFunction());
-            if (!foundAlias || resolvedStruct == null || importedTopLevelTakesPrecedence)
+                    getCurrentFunction(),
+                    importedCandidate.ClassType);
+            if (!foundAlias || resolvedStruct == null || importedTypeTakesPrecedence)
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
                 // targets an IMPORTED reference-type class (a BCL class such as

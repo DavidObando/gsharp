@@ -1221,7 +1221,10 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverUnderlying != constantUnderlying &&
                 this.context.SemanticModel.GetConstantValue(constantSyntax).HasValue)
             {
-                return this.CoerceOperandTo(constant, receiverType);
+                return this.CoerceOperandTo(
+                    constant,
+                    receiverType,
+                    constantSyntax.GetLocation());
             }
 
             return constant;

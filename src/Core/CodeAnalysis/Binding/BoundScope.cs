@@ -835,6 +835,64 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Resolves an explicit import alias whose target is a same-compilation
+    /// source type rather than a CLR type.
+    /// </summary>
+    /// <param name="name">The visible alias name.</param>
+    /// <param name="preferredArity">The requested generic arity.</param>
+    /// <param name="type">The exact source target.</param>
+    /// <returns>Whether the alias targets a source type of the requested arity.</returns>
+    public bool TryResolveExplicitSourceTypeAlias(
+        string name,
+        int preferredArity,
+        [NotNullWhen(true)] out TypeSymbol? type)
+    {
+        type = null;
+        if (!TryLookupImport(name, out var import) || !import.IsAlias)
+        {
+            return false;
+        }
+
+        TypeSymbol? match = null;
+        var seen = new HashSet<TypeSymbol>();
+        foreach (var pair in EnumerateTypeAliasesInChain())
+        {
+            var candidate = TypeDefinition(pair.Value);
+            if (!seen.Add(candidate))
+            {
+                continue;
+            }
+
+            var arity = GetTypeAliasArity(candidate);
+            if ((preferredArity > 0 && arity != preferredArity)
+                || (preferredArity <= 0 && arity != 0))
+            {
+                continue;
+            }
+
+            var package = TypePackageName(candidate);
+            var qualifiedName = QualifiedTypeName(candidate);
+            var fullName = string.IsNullOrEmpty(package)
+                ? qualifiedName
+                : package + "." + qualifiedName;
+            if (!string.Equals(fullName, import.Target, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (match != null && !ReferenceEquals(match, candidate))
+            {
+                return false;
+            }
+
+            match = candidate;
+        }
+
+        type = match;
+        return match != null;
+    }
+
+    /// <summary>
     /// Gets an immutable array of all the declared variables.
     /// </summary>
     /// <returns>The declared variables.</returns>
@@ -1676,8 +1734,8 @@ public sealed class BoundScope
         => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint.Value;
 
     /// <summary>
-    /// Resolves a direct type alias with exact generic-arity semantics.
-    /// Non-positive arities only accept a non-generic target.
+    /// Resolves an explicit CLR type alias by requested arity. Non-positive
+    /// arities only accept a non-generic target.
     /// </summary>
     /// <param name="name">The visible alias name.</param>
     /// <param name="preferredArity">The requested generic arity.</param>

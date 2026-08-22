@@ -482,7 +482,7 @@ internal sealed partial class ExpressionBinder
                 out var typeAlias,
                 out _))
             {
-                if (TryResolveImportedTopLevelOverride(
+                if (TryResolveImportedTypeOverride(
                         name,
                         typeAlias,
                         requestedArity: 0,
@@ -494,7 +494,8 @@ internal sealed partial class ExpressionBinder
 
                 // Top-level source types win globally; nested source types win
                 // only inside their containing lexical type. Outside that
-                // container, a same-arity imported top-level type wins.
+                // container, an explicit alias or same-arity top-level import
+                // wins.
                 else if (typeAlias is EnumSymbol foundEnum)
                 {
                     enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
@@ -1770,7 +1771,7 @@ internal sealed partial class ExpressionBinder
                 out var typeAlias,
                 out _))
         {
-            if (TryResolveImportedTopLevelOverride(
+            if (TryResolveImportedTypeOverride(
                     name,
                     typeAlias,
                     requestedArity: 0,
@@ -1819,7 +1820,7 @@ internal sealed partial class ExpressionBinder
     /// <summary>
     /// Applies the shared lexical source/import precedence for a simple type receiver.
     /// </summary>
-    private bool TryResolveImportedTopLevelOverride(
+    private bool TryResolveImportedTypeOverride(
         string name,
         TypeSymbol sourceType,
         int requestedArity,
@@ -1831,11 +1832,13 @@ internal sealed partial class ExpressionBinder
                 requestedArity,
                 declaration,
                 out var candidate)
-            && !candidate.ClassType.IsNested
             && binderCtx.ImportedTypeOverridesSourceType(
+                scope,
+                name,
                 sourceType,
                 requestedArity,
-                getCurrentFunction()))
+                getCurrentFunction(),
+                candidate.ClassType))
         {
             importedType = candidate;
             return true;
@@ -2665,7 +2668,7 @@ internal sealed partial class ExpressionBinder
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
-                && ImportedGenericTypeHasPrecedence(alias, openClrType, arity);
+                && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
         }
@@ -2759,7 +2762,7 @@ internal sealed partial class ExpressionBinder
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
-                && ImportedGenericTypeHasPrecedence(alias, openClrType, arity);
+                && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
         }
@@ -2801,15 +2804,19 @@ internal sealed partial class ExpressionBinder
     }
 
     private bool ImportedGenericTypeHasPrecedence(
+        string name,
         TypeSymbol? sourceType,
         Type? importedType,
         int requestedArity)
         => sourceType != null
-            && importedType is { IsNested: false }
+            && importedType != null
             && binderCtx.ImportedTypeOverridesSourceType(
+                scope,
+                name,
                 sourceType,
                 requestedArity,
-                getCurrentFunction());
+                getCurrentFunction(),
+                importedType);
 
     /// <summary>
     /// Issue #1559: syntax-shape-agnostic dispatcher over the two

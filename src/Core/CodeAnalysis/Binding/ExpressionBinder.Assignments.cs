@@ -632,7 +632,7 @@ internal sealed partial class ExpressionBinder
         ImportedClassSymbol? importedTypeOverride = null;
         if (sourceTypeAlias != null)
         {
-            _ = TryResolveImportedTopLevelOverride(
+            _ = TryResolveImportedTypeOverride(
                 receiverName,
                 sourceTypeAlias,
                 requestedArity: 0,

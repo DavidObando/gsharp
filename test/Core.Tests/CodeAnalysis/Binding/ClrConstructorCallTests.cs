@@ -738,6 +738,242 @@ Holder().Read()
         Assert.Equal("nested", result.Value);
     }
 
+    [Fact]
+    public void ExplicitAliasToNestedClrType_WinsOutsideUnrelatedNestedHomonym()
+    {
+        var source = @"
+package Demo
+import Folder = GSharp.Core.Tests.CodeAnalysis.Binding.Issue3466ImportedOuter.Folder
+
+class Holder {
+    class Folder {
+        prop Value int32 { get; set; }
+
+        shared {
+            prop Code int32 { get; set; }
+        }
+    }
+
+    shared {
+        func ReadNested(value Folder) int32 {
+            let made = Folder()
+            let literal = Folder{Value: 3}
+            Folder.Code = 4
+            return value.Value + made.Value + literal.Value + Folder.Code
+        }
+    }
+}
+
+class Consumer {
+    var Folder string = ""shadow""
+
+    func ReadColorColor() int32 {
+        return Folder.Code
+    }
+}
+
+func ReadImported(value Folder) int32 {
+    let made = Folder()
+    let literal = Folder{Value: 7}
+    Folder.Code = 5
+    Folder.Code += 1
+    return value.Value + made.Value + literal.Value + Folder.Code + Folder.Child.Code
+}
+
+let nested = Holder.Folder{Value: 1}
+let imported = Folder{Value: 2}
+Holder.ReadNested(nested) * 1000 + ReadImported(imported) + Consumer().ReadColorColor()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(8131, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitAliasToSpecialFolder_WinsOutsideUnrelatedNestedEnum()
+    {
+        var source = @"
+package Demo
+import Folder = System.Environment.SpecialFolder
+
+class Holder {
+    enum Folder {
+        Local
+    }
+
+    shared {
+        func ReadNested() bool {
+            return Folder.Local == Folder.Local
+        }
+    }
+}
+
+func ReadImported(value Folder) bool {
+    return value == Folder.Desktop
+}
+
+Holder.ReadNested() && ReadImported(Folder.Desktop)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitAliasToNestedSourceType_WinsOutsideUnrelatedNestedHomonym()
+    {
+        var library = @"
+package Library
+
+class Outer {
+    class Target {
+        prop Value int32 { get; set; }
+
+        shared {
+            prop Code int32 { get; set; }
+        }
+
+        class Child {
+            shared {
+                const Code int32 = 100
+            }
+        }
+    }
+}
+";
+        var consumer = @"
+package Demo
+import Folder = Library.Outer.Target
+
+class Box[T] {
+    prop Item T
+}
+
+class Holder {
+    class Folder {
+        prop Value int32 { get; set; }
+
+        shared {
+            prop Code int32 { get; set; }
+        }
+    }
+
+    shared {
+        func ReadNested(value Folder) int32 {
+            let made = Folder()
+            let literal = Folder{Value: 3}
+            Folder.Code = 4
+            return value.Value + made.Value + literal.Value + Folder.Code
+        }
+    }
+}
+
+class Consumer {
+    var Folder string = ""shadow""
+
+    func ReadColorColor() int32 {
+        return Folder.Code
+    }
+}
+
+func ReadImported(value Folder) int32 {
+    let made = Folder()
+    let literal = Folder{Value: 7}
+    let boxed Box[Folder] = Box[Folder]{Item: literal}
+    Folder.Code = 5
+    Folder.Code += 1
+    return value.Value + made.Value + boxed.Item.Value + Folder.Code + Folder.Child.Code
+}
+
+let nested = Holder.Folder{Value: 1}
+let imported = Folder{Value: 2}
+Holder.ReadNested(nested) * 1000 + ReadImported(imported) + Consumer().ReadColorColor()
+";
+        var result = Evaluate(library, consumer);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(8121, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitGenericSourceAlias_WinsOutsideUnrelatedNestedHomonym()
+    {
+        var library = @"
+package Library
+
+class Outer {
+    class Target[T] {
+        prop Value T
+    }
+}
+";
+        var consumer = @"
+package Demo
+import Folder = Library.Outer.Target
+
+class Holder {
+    class Folder[T] {
+        prop Value int32
+    }
+
+    shared {
+        func ReadNested(value Folder[int32]) int32 {
+            let literal = Folder[int32]{Value: 3}
+            return value.Value + literal.Value
+        }
+    }
+}
+
+func ReadImported(value Folder[int32]) int32 {
+    let literal = Folder[int32]{Value: 7}
+    return value.Value + literal.Value
+}
+
+let nested = Holder.Folder[int32]{Value: 2}
+let imported = Folder[int32]{Value: 1}
+Holder.ReadNested(nested) * 100 + ReadImported(imported)
+";
+        var result = Evaluate(library, consumer);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(508, result.Value);
+    }
+
+    [Fact]
+    public void ExplicitGenericClrAlias_WinsOutsideUnrelatedNestedHomonym()
+    {
+        var source = @"
+package Demo
+import Folder = System.Collections.Generic.List
+
+class Holder {
+    class Folder[T] {
+        prop Value int32 { get; set; }
+    }
+
+    shared {
+        func ReadNested(value Folder[int32]) int32 {
+            let made = Folder[int32]()
+            let literal = Folder[int32]{Value: 3}
+            return value.Value + made.Value + literal.Value
+        }
+    }
+}
+
+func ReadImported(value Folder[int32]) int32 {
+    let made = Folder[int32]()
+    made.Add(7)
+    return value.Count + made[0]
+}
+
+let nested = Holder.Folder[int32]{Value: 2}
+let imported = Folder[int32]()
+imported.Add(1)
+Holder.ReadNested(nested) * 100 + ReadImported(imported)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(508, result.Value);
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
@@ -871,6 +1107,11 @@ class Holder {
     {
         return EmittedOracle.Evaluate(source);
     }
+
+    private static EmittedOracleResult Evaluate(params string[] sources)
+    {
+        return EmittedOracle.Evaluate(sources);
+    }
 }
 
 public sealed class Issue3466ImportedService
@@ -917,5 +1158,25 @@ public sealed class Issue3466ImportedInitializer
     {
         get => this.value + 100;
         set => this.value = value;
+    }
+}
+
+public static class Issue3466ImportedOuter
+{
+    public sealed class Folder
+    {
+        public Folder()
+        {
+            this.Value = 10;
+        }
+
+        public static int Code { get; set; }
+
+        public int Value { get; set; }
+
+        public sealed class Child
+        {
+            public static int Code => 100;
+        }
     }
 }

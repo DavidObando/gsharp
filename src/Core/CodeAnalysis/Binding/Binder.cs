@@ -4711,8 +4711,13 @@ public sealed class Binder
             return !ambiguousAcrossImportedPackages;
         }
 
-        return !importedType.IsNested
-            && binderCtx.ImportedTypeOverridesSourceType(sourceType, arity, function);
+        return binderCtx.ImportedTypeOverridesSourceType(
+            scope,
+            name,
+            sourceType,
+            arity,
+            function,
+            importedType);
     }
 
     /// <summary>
@@ -7106,27 +7111,31 @@ public sealed class Binder
                 out ambiguousAcrossImportedPackages))
         {
             // Issue #3466: nested source types may retain a bare lookup key so
-            // their containing type can use the short name. A same-named
-            // top-level imported type is the visible meaning outside that
-            // containing lexical scope, but the nested type keeps its existing
-            // short-name meaning inside its container.
-            if (binderCtx.ImportedTypeOverridesSourceType(aliased, preferredArity, function)
-                && scope.TryLookupImportedClassByArity(
+            // their containing type can use the short name. Outside that
+            // lexical scope, an explicit alias (including one targeting a
+            // nested CLR type) or a same-named top-level import wins.
+            if (scope.TryLookupImportedClassByArity(
                     name,
                     preferredArity,
                     declaration: null,
-                    out var importedTopLevel)
-                && !importedTopLevel.ClassType.IsNested)
+                    out var importedType)
+                && binderCtx.ImportedTypeOverridesSourceType(
+                    scope,
+                    name,
+                    aliased,
+                    preferredArity,
+                    function,
+                    importedType.ClassType))
             {
                 if (ImportedTypeSymbol.TryCreateSemanticAggregate(
-                    importedTopLevel.ClassType,
+                    importedType.ClassType,
                     scope.References,
                     out var importedAggregate))
                 {
                     return importedAggregate;
                 }
 
-                return TypeSymbol.FromClrType(importedTopLevel.ClassType);
+                return TypeSymbol.FromClrType(importedType.ClassType);
             }
 
             return aliased;
