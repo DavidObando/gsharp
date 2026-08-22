@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -294,6 +295,14 @@ internal sealed class BinderContext
     public Dictionary<string, TypeParameterSymbol>? CurrentTypeParameters { get; set; }
 
     /// <summary>
+    /// Gets or sets the user type whose declaration body is currently being
+    /// bound. Member bodies normally carry this through their
+    /// <see cref="FunctionSymbol"/>, while member signatures need this ambient
+    /// context before their function symbol exists.
+    /// </summary>
+    public TypeSymbol? CurrentContainingType { get; set; }
+
+    /// <summary>
     /// Gets or sets the cached list of imported static <c>[Extension]</c>
     /// classes for instance-syntax extension-method dispatch (issue #294).
     /// Recomputed when <see cref="CachedImportedExtensionImportCount"/> falls
@@ -309,6 +318,184 @@ internal sealed class BinderContext
     public int CachedImportedExtensionImportCount { get; set; } = -1;
 
     public SyntaxTree? CachedImportedExtensionSyntaxTree { get; set; }
+
+    /// <summary>
+    /// Resolves a source type at the current binding site. Lexically visible
+    /// nested types on the containing type or an accessible base type are
+    /// considered before the compilation-wide simple-name table.
+    /// </summary>
+    /// <param name="scope">The current bound scope.</param>
+    /// <param name="name">The requested simple type name.</param>
+    /// <param name="preferredArity">The exact requested arity, or -1 when unspecified.</param>
+    /// <param name="currentFunction">The function currently being bound, if any.</param>
+    /// <param name="type">The resolved source type.</param>
+    /// <param name="ambiguousAcrossImportedPackages">Whether global source lookup was ambiguous across imported packages.</param>
+    /// <returns>Whether a source type was found.</returns>
+    public bool TryLookupSourceType(
+        BoundScope scope,
+        string name,
+        int preferredArity,
+        FunctionSymbol? currentFunction,
+        [NotNullWhen(true)] out TypeSymbol? type,
+        out bool ambiguousAcrossImportedPackages)
+    {
+        var currentContainingType = CurrentContainingType
+            ?? currentFunction?.ReceiverType
+            ?? currentFunction?.StaticOwnerType
+            ?? currentFunction?.LexicalEnclosingType;
+        if (currentContainingType != null
+            && scope.TryLookupLexicalNestedTypeAlias(
+                currentContainingType,
+                name,
+                preferredArity,
+                out type))
+        {
+            ambiguousAcrossImportedPackages = false;
+            return true;
+        }
+
+        bool foundSource = scope.TryLookupTypeAlias(
+            name,
+            preferredArity,
+            out type,
+            out ambiguousAcrossImportedPackages);
+        if (foundSource
+            && type is { } sourceType
+            && ImportedTypeOverridesSourceType(
+                scope,
+                name,
+                sourceType,
+                preferredArity,
+                currentFunction,
+                importedType: null)
+            && scope.TryResolveExplicitSourceTypeAlias(
+                name,
+                preferredArity,
+                out var aliasedSourceType))
+        {
+            type = aliasedSourceType;
+            ambiguousAcrossImportedPackages = false;
+            return true;
+        }
+
+        if (foundSource || ambiguousAcrossImportedPackages)
+        {
+            return foundSource;
+        }
+
+        return scope.TryResolveExplicitSourceTypeAlias(
+            name,
+            preferredArity,
+            out type);
+    }
+
+    /// <summary>
+    /// Returns whether an imported type should override a same-named source
+    /// type at the current binding site.
+    /// </summary>
+    /// <param name="scope">The current bound scope.</param>
+    /// <param name="importedName">The imported name used at the binding site.</param>
+    /// <param name="sourceType">The source type found by simple-name lookup.</param>
+    /// <param name="requestedArity">The exact requested arity, or -1 when no arity was specified.</param>
+    /// <param name="currentFunction">The function currently being bound, if any.</param>
+    /// <param name="importedType">The resolved CLR import target, if any.</param>
+    /// <returns>
+    /// <see langword="true"/> when an explicit alias exists, or the resolved
+    /// CLR target is top-level, and the source fallback has the wrong requested
+    /// arity or is nested outside its lexical/accessibility scope.
+    /// </returns>
+    public bool ImportedTypeOverridesSourceType(
+        BoundScope scope,
+        string importedName,
+        TypeSymbol sourceType,
+        int requestedArity,
+        FunctionSymbol? currentFunction,
+        Type? importedType)
+    {
+        static TypeSymbol? ContainingType(TypeSymbol? type) => type switch
+        {
+            StructSymbol s => s.ContainingType,
+            EnumSymbol e => e.ContainingType,
+            InterfaceSymbol i => i.ContainingType,
+            DelegateTypeSymbol d => d.ContainingType,
+            _ => null,
+        };
+        static TypeSymbol Definition(TypeSymbol type) => type switch
+        {
+            StructSymbol s => s.Definition,
+            EnumSymbol e => e.Definition,
+            InterfaceSymbol i => i.Definition,
+            DelegateTypeSymbol d => d.Definition ?? d,
+            _ => type,
+        };
+        static Accessibility TypeAccessibility(TypeSymbol type) => type switch
+        {
+            StructSymbol s => s.Accessibility,
+            EnumSymbol e => e.Accessibility,
+            InterfaceSymbol i => i.Accessibility,
+            DelegateTypeSymbol d => d.Accessibility,
+            _ => Accessibility.Private,
+        };
+        static int Arity(TypeSymbol type) => type switch
+        {
+            StructSymbol s when s.IsGenericDefinition => s.TypeParameters.Length,
+            InterfaceSymbol i when i.IsGenericDefinition => i.TypeParameters.Length,
+            DelegateTypeSymbol d when d.IsGenericDefinition => d.TypeParameters.Length,
+            _ => 0,
+        };
+
+        bool explicitAlias = scope.TryLookupImport(importedName, out var import)
+            && import.IsAlias;
+        if (!explicitAlias && importedType is not { IsNested: false })
+        {
+            return false;
+        }
+
+        if (requestedArity >= 0 && Arity(sourceType) != requestedArity)
+        {
+            return true;
+        }
+
+        var sourceContainer = ContainingType(sourceType);
+        if (sourceContainer == null)
+        {
+            return false;
+        }
+
+        var currentContainer = CurrentContainingType
+            ?? currentFunction?.ReceiverType
+            ?? currentFunction?.StaticOwnerType
+            ?? currentFunction?.LexicalEnclosingType;
+        for (var current = currentContainer; current != null; current = ContainingType(current))
+        {
+            if (ReferenceEquals(Definition(current), Definition(sourceContainer)))
+            {
+                return false;
+            }
+
+            if (current is not StructSymbol currentStruct
+                || sourceContainer is not StructSymbol sourceStruct)
+            {
+                continue;
+            }
+
+            for (StructSymbol? baseType = currentStruct.BaseClass;
+                baseType != null;
+                baseType = baseType.BaseClass)
+            {
+                if (ReferenceEquals(Definition(baseType), Definition(sourceStruct))
+                    && AccessibilityChecker.IsAccessibleFromType(
+                        TypeAccessibility(sourceType),
+                        sourceStruct,
+                        currentStruct))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Issue #1201: resolves the compilation's non-alias type imports

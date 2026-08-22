@@ -261,6 +261,205 @@ namespace Demo
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "-1");
     }
 
+    [Fact]
+    public void MergedCatch_AvoidsOuterSourceName_AndNestedMergedCatchUsesUniqueBinder()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public int Run(string __caught)
+                    {
+                        try
+                        {
+                            throw new InvalidOperationException("outer");
+                        }
+                        catch (InvalidOperationException ex) when (__caught == "outer")
+                        {
+                            try
+                            {
+                                throw new ArgumentException("inner");
+                            }
+                            catch (ArgumentException inner) when (__caught == "outer")
+                            {
+                                return 7;
+                            }
+                            catch (Exception)
+                            {
+                                return 8;
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            return 9;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("catch (__caught_2 Exception)", printed);
+        Assert.Contains("__caught_2 is InvalidOperationException", printed);
+        Assert.Contains("catch (__caught_3 Exception)", printed);
+        Assert.Contains("__caught_3 is ArgumentException", printed);
+        Assert.Contains("__caught == \"outer\"", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"outer\"))", "7");
+    }
+
+    [Fact]
+    public void SynthesizedBareCatchBinder_DoesNotShadowOuterParameterNamedEx()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public int Run(string ex)
+                    {
+                        try
+                        {
+                            throw new InvalidOperationException("boom");
+                        }
+                        catch
+                        {
+                            return ex.Length;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("catch (__caught Exception)", printed);
+        Assert.Contains("return ex.Length", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"outer\"))", "5");
+    }
+
+    [Fact]
+    public void SynthesizedTypedCatchBinder_DoesNotShadowOuterLocalNamedEx()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public int Run()
+                    {
+                        string ex = "typed";
+                        string __caught = "visible";
+                        try
+                        {
+                            throw new InvalidOperationException("boom");
+                        }
+                        catch (Exception)
+                        {
+                            return ex.Length + __caught.Length;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("catch (__caught_2 Exception)", printed);
+        Assert.Contains("return ex.Length", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run())", "12");
+    }
+
+    [Fact]
+    public void NestedSynthesizedCatchBinders_AvoidCatchDeclarations_AndRemainUnique()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    private static bool Bind(object value, out string text)
+                    {
+                        text = (string)value;
+                        return true;
+                    }
+
+                    public int Run(object ex)
+                    {
+                        try
+                        {
+                            throw new InvalidOperationException("outer");
+                        }
+                        catch (Exception) when (Bind(ex, out string __caught))
+                        {
+                            string __caught_2 = (string)ex;
+                            try
+                            {
+                                throw new ArgumentException("inner");
+                            }
+                            catch
+                            {
+                                return __caught_2.Length;
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("catch (__caught_3 Exception)", printed);
+        Assert.Contains("catch (__caught_4 Exception)", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"nested\"))", "6");
+    }
+
+    [Fact]
+    public void MergedCatch_InsideNestedExceptionHomonym_PreservesSystemExceptionIdentity()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public sealed class Exception
+                    {
+                    }
+
+                    public int Run(bool retryable)
+                    {
+                        try
+                        {
+                            throw new ArgumentException("boom");
+                        }
+                        catch (System.ArgumentException) when (retryable)
+                        {
+                            return 1;
+                        }
+                        catch (System.Exception)
+                        {
+                            return 2;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("import SystemException_2 = System.Exception", printed);
+        Assert.Contains("catch (__caught SystemException_2)", printed);
+        Assert.DoesNotContain("catch (__caught Exception)", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "2");
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

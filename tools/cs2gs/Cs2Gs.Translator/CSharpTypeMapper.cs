@@ -14,6 +14,7 @@ using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Cs2Gs.Translator;
 
@@ -41,6 +42,13 @@ public sealed class CSharpTypeMapper
     /// the accompanying <see cref="TranslationSeverity.Unsupported"/> diagnostic.
     /// </summary>
     public const string UnsupportedPlaceholderType = "object";
+
+    /// <summary>
+    /// Public top-level type names exposed by every namespace analyzer-mode
+    /// rewrites may synthesize, cached from the G# core assembly.
+    /// </summary>
+    private static readonly System.Lazy<IReadOnlyDictionary<string, List<string>>> AnalyzerTargetTypeNames =
+        new(BuildAnalyzerTargetTypeNames);
 
     /// <summary>
     /// Issue #2211: every namespace this mapper has shortened a type reference
@@ -103,12 +111,27 @@ public sealed class CSharpTypeMapper
     private readonly Dictionary<string, HashSet<string>> reservedTypeAliases =
         new(System.StringComparer.Ordinal);
 
+    private readonly HashSet<string> reservedImportedTypeNames =
+        new(System.StringComparer.Ordinal);
+
+    private readonly HashSet<string> reservedTypeParameterNames =
+        new(System.StringComparer.Ordinal);
+
+    private readonly HashSet<string> reservedInvokedLocalNames =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
-    /// Issue #1174: cached per-compilation census of source-declared type simple
-    /// names (built lazily on first use), used to decide whether a source nested
-    /// type's simple name is ambiguous and must be emitted in qualified form.
+    /// Issue #1174: cached per-compilation census of source-declared top-level
+    /// type simple names (built lazily on first use), used to decide whether a
+    /// bare type name is ambiguous and must be emitted in qualified form.
+    /// Nested declarations are excluded because they are not imported by their
+    /// simple names.
     /// </summary>
-    private Dictionary<string, int> sourceSimpleNameCounts;
+    private Dictionary<string, int> sourceTopLevelSimpleNameCounts;
+
+    private Dictionary<string, int> sourceNestedSimpleNameCounts;
+
+    private HashSet<string> sourceDeclaredTypeNames;
 
     /// <summary>
     /// Issue #2222: the current file's imported namespace names (`using`
@@ -176,7 +199,8 @@ public sealed class CSharpTypeMapper
     public IReadOnlyCollection<string> ShortenedNamespaces => this.shortenedNamespaces;
 
     /// <summary>
-    /// Gets metadata type aliases synthesized to disambiguate source homonyms.
+    /// Gets type aliases synthesized to preserve unambiguous source or CLR type
+    /// identity.
     /// </summary>
     public IReadOnlyDictionary<string, string> SynthesizedTypeAliases =>
         this.synthesizedTypeAliases;
@@ -250,28 +274,8 @@ public sealed class CSharpTypeMapper
     /// <param name="method">The resolved extension method symbol.</param>
     public void TrackExtensionMethodNamespace(IMethodSymbol method)
     {
-        if (method is null)
-        {
-            return;
-        }
-
-        // Reduced instance-form calls (key.All(predicate)) resolve to a
-        // reduced symbol; unwrap it back to the original static-form method
-        // so ContainingNamespace reflects the extension's declaring type.
-        IMethodSymbol original = method.ReducedFrom ?? method;
-
-        // C# 14 extension blocks compile their members onto a synthetic
-        // marker type nested inside the containing type; unwrap to the
-        // enclosing (real, declared) type so the namespace we record is the
-        // one the user would actually need to import.
-        INamedTypeSymbol containingType = original.ContainingType;
-        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
-        {
-            containingType = declaringType;
-        }
-
-        INamespaceSymbol ns = containingType?.ContainingNamespace;
-        if (ns is null || ns.IsGlobalNamespace)
+        INamespaceSymbol ns = GetExtensionMethodNamespace(method);
+        if (ns is null)
         {
             return;
         }
@@ -482,25 +486,333 @@ public sealed class CSharpTypeMapper
         this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
 
     /// <summary>
-    /// Reserves aliases already present in the final translated import set.
+    /// Reserves aliases and bare type names already present in the final
+    /// translated import set.
     /// </summary>
     /// <param name="imports">Imports collected from the active and merged source trees.</param>
-    internal void ReserveImportAliases(IEnumerable<ImportDirective> imports)
+    /// <param name="contributingTrees">Source trees whose declarations contribute to the emitted document.</param>
+    /// <param name="compilation">The source compilation.</param>
+    internal void ReserveImportNames(
+        IEnumerable<ImportDirective> imports,
+        IEnumerable<SyntaxTree> contributingTrees,
+        Compilation compilation)
     {
+        EmittedNameAllocator names = this.nameAllocator
+            ?? EmittedNameAllocator.For(compilation);
+        var importedNamespaces = new HashSet<INamespaceSymbol>(
+            SymbolEqualityComparer.Default);
+        var mappedMethods = new HashSet<IMethodSymbol>(
+            SymbolEqualityComparer.Default);
+        var mappedTypes = new HashSet<ITypeSymbol>(
+            SymbolEqualityComparer.Default);
+        void AddImportedNamespace(string emittedNamespace)
+        {
+            INamespaceSymbol importedNamespace = ResolveEmittedNamespace(
+                compilation,
+                emittedNamespace,
+                names);
+            if (importedNamespace != null)
+            {
+                importedNamespaces.Add(importedNamespace);
+            }
+        }
+
+        void AddSymbolNamespace(ISymbol symbol)
+        {
+            if (symbol is INamedTypeSymbol type)
+            {
+                while (type.ContainingType != null)
+                {
+                    type = type.ContainingType;
+                }
+
+                if (type.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                {
+                    importedNamespaces.Add(ns);
+                }
+            }
+            else if (symbol is IMethodSymbol method
+                && GetExtensionMethodNamespace(method) is { } extensionNamespace)
+            {
+                importedNamespaces.Add(extensionNamespace);
+            }
+        }
+
+        void AddMappedMethodSignatureNamespaces(IMethodSymbol method)
+        {
+            if (method == null || !mappedMethods.Add(method))
+            {
+                return;
+            }
+
+            if (!method.ReturnsVoid)
+            {
+                AddMappedTypeNamespaces(method.ReturnType);
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters)
+            {
+                AddMappedTypeNamespaces(parameter.Type);
+            }
+
+            foreach (ITypeSymbol typeArgument in method.TypeArguments)
+            {
+                AddMappedTypeNamespaces(typeArgument);
+            }
+        }
+
+        void AddMappedTypeNamespaces(ITypeSymbol type)
+        {
+            if (type == null
+                || type.TypeKind is TypeKind.Dynamic or TypeKind.Error
+                || !mappedTypes.Add(type))
+            {
+                return;
+            }
+
+            switch (type)
+            {
+                case IArrayTypeSymbol array:
+                    AddMappedTypeNamespaces(array.ElementType);
+                    return;
+                case IPointerTypeSymbol pointer:
+                    AddMappedTypeNamespaces(pointer.PointedAtType);
+                    return;
+                case IFunctionPointerTypeSymbol functionPointer:
+                    AddMappedMethodSignatureNamespaces(functionPointer.Signature);
+                    return;
+                case ITypeParameterSymbol:
+                    return;
+            }
+
+            if (type is not INamedTypeSymbol named)
+            {
+                return;
+            }
+
+            if (MapPredefinedName(named.SpecialType) != null
+                || IsSystemIndexOrRange(named))
+            {
+                return;
+            }
+
+            if (named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+            {
+                AddMappedTypeNamespaces(named.TypeArguments[0]);
+                return;
+            }
+
+            if (named.IsTupleType)
+            {
+                foreach (IFieldSymbol element in named.TupleElements)
+                {
+                    AddMappedTypeNamespaces(element.Type);
+                }
+
+                return;
+            }
+
+            if (named.IsAnonymousType)
+            {
+                foreach (IPropertySymbol property in named.GetMembers().OfType<IPropertySymbol>())
+                {
+                    AddMappedTypeNamespaces(property.Type);
+                }
+
+                return;
+            }
+
+            if (named.TypeKind == TypeKind.Delegate
+                && named.DelegateInvokeMethod is { } invoke
+                && !IsSourceDeclaredDelegate(named))
+            {
+                AddMappedMethodSignatureNamespaces(invoke);
+                return;
+            }
+
+            foreach (ITypeSymbol typeArgument in named.TypeArguments)
+            {
+                AddMappedTypeNamespaces(typeArgument);
+            }
+
+            if (named.ContainingType != null)
+            {
+                AddMappedTypeNamespaces(named.ContainingType);
+            }
+
+            if (!this.AnalyzerApiMode
+                || !Analyzers.RoslynAnalyzerApiMap.IsRoslynNamespace(
+                    named.ContainingNamespace?.ToDisplayString()))
+            {
+                AddSymbolNamespace(named);
+            }
+        }
+
+        void AddMappedOperationTypeNamespaces(
+            SyntaxNode node,
+            IOperation operation,
+            SemanticModel semanticModel)
+        {
+            AddMappedTypeNamespaces(operation?.Type);
+            if (node is ExpressionSyntax expression)
+            {
+                TypeInfo typeInfo = semanticModel.GetTypeInfo(expression);
+                AddMappedTypeNamespaces(typeInfo.Type);
+                AddMappedTypeNamespaces(typeInfo.ConvertedType);
+            }
+        }
+
         foreach (ImportDirective import in imports)
         {
-            if (import.Alias == null)
+            if (import.Alias != null)
             {
+                if (!this.reservedTypeAliases.TryGetValue(import.Alias, out var targets))
+                {
+                    targets = new HashSet<string>(System.StringComparer.Ordinal);
+                    this.reservedTypeAliases.Add(import.Alias, targets);
+                }
+
+                targets.Add(import.Name);
                 continue;
             }
 
-            if (!this.reservedTypeAliases.TryGetValue(import.Alias, out var targets))
-            {
-                targets = new HashSet<string>(System.StringComparer.Ordinal);
-                this.reservedTypeAliases.Add(import.Alias, targets);
-            }
+            AddImportedNamespace(import.Name);
+        }
 
-            targets.Add(import.Name);
+        // Analyzer rewrites can synthesize imports from member/attribute
+        // shapes that carry no mapped G# type symbol in the C# syntax. Reserve
+        // every possible mapped target namespace up front so alias allocation
+        // cannot depend on which declaration happens to translate first.
+        if (this.AnalyzerApiMode)
+        {
+            foreach (var targetNamespace in AnalyzerTargetTypeNames.Value)
+            {
+                AddImportedNamespace(targetNamespace.Key);
+                this.reservedImportedTypeNames.UnionWith(targetNamespace.Value);
+            }
+        }
+
+        // Qualified references are shortened and synthesize namespace imports
+        // after translation. Calls and selected operation-bound expressions can
+        // also map types absent from syntax. Pre-scan only those emitted shapes
+        // so future bare names reserve alias candidates before first use.
+        foreach (SyntaxTree tree in contributingTrees)
+        {
+            SemanticModel semanticModel = compilation.GetSemanticModel(tree);
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+            {
+                if (node is TypeParameterSyntax typeParameter
+                    && semanticModel.GetDeclaredSymbol(typeParameter) is ITypeParameterSymbol typeParameterSymbol)
+                {
+                    this.reservedTypeParameterNames.Add(names.GetName(typeParameterSymbol));
+                }
+
+                if (node is InvocationExpressionSyntax { Expression: SimpleNameSyntax invokedName })
+                {
+                    ISymbol invokedSymbol = semanticModel.GetSymbolInfo(invokedName).Symbol;
+                    if (invokedSymbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
+                        || invokedSymbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                    {
+                        this.reservedInvokedLocalNames.Add(names.GetName(invokedSymbol));
+                    }
+                }
+
+                if (node is AnonymousFunctionExpressionSyntax anonymousFunction)
+                {
+                    // Inferred lambda and anonymous-method signatures can emit
+                    // target types that have no corresponding type syntax.
+                    IMethodSymbol targetInvoke =
+                        (semanticModel.GetTypeInfo(anonymousFunction).ConvertedType as INamedTypeSymbol)
+                            ?.DelegateInvokeMethod
+                        ?? (semanticModel.GetOperation(anonymousFunction) as IAnonymousFunctionOperation)
+                            ?.Symbol;
+                    AddMappedMethodSignatureNamespaces(targetInvoke);
+                }
+
+                // These lowerings emit operation/type-info types explicitly.
+                // Ordinary expressions remain unreserved to avoid alias churn.
+                bool mapsOperationType = node switch
+                {
+                    AnonymousObjectCreationExpressionSyntax
+                        or ConditionalExpressionSyntax
+                        or CollectionExpressionSyntax
+                        or DefaultExpressionSyntax
+                        or ImplicitArrayCreationExpressionSyntax
+                        or ImplicitObjectCreationExpressionSyntax
+                        or ImplicitStackAllocArrayCreationExpressionSyntax
+                        or SwitchExpressionSyntax
+                        or ThrowExpressionSyntax => true,
+                    LiteralExpressionSyntax literal =>
+                        literal.IsKind(SyntaxKind.DefaultLiteralExpression),
+                    _ => false,
+                };
+                bool mapsSymbolNamespace = node is NameSyntax
+                    or MemberAccessExpressionSyntax
+                    or InvocationExpressionSyntax
+                    or BaseObjectCreationExpressionSyntax;
+                if (!mapsOperationType && !mapsSymbolNamespace)
+                {
+                    continue;
+                }
+
+                IOperation operation = semanticModel.GetOperation(node);
+                if (mapsOperationType)
+                {
+                    AddMappedOperationTypeNamespaces(node, operation, semanticModel);
+                }
+
+                if (!mapsSymbolNamespace)
+                {
+                    continue;
+                }
+
+                SymbolInfo symbolInfo = semanticModel.GetSymbolInfo(node);
+                AddSymbolNamespace(symbolInfo.Symbol);
+                foreach (ISymbol candidate in symbolInfo.CandidateSymbols)
+                {
+                    AddSymbolNamespace(candidate);
+                }
+
+                switch (operation)
+                {
+                    case IInvocationOperation invocation:
+                        AddSymbolNamespace(invocation.TargetMethod);
+                        AddMappedMethodSignatureNamespaces(invocation.TargetMethod);
+                        break;
+                    case IObjectCreationOperation creation:
+                        AddMappedTypeNamespaces(
+                            creation.Constructor?.ContainingType ?? creation.Type);
+                        AddMappedMethodSignatureNamespaces(creation.Constructor);
+                        break;
+                    case IDelegateCreationOperation delegateCreation:
+                        AddMappedTypeNamespaces(delegateCreation.Type);
+                        if (delegateCreation.Target is IMethodReferenceOperation delegateTarget)
+                        {
+                            AddSymbolNamespace(delegateTarget.Method);
+                            AddMappedMethodSignatureNamespaces(delegateTarget.Method);
+                        }
+
+                        break;
+                    case IMethodReferenceOperation methodReference:
+                        AddSymbolNamespace(methodReference.Method);
+                        AddMappedMethodSignatureNamespaces(methodReference.Method);
+                        if (semanticModel.GetTypeInfo(node).ConvertedType
+                            is INamedTypeSymbol { DelegateInvokeMethod: { } targetInvoke })
+                        {
+                            AddMappedMethodSignatureNamespaces(targetInvoke);
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        foreach (INamespaceSymbol importedNamespace in importedNamespaces)
+        {
+            foreach (INamedTypeSymbol type in importedNamespace.GetTypeMembers())
+            {
+                this.reservedImportedTypeNames.Add(names.GetName(type));
+            }
         }
     }
 
@@ -525,41 +837,112 @@ public sealed class CSharpTypeMapper
         }
     }
 
-    internal string GetOrCreateMetadataTypeAlias(
+    internal string GetOrCreateImportedTypeAlias(
         INamedTypeSymbol named,
-        TranslationContext context)
+        TranslationContext context,
+        Location location)
     {
-        string simpleName = this.Names(context).GetName(named);
-        string target = named.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? $"{this.Names(context).GetNamespaceName(ns)}.{simpleName}"
-            : simpleName;
-        foreach (var existing in this.synthesizedTypeAliases)
+        static bool HasVisibleSourceTypeName(
+            string name,
+            TranslationContext context,
+            Location location)
         {
-            if (existing.Value == target)
+            if (location?.SourceTree == null)
             {
-                return existing.Key;
+                return false;
             }
+
+            int position = System.Math.Min(
+                location.SourceSpan.Start,
+                location.SourceTree.GetRoot().FullSpan.End - 1);
+            SemanticModel semanticModel = ReferenceEquals(
+                context.SemanticModel.SyntaxTree,
+                location.SourceTree)
+                    ? context.SemanticModel
+                    : context.Compilation.GetSemanticModel(location.SourceTree);
+            return semanticModel.LookupNamespacesAndTypes(position, name: name)
+                .OfType<INamedTypeSymbol>()
+                .Any(type => type.Locations.Any(candidate => candidate.IsInSource));
         }
 
+        static bool HasVisibleCallableName(
+            string name,
+            TranslationContext context,
+            Location location,
+            EmittedNameAllocator names)
+        {
+            if (location?.SourceTree == null)
+            {
+                return false;
+            }
+
+            int position = System.Math.Min(
+                location.SourceSpan.Start,
+                location.SourceTree.GetRoot().FullSpan.End - 1);
+            SemanticModel semanticModel = ReferenceEquals(
+                context.SemanticModel.SyntaxTree,
+                location.SourceTree)
+                    ? context.SemanticModel
+                    : context.Compilation.GetSemanticModel(location.SourceTree);
+            return semanticModel.LookupSymbols(position)
+                .OfType<IMethodSymbol>()
+                .Any(method =>
+                    method.MethodKind is MethodKind.Ordinary or MethodKind.ReducedExtension
+                    && names.GetName(method) == name);
+        }
+
+        EmittedNameAllocator names = this.Names(context);
+        string simpleName = this.Names(context).GetName(named);
+        string namespaceName = named.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? this.Names(context).GetNamespaceName(ns)
+            : null;
+        string target = namespaceName != null
+            ? $"{namespaceName}.{simpleName}"
+            : simpleName;
         foreach (var reservedAlias in this.reservedTypeAliases)
         {
             if (reservedAlias.Value.Count == 1
-                && reservedAlias.Value.Contains(target))
+                && reservedAlias.Value.Contains(target)
+                && !this.reservedTypeParameterNames.Contains(reservedAlias.Key)
+                && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key)
+                && !HasVisibleCallableName(reservedAlias.Key, context, location, names)
+                && !HasVisibleSourceTypeName(reservedAlias.Key, context, location))
             {
                 return reservedAlias.Key;
             }
         }
 
-        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
+        foreach (var existing in this.synthesizedTypeAliases)
+        {
+            if (existing.Value == target
+                && !this.reservedTypeParameterNames.Contains(existing.Key)
+                && !this.reservedInvokedLocalNames.Contains(existing.Key)
+                && !HasVisibleCallableName(existing.Key, context, location, names)
+                && !HasVisibleSourceTypeName(existing.Key, context, location))
+            {
+                return existing.Key;
+            }
+        }
+
+        this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(
+            context.Compilation,
+            this.Names(context));
         var reserved = new HashSet<string>(
             this.synthesizedTypeAliases.Keys,
             System.StringComparer.Ordinal);
         reserved.UnionWith(this.reservedTypeAliases.Keys);
-        reserved.UnionWith(this.sourceSimpleNameCounts.Keys);
+        reserved.UnionWith(this.reservedImportedTypeNames);
+        reserved.UnionWith(this.reservedTypeParameterNames);
+        reserved.UnionWith(this.reservedInvokedLocalNames);
+        reserved.UnionWith(this.sourceDeclaredTypeNames);
 
-        string baseAlias = $"__cs2gs_{target.Replace('.', '_')}";
+        string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
+        string baseAlias = $"{namespaceQualifier}{simpleName}";
         string alias = baseAlias;
-        for (var suffix = 2; reserved.Contains(alias); suffix++)
+        for (var suffix = 2;
+            reserved.Contains(alias)
+                || HasVisibleCallableName(alias, context, location, names);
+            suffix++)
         {
             alias = $"{baseAlias}_{suffix}";
         }
@@ -669,6 +1052,71 @@ public sealed class CSharpTypeMapper
                 this.DelegateTypeName(type, context, location),
                 type.TypeArguments.Select(argument => this.Map(argument, context, location)).ToList())
             : new NamedTypeReference(this.DelegateTypeName(type, context, location));
+    }
+
+    private static INamespaceSymbol GetExtensionMethodNamespace(IMethodSymbol method)
+    {
+        if (method is null)
+        {
+            return null;
+        }
+
+        // Reduced instance-form calls (key.All(predicate)) resolve to a
+        // reduced symbol; unwrap it back to the original static-form method
+        // so ContainingNamespace reflects the extension's declaring type.
+        IMethodSymbol original = method.ReducedFrom ?? method;
+        if (!original.IsExtensionMethod)
+        {
+            return null;
+        }
+
+        // C# 14 extension blocks compile their members onto a synthetic
+        // marker type nested inside the containing type; unwrap to the
+        // enclosing (real, declared) type so the namespace we record is the
+        // one the user would actually need to import.
+        INamedTypeSymbol containingType = original.ContainingType;
+        if (containingType is { IsExtension: true } && containingType.ContainingType is { } declaringType)
+        {
+            containingType = declaringType;
+        }
+
+        return containingType?.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? ns
+            : null;
+    }
+
+    private static IReadOnlyDictionary<string, List<string>> BuildAnalyzerTargetTypeNames()
+    {
+        var targetNamespaces = new HashSet<string>(
+            Analyzers.RoslynAnalyzerApiMap.EnumerateTargetNamespaces(),
+            System.StringComparer.Ordinal);
+        var result = targetNamespaces.ToDictionary(
+            targetNamespace => targetNamespace,
+            _ => new List<string>(),
+            System.StringComparer.Ordinal);
+
+        foreach (System.Type type in typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.GetTypes())
+        {
+            if (type.IsNested
+                || !type.IsPublic
+                || type.Namespace is not { } typeNamespace
+                || !result.TryGetValue(typeNamespace, out var names))
+            {
+                continue;
+            }
+
+            string metadataName = type.Name;
+            int arityMarker = metadataName.IndexOf('`');
+            string simpleName = arityMarker >= 0
+                ? metadataName.Substring(0, arityMarker)
+                : metadataName;
+            names.Add(
+                GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
+                    simpleName,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Type));
+        }
+
+        return result;
     }
 
     private string QualifiedAliasTarget(INamedTypeSymbol type)
@@ -1075,7 +1523,12 @@ public sealed class CSharpTypeMapper
         {
             this.TrackShortenedNamespace(named);
             string simpleName = this.Names(context).GetName(named);
-            if (IsDeclaredInContainingNamespace(named, context, location))
+            bool visibleNestedHomonym = this.HasVisibleSourceNestedHomonym(
+                named,
+                context,
+                location);
+            if (IsDeclaredInContainingNamespace(named, context, location)
+                && !visibleNestedHomonym)
             {
                 return simpleName;
             }
@@ -1087,37 +1540,31 @@ public sealed class CSharpTypeMapper
             // distinct type of the same name sitting in one of the file's
             // actually-imported namespaces — including a referenced assembly,
             // i.e. a translated sibling project surfaced as a metadata
-            // reference). Qualify with the namespace in that case so gsc binds
-            // the reference to the right type instead of whichever homonym
-            // happens to resolve first.
+            // reference). Qualify source types with their namespace and alias
+            // metadata types in that case so gsc binds the reference to the
+            // right type instead of whichever homonym happens to resolve first.
             //
             // Constraint mapping also enables this scan for metadata/metadata
             // collisions (issue #2509). Ordinary positions retain the
             // source-authored gate so common framework types are not qualified
             // spuriously.
-            bool scanImportedNamespaces = named.Locations.Any(l => l.IsInSource)
+            bool isSourceType = named.Locations.Any(l => l.IsInSource);
+            bool scanImportedNamespaces = isSourceType
                 || this.qualifyMetadataImportCollisions;
             bool ambiguous = this.HasSourceHomonym(named, context)
+                || visibleNestedHomonym
                 || (scanImportedNamespaces && this.HasImportedNamespaceHomonym(named, context));
             if (!ambiguous)
             {
                 return simpleName;
             }
 
-            if (!named.Locations.Any(candidate => candidate.IsInSource)
-                && named.Name == "List"
-                && named.ContainingNamespace?.ToDisplayString()
-                    == "System.Collections.Generic")
-            {
-                // ponytail: ordinary metadata collision qualification only
-                // needs List<T>; constructor paths request aliases explicitly
-                // when a qualified CLR constructor cannot bind.
-                return this.GetOrCreateMetadataTypeAlias(named, context);
-            }
-
-            return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs
-                ? $"{this.Names(context).GetNamespaceName(containingNs)}.{simpleName}"
-                : simpleName;
+            return this.AmbiguousTopLevelTypeName(
+                named,
+                simpleName,
+                isSourceType,
+                context,
+                location);
         }
 
         // A source nested type may use its simple name only from inside its
@@ -1125,6 +1572,8 @@ public sealed class CSharpTypeMapper
         // even when no homonym exists.
         if (named.Locations.Any(l => l.IsInSource)
             && !this.HasSourceHomonym(named, context)
+            && !this.HasSourceNestedHomonym(named, context)
+            && !this.HasImportedNamespaceHomonym(named, context)
             && IsWithinContainingType(named, context, location))
         {
             return this.Names(context).GetName(named);
@@ -1143,11 +1592,43 @@ public sealed class CSharpTypeMapper
         bool scanOutermostImports = outermost.Locations.Any(l => l.IsInSource)
             || this.qualifyMetadataImportCollisions;
         bool outermostAmbiguous = this.HasSourceHomonym(outermost, context)
+            || this.HasVisibleSourceNestedHomonym(outermost, context, location)
             || (scanOutermostImports && this.HasImportedNamespaceHomonym(outermost, context));
-        return outermostAmbiguous
-            && outermost.ContainingNamespace is { IsGlobalNamespace: false } outerNamespace
-                ? $"{this.Names(context).GetNamespaceName(outerNamespace)}.{nestedName}"
-                : nestedName;
+        if (!outermostAmbiguous)
+        {
+            return nestedName;
+        }
+
+        parts[0] = this.AmbiguousTopLevelTypeName(
+            outermost,
+            parts[0],
+            outermost.Locations.Any(candidate => candidate.IsInSource),
+            context,
+            location);
+        return string.Join(".", parts);
+    }
+
+    private string AmbiguousTopLevelTypeName(
+        INamedTypeSymbol named,
+        string simpleName,
+        bool isSourceType,
+        TranslationContext context,
+        Location location)
+    {
+        if ((!isSourceType && SupportsMetadataTypeAlias(named))
+            || (isSourceType
+                && named.ContainingNamespace is { IsGlobalNamespace: true }))
+        {
+            // ponytail: metadata aliases currently bind reliably for System.*;
+            // source aliases also bind within the current compilation. Keep
+            // other external metadata namespace-qualified until arbitrary CLR
+            // alias imports bind.
+            return this.GetOrCreateImportedTypeAlias(named, context, location);
+        }
+
+        return named.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace
+            ? $"{this.Names(context).GetNamespaceName(containingNamespace)}.{simpleName}"
+            : simpleName;
     }
 
     private static bool IsDeclaredInContainingNamespace(
@@ -1167,6 +1648,13 @@ public sealed class CSharpTypeMapper
             .GetEnclosingSymbol(position)?
             .ContainingNamespace;
         return SymbolEqualityComparer.Default.Equals(currentNamespace, containingNamespace);
+    }
+
+    private static bool SupportsMetadataTypeAlias(INamedTypeSymbol named)
+    {
+        string namespaceName = named.ContainingNamespace?.ToDisplayString();
+        return namespaceName == "System"
+            || namespaceName?.StartsWith("System.", System.StringComparison.Ordinal) == true;
     }
 
     private static bool IsWithinContainingType(
@@ -1211,25 +1699,82 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
-    /// Issue #1174: whether another source-declared type shares the simple name of
-    /// <paramref name="named"/>, making the bare name ambiguous in the flat G#
-    /// package scope. The per-compilation simple-name census is built once and
-    /// cached on this mapper instance.
+    /// Issue #1174: whether a source-declared top-level type shares the simple
+    /// name of <paramref name="named"/>, making the bare name ambiguous in the
+    /// flat G# package scope. Nested declarations are excluded from the census:
+    /// they are reachable through their containing type, not through an import.
+    /// The per-compilation simple-name census is built once and cached on this
+    /// mapper instance.
     /// </summary>
     private bool HasSourceHomonym(INamedTypeSymbol named, TranslationContext context)
     {
-        this.sourceSimpleNameCounts ??= BuildSourceSimpleNameCounts(context.Compilation);
-        if (!this.sourceSimpleNameCounts.TryGetValue(named.Name, out var count))
+        this.sourceTopLevelSimpleNameCounts ??=
+            BuildSourceTopLevelSimpleNameCounts(context.Compilation);
+        if (!this.sourceTopLevelSimpleNameCounts.TryGetValue(named.Name, out var count))
         {
             return false;
         }
 
-        // Issue #2307: for a source symbol, one census entry is the symbol
-        // itself, so ambiguity starts at two. A metadata symbol is not in the
-        // source census at all, so even one same-named source declaration is a
-        // distinct homonym and the metadata reference must stay qualified.
-        int selfCount = named.Locations.Any(l => l.IsInSource) ? 1 : 0;
+        // Issue #2307: for a source top-level symbol, one census entry is the
+        // symbol itself, so ambiguity starts at two. Metadata and nested source
+        // symbols are not census entries, so one same-named top-level source
+        // declaration is already a distinct homonym.
+        int selfCount = named.ContainingType == null
+            && named.Locations.Any(l => l.IsInSource)
+                ? 1
+                : 0;
         return count > selfCount;
+    }
+
+    private bool HasSourceNestedHomonym(INamedTypeSymbol named, TranslationContext context)
+    {
+        this.sourceNestedSimpleNameCounts ??=
+            BuildSourceNestedSimpleNameCounts(context.Compilation);
+        if (!this.sourceNestedSimpleNameCounts.TryGetValue(named.Name, out int count))
+        {
+            return false;
+        }
+
+        int selfCount = named.ContainingType != null
+            && named.Locations.Any(location => location.IsInSource)
+                ? 1
+                : 0;
+        return count > selfCount;
+    }
+
+    private bool HasVisibleSourceNestedHomonym(
+        INamedTypeSymbol named,
+        TranslationContext context,
+        Location location)
+    {
+        if (location?.SourceTree == null)
+        {
+            return false;
+        }
+
+        int position = System.Math.Min(
+            location.SourceSpan.Start,
+            location.SourceTree.GetRoot().FullSpan.End - 1);
+        SemanticModel semanticModel = ReferenceEquals(
+            context.SemanticModel.SyntaxTree,
+            location.SourceTree)
+                ? context.SemanticModel
+                : context.Compilation.GetSemanticModel(location.SourceTree);
+        foreach (ISymbol symbol in semanticModel.LookupNamespacesAndTypes(position, name: named.Name))
+        {
+            if (symbol is INamedTypeSymbol candidate
+                && candidate.Arity == named.Arity
+                && candidate.ContainingType != null
+                && candidate.Locations.Any(candidateLocation => candidateLocation.IsInSource)
+                && !SymbolEqualityComparer.Default.Equals(
+                    candidate.OriginalDefinition,
+                    named.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1388,12 +1933,32 @@ public sealed class CSharpTypeMapper
         return current;
     }
 
-    private static Dictionary<string, int> BuildSourceSimpleNameCounts(Compilation compilation)
+    private static INamespaceSymbol ResolveEmittedNamespace(
+        Compilation compilation,
+        string dottedName,
+        EmittedNameAllocator names)
+    {
+        INamespaceSymbol current = compilation.GlobalNamespace;
+        foreach (string part in StripGlobalPrefix(dottedName).Split('.'))
+        {
+            current = current.GetNamespaceMembers()
+                .FirstOrDefault(candidate => names.GetName(candidate) == part);
+            if (current is null)
+            {
+                return null;
+            }
+        }
+
+        return current;
+    }
+
+    private static Dictionary<string, int> BuildSourceTopLevelSimpleNameCounts(Compilation compilation)
     {
         var counts = new Dictionary<string, int>();
         foreach (var type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
         {
-            if (!type.Locations.Any(l => l.IsInSource))
+            if (type.ContainingType != null
+                || !type.Locations.Any(l => l.IsInSource))
             {
                 continue;
             }
@@ -1404,6 +1969,32 @@ public sealed class CSharpTypeMapper
 
         return counts;
     }
+
+    private static Dictionary<string, int> BuildSourceNestedSimpleNameCounts(Compilation compilation)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (INamedTypeSymbol type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
+        {
+            if (type.ContainingType == null
+                || !type.Locations.Any(location => location.IsInSource))
+            {
+                continue;
+            }
+
+            counts.TryGetValue(type.Name, out int existing);
+            counts[type.Name] = existing + 1;
+        }
+
+        return counts;
+    }
+
+    private static HashSet<string> BuildSourceDeclaredTypeNames(
+        Compilation compilation,
+        EmittedNameAllocator names) =>
+        EnumerateAllNamedTypes(compilation.GlobalNamespace)
+            .Where(type => type.Locations.Any(location => location.IsInSource))
+            .Select(type => names.GetName(type))
+            .ToHashSet(System.StringComparer.Ordinal);
 
     private static IEnumerable<INamedTypeSymbol> EnumerateAllNamedTypes(INamespaceSymbol ns)
     {

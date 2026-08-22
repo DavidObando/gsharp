@@ -435,6 +435,69 @@ public static class DiagnosticDescriptors
     }
 
     [Fact]
+    public void ReadableAlias_ReservesLateAnalyzerSubstitutionNamespace()
+    {
+        string fixturePath = typeof(System.Text.Location).Assembly.Location;
+        IReadOnlyList<MetadataReference> references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromFile(fixturePath))
+            .ToArray();
+        var (printedByFile, diagnostics) = TranslateAnalyzerProject(
+            references,
+            ("Analyzer.cs", @"
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[Microsoft.CodeAnalysis.Diagnostics.DiagnosticAnalyzer(Microsoft.CodeAnalysis.LanguageNames.CSharp)]
+public sealed class CollisionAnalyzer : Microsoft.CodeAnalysis.Diagnostics.DiagnosticAnalyzer
+{
+    private static readonly Microsoft.CodeAnalysis.DiagnosticDescriptor Rule = new(
+        ""TEST3466"", ""Title"", ""Message"", ""Testing"",
+        Microsoft.CodeAnalysis.DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
+    public override ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor> SupportedDiagnostics =>
+        ImmutableArray.Create(Rule);
+
+    public override void Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext context)
+    {
+    }
+
+    public static System.Text.Location CreateLocation() =>
+        new System.Text.Location();
+
+    private static Microsoft.CodeAnalysis.Location PreserveLocation(
+        Microsoft.CodeAnalysis.Location location) => location;
+}
+
+public sealed class Location
+{
+}
+"));
+
+        string printed = printedByFile["Analyzer.cs"];
+        Assert.Contains(
+            "import TextLocation_2 = System.Text.Location",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextLocation = System.Text.Location",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "import GSharp.Core.CodeAnalysis.Text",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(
+            new[] { fixturePath },
+            printedByFile.Values.ToArray());
+    }
+
+    [Fact]
     public void UnmappedRoslynApi_ReportsLoudGap()
     {
         var (_, diagnostics) = TranslateAnalyzer(@"
@@ -501,8 +564,13 @@ public static class NotAnAnalyzer
 
     private static (IReadOnlyDictionary<string, string> PrintedByFile, IReadOnlyList<TranslationDiagnostic> Diagnostics) TranslateAnalyzerProject(
         params (string FileName, string Source)[] sources)
+        => TranslateAnalyzerProject(null, sources);
+
+    private static (IReadOnlyDictionary<string, string> PrintedByFile, IReadOnlyList<TranslationDiagnostic> Diagnostics) TranslateAnalyzerProject(
+        IReadOnlyList<MetadataReference> references,
+        params (string FileName, string Source)[] sources)
     {
-        LoadedCSharpProject project = LoadAnalyzerProject(sources);
+        LoadedCSharpProject project = LoadAnalyzerProject(sources, references);
         Assert.True(AnalyzerProjectDetector.IsAnalyzerProject(project.Compilation));
 
         var translator = new CSharpToGSharpTranslator(analyzerApiMode: true);
@@ -540,10 +608,15 @@ public static class NotAnAnalyzer
         => LoadAnalyzerProject(new[] { ("Analyzer.cs", source) });
 
     private static LoadedCSharpProject LoadAnalyzerProject((string FileName, string Source)[] sources)
+        => LoadAnalyzerProject(sources, references: null);
+
+    private static LoadedCSharpProject LoadAnalyzerProject(
+        (string FileName, string Source)[] sources,
+        IReadOnlyList<MetadataReference> references)
     {
         // The test host's trusted platform assemblies include the restored
         // Microsoft.CodeAnalysis packages, so the default reference set works.
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources);
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(sources, references);
         Assert.True(
             project.BoundWithoutErrors,
             "Analyzer snippet should bind with no C# errors: "
@@ -552,6 +625,11 @@ public static class NotAnAnalyzer
     }
 
     private static void AssertBindsAgainstGsCore(params string[] printedSources)
+        => AssertBindsAgainstGsCore(null, printedSources);
+
+    private static void AssertBindsAgainstGsCore(
+        IReadOnlyList<string> additionalReferencePaths,
+        params string[] printedSources)
     {
         var trees = printedSources.Select((printed, index) =>
         {
@@ -563,8 +641,11 @@ public static class NotAnAnalyzer
             return tree;
         }).ToArray();
 
-        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
-            new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
+        IEnumerable<string> referencePaths =
+            new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location }
+                .Concat(additionalReferencePaths ?? Array.Empty<string>())
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(referencePaths);
         var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees)
         {
             IsLibrary = true,

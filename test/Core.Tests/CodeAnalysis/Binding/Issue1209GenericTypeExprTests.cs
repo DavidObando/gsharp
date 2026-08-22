@@ -94,6 +94,54 @@ func F() int32 {
     }
 
     [Fact]
+    public void NestedGenericSourceHomonym_InContainingScope_StaticReceiverWinsImportedType()
+    {
+        var source = @"
+import System.Collections.Generic
+
+class Holder {
+  class Comparer[T] {
+    shared {
+      func SourceValue() int32 { return 7 }
+    }
+  }
+
+  shared {
+    func Read() int32 {
+      return Comparer[int32].SourceValue()
+    }
+  }
+}
+
+Holder.Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void NestedGenericSourceHomonym_OutsideContainingScope_StaticReceiverBindsImportedType()
+    {
+        var source = @"
+import System.Collections.Generic
+
+class Holder {
+  class Comparer[T] {
+    shared {
+      func SourceValue() int32 { return 7 }
+    }
+  }
+}
+
+Comparer[int32].Default.Compare(1, 2)
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(-1, result.Value);
+    }
+
+    [Fact]
     public void ArrayIndexing_StillBindsAsElementAccess()
     {
         var source = @"

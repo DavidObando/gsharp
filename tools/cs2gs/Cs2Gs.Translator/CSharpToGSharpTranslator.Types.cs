@@ -592,7 +592,8 @@ public sealed partial class CSharpToGSharpTranslator
                 GTypeReference resultType = this.ResolveExpressionType(node);
                 GExpression unmatchedThrow = new ThrowExpression(
                     BuildConstruction(
-                        new NamedTypeReference("InvalidOperationException"),
+                        this.MapSystemInvalidOperationException(
+                            node.GetLocation()),
                         new List<GExpression> { LiteralExpression.String("Unmatched switch expression value.") }),
                     resultType);
                 arms.Add(new SwitchArm(null, unmatchedThrow, null));
@@ -803,7 +804,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 GExpression unmatchedThrow = new ThrowExpression(
                     BuildConstruction(
-                        new NamedTypeReference("InvalidOperationException"),
+                        this.MapSystemInvalidOperationException(
+                            node.GetLocation()),
                         new List<GExpression> { LiteralExpression.String("Unmatched switch expression value.") }),
                     null);
                 cases.Add(new SwitchStatementCase(
@@ -812,6 +814,19 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new SwitchStatement(subject, cases);
+        }
+
+        private GTypeReference MapSystemInvalidOperationException(Location location)
+        {
+            ITypeSymbol invalidOperationException =
+                this.context.Compilation.GetTypeByMetadataName(
+                    "System.InvalidOperationException");
+            return invalidOperationException != null
+                ? this.typeMapper.Map(
+                    invalidOperationException,
+                    this.context,
+                    location)
+                : new NamedTypeReference("InvalidOperationException");
         }
 
         // Renders a switch-expression arm through the shared statement seam so

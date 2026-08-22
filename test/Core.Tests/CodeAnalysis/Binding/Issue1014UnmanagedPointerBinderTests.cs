@@ -133,6 +133,46 @@ unsafe func run() {
     }
 
     [Fact]
+    public void PointerCast_ExplicitAliasWinsOutsideUnrelatedNestedHomonym()
+    {
+        const string source = @"
+package P
+import Folder = System.Guid
+
+class Holder {
+    data struct Folder(Value int32) { }
+}
+
+unsafe func Cast(value nint) *Folder {
+    return *Folder(value)
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void PointerCast_LexicalNestedTypeWinsInsideContainer()
+    {
+        const string source = @"
+package P
+import Folder = System.Guid
+
+class Holder {
+    data struct Folder(Value int32) { }
+
+    shared {
+        unsafe func Cast(value nint) *Folder {
+            return *Folder(value)
+        }
+    }
+}
+";
+        var diagnostics = GetDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
     public void NintRoundTrip_Binds()
     {
         const string source = @"

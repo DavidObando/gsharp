@@ -3652,9 +3652,13 @@ public sealed class Binder
         // set (both are dereferenced unconditionally by the fallthrough
         // identifier-lookup path below too).
         var identifierToken = Invariant.Required(syntax.Identifier, "the single-identifier type-clause form has an Identifier token");
+        var topLevelTypeArgumentCount = syntax.HasTypeArguments
+            ? Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count
+            : 0;
         if (!syntax.HasQualifier &&
             syntax.HasTypeArguments &&
-            scope.TryLookupImportedGenericClass(identifierToken.Text, Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count, out var clrOpenType))
+            scope.TryLookupImportedGenericClass(identifierToken.Text, topLevelTypeArgumentCount, out var clrOpenType) &&
+            ImportedGenericTypeHasPrecedence(identifierToken.Text, topLevelTypeArgumentCount, clrOpenType))
         {
             var topLevelTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
             var clrArgs = new System.Type[topLevelTypeArguments.Count];
@@ -4660,7 +4664,8 @@ public sealed class Binder
         {
             if (arity > 0)
             {
-                if (scope.TryLookupImportedGenericClass(segmentTexts[0], arity, out var imported))
+                if (scope.TryLookupImportedGenericClass(segmentTexts[0], arity, out var imported)
+                    && ImportedGenericTypeHasPrecedence(segmentTexts[0], arity, imported))
                 {
                     return imported;
                 }
@@ -4691,6 +4696,28 @@ public sealed class Binder
         }
 
         return null;
+    }
+
+    private bool ImportedGenericTypeHasPrecedence(string name, int arity, Type importedType)
+    {
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                arity,
+                function,
+                out var sourceType,
+                out var ambiguousAcrossImportedPackages))
+        {
+            return !ambiguousAcrossImportedPackages;
+        }
+
+        return binderCtx.ImportedTypeOverridesSourceType(
+            scope,
+            name,
+            sourceType,
+            arity,
+            function,
+            importedType);
     }
 
     /// <summary>
@@ -7075,8 +7102,42 @@ public sealed class Binder
                 return TypeSymbol.Void;
         }
 
-        if (scope.TryLookupTypeAlias(name, preferredArity, out var aliased, out ambiguousAcrossImportedPackages))
+        if (binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity,
+                function,
+                out var aliased,
+                out ambiguousAcrossImportedPackages))
         {
+            // Issue #3466: nested source types may retain a bare lookup key so
+            // their containing type can use the short name. Outside that
+            // lexical scope, an explicit alias (including one targeting a
+            // nested CLR type) or a same-named top-level import wins.
+            if (scope.TryLookupImportedClassByArity(
+                    name,
+                    preferredArity,
+                    declaration: null,
+                    out var importedType)
+                && binderCtx.ImportedTypeOverridesSourceType(
+                    scope,
+                    name,
+                    aliased,
+                    preferredArity,
+                    function,
+                    importedType.ClassType))
+            {
+                if (ImportedTypeSymbol.TryCreateSemanticAggregate(
+                    importedType.ClassType,
+                    scope.References,
+                    out var importedAggregate))
+                {
+                    return importedAggregate;
+                }
+
+                return TypeSymbol.FromClrType(importedType.ClassType);
+            }
+
             return aliased;
         }
 

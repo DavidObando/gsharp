@@ -410,8 +410,34 @@ internal sealed partial class OverloadResolver
         // qualification, or the qualified-construction package hint — because
         // tryBindClrConstructorCall/TryLookupImportedClass ran unconditionally
         // before the source-type-alias checks further down ever got a chance.
-        var hasSourceConstructibleType = Scope.TryLookupTypeAlias(syntax.Identifier.Text, ctorPreferredArity, out var sourceCtorCandidate, out _)
+        // Issue #3466: a nested source type keeps that precedence only inside
+        // its containing lexical scope; outside it, an explicit alias or
+        // same-named top-level import remains the visible constructor target.
+        bool hasImportedType = Scope.TryLookupImportedClassByArity(
+                syntax.Identifier.Text,
+                ctorPreferredArity,
+                declaration: null,
+                out var importedCtorCandidate);
+        var hasSourceConstructibleType = binderCtx.TryLookupSourceType(
+                Scope,
+                syntax.Identifier.Text,
+                ctorPreferredArity,
+                getCurrentFunction(),
+                out var sourceCtorCandidate,
+                out _)
             && sourceCtorCandidate is StructSymbol sourceCtorStruct
+            && !(hasImportedType
+                && binderCtx.ImportedTypeOverridesSourceType(
+                    Scope,
+                    syntax.Identifier.Text,
+                    sourceCtorStruct,
+                    ctorPreferredArity,
+                    getCurrentFunction(),
+                    importedCtorCandidate!.ClassType))
+            && (ctorPreferredArity < 0
+                || (sourceCtorStruct.IsGenericDefinition
+                    ? sourceCtorStruct.TypeParameters.Length
+                    : 0) == ctorPreferredArity)
             && (sourceCtorStruct.IsClass
                 || sourceCtorStruct.IsInline
                 || sourceCtorStruct.HasPrimaryConstructor

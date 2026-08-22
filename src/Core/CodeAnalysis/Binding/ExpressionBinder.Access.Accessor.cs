@@ -106,7 +106,11 @@ internal sealed partial class ExpressionBinder
         if (syntax.LeftPart is NameExpressionSyntax enclosingNameSyntax
             && syntax.RightPart is not NameExpressionSyntax
             && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.Text) is not VariableSymbol
-            && scope.TryLookupTypeAlias(enclosingNameSyntax.IdentifierToken.Text, out var enclosingAliasType)
+            && TryLookupSourceTypeWithImportPrecedence(
+                enclosingNameSyntax.IdentifierToken.Text,
+                preferredArity: -1,
+                enclosingNameSyntax,
+                out var enclosingAliasType)
             && IsUserAggregateType(enclosingAliasType)
             && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
@@ -468,6 +472,48 @@ internal sealed partial class ExpressionBinder
                 // field read and continues the chain on that value.
                 return BindAccessorStep(submissionHead, null, rightPart);
             }
+            else if (binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: 0,
+                getCurrentFunction(),
+                out var typeAlias,
+                out _))
+            {
+                if (TryResolveImportedTypeOverride(
+                        name,
+                        typeAlias,
+                        requestedArity: 0,
+                        leftName,
+                        out var importedStaticCandidate))
+                {
+                    classSymbol = importedStaticCandidate;
+                }
+
+                // Top-level source types win globally; nested source types win
+                // only inside their containing lexical type. Outside that
+                // container, an explicit alias or same-arity top-level import
+                // wins.
+                else if (typeAlias is EnumSymbol foundEnum)
+                {
+                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
+                }
+                else if (typeAlias is StructSymbol foundStruct)
+                {
+                    userStructSymbol = foundStruct;
+                }
+                else if (typeAlias is InterfaceSymbol foundInterface)
+                {
+                    // ADR-0089 / issue #1030: `IName.StaticField` — qualified
+                    // access to an interface static field (storage or const).
+                    userInterfaceSymbol = foundInterface;
+                }
+                else
+                {
+                    Diagnostics.ReportUnableToFindType(leftName.Location, name);
+                    return new BoundErrorExpression(null);
+                }
+            }
             else if (scope.TryLookupImport(name, out var matchedImport)
                 && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
             {
@@ -502,36 +548,6 @@ internal sealed partial class ExpressionBinder
                 else if (aliasedType.ClrType != null)
                 {
                     classSymbol = new ImportedClassSymbol(aliasedType.ClrType, leftName, references: scope.References);
-                }
-                else
-                {
-                    Diagnostics.ReportUnableToFindType(leftName.Location, name);
-                    return new BoundErrorExpression(null);
-                }
-            }
-            else if (scope.TryLookupTypeAlias(name, out var typeAlias))
-            {
-                // Issue #2394: a same-compilation SOURCE type (enum/struct/
-                // interface) must be checked BEFORE an imported CLR class so
-                // that it wins when both are visible under the same simple
-                // name. Imports are bound compilation-wide (not scoped per
-                // file), so a same-simple-name CLR type imported via some
-                // OTHER file could otherwise incorrectly shadow this
-                // compilation's own type here — matching the precedence
-                // already used by Binder.LookupType (type-clause position).
-                if (typeAlias is EnumSymbol foundEnum)
-                {
-                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
-                }
-                else if (typeAlias is StructSymbol foundStruct)
-                {
-                    userStructSymbol = foundStruct;
-                }
-                else if (typeAlias is InterfaceSymbol foundInterface)
-                {
-                    // ADR-0089 / issue #1030: `IName.StaticField` — qualified
-                    // access to an interface static field (storage or const).
-                    userInterfaceSymbol = foundInterface;
                 }
                 else
                 {
@@ -766,7 +782,11 @@ internal sealed partial class ExpressionBinder
         nestedClassSymbol = null;
         StructSymbol? sourceType = null;
         if (syntax.LeftPart is NameExpressionSyntax sourceName
-            && scope.TryLookupTypeAlias(sourceName.IdentifierToken.Text, out var sourceAlias)
+            && TryLookupSourceTypeWithImportPrecedence(
+                sourceName.IdentifierToken.Text,
+                preferredArity: -1,
+                sourceName,
+                out var sourceAlias)
             && sourceAlias is StructSymbol namedSourceType)
         {
             sourceType = namedSourceType;
@@ -919,9 +939,8 @@ internal sealed partial class ExpressionBinder
     /// type whose enclosing type is <paramref name="container"/>.
     /// </summary>
     private bool IsNestedTypeOf(string name, TypeSymbol container) =>
-        scope.TryLookupTypeAlias(name, out var candidate)
-        && IsUserAggregateType(candidate)
-        && ReferenceEquals(GetSymbolContainingType(candidate), container);
+        scope.TryLookupNestedTypeAlias(container, name, preferredArity: -1, out var candidate)
+        && IsUserAggregateType(candidate);
 
     /// <summary>
     /// Issue #1069: returns the leftmost identifier of an accessor-chain segment
@@ -981,25 +1000,36 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="expr">The candidate type-naming expression.</param>
     /// <param name="headName">The resolved root identifier on success.</param>
+    /// <param name="headArity">The root segment's explicit arity, or -1 when unspecified.</param>
     /// <returns>Whether a root identifier could be extracted.</returns>
     private static bool TryGetUserTypeChainHead(
         ExpressionSyntax expr,
-        [NotNullWhen(true)] out string? headName)
+        [NotNullWhen(true)] out string? headName,
+        out int headArity)
     {
         switch (expr)
         {
             case NameExpressionSyntax name:
                 headName = name.IdentifierToken.Text;
+                headArity = -1;
                 return true;
             case GenericNameExpressionSyntax generic:
                 headName = generic.Identifier.Text;
+                headArity = generic.TypeArgumentList.Arguments.Count;
+                return true;
+            case IndexExpressionSyntax index
+                when !index.IsNullConditional
+                    && index.Target is NameExpressionSyntax indexName:
+                headName = indexName.IdentifierToken.Text;
+                headArity = index.Indices.Count;
                 return true;
             case IndexExpressionSyntax index when !index.IsNullConditional:
-                return TryGetUserTypeChainHead(index.Target, out headName);
+                return TryGetUserTypeChainHead(index.Target, out headName, out headArity);
             case AccessorExpressionSyntax accessor when !accessor.IsNullConditional:
-                return TryGetUserTypeChainHead(accessor.LeftPart, out headName);
+                return TryGetUserTypeChainHead(accessor.LeftPart, out headName, out headArity);
             default:
                 headName = null;
+                headArity = -1;
                 return false;
         }
     }
@@ -1040,9 +1070,13 @@ internal sealed partial class ExpressionBinder
         // TryResolveConstructedGenericTypeReceiver — so a real indexer whose
         // index is an identifier is never probed as a nested type (which would
         // look the index up as a type and report a spurious GS0113).
-        if (!TryGetUserTypeChainHead(expr, out var headName)
+        if (!TryGetUserTypeChainHead(expr, out var headName, out var headArity)
             || scope.TryLookupSymbol(headName) is VariableSymbol
-            || !scope.TryLookupTypeAlias(headName, out var headCandidate)
+            || !TryLookupSourceTypeWithImportPrecedence(
+                headName,
+                headArity,
+                expr,
+                out var headCandidate)
             || !IsUserAggregateType(headCandidate))
         {
             return false;
@@ -1073,7 +1107,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var headArity = segments[0].Args.IsDefaultOrEmpty ? -1 : segments[0].Args.Length;
-        if (!scope.TryLookupTypeAlias(segments[0].Name, headArity, out var headDef) || !IsUserAggregateType(headDef))
+        if (!TryLookupSourceTypeWithImportPrecedence(
+                segments[0].Name,
+                headArity,
+                expr,
+                out var headDef)
+            || !IsUserAggregateType(headDef))
         {
             return false;
         }
@@ -1727,12 +1766,25 @@ internal sealed partial class ExpressionBinder
         interfaceSymbol = null;
         enumSymbol = null;
 
-        // Issue #2394: check the same-compilation SOURCE type (struct/enum)
-        // BEFORE the imported CLR class so it wins on a same-simple-name
-        // collision — matching Binder.LookupType's precedence and the
-        // read-path fix above in BindAccessorExpression.
-        if (scope.TryLookupTypeAlias(name, out var typeAlias))
+        if (binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: 0,
+                getCurrentFunction(),
+                out var typeAlias,
+                out _))
         {
+            if (TryResolveImportedTypeOverride(
+                    name,
+                    typeAlias,
+                    requestedArity: 0,
+                    leftName,
+                    out var importedOverride))
+            {
+                importedClassSymbol = importedOverride;
+                return true;
+            }
+
             if (typeAlias is StructSymbol foundStruct)
             {
                 userStructSymbol = foundStruct;
@@ -1766,6 +1818,69 @@ internal sealed partial class ExpressionBinder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Applies the shared lexical source/import precedence for a simple type receiver.
+    /// </summary>
+    private bool TryResolveImportedTypeOverride(
+        string name,
+        TypeSymbol sourceType,
+        int requestedArity,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedType)
+    {
+        if (scope.TryLookupImportedClassByArity(
+                name,
+                requestedArity,
+                declaration,
+                out var candidate)
+            && binderCtx.ImportedTypeOverridesSourceType(
+                scope,
+                name,
+                sourceType,
+                requestedArity,
+                getCurrentFunction(),
+                candidate.ClassType))
+        {
+            importedType = candidate;
+            return true;
+        }
+
+        importedType = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves a source type only when it remains visible after applying the
+    /// same lexical-inside / explicit-import-outside precedence as ordinary
+    /// type receivers.
+    /// </summary>
+    private bool TryLookupSourceTypeWithImportPrecedence(
+        string name,
+        int preferredArity,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out TypeSymbol? sourceType)
+    {
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity,
+                getCurrentFunction(),
+                out sourceType,
+                out _)
+            || TryResolveImportedTypeOverride(
+                name,
+                sourceType,
+                preferredArity,
+                declaration,
+                out _))
+        {
+            sourceType = null;
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -2492,7 +2607,13 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!scope.TryLookupTypeAlias(targetName.IdentifierToken.Text, out var alias)
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                targetName.IdentifierToken.Text,
+                index.Indices.Count,
+                getCurrentFunction(),
+                out var alias,
+                out _)
             || alias is not InterfaceSymbol ifaceDef
             || !ifaceDef.IsGenericDefinition)
         {
@@ -2567,12 +2688,25 @@ internal sealed partial class ExpressionBinder
         // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
         // generic receiver fails to resolve. Disambiguate using the bracketed
         // type-argument count so `Box[int32]` selects the arity-1 `Box[T]`.
-        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
+        var userGenericDef = binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: arity,
+                getCurrentFunction(),
+                out var alias,
+                out var typeNameAmbiguous)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
-        var clrGenericDef = !userGenericDef
+        var clrGenericDef = !typeNameAmbiguous
             && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+        if (userGenericDef)
+        {
+            var importedGenericTakesPrecedence = clrGenericDef
+                && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
+            userGenericDef = !importedGenericTakesPrecedence;
+            clrGenericDef = importedGenericTakesPrecedence;
+        }
 
         if (!userGenericDef && !clrGenericDef)
         {
@@ -2648,12 +2782,25 @@ internal sealed partial class ExpressionBinder
         // index-expression overload — select the same-name type whose generic
         // arity matches the supplied type-argument count so `Box[int32]`
         // resolves to `Box[T]` rather than the non-generic `Box`.
-        var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
+        var userGenericDef = binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity: arity,
+                getCurrentFunction(),
+                out var alias,
+                out var typeNameAmbiguous)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
-        var clrGenericDef = !userGenericDef
+        var clrGenericDef = !typeNameAmbiguous
             && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+        if (userGenericDef)
+        {
+            var importedGenericTakesPrecedence = clrGenericDef
+                && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
+            userGenericDef = !importedGenericTakesPrecedence;
+            clrGenericDef = importedGenericTakesPrecedence;
+        }
 
         if (!userGenericDef && !clrGenericDef)
         {
@@ -2690,6 +2837,21 @@ internal sealed partial class ExpressionBinder
         return openClrType is not null
             && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
     }
+
+    private bool ImportedGenericTypeHasPrecedence(
+        string name,
+        TypeSymbol? sourceType,
+        Type? importedType,
+        int requestedArity)
+        => sourceType != null
+            && importedType != null
+            && binderCtx.ImportedTypeOverridesSourceType(
+                scope,
+                name,
+                sourceType,
+                requestedArity,
+                getCurrentFunction(),
+                importedType);
 
     /// <summary>
     /// Issue #1559: syntax-shape-agnostic dispatcher over the two
@@ -2773,7 +2935,13 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether the segment is a pure namespace/package prefix.</returns>
     private bool IsNamespacePrefixSegment(string segment, bool isLeadingSegment = true) =>
         (!isLeadingSegment || scope.TryLookupSymbol(segment) is not VariableSymbol)
-        && !scope.TryLookupTypeAlias(segment, out _)
+        && !binderCtx.TryLookupSourceType(
+            scope,
+            segment,
+            preferredArity: -1,
+            getCurrentFunction(),
+            out _,
+            out _)
         && !(scope.TryLookupImport(segment, out var import) && import.IsAlias)
         && !scope.TryLookupImportedClass(segment, declaration: null, out _);
 
