@@ -199,7 +199,7 @@ public sealed class CSharpTypeMapper
     public IReadOnlyCollection<string> ShortenedNamespaces => this.shortenedNamespaces;
 
     /// <summary>
-    /// Gets metadata type aliases synthesized to preserve unambiguous CLR type
+    /// Gets type aliases synthesized to preserve unambiguous source or CLR type
     /// identity.
     /// </summary>
     public IReadOnlyDictionary<string, string> SynthesizedTypeAliases =>
@@ -1366,17 +1366,12 @@ public sealed class CSharpTypeMapper
                 return simpleName;
             }
 
-            if (!isSourceType && SupportsMetadataTypeAlias(named))
-            {
-                // ponytail: metadata aliases currently bind reliably for
-                // System.*; keep other external metadata namespace-qualified
-                // until arbitrary CLR alias imports bind.
-                return this.GetOrCreateImportedTypeAlias(named, context, location);
-            }
-
-            return named.ContainingNamespace is { IsGlobalNamespace: false } containingNs
-                ? $"{this.Names(context).GetNamespaceName(containingNs)}.{simpleName}"
-                : simpleName;
+            return this.AmbiguousTopLevelTypeName(
+                named,
+                simpleName,
+                isSourceType,
+                context,
+                location);
         }
 
         // A source nested type may use its simple name only from inside its
@@ -1404,11 +1399,43 @@ public sealed class CSharpTypeMapper
         bool scanOutermostImports = outermost.Locations.Any(l => l.IsInSource)
             || this.qualifyMetadataImportCollisions;
         bool outermostAmbiguous = this.HasSourceHomonym(outermost, context)
+            || this.HasVisibleSourceNestedHomonym(outermost, context, location)
             || (scanOutermostImports && this.HasImportedNamespaceHomonym(outermost, context));
-        return outermostAmbiguous
-            && outermost.ContainingNamespace is { IsGlobalNamespace: false } outerNamespace
-                ? $"{this.Names(context).GetNamespaceName(outerNamespace)}.{nestedName}"
-                : nestedName;
+        if (!outermostAmbiguous)
+        {
+            return nestedName;
+        }
+
+        parts[0] = this.AmbiguousTopLevelTypeName(
+            outermost,
+            parts[0],
+            outermost.Locations.Any(candidate => candidate.IsInSource),
+            context,
+            location);
+        return string.Join(".", parts);
+    }
+
+    private string AmbiguousTopLevelTypeName(
+        INamedTypeSymbol named,
+        string simpleName,
+        bool isSourceType,
+        TranslationContext context,
+        Location location)
+    {
+        if ((!isSourceType && SupportsMetadataTypeAlias(named))
+            || (isSourceType
+                && named.ContainingNamespace is { IsGlobalNamespace: true }))
+        {
+            // ponytail: metadata aliases currently bind reliably for System.*;
+            // source aliases also bind within the current compilation. Keep
+            // other external metadata namespace-qualified until arbitrary CLR
+            // alias imports bind.
+            return this.GetOrCreateImportedTypeAlias(named, context, location);
+        }
+
+        return named.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace
+            ? $"{this.Names(context).GetNamespaceName(containingNamespace)}.{simpleName}"
+            : simpleName;
     }
 
     private static bool IsDeclaredInContainingNamespace(

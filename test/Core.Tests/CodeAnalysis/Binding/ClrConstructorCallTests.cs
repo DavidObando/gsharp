@@ -901,6 +901,47 @@ Holder.ReadNested(nested) * 1000 + ReadImported(imported) + Consumer().ReadColor
     }
 
     [Fact]
+    public void ExplicitAliasToGlobalSourceType_WinsInsideNestedHomonym()
+    {
+        var source = @"
+import GlobalTarget = Target
+
+class Target {
+    init(value int32) {
+        Value = value
+    }
+
+    prop Value int32 { get; init; }
+
+    shared {
+        func Code() int32 -> 4
+    }
+}
+
+class Holder {
+    class Target {
+    }
+
+    shared {
+        func Make() GlobalTarget {
+            return GlobalTarget(3)
+        }
+
+        func Read() int32 {
+            let value = GlobalTarget(5)
+            return value.Value + GlobalTarget.Code()
+        }
+    }
+}
+
+Holder.Read()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(9, result.Value);
+    }
+
+    [Fact]
     public void ExplicitGenericSourceAlias_WinsOutsideUnrelatedNestedHomonym()
     {
         var library = @"

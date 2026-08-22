@@ -873,6 +873,8 @@ public sealed class BoundScope
             var package = TypePackageName(candidate);
             var qualifiedName = QualifiedTypeName(candidate);
             var fullName = string.IsNullOrEmpty(package)
+                || string.Equals(package, "Default", StringComparison.Ordinal)
+                || IsDeclaredInImplicitPackage(candidate)
                 ? qualifiedName
                 : package + "." + qualifiedName;
             if (!string.Equals(fullName, import.Target, StringComparison.Ordinal))
@@ -2622,6 +2624,20 @@ public sealed class BoundScope
         DelegateTypeSymbol d => d.PackageName,
         _ => null,
     };
+
+    private static bool IsDeclaredInImplicitPackage(TypeSymbol type)
+    {
+        SyntaxNode? declaration = type switch
+        {
+            StructSymbol s => s.Declaration,
+            EnumSymbol e => e.Declaration,
+            InterfaceSymbol i => i.Declaration,
+            DelegateTypeSymbol d => d.Declaration,
+            _ => null,
+        };
+        return declaration != null
+            && !declaration.SyntaxTree.Root.Members.Any(member => member is PackageSyntax);
+    }
 
     /// <summary>
     /// Issue #1080 / #2342: two type declarations share a declaration scope —

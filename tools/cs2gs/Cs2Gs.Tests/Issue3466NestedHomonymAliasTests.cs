@@ -353,6 +353,93 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void NestedMetadataType_InsideOutermostNestedHomonymScope_UsesOuterAliasAndRuns()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class Environment
+                    {
+                    }
+
+                    public static global::System.Environment.SpecialFolder Get()
+                    {
+                        return global::System.Environment.SpecialFolder.System;
+                    }
+
+                    public static int Read()
+                    {
+                        global::System.Environment.SpecialFolder value = Get();
+                        return value == global::System.Environment.SpecialFolder.System ? 7 : 0;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import SystemEnvironment = System.Environment",
+            printed,
+            StringComparison.Ordinal);
+        Assert.True(
+            CountOccurrences(printed, "SystemEnvironment.SpecialFolder") >= 3,
+            "Type and static-member positions must retain the metadata outer type identity.");
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.Holder.Read())",
+            "7");
+    }
+
+    [Fact]
+    public void NestedMetadataType_WithGenericOutermostHomonym_UsesOuterAliasAndRuns()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class Dictionary<TKey, TValue>
+                    {
+                    }
+
+                    public static global::System.Collections.Generic.Dictionary<int, int>.Enumerator Get(
+                        global::System.Collections.Generic.Dictionary<int, int> values)
+                    {
+                        return values.GetEnumerator();
+                    }
+
+                    public static int Read()
+                    {
+                        var values = new global::System.Collections.Generic.Dictionary<int, int>();
+                        values.Add(3, 4);
+                        var iterator = Get(values);
+                        return iterator.MoveNext()
+                            ? iterator.Current.Key + iterator.Current.Value
+                            : 0;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import GenericDictionary = System.Collections.Generic.Dictionary",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "func Get(values GenericDictionary[int32, int32]) GenericDictionary[int32, int32].Enumerator",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("GenericDictionary[int32, int32]()", printed, StringComparison.Ordinal);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.Holder.Read())",
+            "7");
+    }
+
+    [Fact]
     public void NestedType_WithImportedTopLevelHomonym_RemainsQualified()
     {
         string printed = Translate("""
@@ -691,6 +778,103 @@ public sealed class Issue3466NestedHomonymAliasTests
         Assert.Contains("func MakeSafe() Target", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("func MakeSafe() Demo.Target", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("import DemoTarget =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GlobalSourceType_InsideNestedHomonymScope_UsesAliasAndRuns()
+    {
+        string printed = Translate("""
+            public sealed class GlobalTarget
+            {
+            }
+
+            public sealed class Target
+            {
+                public Target(int value)
+                {
+                    Value = value;
+                }
+
+                public int Value { get; }
+
+                public static int Shared() => 4;
+            }
+
+            public sealed class Holder
+            {
+                public sealed class Target
+                {
+                }
+
+                public static global::Target Make()
+                {
+                    return new global::Target(3);
+                }
+
+                public static int Read()
+                {
+                    global::Target value = new global::Target(5);
+                    return value.Value + global::Target.Shared();
+                }
+            }
+            """);
+
+        Assert.Contains("import GlobalTarget_2 = Target", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("import GlobalTarget = Target", printed, StringComparison.Ordinal);
+        Assert.Contains("func Make() GlobalTarget_2", printed, StringComparison.Ordinal);
+        Assert.Contains("return GlobalTarget_2(3)", printed, StringComparison.Ordinal);
+        Assert.Contains("let value = GlobalTarget_2(5)", printed, StringComparison.Ordinal);
+        Assert.Contains("GlobalTarget_2.Shared()", printed, StringComparison.Ordinal);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Holder.Read())",
+            "9");
+    }
+
+    [Fact]
+    public void UnshadowedGlobalSourceType_RemainsBareAndRuns()
+    {
+        string printed = Translate("""
+            public sealed class SafeTarget
+            {
+                public SafeTarget(int value)
+                {
+                    Value = value;
+                }
+
+                public int Value { get; }
+
+                public static int Shared() => 2;
+            }
+
+            public sealed class Holder
+            {
+                public sealed class Target
+                {
+                }
+
+                public static global::SafeTarget Make()
+                {
+                    return new global::SafeTarget(6);
+                }
+
+                public static int Read()
+                {
+                    return Make().Value + global::SafeTarget.Shared();
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("import GlobalSafeTarget =", printed, StringComparison.Ordinal);
+        Assert.Contains("func Make() SafeTarget", printed, StringComparison.Ordinal);
+        Assert.Contains("return SafeTarget(6)", printed, StringComparison.Ordinal);
+        Assert.Contains("SafeTarget.Shared()", printed, StringComparison.Ordinal);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Holder.Read())",
+            "8");
     }
 
     [Fact]
