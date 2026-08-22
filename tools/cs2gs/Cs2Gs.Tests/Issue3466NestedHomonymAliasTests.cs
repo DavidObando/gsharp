@@ -81,6 +81,76 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void ParamsCollectionAndCollectionExpression_InsideNestedGenericListScope_UseAliasAndRun()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    public sealed class List<T>
+                    {
+                    }
+
+                    public static int Total(params global::System.Collections.Generic.List<int> values)
+                    {
+                        int total = 0;
+                        foreach (int value in values)
+                        {
+                            total += value;
+                        }
+
+                        return total;
+                    }
+
+                    public static int TotalInterface(
+                        params global::System.Collections.Generic.IEnumerable<int> values)
+                    {
+                        int total = 0;
+                        foreach (int value in values)
+                        {
+                            total += value;
+                        }
+
+                        return total;
+                    }
+
+                    public static int Read()
+                    {
+                        return Total(1, 2, 3) + Total([4, 5]) + TotalInterface(6, 7);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import GenericList = System.Collections.Generic.List",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "func Total(values GenericList[int32]) int32",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Holder.Total(GenericList[int32]{ 1, 2, 3 })",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Holder.Total(GenericList[int32]{ 4, 5 })",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Holder.TotalInterface(cast[IEnumerable[int32]](GenericList[int32]{ 6, 7 }))",
+            printed,
+            StringComparison.Ordinal);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "System.Console.WriteLine(Demo.Holder.Read())",
+            "28");
+    }
+
+    [Fact]
     public void NonListMetadataHomonym_UsesGeneralReadableAliasPath()
     {
         string printed = Translate("""

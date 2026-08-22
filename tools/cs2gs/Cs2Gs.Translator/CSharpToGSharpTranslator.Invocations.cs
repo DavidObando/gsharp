@@ -1181,12 +1181,13 @@ public sealed partial class CSharpToGSharpTranslator
                 paramsCollectionArg,
                 out int consumedSyntaxArguments);
 
-            _ = this.typeMapper.Map(
+            Location callLocation = callSyntax.GetLocation();
+            GTypeReference paramsCollectionType = this.typeMapper.Map(
                 paramsCollectionArg.Parameter.Type,
                 this.context,
-                callSyntax.GetLocation());
+                callLocation);
             ITypeSymbol paramsElementType = ((INamedTypeSymbol)paramsCollectionArg.Parameter.Type).TypeArguments[0];
-            GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callSyntax.GetLocation());
+            GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callLocation);
 
             var paramsValues = arguments.Skip(consumedSyntaxArguments)
                 .Select(a => this.TranslateArgument(a))
@@ -1196,14 +1197,25 @@ public sealed partial class CSharpToGSharpTranslator
                 translatedArguments.Add(this.CoerceMaterializedArgument(
                     new ArrayLiteralExpression(elementType, paramsValues),
                     paramsCollectionArg.Parameter.Type,
-                    callSyntax.GetLocation()));
+                    callLocation));
                 return translatedArguments;
             }
 
             var collectionElements = paramsValues
                 .Select(value => new CollectionInitializerElement(value))
                 .ToList();
-            var listType = new NamedTypeReference("List", new List<GTypeReference> { elementType });
+            bool exactListParameter = paramsCollectionArg.Parameter.Type
+                is INamedTypeSymbol { Name: "List" } listParameter
+                && listParameter.ContainingNamespace?.ToDisplayString()
+                    == "System.Collections.Generic";
+            GTypeReference listType = exactListParameter
+                ? paramsCollectionType
+                : this.typeMapper.Map(
+                    this.context.Compilation
+                        .GetTypeByMetadataName("System.Collections.Generic.List`1")
+                        ?.Construct(paramsElementType),
+                    this.context,
+                    callLocation);
             GExpression construction = BuildConstruction(listType, new List<GExpression>());
 
             // A zero-element params-collection call (`Total()`) has no elements to
@@ -1214,16 +1226,12 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression collectionArgument = collectionElements.Count == 0
                 ? construction
                 : new CollectionInitializerExpression(construction, collectionElements);
-            bool exactListParameter = paramsCollectionArg.Parameter.Type
-                is INamedTypeSymbol { Name: "List" } listParameter
-                && listParameter.ContainingNamespace?.ToDisplayString()
-                    == "System.Collections.Generic";
             translatedArguments.Add(exactListParameter
                 ? collectionArgument
                 : this.CoerceMaterializedArgument(
                     collectionArgument,
                     paramsCollectionArg.Parameter.Type,
-                    callSyntax.GetLocation()));
+                    callLocation));
             return translatedArguments;
         }
 
