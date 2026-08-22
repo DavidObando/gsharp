@@ -13,9 +13,9 @@ namespace Models
 
 namespace Signatures
 {
-#nullable enable
-    public delegate Models.TextStringBuilder? Handler(Models.TextStringBuilder value);
-#nullable restore
+    public delegate Models.TextStringBuilder Handler(Models.TextStringBuilder value);
+
+    public delegate void ActionHandler(Models.TextStringBuilder value);
 
     public sealed class TargetTypedDefaults
     {

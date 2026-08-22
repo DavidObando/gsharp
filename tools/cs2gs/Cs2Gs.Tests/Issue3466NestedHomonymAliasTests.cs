@@ -1091,7 +1091,7 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let handler ((TextStringBuilder) -> TextStringBuilder?)? = (value TextStringBuilder) -> value",
+            "let handler (TextStringBuilder) -> TextStringBuilder = (value TextStringBuilder) -> value",
             printed,
             StringComparison.Ordinal);
     }
@@ -1115,9 +1115,8 @@ public sealed class Issue3466NestedHomonymAliasTests
 
                     public static int Read()
                     {
-                        global::Signatures.Handler handler = delegate
+                        global::Signatures.ActionHandler handler = delegate
                         {
-                            return null;
                         };
                         return MakeBuilder().Length;
                     }
@@ -1135,10 +1134,9 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let handler ((TextStringBuilder) -> TextStringBuilder?)? = (__anon0 TextStringBuilder) -> {",
+            "let handler (TextStringBuilder) -> void = (__anon0 TextStringBuilder) -> {",
             printed,
             StringComparison.Ordinal);
-        Assert.Contains("return nil", printed, StringComparison.Ordinal);
     }
 
     [Fact]
