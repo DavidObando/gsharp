@@ -117,6 +117,9 @@ public sealed class CSharpTypeMapper
     private readonly HashSet<string> reservedTypeParameterNames =
         new(System.StringComparer.Ordinal);
 
+    private readonly HashSet<string> reservedInvokedLocalNames =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared top-level
     /// type simple names (built lazily on first use), used to decide whether a
@@ -576,6 +579,16 @@ public sealed class CSharpTypeMapper
                     this.reservedTypeParameterNames.Add(names.GetName(typeParameterSymbol));
                 }
 
+                if (node is InvocationExpressionSyntax { Expression: SimpleNameSyntax invokedName })
+                {
+                    ISymbol invokedSymbol = semanticModel.GetSymbolInfo(invokedName).Symbol;
+                    if (invokedSymbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
+                        || invokedSymbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                    {
+                        this.reservedInvokedLocalNames.Add(names.GetName(invokedSymbol));
+                    }
+                }
+
                 if (node is not (NameSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax))
                 {
                     continue;
@@ -659,6 +672,33 @@ public sealed class CSharpTypeMapper
                 .Any(type => type.Locations.Any(candidate => candidate.IsInSource));
         }
 
+        static bool HasVisibleCallableName(
+            string name,
+            TranslationContext context,
+            Location location,
+            EmittedNameAllocator names)
+        {
+            if (location?.SourceTree == null)
+            {
+                return false;
+            }
+
+            int position = System.Math.Min(
+                location.SourceSpan.Start,
+                location.SourceTree.GetRoot().FullSpan.End - 1);
+            SemanticModel semanticModel = ReferenceEquals(
+                context.SemanticModel.SyntaxTree,
+                location.SourceTree)
+                    ? context.SemanticModel
+                    : context.Compilation.GetSemanticModel(location.SourceTree);
+            return semanticModel.LookupSymbols(position)
+                .OfType<IMethodSymbol>()
+                .Any(method =>
+                    method.MethodKind is MethodKind.Ordinary or MethodKind.ReducedExtension
+                    && names.GetName(method) == name);
+        }
+
+        EmittedNameAllocator names = this.Names(context);
         string simpleName = this.Names(context).GetName(named);
         string namespaceName = named.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? this.Names(context).GetNamespaceName(ns)
@@ -671,6 +711,8 @@ public sealed class CSharpTypeMapper
             if (reservedAlias.Value.Count == 1
                 && reservedAlias.Value.Contains(target)
                 && !this.reservedTypeParameterNames.Contains(reservedAlias.Key)
+                && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key)
+                && !HasVisibleCallableName(reservedAlias.Key, context, location, names)
                 && !HasVisibleSourceTypeName(reservedAlias.Key, context, location))
             {
                 return reservedAlias.Key;
@@ -681,6 +723,8 @@ public sealed class CSharpTypeMapper
         {
             if (existing.Value == target
                 && !this.reservedTypeParameterNames.Contains(existing.Key)
+                && !this.reservedInvokedLocalNames.Contains(existing.Key)
+                && !HasVisibleCallableName(existing.Key, context, location, names)
                 && !HasVisibleSourceTypeName(existing.Key, context, location))
             {
                 return existing.Key;
@@ -696,12 +740,16 @@ public sealed class CSharpTypeMapper
         reserved.UnionWith(this.reservedTypeAliases.Keys);
         reserved.UnionWith(this.reservedImportedTypeNames);
         reserved.UnionWith(this.reservedTypeParameterNames);
+        reserved.UnionWith(this.reservedInvokedLocalNames);
         reserved.UnionWith(this.sourceDeclaredTypeNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
         string baseAlias = $"{namespaceQualifier}{simpleName}";
         string alias = baseAlias;
-        for (var suffix = 2; reserved.Contains(alias); suffix++)
+        for (var suffix = 2;
+            reserved.Contains(alias)
+                || HasVisibleCallableName(alias, context, location, names);
+            suffix++)
         {
             alias = $"{baseAlias}_{suffix}";
         }
@@ -1482,7 +1530,12 @@ public sealed class CSharpTypeMapper
         int position = System.Math.Min(
             location.SourceSpan.Start,
             location.SourceTree.GetRoot().FullSpan.End - 1);
-        foreach (ISymbol symbol in context.SemanticModel.LookupNamespacesAndTypes(position, name: named.Name))
+        SemanticModel semanticModel = ReferenceEquals(
+            context.SemanticModel.SyntaxTree,
+            location.SourceTree)
+                ? context.SemanticModel
+                : context.Compilation.GetSemanticModel(location.SourceTree);
+        foreach (ISymbol symbol in semanticModel.LookupNamespacesAndTypes(position, name: named.Name))
         {
             if (symbol is INamedTypeSymbol candidate
                 && candidate.Arity == named.Arity

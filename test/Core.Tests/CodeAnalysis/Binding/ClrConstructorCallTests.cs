@@ -752,6 +752,12 @@ class Holder {
         shared {
             prop Code int32 { get; set; }
         }
+
+        class Child {
+            shared {
+                const Code int32 = 9
+            }
+        }
     }
 
     shared {
@@ -759,7 +765,7 @@ class Holder {
             let made = Folder()
             let literal = Folder{Value: 3}
             Folder.Code = 4
-            return value.Value + made.Value + literal.Value + Folder.Code
+            return value.Value + made.Value + literal.Value + Folder.Code + Folder.Child.Code
         }
     }
 }
@@ -786,7 +792,7 @@ Holder.ReadNested(nested) * 1000 + ReadImported(imported) + Consumer().ReadColor
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(8131, result.Value);
+        Assert.Equal(17131, result.Value);
     }
 
     [Fact]

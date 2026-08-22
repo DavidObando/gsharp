@@ -1696,13 +1696,28 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private CatchClause BuildMergedFilteredCatch(TryStatementSyntax node, ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
         {
-            // Compiler-generated name (never a valid C# identifier a source
-            // catch variable could use) so the per-clause rebind below always
-            // fires, even when the original catch variable is itself named
-            // "ex" — otherwise that clause's body would see the merged
-            // binder's declared (unnarrowed) type instead of the smart-cast
-            // narrowed subtype.
-            const string sharedBinder = "__caught";
+            string sharedBinder = this.AllocateMergedCatchBinder(node, mergeStartIndex);
+            this.state.ActiveMergedCatchBinders.Add(sharedBinder);
+            try
+            {
+                return this.BuildMergedFilteredCatchCore(
+                    node,
+                    catchTypeSymbols,
+                    mergeStartIndex,
+                    sharedBinder);
+            }
+            finally
+            {
+                this.state.ActiveMergedCatchBinders.Remove(sharedBinder);
+            }
+        }
+
+        private CatchClause BuildMergedFilteredCatchCore(
+            TryStatementSyntax node,
+            ITypeSymbol[] catchTypeSymbols,
+            int mergeStartIndex,
+            string sharedBinder)
+        {
             var sharedBinderExpr = new IdentifierExpression(sharedBinder);
 
             // Safety-net fallback: unreachable if the merged catch's declared
@@ -1741,9 +1756,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // Re-bind this clause's own catch-variable name to the shared
                 // binder (narrowed to this clause's type by the `is` test below)
                 // so the body's references to its original name still resolve.
-                // Always emitted (sharedBinder can never collide with a
-                // source name), so this also carries the narrowed type into
-                // closures capturing the rebind, unlike the shared binder.
+                // The allocated binder cannot collide with source names, so
+                // this also carries the narrowed type into closures capturing
+                // the rebind, unlike the shared binder.
                 var branchStatements = new List<GStatement>
                 {
                     new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr),
@@ -1766,6 +1781,42 @@ public sealed partial class CSharpToGSharpTranslator
                 mergeStartIndex,
                 mergedTypeLocation);
             return new CatchClause(sharedBinder, mergedType, new BlockStatement(new List<GStatement> { dispatch }));
+        }
+
+        private string AllocateMergedCatchBinder(TryStatementSyntax node, int mergeStartIndex)
+        {
+            SemanticModel semanticModel = ReferenceEquals(
+                this.context.SemanticModel.SyntaxTree,
+                node.SyntaxTree)
+                    ? this.context.SemanticModel
+                    : this.context.Compilation.GetSemanticModel(node.SyntaxTree);
+            var occupied = new HashSet<string>(
+                this.state.ActiveMergedCatchBinders,
+                StringComparer.Ordinal);
+            foreach (ISymbol symbol in semanticModel.LookupSymbols(node.SpanStart))
+            {
+                occupied.Add(this.EmittedName(symbol, symbol.Name));
+            }
+
+            for (int i = mergeStartIndex; i < node.Catches.Count; i++)
+            {
+                foreach (SyntaxNode declaration in node.Catches[i].DescendantNodesAndSelf())
+                {
+                    if (semanticModel.GetDeclaredSymbol(declaration) is ISymbol symbol)
+                    {
+                        occupied.Add(this.EmittedName(symbol, symbol.Name));
+                    }
+                }
+            }
+
+            const string baseName = "__caught";
+            string candidate = baseName;
+            for (var suffix = 2; occupied.Contains(candidate); suffix++)
+            {
+                candidate = $"{baseName}_{suffix}";
+            }
+
+            return candidate;
         }
 
         /// <summary>

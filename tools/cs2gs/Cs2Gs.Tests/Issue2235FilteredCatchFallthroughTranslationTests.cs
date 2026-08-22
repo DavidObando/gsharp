@@ -262,6 +262,55 @@ namespace Demo
     }
 
     [Fact]
+    public void MergedCatch_AvoidsOuterSourceName_AndNestedMergedCatchUsesUniqueBinder()
+    {
+        string printed = TranslateUnit("""
+            using System;
+
+            namespace Demo
+            {
+                public class C
+                {
+                    public int Run(string __caught)
+                    {
+                        try
+                        {
+                            throw new InvalidOperationException("outer");
+                        }
+                        catch (InvalidOperationException ex) when (__caught == "outer")
+                        {
+                            try
+                            {
+                                throw new ArgumentException("inner");
+                            }
+                            catch (ArgumentException inner) when (__caught == "outer")
+                            {
+                                return 7;
+                            }
+                            catch (Exception)
+                            {
+                                return 8;
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            return 9;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("catch (__caught_2 Exception)", printed);
+        Assert.Contains("__caught_2 is InvalidOperationException", printed);
+        Assert.Contains("catch (__caught_3 Exception)", printed);
+        Assert.Contains("__caught_3 is ArgumentException", printed);
+        Assert.Contains("__caught == \"outer\"", printed);
+
+        CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"outer\"))", "7");
+    }
+
+    [Fact]
     public void MergedCatch_InsideNestedExceptionHomonym_PreservesSystemExceptionIdentity()
     {
         string printed = TranslateUnit("""

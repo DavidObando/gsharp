@@ -110,6 +110,192 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
+    public void ReadableAlias_AvoidsEnclosingMethodThatShadowsTypeCall()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class Repro
+                {
+                    private static int TextStringBuilder()
+                    {
+                        return 4;
+                    }
+
+                    public static int Length()
+                    {
+                        var builder = new System.Text.StringBuilder("one");
+                        return builder.Length + TextStringBuilder();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("TextStringBuilder_2(\"one\")", printed, StringComparison.Ordinal);
+        Assert.Contains("func TextStringBuilder() int32", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadableAlias_AvoidsInvokedLocalValues()
+    {
+        string printed = Translate("""
+            using System;
+
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class LocalFunctionCase
+                {
+                    public static int Read()
+                    {
+                        int TextStringBuilder() => 1;
+                        var builder = new System.Text.StringBuilder("one");
+                        return builder.Length + TextStringBuilder();
+                    }
+                }
+
+                public static class LocalCase
+                {
+                    public static int Read()
+                    {
+                        Func<int> TextStringBuilder = () => 2;
+                        var builder = new System.Text.StringBuilder("two");
+                        return builder.Length + TextStringBuilder();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(printed, "TextStringBuilder_2(\""));
+        Assert.True(
+            CountOccurrences(printed, "TextStringBuilder()") >= 2,
+            "Invoked source values keep their emitted name while the generated type alias moves.");
+    }
+
+    [Fact]
+    public void ReadableAlias_DoesNotAvoidQualifiedMemberValues()
+    {
+        string printed = Translate("""
+            using System;
+
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class FieldCase
+                {
+                    private static Func<int> TextStringBuilder = () => 3;
+
+                    public static int Read()
+                    {
+                        var builder = new System.Text.StringBuilder("three");
+                        return builder.Length + TextStringBuilder();
+                    }
+                }
+
+                public static class PropertyCase
+                {
+                    private static Func<int> TextStringBuilder => () => 4;
+
+                    public static int Read()
+                    {
+                        var builder = new System.Text.StringBuilder("four");
+                        return builder.Length + TextStringBuilder();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(printed, "TextStringBuilder(\""));
+        Assert.Contains("FieldCase.TextStringBuilder()", printed, StringComparison.Ordinal);
+        Assert.Contains("PropertyCase.TextStringBuilder()", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadableAlias_DoesNotAvoidUninvokedValueNames()
+    {
+        string printed = Translate("""
+            namespace Demo
+            {
+                public sealed class StringBuilder
+                {
+                }
+
+                public static class FieldCase
+                {
+                    private static int TextStringBuilder = 1;
+
+                    public static int Read()
+                    {
+                        var builder = new System.Text.StringBuilder("one");
+                        return builder.Length + TextStringBuilder;
+                    }
+                }
+
+                public static class PropertyCase
+                {
+                    private static int TextStringBuilder => 2;
+
+                    public static int Read()
+                    {
+                        var builder = new System.Text.StringBuilder("two");
+                        return builder.Length + TextStringBuilder;
+                    }
+                }
+
+                public static class LocalCase
+                {
+                    public static int Read()
+                    {
+                        int TextStringBuilder = 3;
+                        var builder = new System.Text.StringBuilder("three");
+                        return builder.Length + TextStringBuilder;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder_2 = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(3, CountOccurrences(printed, "TextStringBuilder(\""));
+    }
+
+    [Fact]
     public void NestedSameArityMetadataType_DoesNotForceAlias()
     {
         string printed = Translate("""

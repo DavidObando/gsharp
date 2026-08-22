@@ -106,13 +106,11 @@ internal sealed partial class ExpressionBinder
         if (syntax.LeftPart is NameExpressionSyntax enclosingNameSyntax
             && syntax.RightPart is not NameExpressionSyntax
             && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.Text) is not VariableSymbol
-            && binderCtx.TryLookupSourceType(
-                scope,
+            && TryLookupSourceTypeWithImportPrecedence(
                 enclosingNameSyntax.IdentifierToken.Text,
                 preferredArity: -1,
-                getCurrentFunction(),
-                out var enclosingAliasType,
-                out _)
+                enclosingNameSyntax,
+                out var enclosingAliasType)
             && IsUserAggregateType(enclosingAliasType)
             && TryGetHeadIdentifier(syntax.RightPart, out var headIdentifier))
         {
@@ -784,13 +782,11 @@ internal sealed partial class ExpressionBinder
         nestedClassSymbol = null;
         StructSymbol? sourceType = null;
         if (syntax.LeftPart is NameExpressionSyntax sourceName
-            && binderCtx.TryLookupSourceType(
-                scope,
+            && TryLookupSourceTypeWithImportPrecedence(
                 sourceName.IdentifierToken.Text,
                 preferredArity: -1,
-                getCurrentFunction(),
-                out var sourceAlias,
-                out _)
+                sourceName,
+                out var sourceAlias)
             && sourceAlias is StructSymbol namedSourceType)
         {
             sourceType = namedSourceType;
@@ -1004,25 +1000,36 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="expr">The candidate type-naming expression.</param>
     /// <param name="headName">The resolved root identifier on success.</param>
+    /// <param name="headArity">The root segment's explicit arity, or -1 when unspecified.</param>
     /// <returns>Whether a root identifier could be extracted.</returns>
     private static bool TryGetUserTypeChainHead(
         ExpressionSyntax expr,
-        [NotNullWhen(true)] out string? headName)
+        [NotNullWhen(true)] out string? headName,
+        out int headArity)
     {
         switch (expr)
         {
             case NameExpressionSyntax name:
                 headName = name.IdentifierToken.Text;
+                headArity = -1;
                 return true;
             case GenericNameExpressionSyntax generic:
                 headName = generic.Identifier.Text;
+                headArity = generic.TypeArgumentList.Arguments.Count;
+                return true;
+            case IndexExpressionSyntax index
+                when !index.IsNullConditional
+                    && index.Target is NameExpressionSyntax indexName:
+                headName = indexName.IdentifierToken.Text;
+                headArity = index.Indices.Count;
                 return true;
             case IndexExpressionSyntax index when !index.IsNullConditional:
-                return TryGetUserTypeChainHead(index.Target, out headName);
+                return TryGetUserTypeChainHead(index.Target, out headName, out headArity);
             case AccessorExpressionSyntax accessor when !accessor.IsNullConditional:
-                return TryGetUserTypeChainHead(accessor.LeftPart, out headName);
+                return TryGetUserTypeChainHead(accessor.LeftPart, out headName, out headArity);
             default:
                 headName = null;
+                headArity = -1;
                 return false;
         }
     }
@@ -1063,15 +1070,13 @@ internal sealed partial class ExpressionBinder
         // TryResolveConstructedGenericTypeReceiver — so a real indexer whose
         // index is an identifier is never probed as a nested type (which would
         // look the index up as a type and report a spurious GS0113).
-        if (!TryGetUserTypeChainHead(expr, out var headName)
+        if (!TryGetUserTypeChainHead(expr, out var headName, out var headArity)
             || scope.TryLookupSymbol(headName) is VariableSymbol
-            || !binderCtx.TryLookupSourceType(
-                scope,
+            || !TryLookupSourceTypeWithImportPrecedence(
                 headName,
-                preferredArity: -1,
-                getCurrentFunction(),
-                out var headCandidate,
-                out _)
+                headArity,
+                expr,
+                out var headCandidate)
             || !IsUserAggregateType(headCandidate))
         {
             return false;
@@ -1102,13 +1107,11 @@ internal sealed partial class ExpressionBinder
         }
 
         var headArity = segments[0].Args.IsDefaultOrEmpty ? -1 : segments[0].Args.Length;
-        if (!binderCtx.TryLookupSourceType(
-                scope,
+        if (!TryLookupSourceTypeWithImportPrecedence(
                 segments[0].Name,
                 headArity,
-                getCurrentFunction(),
-                out var headDef,
-                out _)
+                expr,
+                out var headDef)
             || !IsUserAggregateType(headDef))
         {
             return false;
@@ -1846,6 +1849,38 @@ internal sealed partial class ExpressionBinder
 
         importedType = null;
         return false;
+    }
+
+    /// <summary>
+    /// Resolves a source type only when it remains visible after applying the
+    /// same lexical-inside / explicit-import-outside precedence as ordinary
+    /// type receivers.
+    /// </summary>
+    private bool TryLookupSourceTypeWithImportPrecedence(
+        string name,
+        int preferredArity,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out TypeSymbol? sourceType)
+    {
+        if (!binderCtx.TryLookupSourceType(
+                scope,
+                name,
+                preferredArity,
+                getCurrentFunction(),
+                out sourceType,
+                out _)
+            || TryResolveImportedTypeOverride(
+                name,
+                sourceType,
+                preferredArity,
+                declaration,
+                out _))
+        {
+            sourceType = null;
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
