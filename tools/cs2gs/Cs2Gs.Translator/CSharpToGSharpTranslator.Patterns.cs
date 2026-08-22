@@ -377,7 +377,16 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslateSizeOf(sizeOf);
 
                 case AliasQualifiedNameSyntax aliasQualified:
-                    // `global::System` → drop the `global::` alias and keep the name.
+                    if (this.context.GetSymbolInfo(aliasQualified).Symbol is INamedTypeSymbol qualifiedType)
+                    {
+                        return new TypeExpression(
+                            this.typeMapper.Map(
+                                qualifiedType,
+                                this.context,
+                                aliasQualified.GetLocation()));
+                    }
+
+                    // `global::System` → drop the `global::` alias and keep the namespace name.
                     return new IdentifierExpression(this.EmittedName(
                         aliasQualified.Name,
                         aliasQualified.Name.Identifier));
@@ -1221,7 +1230,10 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverUnderlying != constantUnderlying &&
                 this.context.SemanticModel.GetConstantValue(constantSyntax).HasValue)
             {
-                return this.CoerceOperandTo(constant, receiverType);
+                return this.CoerceOperandTo(
+                    constant,
+                    receiverType,
+                    constantSyntax.GetLocation());
             }
 
             return constant;

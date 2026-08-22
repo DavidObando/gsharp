@@ -622,16 +622,27 @@ internal sealed partial class ExpressionBinder
                 selectorLocation: syntax.Receiver.Location);
         }
 
-        // Issue #2394: check the same-compilation SOURCE type (struct/
-        // interface) receiver BEFORE the imported-CLR-class receiver, so a
-        // same-simple-name imported CLR type visible via SOME OTHER file's
-        // import (imports are compilation-wide, not file-scoped) cannot win
-        // over the receiver's own compilation's source type. Matches
-        // Binder.LookupType's precedence and the read-path fix in
-        // BindAccessorExpression.
+        binderCtx.TryLookupSourceType(
+            scope,
+            receiverName,
+            preferredArity: 0,
+            function,
+            out var sourceTypeAlias,
+            out _);
+        ImportedClassSymbol? importedTypeOverride = null;
+        if (sourceTypeAlias != null)
+        {
+            _ = TryResolveImportedTypeOverride(
+                receiverName,
+                sourceTypeAlias,
+                requestedArity: 0,
+                declaration: null,
+                out importedTypeOverride);
+        }
 
         // ADR-0053: user-defined struct/class type → static field write.
-        if (scope.TryLookupTypeAlias(receiverName, out var typeAlias) && typeAlias is StructSymbol userStruct)
+        if (importedTypeOverride == null
+            && sourceTypeAlias is StructSymbol userStruct)
         {
             var fieldName = syntax.FieldIdentifier.Text;
             if (TypeMemberModel.TryGetStaticFieldIncludingInherited(userStruct, fieldName, out var staticField, out var fieldOwner))
@@ -691,7 +702,8 @@ internal sealed partial class ExpressionBinder
         // write (`IName.Field = value`). Interface static fields are plain CLR
         // static fields; emit a static (null receiver / null declaring struct)
         // BoundFieldAssignmentExpression resolved by symbol identity.
-        if (scope.TryLookupTypeAlias(receiverName, out var ifaceAlias) && ifaceAlias is InterfaceSymbol userInterface)
+        if (importedTypeOverride == null
+            && sourceTypeAlias is InterfaceSymbol userInterface)
         {
             var fieldName = syntax.FieldIdentifier.Text;
             var staticField = userInterface.GetStaticField(fieldName);
@@ -723,10 +735,11 @@ internal sealed partial class ExpressionBinder
         }
 
         // Stream B: imported class name on LHS → static field/property write.
-        // Probe the import table after the source-type checks above so we
-        // don't shadow with a variable lookup diagnostic, but still let an
-        // in-compilation source type win over a same-named imported CLR type.
-        if (scope.TryLookupImportedClass(receiverName, declaration: null, out var importedClass))
+        // Submission globals retain value precedence; source/import type
+        // precedence was resolved lexically above.
+        ImportedClassSymbol? importedClass = importedTypeOverride;
+        if (importedClass != null
+            || scope.TryLookupImportedClass(receiverName, declaration: null, out importedClass))
         {
             if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
             {
@@ -1690,6 +1703,65 @@ internal sealed partial class ExpressionBinder
 
         var converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol);
         return new BoundClrPropertyAssignmentExpression(null, boundReceiver, instanceMember, converted, targetSymbol, staticContainerType: null);
+    }
+
+    /// <summary>
+    /// Binds a compound write through an imported static CLR type receiver.
+    /// </summary>
+    private BoundExpression? TryBindStaticClrCompoundAssignment(
+        Type clrReceiverType,
+        string memberName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        SyntaxKind baseOpSyntaxKind)
+    {
+        var importedClass = new ImportedClassSymbol(
+            clrReceiverType,
+            memberNameSyntax,
+            references: scope.References);
+        if (!importedClass.TryLookupMember(memberName, ne: null, out var staticMember))
+        {
+            return null;
+        }
+
+        if (!TryGetWritableClrMember(staticMember, out _, out var targetSymbol, out _))
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        var boundRhs = BindExpression(syntax.Value);
+        var leftRead = new BoundClrPropertyAccessExpression(
+            null,
+            receiver: null,
+            staticMember,
+            targetSymbol);
+        var binary = TryBindCompoundBinaryOperation(
+            baseOpSyntaxKind,
+            leftRead,
+            boundRhs,
+            syntax.Value.Location);
+        if (binary == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                targetSymbol,
+                boundRhs.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var converted = conversions.BindConversion(
+            syntax.Value.Location,
+            binary,
+            targetSymbol);
+        return new BoundClrPropertyAssignmentExpression(
+            null,
+            receiver: null,
+            staticMember,
+            converted,
+            targetSymbol,
+            staticContainerType: null);
     }
 
     /// <summary>

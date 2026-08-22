@@ -1181,12 +1181,13 @@ public sealed partial class CSharpToGSharpTranslator
                 paramsCollectionArg,
                 out int consumedSyntaxArguments);
 
-            _ = this.typeMapper.Map(
+            Location callLocation = callSyntax.GetLocation();
+            GTypeReference paramsCollectionType = this.typeMapper.Map(
                 paramsCollectionArg.Parameter.Type,
                 this.context,
-                callSyntax.GetLocation());
+                callLocation);
             ITypeSymbol paramsElementType = ((INamedTypeSymbol)paramsCollectionArg.Parameter.Type).TypeArguments[0];
-            GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callSyntax.GetLocation());
+            GTypeReference elementType = this.typeMapper.Map(paramsElementType, this.context, callLocation);
 
             var paramsValues = arguments.Skip(consumedSyntaxArguments)
                 .Select(a => this.TranslateArgument(a))
@@ -1195,14 +1196,26 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 translatedArguments.Add(this.CoerceMaterializedArgument(
                     new ArrayLiteralExpression(elementType, paramsValues),
-                    paramsCollectionArg.Parameter.Type));
+                    paramsCollectionArg.Parameter.Type,
+                    callLocation));
                 return translatedArguments;
             }
 
             var collectionElements = paramsValues
                 .Select(value => new CollectionInitializerElement(value))
                 .ToList();
-            var listType = new NamedTypeReference("List", new List<GTypeReference> { elementType });
+            bool exactListParameter = paramsCollectionArg.Parameter.Type
+                is INamedTypeSymbol { Name: "List" } listParameter
+                && listParameter.ContainingNamespace?.ToDisplayString()
+                    == "System.Collections.Generic";
+            GTypeReference listType = exactListParameter
+                ? paramsCollectionType
+                : this.typeMapper.Map(
+                    this.context.Compilation
+                        .GetTypeByMetadataName("System.Collections.Generic.List`1")
+                        ?.Construct(paramsElementType),
+                    this.context,
+                    callLocation);
             GExpression construction = BuildConstruction(listType, new List<GExpression>());
 
             // A zero-element params-collection call (`Total()`) has no elements to
@@ -1213,15 +1226,12 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression collectionArgument = collectionElements.Count == 0
                 ? construction
                 : new CollectionInitializerExpression(construction, collectionElements);
-            bool exactListParameter = paramsCollectionArg.Parameter.Type
-                is INamedTypeSymbol { Name: "List" } listParameter
-                && listParameter.ContainingNamespace?.ToDisplayString()
-                    == "System.Collections.Generic";
             translatedArguments.Add(exactListParameter
                 ? collectionArgument
                 : this.CoerceMaterializedArgument(
                     collectionArgument,
-                    paramsCollectionArg.Parameter.Type));
+                    paramsCollectionArg.Parameter.Type,
+                    callLocation));
             return translatedArguments;
         }
 
@@ -1327,7 +1337,8 @@ public sealed partial class CSharpToGSharpTranslator
             return coerceToParameterType
                 ? this.CoerceMaterializedArgument(
                     defaultValue,
-                    argumentOperation.Parameter.Type)
+                    argumentOperation.Parameter.Type,
+                    callSyntax.GetLocation())
                 : defaultValue;
         }
 
@@ -1781,7 +1792,10 @@ public sealed partial class CSharpToGSharpTranslator
                     && literalSource != literalTarget
                     && !this.TargetsConcreteNumericParameter(argument))
                 {
-                    return this.CoerceOperandTo(translated, literalInfo.ConvertedType);
+                    return this.CoerceOperandTo(
+                        translated,
+                        literalInfo.ConvertedType,
+                        expression.GetLocation());
                 }
 
                 return this.CoerceConstantToUnsigned(expression, translated);
@@ -1792,7 +1806,10 @@ public sealed partial class CSharpToGSharpTranslator
                 TryGetNumericKind(info.ConvertedType, out SpecialType convertedUnderlying) &&
                 sourceUnderlying != convertedUnderlying)
             {
-                return this.CoerceOperandTo(translated, info.ConvertedType);
+                return this.CoerceOperandTo(
+                    translated,
+                    info.ConvertedType,
+                    expression.GetLocation());
             }
 
             return translated;
@@ -1951,9 +1968,10 @@ public sealed partial class CSharpToGSharpTranslator
             if (typeSymbol is INamedTypeSymbol { SpecialType: SpecialType.System_Object } systemObject)
             {
                 type = new NamedTypeReference(
-                    this.typeMapper.GetOrCreateMetadataTypeAlias(
+                    this.typeMapper.GetOrCreateImportedTypeAlias(
                         systemObject,
-                        this.context));
+                        this.context,
+                        creationNode.GetLocation()));
             }
 
             bool hasCtorArgs = arguments.Count > 0;
@@ -2125,7 +2143,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                 materialized.Add(this.CoerceMaterializedArgument(
                     defaultValue,
-                    parameter.Type));
+                    parameter.Type,
+                    creationNode.GetLocation()));
             }
 
             return materialized;
@@ -2133,17 +2152,18 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression CoerceMaterializedArgument(
             GExpression value,
-            ITypeSymbol parameterType)
+            ITypeSymbol parameterType,
+            Location location)
         {
             if (!parameterType.IsReferenceType)
             {
-                return this.CoerceOperandTo(value, parameterType);
+                return this.CoerceOperandTo(value, parameterType, location);
             }
 
             GTypeReference mappedType = this.typeMapper.Map(
                 parameterType,
                 this.context,
-                Location.None);
+                location);
             if (value is LiteralExpression { Kind: LiteralKind.Null }
                 || value is IdentifierExpression { Name: "nil" })
             {

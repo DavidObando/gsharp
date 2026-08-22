@@ -1132,8 +1132,41 @@ internal sealed partial class ExpressionBinder
             // non-generic `Foo` and a generic `Foo[T]` can coexist. Without one,
             // prefer the arity-0 type (falling back to a lone generic for inference).
             var preferredArity = syntax.TypeArgumentList != null ? syntax.TypeArgumentList.Arguments.Count : -1;
-            var foundAlias = scope.TryLookupTypeAlias(typeName, preferredArity, out var resolvedType, out var typeNameAmbiguous);
-            if (!foundAlias || !(resolvedType is StructSymbol resolvedStruct))
+            var foundAlias = binderCtx.TryLookupSourceType(
+                scope,
+                typeName,
+                preferredArity,
+                getCurrentFunction(),
+                out var resolvedType,
+                out var typeNameAmbiguous);
+            var resolvedStruct = resolvedType as StructSymbol;
+            ImportedClassSymbol? importedCandidate = null;
+            bool hasImportedCandidate =
+                !typeNameAmbiguous
+                && scope.TryLookupImportedClassByArity(
+                    typeName,
+                    preferredArity,
+                    declaration: null,
+                    out importedCandidate);
+
+            // Issue #3466: a nested source type may retain the bare (name,
+            // arity) key for references from its containing type. Outside that
+            // lexical scope, an explicit alias or same-named top-level CLR
+            // import wins; inside it, the nested source type retains its
+            // existing short-name meaning.
+            bool importedTypeTakesPrecedence =
+                foundAlias
+                && resolvedStruct != null
+                && hasImportedCandidate
+                && importedCandidate != null
+                && binderCtx.ImportedTypeOverridesSourceType(
+                    scope,
+                    typeName,
+                    resolvedStruct,
+                    preferredArity,
+                    getCurrentFunction(),
+                    importedCandidate.ClassType);
+            if (!foundAlias || resolvedStruct == null || importedTypeTakesPrecedence)
             {
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
                 // targets an IMPORTED reference-type class (a BCL class such as
@@ -1153,24 +1186,24 @@ internal sealed partial class ExpressionBinder
                 // possibly be what the literal means — skip straight to
                 // reporting the dedicated ambiguity diagnostic rather than the
                 // generic "cannot find type".
-                if (!typeNameAmbiguous
-                    && syntax.TypeArgumentList == null
-                    && scope.TryLookupImportedClass(typeName, declaration: null, out var importedClass)
-                    && importedClass.ClassType is { IsGenericTypeDefinition: false })
+                if (syntax.TypeArgumentList == null
+                    && hasImportedCandidate
+                    && importedCandidate != null
+                    && importedCandidate.ClassType is { IsGenericTypeDefinition: false })
                 {
-                    if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedClass.ClassType, scope.References, out var importedAggregate))
+                    if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedCandidate.ClassType, scope.References, out var importedAggregate))
                     {
                         structSymbol = importedAggregate;
                     }
                     else
                     {
-                        return BindImportedTypeLiteralExpression(syntax, importedClass.ClassType);
+                        return BindImportedTypeLiteralExpression(syntax, importedCandidate.ClassType);
                     }
                 }
-                else if (!typeNameAmbiguous
-                    && syntax.TypeArgumentList != null
-                    && scope.TryLookupImportedGenericClass(
-                        typeName, syntax.TypeArgumentList.Arguments.Count, out var openImportedType)
+                else if (syntax.TypeArgumentList != null
+                    && hasImportedCandidate
+                    && importedCandidate != null
+                    && importedCandidate.ClassType.IsGenericTypeDefinition
                     && TryResolveClrConstructionTypeArgs(
                         syntax.TypeArgumentList, out var clrTypeArguments, out _, out var hasSymbolicArgument)
                     && !hasSymbolicArgument)
@@ -1178,7 +1211,7 @@ internal sealed partial class ExpressionBinder
                     Type closedImportedType;
                     try
                     {
-                        closedImportedType = openImportedType.MakeGenericType(clrTypeArguments);
+                        closedImportedType = importedCandidate.ClassType.MakeGenericType(clrTypeArguments);
                     }
                     catch (ArgumentException)
                     {

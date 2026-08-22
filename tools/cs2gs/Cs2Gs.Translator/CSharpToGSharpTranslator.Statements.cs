@@ -392,7 +392,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && rightIsIntegral
                 && this.IntegralConstantFits(binary.Right, leftUnderlying))
             {
-                right = this.CoerceOperandTo(right, leftType);
+                right = this.CoerceOperandTo(
+                    right,
+                    leftType,
+                    binary.Right.GetLocation());
                 return new BinaryExpression(left, op, right);
             }
 
@@ -402,7 +405,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && rightIsIntegral
                 && this.IntegralConstantFits(binary.Left, rightUnderlying))
             {
-                left = this.CoerceOperandTo(left, rightType);
+                left = this.CoerceOperandTo(
+                    left,
+                    rightType,
+                    binary.Left.GetLocation());
                 return new BinaryExpression(left, op, right);
             }
 
@@ -419,13 +425,19 @@ public sealed partial class CSharpToGSharpTranslator
             if (TryGetNumericKind(leftConverted, out SpecialType leftConvUnderlying) &&
                 leftConvUnderlying != leftUnderlying)
             {
-                left = this.CoerceOperandTo(left, leftConverted);
+                left = this.CoerceOperandTo(
+                    left,
+                    leftConverted,
+                    binary.Left.GetLocation());
             }
 
             if (TryGetNumericKind(rightConverted, out SpecialType rightConvUnderlying) &&
                 rightConvUnderlying != rightUnderlying)
             {
-                right = this.CoerceOperandTo(right, rightConverted);
+                right = this.CoerceOperandTo(
+                    right,
+                    rightConverted,
+                    binary.Right.GetLocation());
             }
 
             return new BinaryExpression(left, op, right);
@@ -706,7 +718,10 @@ public sealed partial class CSharpToGSharpTranslator
                 TryGetNumericKind(rightType, out SpecialType rightUnderlying) &&
                 leftUnderlying != rightUnderlying)
             {
-                return this.CoerceOperandTo(rhs, UnwrapNullable(leftType));
+                return this.CoerceOperandTo(
+                    rhs,
+                    UnwrapNullable(leftType),
+                    assignment.Right.GetLocation());
             }
 
             return rhs;
@@ -728,7 +743,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol int32Type =
                     this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(length, int32Type);
+                return this.CoerceOperandTo(
+                    length,
+                    int32Type,
+                    lengthSyntax.GetLocation());
             }
 
             return length;
@@ -772,7 +790,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol int32Type =
                     this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(index, int32Type);
+                return this.CoerceOperandTo(
+                    index,
+                    int32Type,
+                    indexSyntax.GetLocation());
             }
 
             return index;
@@ -790,7 +811,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol int32Type =
                     this.context.Compilation.GetSpecialType(SpecialType.System_Int32);
-                return this.CoerceOperandTo(index, int32Type);
+                return this.CoerceOperandTo(
+                    index,
+                    int32Type,
+                    indexSyntax.GetLocation());
             }
 
             return index;
@@ -1021,7 +1045,10 @@ public sealed partial class CSharpToGSharpTranslator
                 if (TryGetNumericKind(resultType, out SpecialType resultUnderlying) &&
                     rightUnderlying != resultUnderlying)
                 {
-                    right = this.CoerceOperandTo(right, UnwrapNullable(resultType));
+                    right = this.CoerceOperandTo(
+                        right,
+                        UnwrapNullable(resultType),
+                        binary.Right.GetLocation());
                 }
             }
 
@@ -1130,13 +1157,19 @@ public sealed partial class CSharpToGSharpTranslator
                 if (TryGetNumericKind(trueType, out SpecialType trueUnderlying) &&
                     trueUnderlying != resultUnderlying)
                 {
-                    whenTrue = this.CoerceOperandTo(whenTrue, resultType);
+                    whenTrue = this.CoerceOperandTo(
+                        whenTrue,
+                        resultType,
+                        conditional.WhenTrue.GetLocation());
                 }
 
                 if (TryGetNumericKind(falseType, out SpecialType falseUnderlying) &&
                     falseUnderlying != resultUnderlying)
                 {
-                    whenFalse = this.CoerceOperandTo(whenFalse, resultType);
+                    whenFalse = this.CoerceOperandTo(
+                        whenFalse,
+                        resultType,
+                        conditional.WhenFalse.GetLocation());
                 }
             }
 
@@ -1187,16 +1220,19 @@ public sealed partial class CSharpToGSharpTranslator
         // be a reference type or a nullable value type"); the canonical G# form is
         // the width-bearing conversion-call `T(expr)`. Only a reference type or a
         // nullable value type target (where `as` is valid) keeps the `as` form.
-        private GExpression CoerceOperandTo(GExpression expression, ITypeSymbol targetType)
+        private GExpression CoerceOperandTo(
+            GExpression expression,
+            ITypeSymbol targetType,
+            Location location)
         {
             if (IsNonNullableValueType(targetType))
             {
                 GTypeReference conversionTarget = this.typeMapper.Map(
-                    targetType, this.context, Location.None);
+                    targetType, this.context, location);
                 return new ConversionExpression(conversionTarget, expression);
             }
 
-            GTypeReference target = this.typeMapper.Map(targetType, this.context, Location.None);
+            GTypeReference target = this.typeMapper.Map(targetType, this.context, location);
             return new ParenthesizedExpression(
                 new BinaryExpression(expression, "as", new TypeExpression(target)));
         }
@@ -1562,6 +1598,7 @@ public sealed partial class CSharpToGSharpTranslator
                 CatchClauseSyntax catchClause = node.Catches[catchIndex];
                 string variableName = null;
                 GTypeReference exceptionType = null;
+                bool hasSyntheticBinder = false;
                 if (catchClause.Declaration != null)
                 {
                     ITypeSymbol typeSymbol = catchTypeSymbols[catchIndex];
@@ -1575,7 +1612,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         // `catch (Exception)` with no binding: synthesize one so the
                         // G# typed-catch form (which requires a binder) is well-formed.
-                        variableName = "ex";
+                        hasSyntheticBinder = true;
                     }
                 }
                 else
@@ -1584,8 +1621,17 @@ public sealed partial class CSharpToGSharpTranslator
                     // equivalent: the parser requires the parenthesized typed-binder
                     // form `catch (e Exception) { }`. Synthesize a binder over the
                     // root `System.Exception` so the catch-all round-trips (ADR-0115).
-                    variableName = "ex";
-                    exceptionType = new NamedTypeReference("Exception");
+                    hasSyntheticBinder = true;
+                    exceptionType = this.MapSystemException(
+                        catchClause.GetLocation());
+                }
+
+                if (hasSyntheticBinder)
+                {
+                    variableName = this.AllocateSyntheticCatchBinder(
+                        catchClause,
+                        new[] { catchClause });
+                    this.state.ActiveSyntheticCatchBinders.Add(variableName);
                 }
 
                 string previousCatch = this.state.CurrentCatchVariable;
@@ -1621,6 +1667,10 @@ public sealed partial class CSharpToGSharpTranslator
                 finally
                 {
                     this.state.CurrentCatchVariable = previousCatch;
+                    if (hasSyntheticBinder)
+                    {
+                        this.state.ActiveSyntheticCatchBinders.Remove(variableName);
+                    }
                 }
             }
 
@@ -1650,22 +1700,40 @@ public sealed partial class CSharpToGSharpTranslator
         /// <c>try</c>. The merged catch is typed at the narrowest type provably
         /// safe for every merged clause (the last clause's type, when it is a
         /// supertype of all the others; <c>System.Exception</c> otherwise), and
-        /// its body dispatches on <c>ex is OriginalType</c> (G#'s Kotlin-style
-        /// smart cast narrows <c>ex</c> inside each branch, ADR-0069) plus each
-        /// clause's own filter, in source order, falling through to the next
-        /// clause when a type test or filter fails and rethrowing if none of
-        /// the merged clauses match (should not happen if the merge boundary is
-        /// correct, but is a safe fallback).
+        /// its body dispatches on a synthetic binder's
+        /// <c>is OriginalType</c> test (G#'s Kotlin-style smart cast narrows the
+        /// binder inside each branch, ADR-0069) plus each clause's own filter,
+        /// in source order, falling through to the next clause when a type test
+        /// or filter fails and rethrowing if none of the merged clauses match
+        /// (should not happen if the merge boundary is correct, but is a safe
+        /// fallback).
         /// </summary>
         private CatchClause BuildMergedFilteredCatch(TryStatementSyntax node, ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
         {
-            // Compiler-generated name (never a valid C# identifier a source
-            // catch variable could use) so the per-clause rebind below always
-            // fires, even when the original catch variable is itself named
-            // "ex" — otherwise that clause's body would see the merged
-            // binder's declared (unnarrowed) type instead of the smart-cast
-            // narrowed subtype.
-            const string sharedBinder = "__caught";
+            string sharedBinder = this.AllocateSyntheticCatchBinder(
+                node,
+                node.Catches.Skip(mergeStartIndex));
+            this.state.ActiveSyntheticCatchBinders.Add(sharedBinder);
+            try
+            {
+                return this.BuildMergedFilteredCatchCore(
+                    node,
+                    catchTypeSymbols,
+                    mergeStartIndex,
+                    sharedBinder);
+            }
+            finally
+            {
+                this.state.ActiveSyntheticCatchBinders.Remove(sharedBinder);
+            }
+        }
+
+        private CatchClause BuildMergedFilteredCatchCore(
+            TryStatementSyntax node,
+            ITypeSymbol[] catchTypeSymbols,
+            int mergeStartIndex,
+            string sharedBinder)
+        {
             var sharedBinderExpr = new IdentifierExpression(sharedBinder);
 
             // Safety-net fallback: unreachable if the merged catch's declared
@@ -1679,7 +1747,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol typeSymbol = catchTypeSymbols[i];
                 GTypeReference clauseType = typeSymbol != null
                     ? this.typeMapper.Map(typeSymbol, this.context, clause.GetLocation())
-                    : new NamedTypeReference("Exception");
+                    : this.MapSystemException(clause.GetLocation());
                 string originalName = clause.Declaration != null && !string.IsNullOrEmpty(clause.Declaration.Identifier.ValueText)
                     ? this.EmittedName(clause.Declaration, clause.Declaration.Identifier)
                     : sharedBinder;
@@ -1704,13 +1772,15 @@ public sealed partial class CSharpToGSharpTranslator
                 // Re-bind this clause's own catch-variable name to the shared
                 // binder (narrowed to this clause's type by the `is` test below)
                 // so the body's references to its original name still resolve.
-                // Always emitted (sharedBinder can never collide with a
-                // source name), so this also carries the narrowed type into
-                // closures capturing the rebind, unlike the shared binder.
-                var branchStatements = new List<GStatement>
+                // The allocated binder cannot collide with source names, so
+                // this also carries the narrowed type into closures capturing
+                // the rebind, unlike the shared binder.
+                var branchStatements = new List<GStatement>();
+                if (!string.Equals(originalName, sharedBinder, StringComparison.Ordinal))
                 {
-                    new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr),
-                };
+                    branchStatements.Add(
+                        new LocalDeclarationStatement(BindingKind.Let, originalName, initializer: sharedBinderExpr));
+                }
 
                 GStatement matched = filter != null
                     ? new IfStatement(filter, body, new BlockStatement(new List<GStatement> { dispatch }))
@@ -1721,8 +1791,52 @@ public sealed partial class CSharpToGSharpTranslator
                 dispatch = new IfStatement(typeTest, new BlockStatement(branchStatements), new BlockStatement(new List<GStatement> { dispatch }));
             }
 
-            GTypeReference mergedType = this.ComputeMergedCatchType(catchTypeSymbols, mergeStartIndex);
+            CatchClauseSyntax lastClause = node.Catches[node.Catches.Count - 1];
+            Location mergedTypeLocation = lastClause.Declaration?.Type.GetLocation()
+                ?? lastClause.GetLocation();
+            GTypeReference mergedType = this.ComputeMergedCatchType(
+                catchTypeSymbols,
+                mergeStartIndex,
+                mergedTypeLocation);
             return new CatchClause(sharedBinder, mergedType, new BlockStatement(new List<GStatement> { dispatch }));
+        }
+
+        private string AllocateSyntheticCatchBinder(
+            SyntaxNode scope,
+            IEnumerable<CatchClauseSyntax> catchClauses)
+        {
+            SemanticModel semanticModel = ReferenceEquals(
+                this.context.SemanticModel.SyntaxTree,
+                scope.SyntaxTree)
+                    ? this.context.SemanticModel
+                    : this.context.Compilation.GetSemanticModel(scope.SyntaxTree);
+            var occupied = new HashSet<string>(
+                this.state.ActiveSyntheticCatchBinders,
+                StringComparer.Ordinal);
+            foreach (ISymbol symbol in semanticModel.LookupSymbols(scope.SpanStart))
+            {
+                occupied.Add(this.EmittedName(symbol, symbol.Name));
+            }
+
+            foreach (CatchClauseSyntax catchClause in catchClauses)
+            {
+                foreach (SyntaxNode declaration in catchClause.DescendantNodesAndSelf())
+                {
+                    if (semanticModel.GetDeclaredSymbol(declaration) is ISymbol symbol)
+                    {
+                        occupied.Add(this.EmittedName(symbol, symbol.Name));
+                    }
+                }
+            }
+
+            const string baseName = "__caught";
+            string candidate = baseName;
+            for (var suffix = 2; occupied.Contains(candidate); suffix++)
+            {
+                candidate = $"{baseName}_{suffix}";
+            }
+
+            return candidate;
         }
 
         /// <summary>
@@ -1732,7 +1846,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// without the outer G# catch itself narrowing anything away);
         /// <c>System.Exception</c> otherwise (always safe, if less precise).
         /// </summary>
-        private GTypeReference ComputeMergedCatchType(ITypeSymbol[] catchTypeSymbols, int mergeStartIndex)
+        private GTypeReference ComputeMergedCatchType(
+            ITypeSymbol[] catchTypeSymbols,
+            int mergeStartIndex,
+            Location location)
         {
             int lastIndex = catchTypeSymbols.Length - 1;
             ITypeSymbol lastType = catchTypeSymbols[lastIndex];
@@ -1747,10 +1864,19 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (lastIsCommonSupertype)
             {
-                return this.typeMapper.Map(lastType, this.context, Location.None);
+                return this.typeMapper.Map(lastType, this.context, location);
             }
 
-            return new NamedTypeReference("Exception");
+            return this.MapSystemException(location);
+        }
+
+        private GTypeReference MapSystemException(Location location)
+        {
+            ITypeSymbol systemException =
+                this.context.Compilation.GetTypeByMetadataName("System.Exception");
+            return systemException != null
+                ? this.typeMapper.Map(systemException, this.context, location)
+                : new NamedTypeReference("Exception");
         }
 
         /// <summary>

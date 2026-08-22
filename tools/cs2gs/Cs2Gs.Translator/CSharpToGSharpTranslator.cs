@@ -286,7 +286,10 @@ public sealed partial class CSharpToGSharpTranslator
         {
             AnalyzerApiMode = this.analyzerApiMode,
         };
-        typeMapper.ReserveImportAliases(imports);
+        typeMapper.ReserveImportNames(
+            imports,
+            contributingTrees,
+            context.Compilation);
         var visitor = new DeclarationVisitor(
             context,
             typeMapper,

@@ -273,6 +273,10 @@ internal sealed class DocumentTranslationState
     // used to translate a C# re-throw (`throw;`) — which has no bare G# form —
     // to `throw <caughtVar>` (ADR-0115 §B).
     public string CurrentCatchVariable { get; set; }
+
+    // Synthetic catch binders active while nested catch bodies translate.
+    public HashSet<string> ActiveSyntheticCatchBinders { get; } =
+        new HashSet<string>(StringComparer.Ordinal);
 }
 
 internal sealed class LiftedRecursiveLocalFunction

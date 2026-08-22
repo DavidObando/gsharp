@@ -41,6 +41,8 @@ internal sealed partial class DeclarationBinder
     internal void BindStructDeclarationBody(StructDeclarationSyntax syntax, PackageSymbol package, StructSymbol structSymbol)
     {
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
+        var previousContainingType = binderCtx.CurrentContainingType;
+        binderCtx.CurrentContainingType = structSymbol;
         try
         {
             // Issue #1537: a nested type's members may reference the ENCLOSING
@@ -85,6 +87,7 @@ internal sealed partial class DeclarationBinder
         finally
         {
             binderCtx.CurrentTypeParameters = previousTypeParameters;
+            binderCtx.CurrentContainingType = previousContainingType;
         }
     }
 

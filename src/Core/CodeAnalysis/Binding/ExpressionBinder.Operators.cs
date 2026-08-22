@@ -291,7 +291,7 @@ internal sealed partial class ExpressionBinder
             && structCast.TypeArgumentList == null
             && structCast.NullableQuestionToken == null
             && structCast.Arguments.Count == 1
-            && scope.TryLookupTypeAlias(structCast.Identifier.Text, out var castTarget)
+            && lookupType(structCast.Identifier.Text) is { } castTarget
             && BlittableDetector.IsBlittableValueStructPointee(castTarget))
         {
             var castArg = BindExpression(structCast.Arguments[0]);

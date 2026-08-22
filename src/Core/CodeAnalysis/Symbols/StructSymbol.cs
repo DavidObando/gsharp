@@ -1358,7 +1358,25 @@ public sealed class StructSymbol : TypeSymbol
     [return: NotNullIfNotNull(nameof(definition))]
     public static StructSymbol? Construct(StructSymbol? definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type>? mapClrType = null)
     {
-        if (definition == null || !definition.IsGenericDefinition)
+        if (definition == null)
+        {
+            return definition;
+        }
+
+        // A lexically resolved generic nested type may already carry the
+        // concrete construction of its enclosing type. Preserve that vector
+        // when applying the nested type's own arguments.
+        if (definition.IsGenericDefinition
+            && !definition.EnclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return ConstructNestedGeneric(
+                definition.Definition ?? definition,
+                definition.EnclosingTypeArguments,
+                typeArguments,
+                mapClrType);
+        }
+
+        if (!definition.IsGenericDefinition)
         {
             return definition;
         }
@@ -1954,6 +1972,11 @@ public sealed class StructSymbol : TypeSymbol
         constructed.Definition = definition;
         constructed.EnclosingTypeArguments = enclosingTypeArguments;
         constructed.mapClrType = mapClrType;
+        if (!definition.TypeParameters.IsDefaultOrEmpty)
+        {
+            constructed.SetTypeParameters(definition.TypeParameters);
+        }
+
         constructed.ContainingType = definition.ContainingType;
         return constructed;
     }

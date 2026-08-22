@@ -40,14 +40,29 @@ internal static class AccessibilityChecker
     /// <returns><see langword="true"/> when the access is permitted.</returns>
     public static bool IsAccessible(Accessibility accessibility, StructSymbol? declaringType, FunctionSymbol? currentFunction)
     {
+        var enclosingType = (currentFunction?.ReceiverType as StructSymbol)
+            ?? (currentFunction?.StaticOwnerType as StructSymbol)
+            ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
+        return IsAccessibleFromType(accessibility, declaringType, enclosingType);
+    }
+
+    /// <summary>
+    /// Returns whether a member or nested type is accessible from an enclosing
+    /// source type when no function symbol exists yet.
+    /// </summary>
+    /// <param name="accessibility">The accessed member or nested type's accessibility.</param>
+    /// <param name="declaringType">The type that declares the member or nested type.</param>
+    /// <param name="enclosingType">The source type containing the access.</param>
+    /// <returns><see langword="true"/> when the access is permitted.</returns>
+    public static bool IsAccessibleFromType(
+        Accessibility accessibility,
+        StructSymbol? declaringType,
+        StructSymbol? enclosingType)
+    {
         if (declaringType == null || (accessibility != Accessibility.Protected && accessibility != Accessibility.Private))
         {
             return true;
         }
-
-        var enclosingType = (currentFunction?.ReceiverType as StructSymbol)
-            ?? (currentFunction?.StaticOwnerType as StructSymbol)
-            ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
 
         if (accessibility == Accessibility.Private)
         {
