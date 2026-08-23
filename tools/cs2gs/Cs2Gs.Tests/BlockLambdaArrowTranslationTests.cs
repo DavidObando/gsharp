@@ -166,8 +166,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__local_F_Fact", printed);
-        Assert.DoesNotContain("let Fact = func", printed);
+        // Issue #3501 A2: direct self-recursion stays as an in-place `let`
+        // literal — gsc's self-reference support removed the lift.
+        Assert.DoesNotContain("__local_F_Fact", printed);
+        Assert.Contains("let Fact = func", printed);
         Assert.DoesNotContain("(n int32) -> {", printed);
     }
 

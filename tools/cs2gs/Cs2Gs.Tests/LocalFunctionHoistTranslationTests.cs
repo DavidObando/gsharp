@@ -264,13 +264,12 @@ namespace Demo
     }
 }");
 
-    // Issue #3399 hybrid: a capturing recursive local lowers to G#'s
-    // nullable function-typed local, not a synthesized capture-passing helper.
-    Assert.DoesNotContain("let Add", printed, StringComparison.Ordinal);
+    // Issue #3501 A2: gsc `let`-bound literals can self-reference, so a
+    // DIRECT self-recursive capturing local stays on the canonical
+    // `let Add = func …` path — no lift, no #3399 nullable-local scheme.
     Assert.DoesNotContain("__local_Run_Add", printed, StringComparison.Ordinal);
-    Assert.Contains("var Add", printed, StringComparison.Ordinal);
-    Assert.Contains("Add = func", printed, StringComparison.Ordinal);
-    Assert.Contains("Add!!(", printed, StringComparison.Ordinal);
+    Assert.Contains("let Add = func", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
     CompileAndRun(
         printed,
         "C().Run(3)\nConsole.WriteLine(\"ok\")",
@@ -437,10 +436,14 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("let Visit", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("let IsBaseCase", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Factorial_Visit", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Factorial_IsBaseCase", printed, StringComparison.Ordinal);
+        // Issue #3501 A2: direct self-recursion no longer forces the shared-
+        // helper lift — both statics stay as in-place `let` literals (Visit's
+        // self-call resolves through its own binding; IsBaseCase is declared
+        // before Visit, so the sibling call resolves lexically).
+        Assert.Contains("let Visit = func", printed, StringComparison.Ordinal);
+        Assert.Contains("let IsBaseCase = func", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_Factorial_Visit", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_Factorial_IsBaseCase", printed, StringComparison.Ordinal);
         CompileAndRun(
             printed,
             "Console.WriteLine(C().Factorial(5))",
