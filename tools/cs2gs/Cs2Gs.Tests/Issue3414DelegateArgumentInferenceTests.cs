@@ -203,10 +203,10 @@ public sealed class Issue3414DelegateArgumentInferenceTests
         Assert.Contains("DiagnosticsOf", consumer, StringComparison.Ordinal);
         Assert.Contains("IsError", consumer, StringComparison.Ordinal);
         Assert.Contains(
-            "ApplyDescription(cell, func (__arg0 Cell) object",
+            "ApplyDescription(cell, func (value Cell) object",
             consumer,
             StringComparison.Ordinal);
-        Assert.Contains("return Program.Describe(__arg0)", consumer, StringComparison.Ordinal);
+        Assert.Contains("return Program.Describe(value)", consumer, StringComparison.Ordinal);
         Assert.Contains(
             "Rebuilder(func (value Cell) object",
             consumer,

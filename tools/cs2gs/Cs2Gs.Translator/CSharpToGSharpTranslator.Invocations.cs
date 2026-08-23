@@ -898,13 +898,22 @@ public sealed partial class CSharpToGSharpTranslator
                 PassStaticExtensionHelperReceiver(receiver, method),
             };
 
+            var wrapperParameterNames = new HashSet<string>(StringComparer.Ordinal);
+            ReserveMethodGroupReceiverName(receiver, wrapperParameterNames);
+            ImmutableArray<IParameterSymbol> helperNameParameters =
+                invoke != null
+                    ? MethodGroupWrapperNameParameters(method, invoke)
+                    : method.Parameters;
             for (int i = 0; i < sourceParameters.Length; i++)
             {
                 Parameter mapped = this.MapParameter(
                     sourceParameters[i],
                     member,
                     promoteNullability: false);
-                string name = $"__arg{i}";
+                string name = MethodGroupWrapperParameterName(
+                    helperNameParameters,
+                    i,
+                    wrapperParameterNames);
                 parameters.Add(new Parameter(
                     name,
                     mapped.Type,
@@ -1594,11 +1603,75 @@ public sealed partial class CSharpToGSharpTranslator
                     invoke.ReturnType);
         }
 
+        // Issue #3468: a synthesized method-group wrapper parameter takes its
+        // name from the TARGET method's corresponding parameter (`path`,
+        // `value`) so the wrapper reads like the surrounding arrow lambdas;
+        // `__arg{i}` remains only the fallback for missing, discard, reserved,
+        // or colliding names. For extension-method groups the delegate's
+        // parameters align to the ORIGINAL method's parameters AFTER the
+        // receiver, so callers pass the receiver-stripped list, and the
+        // captured receiver identifier is pre-seeded into
+        // <paramref name="usedNames"/> so a derived name can never shadow it.
+        private static ImmutableArray<IParameterSymbol> MethodGroupWrapperNameParameters(
+            IMethodSymbol method,
+            IMethodSymbol invoke)
+        {
+            IMethodSymbol original = method.ReducedFrom ?? method;
+            if (method.MethodKind == MethodKind.ReducedExtension)
+            {
+                return method.Parameters;
+            }
+
+            return original.IsExtensionMethod
+                && original.Parameters.Length == invoke.Parameters.Length + 1
+                ? original.Parameters.RemoveAt(0)
+                : method.Parameters;
+        }
+
+        private static void ReserveMethodGroupReceiverName(
+            GExpression receiver,
+            HashSet<string> usedNames)
+        {
+            GExpression current = receiver;
+            while (current is MemberAccessExpression memberAccess)
+            {
+                current = memberAccess.Target;
+            }
+
+            if (current is IdentifierExpression identifier)
+            {
+                usedNames.Add(identifier.Name);
+            }
+        }
+
+        private static string MethodGroupWrapperParameterName(
+            ImmutableArray<IParameterSymbol> targetParameters,
+            int index,
+            HashSet<string> usedNames)
+        {
+            string candidate = index < targetParameters.Length
+                ? targetParameters[index].Name
+                : null;
+            if (string.IsNullOrEmpty(candidate)
+                || candidate == "_"
+                || GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+                    candidate,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter)
+                || !usedNames.Add(candidate))
+            {
+                candidate = $"__arg{index}";
+                usedNames.Add(candidate);
+            }
+
+            return candidate;
+        }
+
         private GExpression TranslateExactMethodGroupArgument(
             ExpressionSyntax expression,
             IMethodSymbol method,
             IMethodSymbol invoke)
         {
+            var wrapperParameterNames = new HashSet<string>(StringComparer.Ordinal);
             var parameters = new List<Parameter>(invoke.Parameters.Length);
             var arguments = new List<GExpression>(invoke.Parameters.Length + 1);
             GExpression target = null;
@@ -1664,6 +1737,20 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            target ??= this.TranslateMethodGroupInvocationTarget(
+                expression,
+                method);
+            ReserveMethodGroupReceiverName(target, wrapperParameterNames);
+
+            // At this point `arguments` holds only a captured receiver (the
+            // static-extension-helper shape); reserve its root identifier too.
+            foreach (GExpression receiverArgument in arguments)
+            {
+                ReserveMethodGroupReceiverName(receiverArgument, wrapperParameterNames);
+            }
+
+            ImmutableArray<IParameterSymbol> wrapperNameParameters =
+                MethodGroupWrapperNameParameters(method, invoke);
             for (int index = 0; index < invoke.Parameters.Length; index++)
             {
                 IParameterSymbol invokeParameter = invoke.Parameters[index];
@@ -1671,7 +1758,10 @@ public sealed partial class CSharpToGSharpTranslator
                     invokeParameter,
                     expression,
                     promoteNullability: false);
-                string name = $"__arg{index}";
+                string name = MethodGroupWrapperParameterName(
+                    wrapperNameParameters,
+                    index,
+                    wrapperParameterNames);
                 parameters.Add(new Parameter(
                     name,
                     mapped.Type,
@@ -1687,9 +1777,6 @@ public sealed partial class CSharpToGSharpTranslator
                 arguments.Add(forwarded);
             }
 
-            target ??= this.TranslateMethodGroupInvocationTarget(
-                expression,
-                method);
             IReadOnlyList<GTypeReference> typeArguments = method.IsGenericMethod
                 ? method.TypeArguments
                     .Select(type => this.typeMapper.Map(
@@ -1703,6 +1790,29 @@ public sealed partial class CSharpToGSharpTranslator
                 invoke,
                 isAsync: false,
                 expression.GetLocation());
+
+            // Issue #3468: the surrounding output uses arrow lambdas, so a
+            // wrapper whose result type needs no pinning renders as the
+            // concise arrow form `(path string) -> Target(path)`. Only two
+            // shapes still need a body that fixes the delegate's result type:
+            // a non-void delegate whose result differs from the method's
+            // return (the explicit-return-type function literal widens the
+            // returned value), and a void delegate wrapping a value-returning
+            // method (the block statement discards the value). By-ref
+            // parameters also keep the literal form.
+            bool hasByRefParameter = invoke.Parameters.Any(
+                parameter => parameter.RefKind is RefKind.Ref or RefKind.Out);
+            bool resultMatches = invoke.ReturnsVoid
+                ? method.ReturnsVoid
+                : !method.ReturnsVoid
+                    && SymbolEqualityComparer.Default.Equals(
+                        method.ReturnType,
+                        invoke.ReturnType);
+            if (!hasByRefParameter && resultMatches)
+            {
+                return new LambdaExpression(parameters, expressionBody: call);
+            }
+
             var statements = returnType == null
                 ? new GStatement[] { new ExpressionStatement(call) }
                 : new GStatement[] { new ReturnStatement(call) };
