@@ -1255,7 +1255,9 @@ public static class GSharpPrinter
                 return $"{pad}{raw.Text}";
 
             case YieldStatement yield:
-                return $"{pad}yield {RenderExpression(yield.Expression, indent)}";
+                return yield.Expression == null
+                    ? $"{pad}yield break"
+                    : $"{pad}yield {RenderExpression(yield.Expression, indent)}";
 
             case SwitchStatement switchStatement:
                 return RenderSwitchStatement(switchStatement, indent);

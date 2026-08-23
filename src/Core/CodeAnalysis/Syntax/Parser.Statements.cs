@@ -1455,6 +1455,15 @@ public partial class Parser
         // ADR-0040: `yield <expr>` statement. The `yield` token is a contextual
         // identifier (not a reserved keyword) to preserve source compatibility.
         var yieldToken = MatchToken(SyntaxKind.IdentifierToken);
+
+        // Issue #3501: `yield break` terminates the iterator from any nesting
+        // depth (C# alignment); plain `break` keeps its loop binding.
+        if (Current.Kind == SyntaxKind.BreakKeyword)
+        {
+            var breakToken = MatchToken(SyntaxKind.BreakKeyword);
+            return new YieldStatementSyntax(syntaxTree, yieldToken, expression: null, breakToken);
+        }
+
         var expression = ParseExpression();
         return new YieldStatementSyntax(syntaxTree, yieldToken, expression);
     }

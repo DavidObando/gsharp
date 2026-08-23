@@ -1191,12 +1191,12 @@ public sealed partial class CSharpToGSharpTranslator
         {
             // `yield return x` maps to the G# iterator `yield x` (sample
             // TupleSequenceIterators.gs); the enclosing func's return type is
-            // rewritten to `sequence[T]`. G# has no `yield break`, so jump to
-            // the end of the nearest iterator body regardless of nested loops.
+            // rewritten to `sequence[T]`. `yield break` maps to G#'s native
+            // `yield break` (issue #3501), which terminates the iterator from
+            // any nesting depth.
             if (node.Expression == null)
             {
-                SyntaxNode target = this.state.CurrentBodyScope ?? GetBreakTarget(node);
-                return new[] { (GStatement)new GotoStatement(this.IteratorExitLabelName(target)) };
+                return new[] { (GStatement)new YieldStatement(null) };
             }
 
             GExpression value = this.TranslateValueWithNullForgiveness(node.Expression);
@@ -1221,9 +1221,6 @@ public sealed partial class CSharpToGSharpTranslator
             => node.Ancestors().FirstOrDefault(
                 n => n is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax or LocalFunctionStatementSyntax)
                 ?? node;
-
-        private string IteratorExitLabelName(SyntaxNode node)
-            => this.SyntheticLabelName("iteratorExit", node);
 
         private GStatement TranslateForEachVariable(ForEachVariableStatementSyntax node)
         {

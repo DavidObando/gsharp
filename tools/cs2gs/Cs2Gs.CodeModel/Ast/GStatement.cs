@@ -741,14 +741,16 @@ public sealed class SwitchStatement : GStatement
 /// A <c>yield</c> statement inside an iterator <c>func</c> whose return type is
 /// <c>sequence[T]</c> (spec §Iterators; sample <c>TupleSequenceIterators.gs</c>).
 /// When <see cref="Expression"/> is non-<see langword="null"/> the statement is
-/// <c>yield &lt;expr&gt;</c> (C# <c>yield return</c>).
+/// <c>yield &lt;expr&gt;</c> (C# <c>yield return</c>), or the
+/// iteration-terminating <c>yield break</c> when <see cref="Expression"/> is
+/// <see langword="null"/> (issue #3501).
 /// </summary>
 public sealed class YieldStatement : GStatement
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="YieldStatement"/> class.
     /// </summary>
-    /// <param name="expression">The yielded value.</param>
+    /// <param name="expression">The yielded value, or <see langword="null"/> for <c>yield break</c>.</param>
     public YieldStatement(GExpression expression)
     {
         Expression = expression;
