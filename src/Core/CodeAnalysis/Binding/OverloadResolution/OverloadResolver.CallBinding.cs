@@ -109,6 +109,24 @@ internal sealed partial class OverloadResolver
         return Scope.TryLookupSymbol("this") as ParameterSymbol;
     }
 
+    /// <summary>
+    /// Issue #3487: the lexical owner for implicit static-self dispatch. A
+    /// member body carries it as the function's own <c>StaticOwnerType</c>; a
+    /// function literal nested in that body has a synthetic symbol with no
+    /// <c>StaticOwnerType</c>, only the <c>LexicalEnclosingType</c> chained
+    /// through <c>LambdaBinder.ResolveLexicalEnclosingType</c> — falling back
+    /// to it makes bare sibling <c>shared</c> calls resolve identically in
+    /// both positions (they already did inside instance-method lambdas via
+    /// the effective-<c>this</c> path).
+    /// </summary>
+    private TypeSymbol? GetImplicitStaticSelfOwner()
+    {
+        var current = getCurrentFunction();
+        return current?.ThisParameter != null
+            ? null
+            : current?.StaticOwnerType ?? current?.LexicalEnclosingType;
+    }
+
     private StructSymbol? GetConstructorInitializerReceiverType()
     {
         return (getCurrentFunction()?.ReceiverType as StructSymbol)
@@ -278,7 +296,7 @@ internal sealed partial class OverloadResolver
         {
             // ADR-0089 / ADR-0090: implicit static-self dispatch inside a
             // static-virtual or private-static interface helper body.
-            if (getCurrentFunction()?.StaticOwnerType is InterfaceSymbol staticIface)
+            if (GetImplicitStaticSelfOwner() is InterfaceSymbol staticIface)
             {
                 if (!TypeMemberModel.GetMethods(staticIface, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty
                     || staticIface.GetStaticPrivateMethods(name).Length > 0)
@@ -286,7 +304,7 @@ internal sealed partial class OverloadResolver
                     return true;
                 }
             }
-            else if (getCurrentFunction()?.StaticOwnerType is StructSymbol staticStruct)
+            else if (GetImplicitStaticSelfOwner() is StructSymbol staticStruct)
             {
                 // Issue #1585: implicit static-self dispatch inside a
                 // `shared` method body of a user struct/class.
@@ -834,8 +852,7 @@ internal sealed partial class OverloadResolver
             // <c>StaticOwnerType</c> set to the owning InterfaceSymbol. An
             // unqualified call resolves against the interface's static
             // (public + private) buckets.
-            if (getCurrentFunction()?.ThisParameter == null
-                && getCurrentFunction()?.StaticOwnerType is InterfaceSymbol implicitStaticIface)
+            if (GetImplicitStaticSelfOwner() is InterfaceSymbol implicitStaticIface)
             {
                 var implicitStaticOverloads = TypeMemberModel.GetMethods(implicitStaticIface, syntax.Identifier.Text, MemberQuery.Static(MemberKinds.Method));
                 var implicitStaticPrivateOverloads = implicitStaticIface.GetStaticPrivateMethods(syntax.Identifier.Text);
@@ -879,8 +896,7 @@ internal sealed partial class OverloadResolver
             // walks the same base-type chain as the qualified path. The method
             // group is fetched through the canonical member-resolution layer
             // (ADR-0112) so it holds under both reference resolvers.
-            if (getCurrentFunction()?.ThisParameter == null
-                && getCurrentFunction()?.StaticOwnerType is StructSymbol implicitStaticStruct
+            if (GetImplicitStaticSelfOwner() is StructSymbol implicitStaticStruct
                 && bindUserTypeStaticCall != null)
             {
                 var implicitStaticStructOverloads = TypeMemberModel.GetMethods(
