@@ -53,13 +53,13 @@ namespace Demo
     }
 }");
 
-        // The recursive member must be a mutable function local, not a plain
-        // `let` binding, and the self-recursive call site inside the closure
-        // body must carry the postfix null assertion.
-        Assert.DoesNotContain("let Add", printed, StringComparison.Ordinal);
-        Assert.Contains("var Add", printed, StringComparison.Ordinal);
-        Assert.Contains("Add = func", printed, StringComparison.Ordinal);
-        Assert.Contains("Add!!(", printed, StringComparison.Ordinal);
+        // Issue #3501 A2: a DIRECT self-recursive capturing local now stays
+        // on the canonical `let Add = func …` path (gsc literals see their
+        // own binding) — the #3399 nullable-local scheme is reserved for
+        // MUTUAL recursion.
+        Assert.Contains("let Add = func", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("var Add", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
 
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "C().M()");
     }

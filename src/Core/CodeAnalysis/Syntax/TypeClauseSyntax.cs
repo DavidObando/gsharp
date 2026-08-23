@@ -621,6 +621,19 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// </summary>
     public ImmutableArray<SyntaxToken?> FunctionParameterEllipsisTokens { get; } = ImmutableArray<SyntaxToken?>.Empty;
 
+    /// <summary>
+    /// Gets the per-parameter <c>ref</c>/<c>out</c>/<c>in</c> contextual
+    /// modifier tokens of an arrow-form function-type clause (issue #3501
+    /// A2: <c>(ref int32) -&gt; void</c>). The array is parallel to
+    /// <see cref="FunctionParameterTypes"/> — entry <c>i</c> is the leading
+    /// modifier token of the i-th parameter slot, or <see langword="null"/>
+    /// when that slot is a plain by-value parameter. Always non-default;
+    /// <see cref="ImmutableArray{T}.Empty"/> when the clause is not a
+    /// function-type clause or carries no ref-kind modifiers. Assigned by
+    /// the parser after construction.
+    /// </summary>
+    public ImmutableArray<SyntaxToken?> FunctionParameterRefKindTokens { get; internal set; } = ImmutableArray<SyntaxToken?>.Empty;
+
     /// <summary>Gets the function return-type clause, or <c>null</c> when the type is void / not a function type.</summary>
     public TypeClauseSyntax? ReturnTypeClause { get; }
 
@@ -821,6 +834,18 @@ public sealed class TypeClauseSyntax : SyntaxNode
             && index >= 0
             && index < FunctionParameterEllipsisTokens.Length
             && FunctionParameterEllipsisTokens[index] != null;
+    }
+
+    /// <summary>Returns the parameter slot's leading <c>ref</c>/<c>out</c>/<c>in</c> modifier token, or <see langword="null"/> for a by-value slot (issue #3501 A2).</summary>
+    /// <param name="index">The parameter slot index.</param>
+    /// <returns>The modifier token, or <see langword="null"/>.</returns>
+    public SyntaxToken? FunctionParameterRefKindToken(int index)
+    {
+        return !FunctionParameterRefKindTokens.IsDefaultOrEmpty
+            && index >= 0
+            && index < FunctionParameterRefKindTokens.Length
+            ? FunctionParameterRefKindTokens[index]
+            : null;
     }
 
     /// <summary>

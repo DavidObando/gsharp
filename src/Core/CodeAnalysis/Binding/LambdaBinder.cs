@@ -233,10 +233,19 @@ internal sealed class LambdaBinder
     /// local-function declaration) instead of the default
     /// <c>&lt;lambdaN&gt;</c> synthetic name, so scope-based name lookup
     /// (<see cref="BoundScope.TryDeclareFunction"/>) can find it.</param>
+    /// <param name="onSignatureBound">Issue #3501 A2: when non-null, invoked
+    /// once the literal's signature (parameters + return type) is bound —
+    /// with the synthetic <see cref="FunctionSymbol"/> and the literal's
+    /// natural <see cref="FunctionTypeSymbol"/> — BEFORE the body-binding
+    /// scope is pushed. A named-binding caller (<c>let f = func ...</c>)
+    /// uses this to declare <c>f</c> into the enclosing scope so the body
+    /// can reference itself (recursion through the captured variable, the
+    /// G# local-function idiom).</param>
     /// <returns>The bound function-literal expression.</returns>
     public BoundExpression BindFunctionLiteralExpression(
         FunctionLiteralExpressionSyntax syntax,
-        string? explicitName = null)
+        string? explicitName = null,
+        Action<FunctionSymbol, FunctionTypeSymbol>? onSignatureBound = null)
     {
         // Phase 4.7: function literal `[async] func(p1 T1, p2 T2) R { body }`.
         // Bind parameters, push a new scope chained to the current scope so
@@ -338,6 +347,11 @@ internal sealed class LambdaBinder
             parameterSymbols.ToImmutable(),
             returnType);
         synthetic.IsAsync = isAsync;
+
+        // Issue #3501 A2: give a named-binding caller the chance to declare
+        // the literal's own name into the (still-current) enclosing scope
+        // before the body binds, so `let f = func ...` bodies can call `f`.
+        onSignatureBound?.Invoke(synthetic, fnType);
 
         // Snapshot current binder state, then push a child scope and bind
         // the body as if we were inside this synthetic function.
@@ -546,8 +560,20 @@ internal sealed class LambdaBinder
                 binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
 
-            var literal = (BoundFunctionLiteralExpression)BindFunctionLiteralExpression(literalSyntax, explicitName: name);
-            literal.Function.TypeParameters = typeParameters;
+            // Issue #3501 A2: declare the function (with its type parameters
+            // already attached, so generic call resolution sees them) into the
+            // enclosing scope BEFORE the body binds — a generic local function
+            // can then call itself (`fact[T](n - 1)`), matching C# local
+            // functions.
+            var declaredEarly = false;
+            var literal = (BoundFunctionLiteralExpression)BindFunctionLiteralExpression(
+                literalSyntax,
+                explicitName: name,
+                onSignatureBound: (fn, _) =>
+                {
+                    fn.TypeParameters = typeParameters;
+                    declaredEarly = Scope.TryDeclareFunction(fn);
+                });
 
             if (literal.CapturedVariables.Length > 0)
             {
@@ -576,7 +602,7 @@ internal sealed class LambdaBinder
                 }
             }
 
-            if (!Scope.TryDeclareFunction(literal.Function))
+            if (!declaredEarly)
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
             }

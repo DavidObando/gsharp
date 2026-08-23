@@ -1265,6 +1265,26 @@ internal sealed partial class StatementBinder
         => syntax is BinaryExpressionSyntax binary
             && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken;
 
+    /// <summary>
+    /// Issue #3501 A2: when the literal declares at least one
+    /// <c>ref</c>/<c>out</c>/<c>in</c> parameter, returns the synthesized
+    /// delegate type backing its shape (Func/Action cannot carry by-ref type
+    /// arguments); <see langword="null"/> for a by-value-only literal, which
+    /// keeps its <see cref="FunctionTypeSymbol"/> natural type.
+    /// </summary>
+    private TypeSymbol? SynthesizeRefDelegateForLiteral(FunctionSymbol function, FunctionTypeSymbol functionType)
+    {
+        if (!function.Parameters.Any(p => p.RefKind != RefKind.None))
+        {
+            return null;
+        }
+
+        return scope.GetSynthesizedRefDelegateCache().GetOrCreate(
+            function.Parameters,
+            functionType.ReturnType,
+            scope.GetCurrentDeclaringPackageName());
+    }
+
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
     {
         // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
@@ -1294,6 +1314,15 @@ internal sealed partial class StatementBinder
         var type = syntax.TypeClause is { } typeClause
             ? bindTypeClause(typeClause)
             : null;
+        var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
+
+        // Issue #3501 A2: when the initializer is a function literal, the
+        // variable is declared BEFORE the literal's body binds (from the
+        // literal's own signature, or the explicit type clause when present)
+        // so the body can reference the binding it is being assigned to —
+        // `let fact = func(n int32) int32 { ... fact(n - 1) ... }` is the G#
+        // local-function recursion idiom.
+        VariableSymbol? preDeclaredSelf = null;
 
         BoundExpression convertedInitializer;
         TypeSymbol variableType;
@@ -1399,8 +1428,33 @@ internal sealed partial class StatementBinder
             }
             else
             {
-                var initializer = bindExpression(syntax.Initializer);
-                variableType = type ?? initializer.Type;
+                BoundExpression initializer;
+                if (syntax.Initializer is FunctionLiteralExpressionSyntax literalInitializer
+                    && bindFunctionLiteralWithSelfDeclaration != null)
+                {
+                    // Issue #3501 A2: bind the literal with a signature hook
+                    // that declares the variable into the current scope before
+                    // the body binds. The variable's type is the explicit type
+                    // clause when present, else the literal's natural type.
+                    initializer = bindFunctionLiteralWithSelfDeclaration(literalInitializer, (fn, fnType) =>
+                    {
+                        // Issue #3501 A2: a literal with `ref`/`out`/`in`
+                        // parameters cannot live in a Func/Action-backed
+                        // FunctionTypeSymbol — its inferred type is the
+                        // synthesized ref-kind delegate for its shape.
+                        var selfType = type
+                            ?? SynthesizeRefDelegateForLiteral(fn, fnType)
+                            ?? (TypeSymbol)fnType;
+                        preDeclaredSelf = bindLocalVariableWithAccessibility(
+                            syntax.Identifier, isReadOnly, selfType, accessibility);
+                    });
+                }
+                else
+                {
+                    initializer = bindExpression(syntax.Initializer);
+                }
+
+                variableType = type ?? preDeclaredSelf?.Type ?? initializer.Type;
                 convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
 
                 // Issue #2016: a NON-generic named local function (`let`/`var`/`const
@@ -1426,8 +1480,8 @@ internal sealed partial class StatementBinder
             }
         }
 
-        var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
-        var variable = bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly, variableType, accessibility);
+        var variable = preDeclaredSelf
+            ?? bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly, variableType, accessibility);
 
         // Issue #3316 (ADR-0159 follow-up (a)): a bare `chan T` slot without an
         // initializer is only a declaration-site error (GS0520) for a GLOBAL —

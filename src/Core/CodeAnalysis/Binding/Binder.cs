@@ -355,7 +355,11 @@ public sealed class Binder
             {
                 return Lambdas.BindGenericLocalFunctionDeclaration(syntax);
             },
-            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
+            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal),
+            bindFunctionLiteralWithSelfDeclaration: (literalSyntax, onSignatureBound) =>
+            {
+                return Lambdas.BindFunctionLiteralExpression(literalSyntax, explicitName: null, onSignatureBound: onSignatureBound);
+            });
         BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
             Expressions.BindTypeOfExpression(syntax);
         BoundExpression BindExpressionForDeclarations(ExpressionSyntax syntax) =>
@@ -1553,7 +1557,11 @@ public sealed class Binder
             diagnostics = diagnostics.InsertRange(0, previous.Diagnostics);
         }
 
-        var delegates = binder.scope.GetDeclaredDelegates();
+        // Issue #3501 A2: synthesized ref-kind delegates (see
+        // SynthesizedRefDelegateCache) join the declared named delegates so
+        // the emitter stamps their TypeDefs through the same ADR-0059 path.
+        var delegates = binder.scope.GetDeclaredDelegates()
+            .AddRange(binder.scope.GetSynthesizedRefDelegateCache().Symbols);
 
         var result = new BoundGlobalScope(previous, entryPointPackage, packagesInOrder.ToImmutable(), diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, delegates, entryPoint, statements.ToImmutable());
         result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet<string>.Empty;
@@ -1578,6 +1586,12 @@ public sealed class Binder
         // bodies against a freshly-derived scope chain) can rehydrate it and
         // bind literals appearing inside those bodies.
         result.RichAnonymousClassMap = binder.scope.GetRichAnonymousClassMap();
+
+        // Issue #3501 A2: carry the ref-kind delegate cache itself (not just
+        // a snapshot) so BindProgram can install it on its freshly-derived
+        // scope chain — a type clause bound in this pass and a literal bound
+        // in a method body must unify to the SAME synthesized delegate.
+        result.RefDelegateCache = binder.scope.GetSynthesizedRefDelegateCache();
 
         // Issue #1929/#1953: collect producer-declared friend assemblies
         // (`@assembly:InternalsVisibleTo("...")`) so the emitter can write
@@ -1616,6 +1630,7 @@ public sealed class Binder
                 ModuleAttributes = result.ModuleAttributes,
                 AnonymousTypes = result.AnonymousTypes,
                 RichAnonymousClassMap = result.RichAnonymousClassMap,
+                RefDelegateCache = result.RefDelegateCache,
             };
         }
 
@@ -1831,6 +1846,15 @@ public sealed class Binder
     public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver? references, BoundBodyCache? cache, ImmutableHashSet<SyntaxTree>? dirtyTrees)
     {
         var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols, preserveLatestImportSyntaxTrees: true);
+
+        // Issue #3501 A2: reuse the global-scope pass's ref-kind delegate
+        // cache on this pass's scope chain, so a shape spelled in a
+        // declaration's type clause and the same shape appearing inside a
+        // method body resolve to ONE synthesized delegate symbol.
+        if (globalScope?.RefDelegateCache != null)
+        {
+            parentScope.InstallSynthesizedRefDelegateCache(globalScope.RefDelegateCache);
+        }
 
         // ADR-0146 / issue #2243: rehydrate the rich anonymous-object literal →
         // synthesized-class map onto this pass's scope chain so a literal
@@ -2332,7 +2356,16 @@ public sealed class Binder
         // the empty synthetic block unanchored — there is nothing to point at.
         SyntaxAnchoringWalker.Anchor(statement, statement.Statements.FirstOrDefault(s => s.Syntax is not null)?.Syntax);
 
-        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, allStructs, globalScope.Interfaces, globalScope.Enums, globals, globalScope.Delegates)
+        // Issue #3501 A2: union the ref-kind delegates synthesized while
+        // binding top-level statements (already in globalScope.Delegates via
+        // BindGlobalScope) with those synthesized while binding
+        // function/method bodies just above (parentScope's own cache — a
+        // fresh scope chain, mirroring the anonymous-type union above).
+        var allDelegates = globalScope.Delegates
+            .AddRange(parentScope.GetSynthesizedRefDelegateCache().Symbols
+                .Where(d => !globalScope.Delegates.Contains(d)));
+
+        return new BoundProgram(globalScope.Package, globalScope.Packages, diagnostics.ToImmutable(), functionBodies.ToImmutable(), globalScope.EntryPoint, statement, allStructs, globalScope.Interfaces, globalScope.Enums, globals, allDelegates)
         {
             Imports = globalScope.GetCumulativeImports(),
             FriendAssemblies = globalScope.FriendAssemblies,
@@ -3472,6 +3505,44 @@ public sealed class Binder
                         ret = lambdas.WrapAsTask(ret);
                     }
                 }
+            }
+
+            // Issue #3501 A2: a parameter slot may carry the ADR-0060
+            // `ref`/`out`/`in` modifier — `(ref int32) -> void`. Func/Action
+            // cannot represent by-ref type arguments, so such a shape binds
+            // to a compiler-synthesized delegate (cached per shape, emitted
+            // through the ADR-0059 named-delegate path) instead of a
+            // FunctionTypeSymbol.
+            if (!syntax.FunctionParameterRefKindTokens.IsDefaultOrEmpty
+                && syntax.FunctionParameterRefKindTokens.Any(token => token != null))
+            {
+                var boundParamTypes = paramTypes.MoveToImmutable();
+                var refParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(boundParamTypes.Length);
+                for (var i = 0; i < boundParamTypes.Length; i++)
+                {
+                    var refKindToken = syntax.FunctionParameterRefKindToken(i);
+                    var refKind = refKindToken?.Text switch
+                    {
+                        "ref" => RefKind.Ref,
+                        "out" => RefKind.Out,
+                        "in" => RefKind.In,
+                        _ => RefKind.None,
+                    };
+                    if (refKind != RefKind.None && syntax.IsParameterVariadic(i))
+                    {
+                        // ADR-0060 §8: a variadic slot cannot also carry a
+                        // ref-kind modifier — same rule as declared parameters.
+                        Diagnostics.ReportRefKindOnVariadicParameter(fnParameterTypes[i].Location, $"<arg{i}>");
+                        refKind = RefKind.None;
+                    }
+
+                    refParameters.Add(new ParameterSymbol($"arg{i}", boundParamTypes[i], refKind: refKind));
+                }
+
+                return scope.GetSynthesizedRefDelegateCache().GetOrCreate(
+                    refParameters.MoveToImmutable(),
+                    ret ?? TypeSymbol.Void,
+                    scope.GetCurrentDeclaringPackageName());
             }
 
             var variadicFlags = anyVariadic ? variadicFlagsBuilder.MoveToImmutable() : default;
