@@ -149,7 +149,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("return value.Measure(__arg0)", printed, StringComparison.Ordinal);
+        Assert.Contains("(delta int32) -> value.Measure(delta)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Ext.Measure", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("value!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("value.Measure(value", printed, StringComparison.Ordinal);
@@ -249,7 +249,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             """);
 
         Assert.Contains("let __spill0 = value!!", printed, StringComparison.Ordinal);
-        Assert.Contains("return __spill0.Measure(__arg0)", printed, StringComparison.Ordinal);
+        Assert.Contains("(delta int32) -> __spill0.Measure(delta)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Ext.Measure", printed, StringComparison.Ordinal);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -289,9 +289,9 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("return receiver.Matches(__arg0)", printed, StringComparison.Ordinal);
+        Assert.Contains("(expected string) -> receiver.Matches(expected)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(
-            "receiver.Matches(receiver, __arg0)",
+            "receiver.Matches(receiver, expected)",
             printed,
             StringComparison.Ordinal);
 
@@ -357,11 +357,11 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             """);
 
         Assert.Contains(
-            "Enumerable.Contains[Item](removed, __arg0)",
+            "Enumerable.Contains[Item](removed, value)",
             printed,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
-            "Enumerable.Contains[Item](__arg0)",
+            "Enumerable.Contains[Item](value)",
             printed,
             StringComparison.Ordinal);
     }
