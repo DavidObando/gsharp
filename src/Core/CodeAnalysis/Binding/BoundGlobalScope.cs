@@ -340,6 +340,14 @@ public sealed class BoundGlobalScope
         = new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
 
     /// <summary>
+    /// Gets or sets the ref-kind delegate cache (issue #3501 A2) shared with
+    /// <c>BindProgram</c>'s body-binding pass so a function-type shape with
+    /// <c>ref</c>/<c>out</c>/<c>in</c> slots resolves to one synthesized
+    /// delegate symbol across both passes.
+    /// </summary>
+    internal SynthesizedRefDelegateCache? RefDelegateCache { get; set; }
+
+    /// <summary>
     /// Returns every import visible across the whole <see cref="Previous"/>
     /// chain, oldest submission first (issue #2101). This is the cumulative
     /// view that <see cref="Imports"/> itself used to provide directly —

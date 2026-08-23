@@ -634,10 +634,24 @@ public partial class Parser
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken?>();
+        var refKindTokens = ImmutableArray.CreateBuilder<SyntaxToken?>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
+            // Issue #3501 A2: a parameter slot may lead with the ADR-0060
+            // contextual `ref`/`out`/`in` modifier — `(ref int32) -> void`.
+            // The modifier is consumed only when the next token can start a
+            // type clause, so a plain type named `ref`/`out`/`in` (followed
+            // by `,` or `)`) still binds as the slot's type.
+            SyntaxToken? refKind = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken
+                && Current.Text is "ref" or "out" or "in"
+                && CanStartTypeClause(Peek(1)))
+            {
+                refKind = NextToken();
+            }
+
             SyntaxToken? ellipsis = null;
             if (Current.Kind == SyntaxKind.EllipsisToken)
             {
@@ -646,6 +660,7 @@ public partial class Parser
 
             nodesAndSeparators.Add(ParseTypeClause());
             ellipsisTokens.Add(ellipsis);
+            refKindTokens.Add(refKind);
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -660,9 +675,10 @@ public partial class Parser
         var arrow = MatchToken(SyntaxKind.RightArrowToken);
         var returnTypeClause = ParseTypeClause();
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+        TypeClauseSyntax clause;
         if (asyncModifier != null)
         {
-            return TypeClauseSyntax.CreateAsyncArrowFunction(
+            clause = TypeClauseSyntax.CreateAsyncArrowFunction(
                 syntaxTree,
                 asyncModifier,
                 openParen,
@@ -673,16 +689,27 @@ public partial class Parser
                 returnTypeClause,
                 question);
         }
+        else
+        {
+            clause = TypeClauseSyntax.CreateArrowFunction(
+                syntaxTree,
+                openParen,
+                new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
+                ellipsisTokens.ToImmutable(),
+                closeParen,
+                arrow,
+                returnTypeClause,
+                question);
+        }
 
-        return TypeClauseSyntax.CreateArrowFunction(
-            syntaxTree,
-            openParen,
-            new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
-            ellipsisTokens.ToImmutable(),
-            closeParen,
-            arrow,
-            returnTypeClause,
-            question);
+        // Issue #3501 A2: attach the per-slot ref-kind modifier tokens when
+        // any slot carried one.
+        if (refKindTokens.Any(token => token != null))
+        {
+            clause.FunctionParameterRefKindTokens = refKindTokens.ToImmutable();
+        }
+
+        return clause;
     }
 
     private TypeClauseSyntax ParseParenthesizedArrowFunctionTypeClause(SyntaxToken? asyncModifier)
@@ -696,9 +723,10 @@ public partial class Parser
         _ = MatchToken(SyntaxKind.CloseParenthesisToken);
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
 
+        TypeClauseSyntax rebuilt;
         if (inner.AsyncModifier != null)
         {
-            return TypeClauseSyntax.CreateAsyncArrowFunction(
+            rebuilt = TypeClauseSyntax.CreateAsyncArrowFunction(
                 syntaxTree,
                 inner.AsyncModifier,
                 inner.OpenParenToken,
@@ -709,16 +737,23 @@ public partial class Parser
                 inner.ReturnTypeClause,
                 question);
         }
+        else
+        {
+            rebuilt = TypeClauseSyntax.CreateArrowFunction(
+                syntaxTree,
+                inner.OpenParenToken,
+                inner.FunctionParameterTypes,
+                inner.FunctionParameterEllipsisTokens,
+                inner.CloseParenToken,
+                inner.ArrowToken,
+                inner.ReturnTypeClause,
+                question);
+        }
 
-        return TypeClauseSyntax.CreateArrowFunction(
-            syntaxTree,
-            inner.OpenParenToken,
-            inner.FunctionParameterTypes,
-            inner.FunctionParameterEllipsisTokens,
-            inner.CloseParenToken,
-            inner.ArrowToken,
-            inner.ReturnTypeClause,
-            question);
+        // Issue #3501 A2: the rebuild must carry the inner clause's per-slot
+        // ref-kind modifiers — `((ref int32) -> void)?` keeps its ref slot.
+        rebuilt.FunctionParameterRefKindTokens = inner.FunctionParameterRefKindTokens;
+        return rebuilt;
     }
 
     /// <summary>

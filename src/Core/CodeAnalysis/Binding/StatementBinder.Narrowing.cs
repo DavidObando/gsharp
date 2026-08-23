@@ -1265,6 +1265,26 @@ internal sealed partial class StatementBinder
         => syntax is BinaryExpressionSyntax binary
             && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken;
 
+    /// <summary>
+    /// Issue #3501 A2: when the literal declares at least one
+    /// <c>ref</c>/<c>out</c>/<c>in</c> parameter, returns the synthesized
+    /// delegate type backing its shape (Func/Action cannot carry by-ref type
+    /// arguments); <see langword="null"/> for a by-value-only literal, which
+    /// keeps its <see cref="FunctionTypeSymbol"/> natural type.
+    /// </summary>
+    private TypeSymbol? SynthesizeRefDelegateForLiteral(FunctionSymbol function, FunctionTypeSymbol functionType)
+    {
+        if (!function.Parameters.Any(p => p.RefKind != RefKind.None))
+        {
+            return null;
+        }
+
+        return scope.GetSynthesizedRefDelegateCache().GetOrCreate(
+            function.Parameters,
+            functionType.ReturnType,
+            scope.GetCurrentDeclaringPackageName());
+    }
+
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
     {
         // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
@@ -1416,10 +1436,17 @@ internal sealed partial class StatementBinder
                     // that declares the variable into the current scope before
                     // the body binds. The variable's type is the explicit type
                     // clause when present, else the literal's natural type.
-                    initializer = bindFunctionLiteralWithSelfDeclaration(literalInitializer, (_, fnType) =>
+                    initializer = bindFunctionLiteralWithSelfDeclaration(literalInitializer, (fn, fnType) =>
                     {
+                        // Issue #3501 A2: a literal with `ref`/`out`/`in`
+                        // parameters cannot live in a Func/Action-backed
+                        // FunctionTypeSymbol — its inferred type is the
+                        // synthesized ref-kind delegate for its shape.
+                        var selfType = type
+                            ?? SynthesizeRefDelegateForLiteral(fn, fnType)
+                            ?? (TypeSymbol)fnType;
                         preDeclaredSelf = bindLocalVariableWithAccessibility(
-                            syntax.Identifier, isReadOnly, type ?? fnType, accessibility);
+                            syntax.Identifier, isReadOnly, selfType, accessibility);
                     });
                 }
                 else
@@ -1427,7 +1454,7 @@ internal sealed partial class StatementBinder
                     initializer = bindExpression(syntax.Initializer);
                 }
 
-                variableType = type ?? initializer.Type;
+                variableType = type ?? preDeclaredSelf?.Type ?? initializer.Type;
                 convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
 
                 // Issue #2016: a NON-generic named local function (`let`/`var`/`const
