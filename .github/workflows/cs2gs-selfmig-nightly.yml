@@ -1,0 +1,59 @@
+name: cs2gs-selfmig-nightly
+
+# Issue #3501 Track C: the repo self-migration gate. Migrates the entire
+# GSharp repository C# → G# nightly and enforces the ratcheting baseline in
+# tools/cs2gs/selfmig-baseline.json — a green-count floor plus readability
+# ceilings (synthetic labels, __local_ lifts, >300-char lines) over the
+# migrated output. Track A/B improvements tighten the baseline in the same
+# PR, so the migration goal ratchets instead of drifting.
+#
+# Too expensive for the PR gates (~40+ minutes: 55 projects through
+# translate + SDK compile + ilverify + parity); scheduled clear of
+# cs2gs-nightly (07:17), windows-nightly (09:23), macos-nightly (11:23).
+
+on:
+  schedule:
+    - cron: '23 13 * * *'
+  workflow_dispatch:
+
+env:
+  # See build.yml: parallel MSBuild nodes corrupt $GITHUB_ENV via
+  # Nerdbank.GitVersioning's GitBuildVersion* emission.
+  NBGV_SetCloudBuildVersionVars: false
+
+jobs:
+  selfmig:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build cs2gs (Release)
+        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph
+
+      - name: Run self-migration gate
+        run: ./build/run-cs2gs-selfmig.sh
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-selfmig-run
+          path: |
+            /tmp/gsharp-cs2gs-selfmig/migrate.log
+            /tmp/gsharp-cs2gs-selfmig/runs/**/run.json
+            /tmp/gsharp-cs2gs-selfmig/runs/**/report.html

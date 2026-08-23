@@ -187,6 +187,15 @@ internal static class Program
 
             options.ArtifactRoot ??= Path.GetFullPath(options.OutputRoot) + ".cs2gs-runs";
             apps = RepositoryDiscovery.Discover(corpus);
+            if (options.ExcludeAppIdPrefixes.Count > 0)
+            {
+                int before = apps.Count;
+                apps = apps
+                    .Where(app => !options.ExcludeAppIdPrefixes.Any(prefix =>
+                        app.Id.StartsWith(prefix, StringComparison.Ordinal)))
+                    .ToList();
+                Console.WriteLine($"cs2gs: excluded {before - apps.Count} project(s) via --exclude.");
+            }
         }
         else if (appIds.Count > 0)
         {
@@ -462,6 +471,10 @@ internal static class Program
                     case "--config":
                         options.Config = NextValue(args, ref i, arg);
                         break;
+                    case "--exclude":
+                        options.ExcludeAppIdPrefixes.Add(
+                            NextValue(args, ref i, arg).Replace('\\', '/').TrimEnd('/'));
+                        break;
                     case "--baseline":
                         baselinePath = NextValue(args, ref i, arg);
                         break;
@@ -626,6 +639,8 @@ internal static class Program
         Console.WriteLine("  --gsgen <path>    Override gsgen.dll (default: out/bin/<Config>/Gsgen.Cli/gsgen.dll); issue #2215.");
         Console.WriteLine("                    With --diagnostic-run, --out is the runs root.");
         Console.WriteLine("  --config <name>   Build config used to find gsc (default: Release).");
+        Console.WriteLine("  --exclude <path>  Repository migration only: exclude apps whose repo-relative id");
+        Console.WriteLine("                    starts with <path> (repeatable; e2e fixtures, non-app projects).");
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");
         Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.");
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");

@@ -62,6 +62,15 @@ public sealed class PipelineOptions
     public string SourceRoot { get; set; }
 
     /// <summary>
+    /// Gets repository-relative app-id prefixes excluded from repository
+    /// migration (issue #3501 corpus hygiene: e2e fixtures such as
+    /// <c>samples/ProjectRef/CSharpApp</c> are not migration targets).
+    /// Matched with an ordinal prefix comparison against the discovered
+    /// app id.
+    /// </summary>
+    public List<string> ExcludeAppIdPrefixes { get; } = new List<string>();
+
+    /// <summary>
     /// Gets or sets the build configuration used to locate the default compiler
     /// (<c>Release</c> by default).
     /// </summary>
