@@ -364,6 +364,10 @@ public sealed partial class CSharpToGSharpTranslator
             GMember translated = visitor.Visit(member);
             if (translated is not null)
             {
+                // Issue #3469: a top-level type's own leading comments (file
+                // headers, ADR references, type doc comments) ride on the
+                // translated declaration.
+                DeclarationVisitor.AttachSourceComments(translated, member);
                 members.Add(translated);
             }
 

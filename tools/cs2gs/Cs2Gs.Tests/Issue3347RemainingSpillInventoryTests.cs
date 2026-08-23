@@ -67,7 +67,10 @@ public sealed class Issue3347RemainingSpillInventoryTests
                 translator.TranslateDocument(document, context));
             castCount += CountOccurrences(printed, "__cast");
             deconstructionCount += CountOccurrences(printed, "__decon");
-            spillCount += CountOccurrences(printed, "let __spill");
+            // Issue #3469: author comments now flow into the emitted G#,
+            // and Translator-source comments mention the very patterns this
+            // inventory counts — count code lines only.
+            spillCount += CountOccurrences(StripCommentLines(printed), "let __spill");
             usingCount += CountOccurrences(printed, "__using");
             sourceAssertedAsConversions += CountSourceAssertedAsConversions(document);
             translatedAssertedAsConversions += CountTranslatedAssertedAsConversions(printed);
@@ -106,7 +109,10 @@ public sealed class Issue3347RemainingSpillInventoryTests
                 document.FilePath);
             string printed = GSharpPrinter.Print(
                 translator.TranslateDocument(document, context));
-            spillCount += CountOccurrences(printed, "let __spill");
+            // Issue #3469: author comments now flow into the emitted G#,
+            // and Translator-source comments mention the very patterns this
+            // inventory counts — count code lines only.
+            spillCount += CountOccurrences(StripCommentLines(printed), "let __spill");
         }
 
         Assert.Equal(0, spillCount);
@@ -501,6 +507,16 @@ public sealed class Issue3347RemainingSpillInventoryTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
     }
+
+
+    private static string StripCommentLines(string printed) =>
+        string.Join(
+            "\n",
+            printed.Split('\n').Where(line =>
+            {
+                string trimmed = line.TrimStart();
+                return !trimmed.StartsWith("//", StringComparison.Ordinal);
+            }));
 
     private static int CountOccurrences(string haystack, string needle)
     {

@@ -46,8 +46,12 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
                 document.FilePath);
             string printed = GSharpPrinter.Print(
                 translator.TranslateDocument(document, context));
-            doubledAssertions += CountOccurrences(printed, "!!!!");
-            assertedParenthesizedReceivers += CountOccurrences(printed, ")!!.");
+            // Issue #3469: author comments now flow into the emitted G#,
+            // and Core-source comments mention the very patterns this
+            // inventory counts — count code lines only.
+            string code = StripCommentLines(printed);
+            doubledAssertions += CountOccurrences(code, "!!!!");
+            assertedParenthesizedReceivers += CountOccurrences(code, ")!!.");
         }
 
         Assert.Equal(0, doubledAssertions);
@@ -754,6 +758,16 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
                 + printed);
         return printed;
     }
+
+
+    private static string StripCommentLines(string printed) =>
+        string.Join(
+            "\n",
+            printed.Split('\n').Where(line =>
+            {
+                string trimmed = line.TrimStart();
+                return !trimmed.StartsWith("//", StringComparison.Ordinal);
+            }));
 
     private static int CountOccurrences(string haystack, string needle)
     {
