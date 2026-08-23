@@ -790,6 +790,18 @@ internal static class ClrOverloadResolution
             || argument is BoundClrMethodGroupExpression { ResolvedMethod: null };
 
     /// <summary>
+    /// Issue #3501 A5: whether <paramref name="argument"/> is ANY method-group
+    /// argument — resolved single-candidate groups included. Method groups
+    /// contribute only output-type inference, so even a group with a natural
+    /// function type must route through the method-group inference callback
+    /// instead of hard-unifying its natural type against the delegate slots.
+    /// </summary>
+    /// <param name="argument">The bound argument to inspect.</param>
+    /// <returns>Whether the argument is a method group.</returns>
+    public static bool IsMethodGroupArgument(BoundExpression argument) =>
+        argument is BoundMethodGroupExpression or BoundClrMethodGroupExpression;
+
+    /// <summary>
     /// Issue #506: returns <see langword="true"/> when <paramref name="parameter"/>
     /// is the trailing <c>params T[]</c> parameter — i.e. carries the
     /// <see cref="ParamArrayAttribute"/> marker and is a single-dimensional
@@ -1482,13 +1494,33 @@ internal static class ClrOverloadResolution
         {
             if (!UnifyForInference(delegateParameters[i], signature.Value.Parameters[i], inferred))
             {
-                return false;
+                // Issue #3501 A5: a VARIANT method group is a valid delegate
+                // conversion — the method may take a broader parameter type
+                // than the delegate (contravariance). When the delegate
+                // parameter closes to a concrete type the method parameter
+                // can accept, the position simply contributes no inference
+                // bounds; the later conversion check enforces the real
+                // compatibility (explicit type arguments already accepted
+                // exactly these method groups).
+                if (!TryCloseInferredType(delegateParameters[i], inferred, out var closedParameter)
+                    || closedParameter is null
+                    || !IsVariantAssignable(target: signature.Value.Parameters[i], source: closedParameter))
+                {
+                    return false;
+                }
             }
         }
 
         if (!UnifyForInference(delegateReturn, signature.Value.Return, inferred))
         {
-            return false;
+            // Covariant return: the method may return a narrower reference
+            // type than the delegate expects.
+            if (!TryCloseInferredType(delegateReturn, inferred, out var closedReturn)
+                || closedReturn is null
+                || !IsVariantAssignable(target: closedReturn, source: signature.Value.Return))
+            {
+                return false;
+            }
         }
 
         bounds.Clear();
@@ -2459,6 +2491,32 @@ internal static class ClrOverloadResolution
                     }
 
                     inferenceArgTypes = deferred;
+                }
+
+                // Issue #3501 A5: a method-group argument contributes only
+                // OUTPUT-type inference (C# §12.6.3): its natural function
+                // type must not hard-unify the delegate's parameter slots —
+                // `paths.Select(Stringify)` with `Stringify(object?)` infers
+                // TSource from the receiver (string) and TResult from the
+                // group's return given those inputs, with the contravariant
+                // parameter satisfied by conversion, not unification. Null
+                // the slot so TryInferMethodGroupArgument handles it.
+                if (methodGroupInference != null && methodGroupArgumentCheck != null)
+                {
+                    Type?[]? groupCleared = null;
+                    for (var i = 0; i < inferenceArgTypes.Count; i++)
+                    {
+                        if (inferenceArgTypes[i] != null && methodGroupArgumentCheck(i))
+                        {
+                            groupCleared ??= inferenceArgTypes.ToArray();
+                            groupCleared[i] = null;
+                        }
+                    }
+
+                    if (groupCleared != null)
+                    {
+                        inferenceArgTypes = groupCleared;
+                    }
                 }
 
                 var inferenceMethodGroup = methodGroupInference;
@@ -5043,6 +5101,35 @@ internal static class ClrOverloadResolution
 
         var underlying = target.GetGenericArguments()[0];
         return ClrTypeUtilities.AreSame(underlying, source);
+    }
+
+    /// <summary>
+    /// Issue #3501 A5: whether <paramref name="source"/> converts to
+    /// <paramref name="target"/> by identity or implicit reference
+    /// conversion — the variance C# permits between a method group's
+    /// signature and the target delegate's. Value types only convert by
+    /// identity (no boxing variance in delegate signatures).
+    /// </summary>
+    private static bool IsVariantAssignable(Type target, Type source)
+    {
+        if (ClrTypeUtilities.IsSameAs(target, source))
+        {
+            return true;
+        }
+
+        if (source.IsValueType || target.IsValueType)
+        {
+            return false;
+        }
+
+        try
+        {
+            return target.IsAssignableFrom(source);
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static bool UnifyForInference(Type? parameterType, Type? argumentType, Dictionary<string, Type> bounds)

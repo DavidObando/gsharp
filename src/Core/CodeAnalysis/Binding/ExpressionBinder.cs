@@ -2036,7 +2036,7 @@ internal sealed partial class ExpressionBinder
         Func<TypeSymbol, Type?> projectType,
         int argumentOffset = 0)
     {
-        if (arguments == null || !arguments.Any(ClrOverloadResolution.IsUnresolvedMethodGroupArgument))
+        if (arguments == null || !arguments.Any(ClrOverloadResolution.IsMethodGroupArgument))
         {
             return null;
         }
@@ -2057,7 +2057,7 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<BoundExpression> arguments,
         int argumentOffset = 0)
     {
-        if (arguments == null || !arguments.Any(ClrOverloadResolution.IsUnresolvedMethodGroupArgument))
+        if (arguments == null || !arguments.Any(ClrOverloadResolution.IsMethodGroupArgument))
         {
             return null;
         }
@@ -2067,7 +2067,7 @@ internal sealed partial class ExpressionBinder
             var sourceIndex = argumentIndex - argumentOffset;
             return sourceIndex >= 0
                 && sourceIndex < arguments.Count
-                && ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[sourceIndex]);
+                && ClrOverloadResolution.IsMethodGroupArgument(arguments[sourceIndex]);
         };
     }
 
@@ -2076,7 +2076,7 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<Type> delegateParameterTypes,
         Func<TypeSymbol, Type?> projectType)
     {
-        if (argument is BoundClrMethodGroupExpression { ResolvedMethod: null } clrGroup)
+        if (argument is BoundClrMethodGroupExpression clrGroup)
         {
             var receiver = clrGroup.Receiver;
             var closesExtensionReceiver = receiver != null;
@@ -2122,7 +2122,7 @@ internal sealed partial class ExpressionBinder
             return (signatureParameters, method.ReturnType);
         }
 
-        if (argument is not BoundMethodGroupExpression { FunctionType: null } userGroup)
+        if (argument is not BoundMethodGroupExpression userGroup)
         {
             return null;
         }
@@ -2158,6 +2158,11 @@ internal sealed partial class ExpressionBinder
                     break;
                 }
 
+                // The method must ACCEPT what the delegate provides:
+                // ClassifyImplicit(target, source) with the METHOD parameter
+                // as the target admits contravariant groups
+                // (`Stringify(object?)` satisfies a `(string) -> string`
+                // slot; issue #3501 A5).
                 conversions[i] = ClrOverloadResolution.ClassifyImplicit(projected, delegateParameterTypes[i]);
                 if (conversions[i] == ClrOverloadResolution.ImplicitConversionKind.None)
                 {

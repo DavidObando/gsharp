@@ -50,8 +50,11 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
+        // An EXPLICIT C# delegate creation renders as a G# construction,
+        // whose operand cannot be a variant group — so the cast shape keeps
+        // its arrow wrapper even after #3501 A5.
         [Fact]
-        public void ParameterContravariantWrapper_UsesArrowFormWithDerivedName()
+        public void ContravariantCastMethodGroup_KeepsArrowWrapper()
         {
             string printed = Translate("""
                 using System;
@@ -73,8 +76,9 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
+        // Issue #3501 A5: covariant-return groups pass direct.
         [Fact]
-        public void ReturnCovariantWrapper_KeepsTypedFunctionLiteralWithDerivedName()
+        public void ReturnCovariantMethodGroup_PassesDirect()
         {
             string printed = Translate("""
                 using System.Collections.Generic;
@@ -89,8 +93,8 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("func (s string) object", printed, StringComparison.Ordinal);
-            Assert.Contains("W.Twice(s)", printed, StringComparison.Ordinal);
+            Assert.Contains("Select[string, object](Twice)", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("func (s string) object", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }

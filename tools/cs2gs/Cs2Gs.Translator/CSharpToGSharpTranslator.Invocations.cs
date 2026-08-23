@@ -1497,8 +1497,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.TryGetMethodGroupArgument(
                     argument,
                     out IMethodSymbol method,
-                    out IMethodSymbol methodGroupInvoke)
-                && MethodGroupNeedsExactTarget(method, methodGroupInvoke))
+                    out IMethodSymbol methodGroupInvoke,
+                    out bool isImplicitGroupConversion)
+                && MethodGroupNeedsExactTarget(method, methodGroupInvoke, isImplicitGroupConversion))
             {
                 return this.typeMapper.WithMetadataImportCollisionQualification(
                     () => this.TranslateExactMethodGroupArgument(
@@ -1513,10 +1514,12 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryGetMethodGroupArgument(
             ArgumentSyntax argument,
             out IMethodSymbol method,
-            out IMethodSymbol invoke)
+            out IMethodSymbol invoke,
+            out bool isImplicitConversion)
         {
             method = null;
             invoke = null;
+            isImplicitConversion = false;
             if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation argumentOperation
                 || argumentOperation.Value is not IDelegateCreationOperation delegateCreation
                 || delegateCreation.Target is not IMethodReferenceOperation methodReference
@@ -1524,6 +1527,18 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return false;
             }
+
+            // Issue #3501 A5: variance-direct emission is safe only when the
+            // CALLEE is imported CLR — its delegate slots are real CLR
+            // delegate types, where gsc creates variant method-group
+            // delegates correctly (proven end-to-end). A source-defined
+            // callee's slot translates to a NATIVE function type, whose
+            // erased-delegate semantics do not support variant groups yet
+            // (gsc emits NotSupported or unsound IL) — those keep wrappers.
+            ISymbol targetMethod = argumentOperation.Parameter?.ContainingSymbol;
+            bool calleeIsImported = targetMethod != null
+                && targetMethod.DeclaringSyntaxReferences.IsDefaultOrEmpty;
+            isImplicitConversion = delegateCreation.IsImplicit && calleeIsImported;
 
             method = methodReference.Method;
             invoke = delegateType.DelegateInvokeMethod;
@@ -1587,7 +1602,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static bool MethodGroupNeedsExactTarget(
             IMethodSymbol method,
-            IMethodSymbol invoke)
+            IMethodSymbol invoke,
+            bool isImplicitConversion = true)
         {
             if (method.Parameters.Length != invoke.Parameters.Length
                 || method.ReturnsVoid != invoke.ReturnsVoid)
@@ -1595,14 +1611,52 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #3501 A5: gsc now accepts VARIANT method groups at
+            // IMPLICIT conversion sites — a contravariant reference
+            // parameter or covariant reference return converts directly,
+            // under inference and against fixed delegate slots alike — so a
+            // pure reference-variance mismatch no longer forces a wrapper
+            // lambda there. An EXPLICIT C# delegate creation
+            // (`(Func<...>)Group`, `new Func<...>(Group)`) still renders as
+            // a G# construction, whose operand cannot be a variant group,
+            // so those keep the wrapper. Ref-kind differences and
+            // non-reference (identity-only) type changes always do.
+            if (!isImplicitConversion)
+            {
+                for (int index = 0; index < method.Parameters.Length; index++)
+                {
+                    IParameterSymbol methodParameter = method.Parameters[index];
+                    IParameterSymbol invokeParameter = invoke.Parameters[index];
+                    if (methodParameter.RefKind != invokeParameter.RefKind
+                        || !SymbolEqualityComparer.Default.Equals(
+                            methodParameter.Type,
+                            invokeParameter.Type))
+                    {
+                        return true;
+                    }
+                }
+
+                return !method.ReturnsVoid
+                    && !SymbolEqualityComparer.Default.Equals(
+                        method.ReturnType,
+                        invoke.ReturnType);
+            }
+
             for (int index = 0; index < method.Parameters.Length; index++)
             {
                 IParameterSymbol methodParameter = method.Parameters[index];
                 IParameterSymbol invokeParameter = invoke.Parameters[index];
-                if (methodParameter.RefKind != invokeParameter.RefKind
-                    || !SymbolEqualityComparer.Default.Equals(
+                if (methodParameter.RefKind != invokeParameter.RefKind)
+                {
+                    return true;
+                }
+
+                if (!SymbolEqualityComparer.Default.Equals(
                         methodParameter.Type,
-                        invokeParameter.Type))
+                        invokeParameter.Type)
+                    && !IsReferenceVariantCompatible(
+                        target: methodParameter.Type,
+                        source: invokeParameter.Type))
                 {
                     return true;
                 }
@@ -1611,7 +1665,34 @@ public sealed partial class CSharpToGSharpTranslator
             return !method.ReturnsVoid
                 && !SymbolEqualityComparer.Default.Equals(
                     method.ReturnType,
-                    invoke.ReturnType);
+                    invoke.ReturnType)
+                && !IsReferenceVariantCompatible(
+                    target: invoke.ReturnType,
+                    source: method.ReturnType);
+        }
+
+        // Issue #3501 A5: whether `source` converts to `target` by implicit
+        // reference conversion — the variance C# permits between a method
+        // group's signature and the target delegate's, mirrored by gsc since
+        // its variant method-group support landed.
+        private static bool IsReferenceVariantCompatible(ITypeSymbol target, ITypeSymbol source)
+        {
+            if (target == null || source == null
+                || target.IsValueType || source.IsValueType)
+            {
+                return false;
+            }
+
+            for (ITypeSymbol current = source; current != null; current = (current as INamedTypeSymbol)?.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(current, target))
+                {
+                    return true;
+                }
+            }
+
+            return source.AllInterfaces.Any(candidate =>
+                SymbolEqualityComparer.Default.Equals(candidate, target));
         }
 
         // Issue #3468: a synthesized method-group wrapper parameter takes its
