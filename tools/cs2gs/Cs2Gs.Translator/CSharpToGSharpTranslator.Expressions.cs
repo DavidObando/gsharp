@@ -109,10 +109,11 @@ public sealed partial class CSharpToGSharpTranslator
                         staticMember,
                         identifier)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition) &&
-                !this.IsBareSiblingStaticScope(
-                    owner,
-                    this.EmittedName(staticMember, identifier.Identifier.ValueText),
-                    identifier))
+                !(this.IsBareSiblingStaticScope(
+                        owner,
+                        this.EmittedName(staticMember, identifier.Identifier.ValueText),
+                        identifier)
+                    && !IsStoreReceiverPosition(identifier)))
             {
                 return new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, identifier.GetLocation()),
@@ -220,6 +221,46 @@ public sealed partial class CSharpToGSharpTranslator
         // `let` func binding); a LIFTED static local function instead becomes
         // a real `shared` helper method, which is a static member context of
         // its own regardless of the containing C# member.
+        // Issue #3471: gsc's emitter throws GS9998 ("Variable 'X' has no
+        // local slot or parameter index") when a BARE shared member is the
+        // base receiver of a member STORE (`Instance.flush = value`,
+        // `Instance.Flag = v`, compound assignments, ref/out arguments) in any
+        // member body — while reads (`Instance.flush`), call receivers
+        // (`Instance.Apply(v)`), and direct writes to the member itself
+        // (`Count = Count + 1`) all emit fine. Until that is fixed, a sibling
+        // static referenced in store-receiver position keeps its qualifier.
+        private static bool IsStoreReceiverPosition(IdentifierNameSyntax identifier)
+        {
+            SyntaxNode current = identifier;
+            while ((current.Parent is MemberAccessExpressionSyntax memberAccess
+                        && memberAccess.Expression == current)
+                || (current.Parent is ElementAccessExpressionSyntax elementAccess
+                        && elementAccess.Expression == current))
+            {
+                current = current.Parent;
+            }
+
+            if (ReferenceEquals(current, identifier))
+            {
+                return false;
+            }
+
+            return current.Parent switch
+            {
+                AssignmentExpressionSyntax assignment when assignment.Left == current => true,
+                PrefixUnaryExpressionSyntax prefix
+                    when prefix.Operand == current &&
+                         prefix.Kind() is SyntaxKind.PreIncrementExpression or SyntaxKind.PreDecrementExpression => true,
+                PostfixUnaryExpressionSyntax postfix
+                    when postfix.Operand == current &&
+                         postfix.Kind() is SyntaxKind.PostIncrementExpression or SyntaxKind.PostDecrementExpression => true,
+                ArgumentSyntax argument
+                    when argument.Expression == current &&
+                         argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword => true,
+                _ => false,
+            };
+        }
+
         private bool IsBareSiblingStaticScope(
             INamedTypeSymbol owner,
             string memberName,

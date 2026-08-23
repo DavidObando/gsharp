@@ -251,6 +251,81 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
+        // gsc's emitter throws GS9998 when a bare shared member is the base
+        // receiver of a member STORE, while reads and call receivers emit
+        // fine — so only the store-receiver position keeps its qualifier.
+        [Fact]
+        public void SiblingStaticStoreReceiver_StaysQualified()
+        {
+            string printed = Translate("""
+                public class Logging
+                {
+                    private bool flush;
+
+                    private static Logging Instance = new Logging();
+
+                    public static bool InstantFlush
+                    {
+                        get => Instance.flush;
+                        set => Instance.flush = value;
+                    }
+
+                    public static void Apply(bool value)
+                    {
+                        Instance.Set(value);
+                    }
+
+                    public static int Run()
+                    {
+                        InstantFlush = true;
+                        Apply(true);
+                        return InstantFlush ? 1 : 0;
+                    }
+
+                    private void Set(bool value) => this.flush = value;
+                }
+                """);
+
+            Assert.Contains("Logging.Instance.flush = value", printed, StringComparison.Ordinal);
+            Assert.Contains("get -> Instance.flush", printed, StringComparison.Ordinal);
+            Assert.Contains("Instance.Set(value)", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Logging.Instance.Set", printed, StringComparison.Ordinal);
+            EmittedOracleResult result = EmittedOracle.Evaluate(
+                printed + Environment.NewLine + "Logging.Run()");
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+            Assert.Null(result.UnhandledException);
+            Assert.Equal(1, result.Value);
+        }
+
+        // gsc double-binds the arguments of a BARE sibling call when an
+        // argument subtree carries an inline `out var` declaration (issue
+        // #3490: GS9002 + GS0102 for the same declaration), so such calls
+        // keep the qualifier.
+        [Fact]
+        public void SiblingStaticCall_WithOutVarArgument_StaysQualified()
+        {
+            string printed = Translate("""
+                using System.Collections.Generic;
+                using System.Linq;
+
+                public class Writer
+                {
+                    public string Row(IReadOnlyDictionary<string, object?> row, List<string> keys)
+                    {
+                        return string.Join(",", keys.Select(k => Format(row.TryGetValue(k, out var v) ? v : null)));
+                    }
+
+                    public static string Plain(object? value) => Format(value);
+
+                    private static string Format(object? value) => value?.ToString() ?? "";
+                }
+                """);
+
+            Assert.Contains("Writer.Format(if row.TryGetValue(k, out var v)", printed, StringComparison.Ordinal);
+            Assert.Contains("string -> Format(value)", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
         private static string Translate(
             string source,
             params MetadataReference[] additionalReferences)

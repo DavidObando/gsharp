@@ -72,7 +72,7 @@ public class Issue3402ShortCircuitPatternBinderTranslationTests
         // ADR-0166 / issue #3409: native pattern variable; `candidate` and the
         // later `out var extra` both stay visible through the chain and the body.
         Assert.Contains(
-            "if Get(value) is Candidate candidate && candidate.Value > 0 && TryRead(out var extra) && extra > 0 {",
+            "if Get(value) is Candidate candidate && candidate.Value > 0 && C.TryRead(out var extra) && extra > 0 {",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("return candidate.Value + extra", rendered, StringComparison.Ordinal);
@@ -132,7 +132,7 @@ public class Issue3402ShortCircuitPatternBinderTranslationTests
         // ADR-0166 / issue #3409: the `out var` prefix and the native pattern
         // variable share one condition; no nested `if let` for the binder.
         Assert.Contains(
-            "if TryGet(input, out var value) && value is Candidate candidate && candidate.Value > 0 {",
+            "if C.TryGet(input, out var value) && value is Candidate candidate && candidate.Value > 0 {",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("return candidate.Value", rendered, StringComparison.Ordinal);
