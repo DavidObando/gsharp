@@ -297,7 +297,7 @@ public sealed class Issue3465CompilerInferenceTranslationTests
             }
             """);
 
-        Assert.Contains("Accept(() -> if flag", rendered, StringComparison.Ordinal);
+        Assert.Contains("() -> if flag", rendered, StringComparison.Ordinal);
         Assert.Contains("(value int32) -> seen.Add(value)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("Accept(func ", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);

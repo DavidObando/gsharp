@@ -24,6 +24,10 @@ public static class GSharpPrinter
 {
     private const string IndentUnit = "    ";
 
+    // Issue #3470: column budget for statement-level wrapping (see
+    // RenderWrappable).
+    private const int MaxLineWidth = 120;
+
     // Unary operators (`+ - ! ^ * & <-`) bind at precedence 6 in G#'s
     // grammar — higher than every binary operator — per
     // SyntaxFacts.GetUnaryOperatorPrecedence.
@@ -469,6 +473,78 @@ public static class GSharpPrinter
 
     private static string RenderExpression(GExpression expression, int indent) =>
         RenderExpression(expression, indent, 0);
+
+    // Issue #3470: the printer renders each statement on one line regardless
+    // of source formatting, producing 300+ character lines from deliberately
+    // wrapped boolean chains and argument lists. Statement-level value
+    // positions render through this budgeted entry point instead: when the
+    // one-line form exceeds the column budget, `&&`/`||` chains break after
+    // each operator and long argument lists break after `(` and each comma —
+    // both continuations gsc's parser accepts (trailing-operator and
+    // open-delimiter line joining). Anything else keeps the one-line form.
+    private static string RenderWrappable(GExpression expression, int indent, int prefixWidth)
+    {
+        string single = RenderExpression(expression, indent);
+        if (single.IndexOf('\n') >= 0 || prefixWidth + single.Length <= MaxLineWidth)
+        {
+            return single;
+        }
+
+        return RenderWrapped(expression, indent, prefixWidth) ?? single;
+    }
+
+    private static string RenderWrapped(GExpression expression, int indent, int prefixWidth)
+    {
+        string continuation = Indent(indent + 1);
+        if (expression is BinaryExpression { Operator: "&&" or "||" } chainRoot)
+        {
+            var operands = new List<GExpression>();
+            void Flatten(GExpression node)
+            {
+                if (node is BinaryExpression nested && nested.Operator == chainRoot.Operator)
+                {
+                    Flatten(nested.Left);
+                    Flatten(nested.Right);
+                }
+                else
+                {
+                    operands.Add(node);
+                }
+            }
+
+            Flatten(chainRoot);
+            int operandMin = GetBinaryPrecedence(chainRoot.Operator) + 1;
+            var parts = operands.Select(operand =>
+            {
+                string text = RenderExpression(operand, indent + 1, operandMin);
+
+                // Only invocation operands wrap further: re-flattening a
+                // parenthesized lower-precedence sub-chain here would drop
+                // the parentheses the precedence-aware render just added.
+                return operand is InvocationExpression
+                        && text.IndexOf('\n') < 0
+                        && continuation.Length + text.Length > MaxLineWidth
+                    ? RenderWrapped(operand, indent + 1, continuation.Length) ?? text
+                    : text;
+            });
+            return string.Join($" {chainRoot.Operator}\n{continuation}", parts);
+        }
+
+        if (expression is InvocationExpression { Arguments.Count: > 0 } invocation)
+        {
+            string target = RenderExpression(invocation.Target, indent);
+            string typeArgs = invocation.TypeArguments.Count == 0
+                ? string.Empty
+                : $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
+            IEnumerable<string> argTexts = invocation.Arguments.Select(argument =>
+                RenderWrappable(argument, indent + 1, continuation.Length));
+            return $"{target}{typeArgs}(\n{continuation}"
+                + string.Join($",\n{continuation}", argTexts)
+                + ")";
+        }
+
+        return null;
+    }
 
     private static string RenderExpressionCore(GExpression expression, int indent)
     {
@@ -1065,18 +1141,22 @@ public static class GSharpPrinter
         {
             case LocalDeclarationStatement local:
                 var typeClause = local.Type == null ? string.Empty : $" {RenderType(local.Type)}";
-                var initClause = local.Initializer == null
-                    ? string.Empty
-                    : $" = {RenderExpression(local.Initializer, indent)}";
                 var usingPrefix = local.IsUsing ? (local.IsAwait ? "await using " : "using ") : string.Empty;
                 var refPrefix = local.IsRefAlias ? "ref " : string.Empty;
-                return $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {refPrefix}{local.Name}{typeClause}{initClause}";
+                var declHead = $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {refPrefix}{local.Name}{typeClause}";
+                var initClause = local.Initializer == null
+                    ? string.Empty
+                    : $" = {RenderWrappable(local.Initializer, indent, declHead.Length + 3)}";
+                return $"{declHead}{initClause}";
 
             case ExpressionStatement expression:
-                return $"{pad}{RenderExpression(expression.Expression, indent)}";
+                return $"{pad}{RenderWrappable(expression.Expression, indent, pad.Length)}";
 
             case AssignmentStatement assignment:
-                return $"{pad}{RenderExpression(assignment.Target, indent)} {assignment.Operator} {RenderExpression(assignment.Value, indent)}";
+                var assignmentHead =
+                    $"{pad}{RenderExpression(assignment.Target, indent)} {assignment.Operator} ";
+                return assignmentHead + RenderWrappable(
+                    assignment.Value, indent, assignmentHead.Length);
 
             case MultiAssignmentStatement multiAssignment:
                 return $"{pad}" +
@@ -1096,7 +1176,7 @@ public static class GSharpPrinter
                     ? $"{pad}return"
                     : ret.IsRef
                         ? $"{pad}return ref {RenderExpression(ret.Expression, indent)}"
-                        : $"{pad}return {RenderExpression(ret.Expression, indent)}";
+                        : $"{pad}return {RenderWrappable(ret.Expression, indent, pad.Length + 7)}";
 
             case ThrowStatement thrown:
                 return $"{pad}throw {RenderExpression(thrown.Expression, indent)}";
@@ -1108,7 +1188,7 @@ public static class GSharpPrinter
                 return RenderIfLet(ifLetStatement, indent);
 
             case WhileStatement whileStatement:
-                return $"{pad}while {RenderExpression(whileStatement.Condition, indent)} {RenderBlock(whileStatement.Body, indent)}";
+                return $"{pad}while {RenderWrappable(whileStatement.Condition, indent, pad.Length + 6)} {RenderBlock(whileStatement.Body, indent)}";
 
             case WhileLetStatement whileLetStatement:
                 return $"{pad}while {RenderLetBindings(whileLetStatement.Bindings, indent)} {RenderBlock(whileLetStatement.Body, indent)}";
@@ -1284,7 +1364,7 @@ public static class GSharpPrinter
     {
         var pad = Indent(indent);
         var sb = new StringBuilder();
-        sb.Append($"{pad}if {RenderExpression(ifStatement.Condition, indent)} {RenderBlock(ifStatement.Then, indent)}");
+        sb.Append($"{pad}if {RenderWrappable(ifStatement.Condition, indent, pad.Length + 3)} {RenderBlock(ifStatement.Then, indent)}");
         if (ifStatement.ElseBranch is IfStatement elseIf)
         {
             sb.Append(" else ");

@@ -83,7 +83,11 @@ namespace Demo
         // side-effecting scrutinee, the `and not` combinator and the binder — is
         // the native loop condition.
         Assert.Contains(
-            "while position < endPosition && origPosition == position && (TagFactory.CreateTag(out var lengthRead) is Frame child and not EmptyFrame) {",
+            "while position < endPosition &&",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "(TagFactory.CreateTag(out var lengthRead) is Frame child and not EmptyFrame) {",
             printed);
 
         // No hoist local and no `break` guard are produced.
