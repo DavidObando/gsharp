@@ -968,10 +968,33 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.EmittedName(symbol, symbol.Name);
             }
 
+            // Issue #3467: gsc accepts `_` as a (repeatable) discard parameter
+            // name, so an unreferenced C# `_` parameter keeps its spelling. A
+            // single `_` parameter that the body actually READS (legal C#: `_`
+            // is only a discard when it cannot bind) still needs a real
+            // identifier, since G# `_` is a true blank; only that case renames
+            // to `__underscore` (paired with the identifier-reference rewrite
+            // in TranslateIdentifierName).
             int underscoreCount = underscoreParameter.Parent is ParameterListSyntax parameterList
                 ? parameterList.Parameters.Count(p => p.Identifier.ValueText == "_")
                 : 1;
-            return underscoreCount == 1 ? "__underscore" : "_";
+            if (underscoreCount > 1)
+            {
+                return "_";
+            }
+
+            SyntaxNode body = underscoreParameter.Ancestors().FirstOrDefault(ancestor =>
+                ancestor is AnonymousFunctionExpressionSyntax
+                    or LocalFunctionStatementSyntax
+                    or BaseMethodDeclarationSyntax);
+            bool referenced = body != null
+                && body.DescendantNodes()
+                    .OfType<IdentifierNameSyntax>()
+                    .Any(identifier => identifier.Identifier.ValueText == "_"
+                        && SymbolEqualityComparer.Default.Equals(
+                            this.context.GetSymbolInfo(identifier).Symbol,
+                            symbol));
+            return referenced ? "__underscore" : "_";
         }
 
         /// <summary>
@@ -1454,7 +1477,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
                 body = this.WithParameterShadows(bodyOwner, body);
-                return AddIteratorExitLabel(bodyOwner, body);
+                return this.AddIteratorExitLabel(bodyOwner, body);
             }
             finally
             {
@@ -1597,7 +1620,25 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        private static BlockStatement AddIteratorExitLabel(SyntaxNode bodyOwner, BlockStatement body)
+        // Issue #3467: lifted local-function helper names used to embed the
+        // local function's SpanStart, producing 50+ character identifiers that
+        // shift on any upstream edit. The name is now just
+        // `__local_{owner}_{name}`; only a genuine collision (an overload of
+        // the enclosing member declaring a same-named local function, or
+        // same-named locals in sibling scopes) takes an ordinal suffix.
+        private string AllocateLiftedLocalFunctionName(string ownerName, string localName)
+        {
+            string baseName = $"__local_{ownerName}_{localName}";
+            string candidate = baseName;
+            for (int suffix = 2; !this.state.UsedLiftedLocalFunctionNames.Add(candidate); suffix++)
+            {
+                candidate = $"{baseName}_{suffix}";
+            }
+
+            return candidate;
+        }
+
+        private BlockStatement AddIteratorExitLabel(SyntaxNode bodyOwner, BlockStatement body)
         {
             if (!HasYieldBreak(bodyOwner))
             {
@@ -1606,7 +1647,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             var statements = body.Statements.ToList();
             statements.Add(new LabeledStatement(
-                IteratorExitLabelName(bodyOwner),
+                this.IteratorExitLabelName(bodyOwner),
                 new BlockStatement(new List<GStatement>())));
             return new BlockStatement(statements, body.IsUnsafe);
         }
@@ -1985,7 +2026,7 @@ public sealed partial class CSharpToGSharpTranslator
                     pair.Symbol.ContainingSymbol?.Name ?? "scope");
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedStaticLocalFunctions[pair.Symbol] =
-                    $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}";
+                    this.AllocateLiftedLocalFunctionName(ownerName, localName);
             }
 
             var capturingLocals = localFunctions
@@ -2094,7 +2135,7 @@ public sealed partial class CSharpToGSharpTranslator
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedRecursiveLocalFunctions[pair.Symbol] =
                     new LiftedRecursiveLocalFunction(
-                        $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}",
+                        this.AllocateLiftedLocalFunctionName(ownerName, localName),
                         containingMethod?.IsStatic != false,
                         captures);
             }

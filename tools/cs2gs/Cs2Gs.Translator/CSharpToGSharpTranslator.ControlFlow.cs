@@ -762,7 +762,7 @@ public sealed partial class CSharpToGSharpTranslator
                         : new BinaryExpression(guardExpression, "&&", translated);
                 }
 
-                string endLabel = $"__patternGuardEnd{ifStatement.SpanStart}";
+                string endLabel = this.SyntheticLabelName("patternGuardEnd", ifStatement);
                 List<GStatement> matchedBody = body.Statements.ToList();
                 matchedBody.Add(new GotoStatement(endLabel));
                 thenStatements.Add(new IfStatement(
