@@ -65,19 +65,16 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
 
                     case SyntaxKind.SingleLineDocumentationCommentTrivia:
-                        foreach (string raw in trivia.ToFullString()
-                            .Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        // Issue #3501 B1: XML doc comments convert to the
+                        // ADR-0057 Markdown authoring surface (`@param`,
+                        // backticks, `(cref:X)`, …) with the ```xmldoc
+                        // escape hatch for constructs outside the bijective
+                        // subset; malformed XML passes through verbatim.
+                        IReadOnlyList<string> converted =
+                            XmlDocMarkdownConverter.Convert(trivia.ToFullString());
+                        if (converted != null)
                         {
-                            string text = raw.Trim();
-                            if (text.Length == 0)
-                            {
-                                continue;
-                            }
-
-                            (lines ??= new List<string>()).Add(
-                                text.StartsWith("///", StringComparison.Ordinal)
-                                    ? text
-                                    : $"/// {text}");
+                            (lines ??= new List<string>()).AddRange(converted);
                         }
 
                         break;
