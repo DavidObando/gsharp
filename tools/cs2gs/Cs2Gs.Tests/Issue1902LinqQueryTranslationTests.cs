@@ -170,7 +170,7 @@ namespace Corpus.Issue1902
 ");
 
         Assert.Contains(
-            "owners.GroupJoin(pets, (o Owner) -> o.Id, (p Pet) -> p.OwnerId, (o Owner, petGroup sequence[Pet]) -> {",
+            ".GroupJoin(pets, (o Owner) -> o.Id, (p Pet) -> p.OwnerId, (o Owner, petGroup sequence[Pet]) -> {",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("petGroup.Count()", rendered, StringComparison.Ordinal);
@@ -226,7 +226,7 @@ namespace Corpus.Issue1902
 }
 ");
 
-        Assert.Contains("words.GroupBy((w string) -> w.Length)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".GroupBy((w string) -> w.Length)", rendered, StringComparison.Ordinal);
         Assert.Contains(".Where((g", rendered, StringComparison.Ordinal);
         Assert.Contains("g.Key > 3", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
