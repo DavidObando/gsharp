@@ -73,7 +73,7 @@ public sealed class Issue2516SliceCovariancePipelineTests
 
         // Compiler-level slice/interface covariance makes the natural
         // translation valid; cs2gs must not manufacture an `as` escape hatch.
-        Assert.Contains("Repro.Accept(values)", emitted, StringComparison.Ordinal);
+        Assert.Contains("Accept(values)", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("values as IEnumerable[IPerson]", emitted, StringComparison.Ordinal);
     }
 

@@ -81,9 +81,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("} while (n = C.Probe()) < 0", printed);
+        Assert.Contains("} while (n = Probe()) < 0", printed);
         Assert.True(printed.IndexOf("bodyRuns++", StringComparison.Ordinal) <
-            printed.IndexOf("n = C.Probe()", StringComparison.Ordinal));
+            printed.IndexOf("n = Probe()", StringComparison.Ordinal));
 
         // Behavioral check: body ran once, Probe was called exactly once, AFTER
         // the body (a bug that hoisted the condition BEFORE the body would

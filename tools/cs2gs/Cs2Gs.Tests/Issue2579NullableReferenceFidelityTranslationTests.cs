@@ -75,8 +75,8 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
         Assert.Contains("for current in items!!", printed, StringComparison.Ordinal);
         Assert.Contains("var required = key!!", printed, StringComparison.Ordinal);
         Assert.Contains("required = key!!", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Required = key!!", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Consume(key!!)", printed, StringComparison.Ordinal);
+        Assert.Contains("Required = key!!", printed, StringComparison.Ordinal);
+        Assert.Contains("Consume(key!!)", printed, StringComparison.Ordinal);
         Assert.Contains("map_[key!!]", printed, StringComparison.Ordinal);
         Assert.Contains("let optional string? = key", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("optional string? = key!!", printed, StringComparison.Ordinal);
@@ -115,7 +115,7 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
             }
             """);
 
-        Assert.Contains("Repro.Length(value!!)", printed, StringComparison.Ordinal);
+        Assert.Contains("Length(value!!)", printed, StringComparison.Ordinal);
         Assert.Contains("@NotNullWhen(true)", printed, StringComparison.Ordinal);
     }
 

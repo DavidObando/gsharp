@@ -103,7 +103,7 @@ public sealed class Issue3092NullConditionalRangeSliceTests
 
         Assert.Contains("hash?[..12]", printed, StringComparison.Ordinal);
         Assert.Contains(
-            "Program.Receiver(\"abcdef\")?[Program.Start()..Program.End()]",
+            "Receiver(\"abcdef\")?[Start()..End()]",
             printed,
             StringComparison.Ordinal);
         Assert.Contains("numbers?[1..3]", printed, StringComparison.Ordinal);

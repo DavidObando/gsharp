@@ -173,8 +173,8 @@ namespace Corpus.Issue1901
 ");
 
         Assert.Contains("func Total(values List[int32]) int32", rendered, StringComparison.Ordinal);
-        Assert.Contains("let zero = ParamsCollections.Total(List[int32]())", rendered, StringComparison.Ordinal);
-        Assert.Contains("let three = ParamsCollections.Total(List[int32]{ 1, 2, 3 })", rendered, StringComparison.Ordinal);
+        Assert.Contains("let zero = Total(List[int32]())", rendered, StringComparison.Ordinal);
+        Assert.Contains("let three = Total(List[int32]{ 1, 2, 3 })", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -207,7 +207,7 @@ namespace Corpus.Issue1901
 }
 ");
 
-        Assert.Contains("let sum = ParamsCollections.Total(lst)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let sum = Total(lst)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("List[int32]{ lst }", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
@@ -237,7 +237,7 @@ namespace Corpus.Issue1901
 
         Assert.Contains("func JoinParts(parts IEnumerable[string]) string", rendered, StringComparison.Ordinal);
         Assert.Contains(
-            "let joined = ParamsCollections.JoinParts(cast[IEnumerable[string]](List[string]{ \"a\", \"b\", \"c\" }))",
+            "let joined = JoinParts(cast[IEnumerable[string]](List[string]{ \"a\", \"b\", \"c\" }))",
             rendered,
             StringComparison.Ordinal);
         AssertRoundTripParses(rendered);

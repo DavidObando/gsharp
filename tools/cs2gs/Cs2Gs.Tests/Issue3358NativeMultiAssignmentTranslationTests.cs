@@ -146,7 +146,7 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("a, b = C.Pair()", printed, StringComparison.Ordinal);
+        Assert.Contains("a, b = Pair()", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
     }
 

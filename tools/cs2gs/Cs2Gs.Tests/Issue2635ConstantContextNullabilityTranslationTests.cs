@@ -33,7 +33,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("const Settings string = \"appsettings\" + C.Extension", printed);
+        Assert.Contains("const Settings string = \"appsettings\" + Extension", printed);
         Assert.Contains("const value = \"Mozilla/5.0 \" + \"AppleWebKit/537.36\"", printed);
         Assert.DoesNotContain("!!", printed);
     }

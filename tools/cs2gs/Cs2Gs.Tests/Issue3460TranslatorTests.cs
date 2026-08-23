@@ -683,11 +683,11 @@ namespace Cs2Gs.Tests
                 MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460ImportedOptions).Assembly.Location));
 
             Assert.Contains(
-                "Issue3460ImportedOptions(Obj.MarkArgument())",
+                "Issue3460ImportedOptions(MarkArgument())",
                 printed,
                 StringComparison.Ordinal);
-            Assert.Contains("Required = Obj.MarkText(\"ok\", 3)", printed, StringComparison.Ordinal);
-            Assert.Contains("InitOnly = Obj.Mark(4)", printed, StringComparison.Ordinal);
+            Assert.Contains("Required = MarkText(\"ok\", 3)", printed, StringComparison.Ordinal);
+            Assert.Contains("InitOnly = Mark(4)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
             EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -753,8 +753,8 @@ namespace Cs2Gs.Tests
                 MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460NestedOptions).Assembly.Location));
 
             Assert.Contains("Nested: { Value = 5 }", printed, StringComparison.Ordinal);
-            Assert.Contains("Nested: { Value = Obj.Mark(1) }", printed, StringComparison.Ordinal);
-            Assert.Contains("Values: { Obj.Mark(2) }", printed, StringComparison.Ordinal);
+            Assert.Contains("Nested: { Value = Mark(1) }", printed, StringComparison.Ordinal);
+            Assert.Contains("Values: { Mark(2) }", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
 
             EmittedOracleResult result = EmittedOracle.Evaluate(

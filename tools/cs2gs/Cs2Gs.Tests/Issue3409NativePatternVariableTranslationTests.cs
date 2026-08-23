@@ -89,7 +89,7 @@ public class Issue3409NativePatternVariableTranslationTests
             }
             """);
 
-        Assert.Contains("if C.Get(value) is Candidate candidate && candidate.Value > 0 {", printed, StringComparison.Ordinal);
+        Assert.Contains("if Get(value) is Candidate candidate && candidate.Value > 0 {", printed, StringComparison.Ordinal);
         Assert.Contains("return candidate.Value", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);

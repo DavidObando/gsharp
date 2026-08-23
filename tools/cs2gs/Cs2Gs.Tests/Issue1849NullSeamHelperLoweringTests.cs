@@ -44,7 +44,7 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             """);
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains("private var flag bool = C.GetA() is { X: 1, Y: 2 }", printed, StringComparison.Ordinal);
+        Assert.Contains("private var flag bool = GetA() is { X: 1, Y: 2 }", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
     }
@@ -78,7 +78,7 @@ public class Issue3355NullSeamBlockExpressionLoweringTests
             """);
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()"));
-        Assert.Contains("C.GetA() is { X: > 0 }", printed, StringComparison.Ordinal);
+        Assert.Contains("GetA() is { X: > 0 }", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertNoHelperOrGap(printed, context);
 

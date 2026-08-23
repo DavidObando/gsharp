@@ -106,10 +106,10 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         AssertInOrder(
             printed,
             "GetReceiver().ReceiveAsync(",
-            "after: Scenario.After(3)",
+            "after: After(3)",
             "label: \"named\"",
-            "value: await Scenario.InnerAsync(2)",
-            "before: Scenario.Before(1)");
+            "value: await InnerAsync(2)",
+            "before: Before(1)");
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         AssertRoundTrip(printed);
     }
@@ -167,19 +167,19 @@ public sealed class Issue3090AwaitInvocationArgumentTests
             """);
 
         Assert.Contains(
-            "receiver?.ReceiveAsync(value: await Scenario.InnerAsync())",
+            "receiver?.ReceiveAsync(value: await InnerAsync())",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "receiver?.Next!!.ReceiveAsync(value: await Scenario.InnerAsync())",
+            "receiver?.Next!!.ReceiveAsync(value: await InnerAsync())",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Scenario.SetRefAsync(&a, value: await Scenario.InnerAsync())",
+            "SetRefAsync(&a, value: await InnerAsync())",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Scenario.SetOutAsync(out b, value: await Scenario.InnerAsync())",
+            "SetOutAsync(out b, value: await InnerAsync())",
             printed,
             StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
@@ -381,12 +381,12 @@ public sealed class Issue3090AwaitInvocationArgumentTests
                     SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        Assert.Contains("after: AwaitExpressionFixture.Trace(", emitted, StringComparison.Ordinal);
+        Assert.Contains("after: Trace(", emitted, StringComparison.Ordinal);
         Assert.Contains(
-            "value: await AwaitExpressionFixture.TraceAsync(",
+            "value: await TraceAsync(",
             emitted,
             StringComparison.Ordinal);
-        Assert.Contains("before: AwaitExpressionFixture.Trace(", emitted, StringComparison.Ordinal);
+        Assert.Contains("before: Trace(", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(emitted, "TraceReceiver(\"static-extension\")"));
         Assert.Equal(1, CountOccurrences(emitted, "CreateReceiver(\"bare-extension\")"));

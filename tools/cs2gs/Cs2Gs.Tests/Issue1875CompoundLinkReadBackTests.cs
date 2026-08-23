@@ -205,8 +205,8 @@ namespace Demo
 
         // The receiver-producing call (`GetHolder()`) is evaluated exactly
         // once, spilled into a temp, and that temp's `.P` is what the
-        // compound link reads/writes.
-        Assert.Equal(1, CountOccurrences(printed, "C.GetHolder()"));
+        // compound link reads/writes. (1 func declaration + 1 call site.)
+        Assert.Equal(2, CountOccurrences(printed, "GetHolder()"));
     }
 
     [Fact]
@@ -256,9 +256,9 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal(1, CountOccurrences(printed, "= Next()"));
         Assert.DoesNotContain("__spill", printed);
-        Assert.Contains("a = (b = (c = C.Next()))", printed);
+        Assert.Contains("a = (b = (c = Next()))", printed);
     }
 
     private static int CountOccurrences(string haystack, string needle)

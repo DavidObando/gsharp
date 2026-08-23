@@ -187,7 +187,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return C.Echo(value)!!", printed);
+        Assert.Contains("return Echo(value)!!", printed);
         Assert.DoesNotContain("s string?", printed);
     }
 

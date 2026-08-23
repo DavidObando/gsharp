@@ -359,7 +359,7 @@ namespace Demo
         // Issue #1896: no helper needed — the native range-index form
         // already embeds `Next()` exactly once.
         Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains("Data[C.Next()..2]", printed);
+        Assert.Contains("Data[Next()..2]", printed);
         Assert.DoesNotContain(".Slice(", printed);
         Assert.DoesNotContain("__init0(", printed);
         Assert.DoesNotContain(
@@ -424,7 +424,7 @@ namespace Demo
         // the `this(...)` argument list, and the native range-index form
         // already embeds `Next()` exactly once.
         Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains("init(s[C.Next()..j])", printed);
+        Assert.Contains("init(s[Next()..j])", printed);
         Assert.DoesNotContain(".Slice(", printed);
         Assert.DoesNotContain("__init0(", printed);
         Assert.DoesNotContain(

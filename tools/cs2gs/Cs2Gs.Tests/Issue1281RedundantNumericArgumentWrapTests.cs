@@ -123,7 +123,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("uint32(C.Five)", printed);
+        Assert.Contains("uint32(Five)", printed);
     }
 
     /// <summary>

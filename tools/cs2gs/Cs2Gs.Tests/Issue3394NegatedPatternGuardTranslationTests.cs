@@ -185,7 +185,7 @@ namespace Demo
 
         Assert.Contains("var candidate Candidate? = value as Candidate", rendered, StringComparison.Ordinal);
         Assert.Contains("if candidate == nil {", rendered, StringComparison.Ordinal);
-        Assert.Contains("candidate = C.Normalize(candidate)", rendered, StringComparison.Ordinal);
+        Assert.Contains("candidate = Normalize(candidate)", rendered, StringComparison.Ordinal);
         Assert.Contains("return candidate.Value", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("is Candidate candidate", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
@@ -282,7 +282,7 @@ namespace Demo
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
         Assert.Contains("var candidate Candidate?", rendered, StringComparison.Ordinal);
-        Assert.Contains("candidate = C.Normalize(candidate)", rendered, StringComparison.Ordinal);
+        Assert.Contains("candidate = Normalize(candidate)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -469,9 +469,9 @@ namespace Demo
         // ADR-0166 / issue #3409: `skip` is still tested before `Get(value)` is
         // called, and the else-branch sees the when-false pattern variable.
         int prefixGuard = rendered.IndexOf("if skip ||", StringComparison.Ordinal);
-        int patternTest = rendered.IndexOf("!(C.Get(value) is Candidate candidate)", StringComparison.Ordinal);
+        int patternTest = rendered.IndexOf("!(Get(value) is Candidate candidate)", StringComparison.Ordinal);
         Assert.True(prefixGuard >= 0 && patternTest > prefixGuard, rendered);
-        Assert.Contains("if skip || !(C.Get(value) is Candidate candidate) {", rendered, StringComparison.Ordinal);
+        Assert.Contains("if skip || !(Get(value) is Candidate candidate) {", rendered, StringComparison.Ordinal);
         Assert.Contains("} else {", rendered, StringComparison.Ordinal);
         Assert.Contains("return candidate.Value", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let candidate", rendered, StringComparison.Ordinal);

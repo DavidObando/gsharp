@@ -74,7 +74,7 @@ namespace Demo
         // ADR-0166 / issue #3409: native `!(x is { } at)` guard; no hoisted
         // `let at DateTimeOffset? = promptShownAt` / `if at == nil`.
         Assert.Contains("if !(promptShownAt is { } at) {", printed);
-        Assert.Contains("clock() - at <= C.ExitWindow", printed);
+        Assert.Contains("clock() - at <= ExitWindow", printed);
         Assert.DoesNotContain("let at", printed);
         Assert.DoesNotContain("== nil", printed);
         Assert.DoesNotContain("as DateTimeOffset", printed);
@@ -231,7 +231,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if promptShownAt is { } at && now - at <= C.ExitWindow {", printed);
+        Assert.Contains("if promptShownAt is { } at && now - at <= ExitWindow {", printed);
         Assert.DoesNotContain("if let", printed);
         Assert.DoesNotContain("promptShownAt!!", printed);
         Assert.DoesNotContain("__spill", printed);

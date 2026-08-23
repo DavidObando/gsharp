@@ -90,6 +90,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                 GExpression recursiveTarget = recursiveLift.IsStatic
                     && recursiveLocal.ContainingType is { } recursiveContainingType
+                    && !this.IsBareSiblingStaticScope(
+                        recursiveContainingType, recursiveLift.Name, invocation)
                         ? new MemberAccessExpression(
                             this.StaticQualifierReceiver(recursiveContainingType, invocation.GetLocation()),
                             recursiveLift.Name)
@@ -257,9 +259,13 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
-                target = new MemberAccessExpression(
-                    this.StaticQualifierReceiver(containingType, invocation.GetLocation()),
-                    liftedName);
+                // Issue #3471: same-type call sites name the lifted `shared`
+                // helper bare; only cross-type sites qualify through the owner.
+                target = this.IsBareSiblingStaticScope(containingType, liftedName, invocation)
+                    ? new IdentifierExpression(liftedName)
+                    : new MemberAccessExpression(
+                        this.StaticQualifierReceiver(containingType, invocation.GetLocation()),
+                        liftedName);
                 if (invocation.Expression is GenericNameSyntax liftedGeneric)
                 {
                     typeArguments = this.MapTypeArguments(liftedGeneric);
@@ -334,11 +340,16 @@ public sealed partial class CSharpToGSharpTranslator
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualCall(staticMethod)) &&
-                !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition))
+                !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition) &&
+                !this.IsBareSiblingStaticScope(
+                    owner,
+                    this.EmittedName(staticMethod, staticMethod.Name),
+                    bareName))
             {
                 // A C# bare sibling static call (`Round(value, 2)`) carries an
-                // implicit type qualifier. A G# `shared` method body has no
-                // implicit type scope, so the call must be qualified through the
+                // implicit type qualifier only where the emitted body leaves the
+                // owner's type scope (issue #3471) — e.g. a lifted extension
+                // `func` at file scope — and must then be qualified through the
                 // owning type (`Geometry.Round(value, 2)`); see ADR-0115 §B.18.
                 // A bare call to a `using static` member is the exception
                 // (ADR-0134): gsc brings it into scope through `import Owner`,

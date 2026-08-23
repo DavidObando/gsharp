@@ -457,11 +457,11 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
-        Assert.Contains("User.GetHost()?.Describe()", user);
+        Assert.Equal(1, CountOccurrences(user, "GetHost()?"));
+        Assert.Contains("GetHost()?.Describe()", user);
         Assert.DoesNotContain("__spill", user);
         Assert.DoesNotContain("FirstExtensions.Describe", user);
-        Assert.DoesNotContain("if User.GetHost() != nil", user);
+        Assert.DoesNotContain("if GetHost() != nil", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -559,8 +559,8 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
-        Assert.Contains("() -> User.GetHost()?.Touch()", user);
+        Assert.Equal(1, CountOccurrences(user, "GetHost()?"));
+        Assert.Contains("() -> GetHost()?.Touch()", user);
         Assert.DoesNotContain("__spill", user);
         Assert.DoesNotContain("FirstExtensions.Touch", user);
         Assert.DoesNotContain("default(void", user);
@@ -685,8 +685,8 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Equal(1, CountOccurrences(user, "User.GetConfig()"));
-        Assert.Contains("User.GetConfig()?.Options.Describe()", user);
+        Assert.Equal(1, CountOccurrences(user, "GetConfig()?"));
+        Assert.Contains("GetConfig()?.Options.Describe()", user);
         Assert.DoesNotContain("__spill", user);
         Assert.DoesNotContain("FirstExtensions.Describe", user);
 
