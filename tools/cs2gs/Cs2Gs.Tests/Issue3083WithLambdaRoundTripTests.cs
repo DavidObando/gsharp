@@ -88,7 +88,7 @@ public sealed class Issue3083WithLambdaRoundTripTests
             ".Select((s ArchScenario) -> (s with { Steps = ",
             printed,
             StringComparison.Ordinal);
-        Assert.Contains("})).Where((s ArchScenario) ->", printed, StringComparison.Ordinal);
+        Assert.Contains(".Where((s ArchScenario) ->", printed, StringComparison.Ordinal);
         AssertRoundTrip(printed);
     }
 

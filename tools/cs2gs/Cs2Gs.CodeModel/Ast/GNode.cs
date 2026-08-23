@@ -22,4 +22,12 @@ public abstract class GNode
     /// case — synthesized nodes never carry any).
     /// </summary>
     public System.Collections.Generic.IReadOnlyList<string> AttachedComments { get; set; }
+
+    /// <summary>
+    /// Gets or sets the author comment that followed the source construct on
+    /// the same line (issue #3501 B3), carrying its own <c>//</c> marker;
+    /// the printer appends it after the rendered node. <see langword="null"/>
+    /// when there is none.
+    /// </summary>
+    public string TrailingComment { get; set; }
 }

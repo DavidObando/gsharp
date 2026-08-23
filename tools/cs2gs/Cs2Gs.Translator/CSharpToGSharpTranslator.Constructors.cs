@@ -1902,6 +1902,7 @@ public sealed partial class CSharpToGSharpTranslator
                 statements.AddRange(this.TranslateStatement(statement));
             }
 
+            this.AppendDanglingComments(statements, block.CloseBraceToken);
             return new BlockStatement(statements);
         }
 
@@ -2595,6 +2596,60 @@ public sealed partial class CSharpToGSharpTranslator
         // emitted immediately ahead of `statement`'s own output, then the ambient
         // seam is restored — so a nested statement (e.g. a block's own children)
         // always gets its own independent seam rather than sharing this one.
+        // Issue #3501 B3: a comment on the SAME line after the statement
+        // rides as the emitted statement's trailing comment.
+        private static void AttachTrailingComment(GNode node, SyntaxNode source)
+        {
+            if (node == null || source == null || node.TrailingComment != null)
+            {
+                return;
+            }
+
+            foreach (SyntaxTrivia trivia in source.GetTrailingTrivia())
+            {
+                if (trivia.IsKind(SyntaxKind.EndOfLineTrivia))
+                {
+                    break;
+                }
+
+                if (trivia.IsKind(SyntaxKind.SingleLineCommentTrivia))
+                {
+                    node.TrailingComment = trivia.ToString().TrimEnd();
+                    break;
+                }
+            }
+        }
+
+        // Issue #3501 B3: comments between a block's last statement and its
+        // closing brace have no following statement to ride on; emit them as
+        // standalone comment lines so they survive.
+        private void AppendDanglingComments(List<GStatement> statements, SyntaxToken closeBrace)
+        {
+            foreach (SyntaxTrivia trivia in closeBrace.LeadingTrivia)
+            {
+                switch (trivia.Kind())
+                {
+                    case SyntaxKind.SingleLineCommentTrivia:
+                        statements.Add(new RawStatement(trivia.ToString().TrimEnd()));
+                        break;
+
+                    case SyntaxKind.MultiLineCommentTrivia:
+                        string block = trivia.ToString();
+                        block = block.StartsWith("/*", StringComparison.Ordinal) ? block.Substring(2) : block;
+                        block = block.EndsWith("*/", StringComparison.Ordinal)
+                            ? block.Substring(0, block.Length - 2)
+                            : block;
+                        foreach (string raw in block.Split('\n'))
+                        {
+                            string text = raw.Trim().TrimStart('*').TrimStart();
+                            statements.Add(new RawStatement(text.Length == 0 ? "//" : $"// {text}"));
+                        }
+
+                        break;
+                }
+            }
+        }
+
         private IEnumerable<GStatement> TranslateStatement(StatementSyntax statement)
         {
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
@@ -2606,12 +2661,14 @@ public sealed partial class CSharpToGSharpTranslator
                 if (spillPrologue.Count == 0)
                 {
                     AttachSourceComments(core.FirstOrDefault(), statement);
+                    AttachTrailingComment(core.LastOrDefault(), statement);
                     return core;
                 }
 
                 var combined = new List<GStatement>(spillPrologue);
                 combined.AddRange(core);
                 AttachSourceComments(combined[0], statement);
+                AttachTrailingComment(combined[^1], statement);
                 return combined;
             }
             finally

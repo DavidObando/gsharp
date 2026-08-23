@@ -187,7 +187,7 @@ namespace Corpus.Issue1998
 }
 ");
 
-        Assert.Contains("sales.GroupBy((s Sale) -> s.RegionId, (s Sale) -> s.Amount)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".GroupBy((s Sale) -> s.RegionId, (s Sale) -> s.Amount)", rendered, StringComparison.Ordinal);
         Assert.Contains(".Join(regions,", rendered, StringComparison.Ordinal);
         Assert.Contains("g.Sum()", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);

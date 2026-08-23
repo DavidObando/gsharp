@@ -485,7 +485,15 @@ public static class GSharpPrinter
     private static string RenderWrappable(GExpression expression, int indent, int prefixWidth)
     {
         string single = RenderExpression(expression, indent);
-        if (single.IndexOf('\n') >= 0 || prefixWidth + single.Length <= MaxLineWidth)
+
+        // Issue #3501 B2: the budget applies to the FIRST line — an
+        // expression whose one-line head is over budget wraps even when a
+        // block-bodied lambda argument already made the render multi-line
+        // (previously any embedded newline bailed the whole statement out,
+        // which accounted for most residual >300-char lines).
+        int firstLineEnd = single.IndexOf('\n');
+        int firstLineLength = firstLineEnd < 0 ? single.Length : firstLineEnd;
+        if (prefixWidth + firstLineLength <= MaxLineWidth)
         {
             return single;
         }
@@ -528,6 +536,24 @@ public static class GSharpPrinter
                     : text;
             });
             return string.Join($" {chainRoot.Operator}\n{continuation}", parts);
+        }
+
+        // Issue #3501 B2: a long postfix chain (`a.B(x).C().D`) breaks
+        // before each dot — gsc parses leading-dot continuations — which
+        // reads better than exploding one link's argument list. Only plain
+        // `.` links participate (never `->` pointer access), and only when
+        // the chain has at least two links.
+        if (TryFlattenAccessChain(expression, out GExpression chainHead, out List<string> chainLinks)
+            && chainLinks.Count >= 2)
+        {
+            string headText = RenderExpression(chainHead, indent);
+            var chain = new StringBuilder(headText);
+            foreach (string link in chainLinks)
+            {
+                chain.Append('\n').Append(continuation).Append(link);
+            }
+
+            return chain.ToString();
         }
 
         if (expression is InvocationExpression { Arguments.Count: > 0 } invocation)
@@ -1134,9 +1160,59 @@ public static class GSharpPrinter
         return char.IsLetterOrDigit(first) || first == '_';
     }
 
+    private static bool TryFlattenAccessChain(
+        GExpression expression,
+        out GExpression head,
+        out List<string> links)
+    {
+        head = expression;
+        links = new List<string>();
+        var reversed = new List<string>();
+        GExpression current = expression;
+        while (true)
+        {
+            if (current is InvocationExpression { Target: MemberAccessExpression { IsArrow: false } call } chainCall)
+            {
+                string typeArgs = chainCall.TypeArguments.Count == 0
+                    ? string.Empty
+                    : $"[{string.Join(", ", chainCall.TypeArguments.Select(RenderType))}]";
+                string args = string.Join(
+                    ", ",
+                    chainCall.Arguments.Select(a => RenderExpression(a, 0)));
+                reversed.Add($".{call.MemberName}{typeArgs}({args})");
+                current = call.Target;
+                continue;
+            }
+
+            if (current is MemberAccessExpression { IsArrow: false } access)
+            {
+                reversed.Add($".{access.MemberName}");
+                current = access.Target;
+                continue;
+            }
+
+            break;
+        }
+
+        if (reversed.Count < 2)
+        {
+            return false;
+        }
+
+        head = current;
+        reversed.Reverse();
+        links = reversed;
+        return true;
+    }
+
     private static string RenderStatement(GStatement statement, int indent)
     {
         string core = RenderStatementCore(statement, indent);
+        if (statement.TrailingComment != null)
+        {
+            core = $"{core} {statement.TrailingComment}";
+        }
+
         return PrependAttachedComments(statement, core, indent);
     }
 
@@ -1963,9 +2039,31 @@ public static class GSharpPrinter
 
         sb.Append(method.Name);
         sb.Append(RenderTypeParameterList(method.TypeParameters));
-        sb.Append('(');
-        sb.Append(RenderParameterList(method.Parameters));
-        sb.Append(')');
+        string parameterList = RenderParameterList(method.Parameters);
+
+        // Issue #3501 B2: a signature whose one-line form exceeds the budget
+        // wraps its parameter list after `(` and each comma — the same
+        // continuation shapes gsc parses in call positions.
+        int signatureLineStart = sb.ToString().LastIndexOf('\n') + 1;
+        int signatureLineLength = sb.Length - signatureLineStart;
+        if (method.Parameters.Count > 1
+            && signatureLineLength + parameterList.Length + 2 > MaxLineWidth)
+        {
+            string parameterPad = Indent(indent + 1);
+            sb.Append("(\n");
+            sb.Append(parameterPad);
+            sb.Append(string.Join(
+                ",\n" + parameterPad,
+                method.Parameters.Select(RenderParameter)));
+            sb.Append(')');
+        }
+        else
+        {
+            sb.Append('(');
+            sb.Append(parameterList);
+            sb.Append(')');
+        }
+
         if (method.ReturnType != null)
         {
             sb.Append(' ');
@@ -2007,9 +2105,14 @@ public static class GSharpPrinter
         switch (statement)
         {
             case ReturnStatement ret:
-                return ret.Expression == null ? string.Empty : RenderExpression(ret.Expression, indent);
+                // Issue #3501 B2: arrow bodies participate in the wrap pass —
+                // a long value expression breaks the same way a `return`
+                // statement's would (gsc parses the continuations after `->`).
+                return ret.Expression == null
+                    ? string.Empty
+                    : RenderWrappable(ret.Expression, indent, Indent(indent).Length + 8);
             case ExpressionStatement expr:
-                return RenderExpression(expr.Expression, indent);
+                return RenderWrappable(expr.Expression, indent, Indent(indent).Length + 8);
             case AssignmentStatement assignment:
                 return $"{RenderExpression(assignment.Target, indent)} {assignment.Operator} {RenderExpression(assignment.Value, indent)}";
             default:
