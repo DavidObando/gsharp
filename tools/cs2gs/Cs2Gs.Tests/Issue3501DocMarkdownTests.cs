@@ -141,6 +141,40 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
+        [Fact]
+        public void LongSummaryProse_RewrapsInsteadOfEmittingOneLongLine()
+        {
+            // The converter's whitespace normalization joins the source's own
+            // `///` line breaks; without the re-wrap pass a multi-line C#
+            // summary became one arbitrarily long output line (the dominant
+            // source of >300-char lines in the repo self-migration).
+            string printed = Translate("""
+                public class Widget
+                {
+                    /// <summary>
+                    /// This summary is deliberately written as several source lines of moderately long prose so that
+                    /// the joined single-paragraph form comfortably exceeds any sane single-line budget and therefore
+                    /// exercises the word-wrap pass that splits emitted documentation prose at the configured width
+                    /// while never splitting an individual word in half.
+                    /// </summary>
+                    public int Mass() => 42;
+                }
+                """);
+
+            List<string> docLines = printed
+                .Split('\n')
+                .Select(line => line.TrimEnd())
+                .Where(line => line.TrimStart().StartsWith("///", StringComparison.Ordinal))
+                .ToList();
+            Assert.True(docLines.Count >= 3, "The long summary should span multiple wrapped lines:\n" + printed);
+            Assert.All(docLines, line => Assert.True(
+                line.TrimStart().Length <= 104,
+                "Every emitted doc line should respect the wrap width: " + line));
+            Assert.Contains("/// This summary is deliberately written", printed, StringComparison.Ordinal);
+            Assert.Contains("splitting an individual word in half.", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
         private static string Translate(
             string source,
             params MetadataReference[] additionalReferences)

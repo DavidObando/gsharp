@@ -28,6 +28,14 @@ namespace Cs2Gs.Translator;
 internal static class XmlDocMarkdownConverter
 {
     /// <summary>
+    /// Issue #3501 follow-up: maximum content width (excluding the
+    /// <c>/// </c> marker and indentation) of an emitted prose doc line.
+    /// Sized so a doc line at typical nesting stays within the printer's
+    /// 120-column budget.
+    /// </summary>
+    private const int MaxDocLineWidth = 100;
+
+    /// <summary>
     /// Converts one raw documentation-comment trivia string (the `///`-prefixed
     /// lines) into ADR-0057 Markdown doc-comment lines, each already carrying
     /// the <c>///</c> marker.
@@ -149,9 +157,141 @@ internal static class XmlDocMarkdownConverter
             return null;
         }
 
-        return output
+        // Issue #3501 follow-up: NormalizeInlineWhitespace collapses the
+        // source's own `///` line breaks, so a multi-line C# summary would
+        // otherwise become ONE arbitrarily long prose line (the top source
+        // of >300-char lines in the repo self-migration). Re-wrap prose at a
+        // readable width; fenced content (```…```) is untouched.
+        var wrapped = new List<string>(output.Count);
+        bool inFence = false;
+        foreach (string line in output)
+        {
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                wrapped.Add(line);
+            }
+            else if (inFence)
+            {
+                wrapped.Add(line);
+            }
+            else
+            {
+                wrapped.AddRange(WrapProseLine(line));
+            }
+        }
+
+        return wrapped
             .Select(line => string.IsNullOrWhiteSpace(line) ? "///" : $"/// {line}")
             .ToList();
+    }
+
+    /// <summary>
+    /// Word-wraps one prose line to <see cref="MaxDocLineWidth"/> content
+    /// characters. List items and <c>@tag</c> heads simply continue on the
+    /// following line (Markdown treats the continuation as part of the same
+    /// block). Wrap points are only taken between "atoms": a Markdown link
+    /// (<c>[text](target)</c>) or backtick code span is never split even
+    /// when it contains spaces, and a single atom longer than the width
+    /// stays intact on its own line.
+    /// </summary>
+    private static IEnumerable<string> WrapProseLine(string line)
+    {
+        if (line.Length <= MaxDocLineWidth)
+        {
+            yield return line;
+            yield break;
+        }
+
+        var current = new StringBuilder();
+        foreach (string atom in SplitIntoAtoms(line))
+        {
+            if (current.Length > 0 && current.Length + 1 + atom.Length > MaxDocLineWidth)
+            {
+                yield return current.ToString();
+                current.Clear();
+            }
+
+            if (current.Length > 0)
+            {
+                current.Append(' ');
+            }
+
+            current.Append(atom);
+        }
+
+        if (current.Length > 0)
+        {
+            yield return current.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Splits a prose line at spaces, re-merging any run of words that sits
+    /// inside an unclosed inline span — an odd number of backticks, an
+    /// unclosed <c>[</c>, or an unclosed link-target <c>](…</c> — so
+    /// Markdown links and code spans survive wrapping as single atoms.
+    /// </summary>
+    private static IEnumerable<string> SplitIntoAtoms(string line)
+    {
+        var atom = new StringBuilder();
+        foreach (string word in line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (atom.Length > 0)
+            {
+                atom.Append(' ');
+            }
+
+            atom.Append(word);
+            if (!HasOpenInlineSpan(atom.ToString()))
+            {
+                yield return atom.ToString();
+                atom.Clear();
+            }
+        }
+
+        if (atom.Length > 0)
+        {
+            yield return atom.ToString();
+        }
+    }
+
+    private static bool HasOpenInlineSpan(string text)
+    {
+        int backticks = 0;
+        int bracketDepth = 0;
+        int linkParenDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '`')
+            {
+                backticks++;
+            }
+            else if (c == '[')
+            {
+                bracketDepth++;
+            }
+            else if (c == ']')
+            {
+                if (bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+
+                if (i + 1 < text.Length && text[i + 1] == '(')
+                {
+                    linkParenDepth++;
+                    i++;
+                }
+            }
+            else if (c == ')' && linkParenDepth > 0)
+            {
+                linkParenDepth--;
+            }
+        }
+
+        return (backticks % 2) != 0 || bracketDepth > 0 || linkParenDepth > 0;
     }
 
     private static void AppendBlockContent(List<string> output, IEnumerable<XNode> nodes)
