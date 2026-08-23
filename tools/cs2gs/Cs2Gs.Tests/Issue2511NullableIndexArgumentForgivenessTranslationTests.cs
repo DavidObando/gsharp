@@ -60,10 +60,10 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
         Assert.Contains("let value = items[key!!]", printed, StringComparison.Ordinal);
         Assert.Contains("counts[key!!] += 1", printed, StringComparison.Ordinal);
         Assert.Contains("counts[key!!]++", printed, StringComparison.Ordinal);
-        Assert.Contains("items[Repro.FindKey()!!] ??= value", printed, StringComparison.Ordinal);
+        Assert.Contains("items[FindKey()!!] ??= value", printed, StringComparison.Ordinal);
         Assert.Contains("[key!!] = value", printed, StringComparison.Ordinal);
         Assert.Contains("return items[key!!]", printed, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(printed, "items[Repro.FindKey()!!]"));
+        Assert.Equal(1, CountOccurrences(printed, "items[FindKey()!!]"));
     }
 
     [Fact]
@@ -140,12 +140,12 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("items[Repro.Field!!] = \"field\"", printed, StringComparison.Ordinal);
-        Assert.Contains("items[Repro.Property!!] = \"property\"", printed, StringComparison.Ordinal);
-        Assert.Contains("items[Repro.FindKey()!!] = \"method\"", printed, StringComparison.Ordinal);
+        Assert.Contains("items[Field!!] = \"field\"", printed, StringComparison.Ordinal);
+        Assert.Contains("items[Property!!] = \"property\"", printed, StringComparison.Ordinal);
+        Assert.Contains("items[FindKey()!!] = \"method\"", printed, StringComparison.Ordinal);
         Assert.Contains("items[parameter!!] = \"parameter\"", printed, StringComparison.Ordinal);
-        Assert.Contains("if choose { Repro.Field } else { Repro.Property }", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Property })!!] = \"conditional\"", printed, StringComparison.Ordinal);
+        Assert.Contains("if choose { Field } else { Property }", printed, StringComparison.Ordinal);
+        Assert.Contains("Property })!!] = \"conditional\"", printed, StringComparison.Ordinal);
         Assert.Contains("items[(holder?.Key)!!] = \"conditional-access\"", printed, StringComparison.Ordinal);
         Assert.Contains(
             "items[Environment.GetEnvironmentVariable(\"DIRECT\")!!] = \"external\"",

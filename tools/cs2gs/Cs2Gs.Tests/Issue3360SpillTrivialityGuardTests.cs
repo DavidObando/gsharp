@@ -78,7 +78,7 @@ public sealed class C
 }");
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("if C.Get() is int32 i {", printed, StringComparison.Ordinal);
+        Assert.Contains("if Get() is int32 i {", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("as int32?", printed, StringComparison.Ordinal);
 

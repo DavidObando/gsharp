@@ -57,12 +57,12 @@ public sealed class Issue2506PromotedCallReceiverForgivenessPipelineTests
             Directory.GetFiles(appRunDir, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        Assert.Contains("Repro.Find(false)!!.Name", emitted, StringComparison.Ordinal);
+        Assert.Contains("Find(false)!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains(
             "region.FromCountryCode()!!.Domain",
             emitted,
             StringComparison.Ordinal);
-        Assert.Contains("Repro.FindFactory()!!().Name", emitted, StringComparison.Ordinal);
+        Assert.Contains("FindFactory()!!().Name", emitted, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
             "Expected default --via-sdk/gsc compilation to accept promoted same-project call receivers. Stages: " +

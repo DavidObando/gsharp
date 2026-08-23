@@ -82,8 +82,8 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
-        Assert.Contains("if (x = C.F()) > 0 {", printed);
+        Assert.Equal(1, CountOccurrences(printed, "= F()"));
+        Assert.Contains("if (x = F()) > 0 {", printed);
         Assert.Contains("Console.WriteLine(x)", printed);
     }
 
@@ -112,8 +112,8 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
-        Assert.Contains("if (x = C.F()) {", printed);
+        Assert.Equal(1, CountOccurrences(printed, "= F()"));
+        Assert.Contains("if (x = F()) {", printed);
     }
 
     /// <summary>
@@ -196,8 +196,8 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
-        Assert.Contains("return (x = C.F())", printed);
+        Assert.Equal(1, CountOccurrences(printed, "= F()"));
+        Assert.Contains("return (x = F())", printed);
     }
 
     /// <summary>
@@ -251,8 +251,8 @@ namespace Demo
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("(map_[key] = C.Next())", printed, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Contains("(map_[key] = Next())", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "= Next()"));
 
         Assert.Equal("1,1,42,42,42", CompileAndRun(printed, "C.Run()").Trim());
     }
@@ -374,8 +374,8 @@ namespace Demo
             }
             """);
 
-        Assert.Equal(1, CountOccurrences(printed, "C.Receiver()"));
-        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal(2, CountOccurrences(printed, "Receiver()"));
+        Assert.Equal(2, CountOccurrences(printed, "Next()"));
         Assert.Equal("1,1,1,13,13", CompileAndRun(printed, "C.Run()").Trim());
     }
 
@@ -437,7 +437,7 @@ namespace Demo
             }
             """);
 
-        Assert.Equal(2, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal(3, CountOccurrences(printed, "Next()"));
         Assert.Equal("2,2,13,25,25", CompileAndRun(printed, "C.Run()").Trim());
     }
 
@@ -511,9 +511,9 @@ namespace Demo
             }
             """);
 
-        Assert.Equal(1, CountOccurrences(printed, "C.Receiver()"));
-        Assert.Equal(1, CountOccurrences(printed, "C.NextIndex()"));
-        Assert.Equal(1, CountOccurrences(printed, "C.NextValue()"));
+        Assert.Equal(2, CountOccurrences(printed, "Receiver()"));
+        Assert.Equal(2, CountOccurrences(printed, "NextIndex()"));
+        Assert.Equal(2, CountOccurrences(printed, "NextValue()"));
         Assert.Equal("RIV,1,1,1,1,42,42", CompileAndRun(printed, "C.Run()").Trim());
     }
 
@@ -1070,8 +1070,8 @@ namespace Demo
     }
 }");
 
-        int aAssign = printed.IndexOf("a = C.F()", StringComparison.Ordinal);
-        int bAssign = printed.IndexOf("b = C.G()", StringComparison.Ordinal);
+        int aAssign = printed.IndexOf("a = F()", StringComparison.Ordinal);
+        int bAssign = printed.IndexOf("b = G()", StringComparison.Ordinal);
         Assert.True(aAssign >= 0 && bAssign >= 0 && aAssign < bAssign, printed);
 
         int pAssign = printed.IndexOf("p = 1", StringComparison.Ordinal);

@@ -165,7 +165,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
             """);
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("C.Get() is string and { Length: > 0 } or int32", printed, StringComparison.Ordinal);
+        Assert.Contains("Get() is string and { Length: > 0 } or int32", printed, StringComparison.Ordinal);
         Assert.Contains("node.Value != nil", printed, StringComparison.Ordinal);
     }
 
@@ -202,10 +202,10 @@ public sealed class Issue3347RemainingSpillInventoryTests
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.Contains(
-            "if C.Get() is string { Length: > 0 } text && text[0] == 'a' { text.Length } else { 0 }",
+            "if Get() is string { Length: > 0 } text && text[0] == 'a' { text.Length } else { 0 }",
             printed,
             StringComparison.Ordinal);
-        Assert.Contains("if C.Get() is string { Length: > 0 } text {", printed, StringComparison.Ordinal);
+        Assert.Contains("if Get() is string { Length: > 0 } text {", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("as string", printed, StringComparison.Ordinal);
     }
@@ -300,7 +300,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
             """);
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
-        Assert.Contains("a = (b = C.Echo((holder.P = 5)))", printed, StringComparison.Ordinal);
+        Assert.Contains("a = (b = Echo((holder.P = 5)))", printed, StringComparison.Ordinal);
         Assert.Contains("return (holder[0] = a + b)", printed, StringComparison.Ordinal);
     }
 
@@ -328,8 +328,8 @@ public sealed class Issue3347RemainingSpillInventoryTests
 
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("&& true", printed, StringComparison.Ordinal);
-        Assert.Contains("C.GetItem() is { X: var x, Y: > 0 } && x > 0", printed, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
+        Assert.Contains("GetItem() is { X: var x, Y: > 0 } && x > 0", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "GetItem() is"));
     }
 
     [Fact]
@@ -395,7 +395,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
             }
             """);
 
-        Assert.Contains("C.Apply(value, holder.Mapper.Map)", printed, StringComparison.Ordinal);
+        Assert.Contains("Apply(value, holder.Mapper.Map)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
     }
@@ -422,7 +422,7 @@ public sealed class Issue3347RemainingSpillInventoryTests
             """);
 
         Assert.Contains("__spill", printed, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(printed, "C.GetItem()"));
+        Assert.Equal(1, CountOccurrences(printed, "= GetItem()"));
     }
 
     [Fact]

@@ -91,26 +91,26 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("Repro.Find()!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Find()!!.Read()", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Find()!![0]", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Find().ExtensionName()", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repro.Find()!!.ExtensionName()", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Find().NextExtension()!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.Find()!!.Next()!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.GetHolder().Child!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.GetHolder()[0]!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("Find()!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("Find()!!.Read()", printed, StringComparison.Ordinal);
+        Assert.Contains("Find()!![0]", printed, StringComparison.Ordinal);
+        Assert.Contains("Find().ExtensionName()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Find()!!.ExtensionName()", printed, StringComparison.Ordinal);
+        Assert.Contains("Find().NextExtension()!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("Find()!!.Next()!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("GetHolder().Child!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("GetHolder()[0]!!.Name", printed, StringComparison.Ordinal);
         Assert.Contains("FindGeneric[Item]()!!.Name", printed, StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(printed, "Repro.FindFactory()!!().Name"));
-        Assert.Contains("(Repro.Find())!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("cast[Item](Repro.Find())", printed, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(printed, "FindFactory()!!().Name"));
+        Assert.Contains("(Find())!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[Item](Find())", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as Item", printed, StringComparison.Ordinal);
         Assert.Contains(
-            "(if condition { Repro.Find() } else { Repro.Always() })!!.Name",
+            "(if condition { Find() } else { Always() })!!.Name",
             printed,
             StringComparison.Ordinal);
         Assert.Contains("LocalFind()!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("for item in Repro.FindMany()!!", printed, StringComparison.Ordinal);
+        Assert.Contains("for item in FindMany()!!", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -132,8 +132,8 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("Repro.Find()!!.Name", printed, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(printed, "Repro.Find()"));
+        Assert.Contains("Find()!!.Name", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "Find()!!"));
     }
 
     [Fact]
@@ -184,9 +184,9 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("(await Repro.FindAsync())!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("Repro.FindAsync().ToString()", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repro.FindAsync()!!.ToString()", printed, StringComparison.Ordinal);
+        Assert.Contains("(await FindAsync())!!.Name", printed, StringComparison.Ordinal);
+        Assert.Contains("FindAsync().ToString()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("FindAsync()!!.ToString()", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -216,9 +216,9 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             """,
             "G# currently rejects nullable disposable resources even though C# using is null-tolerant.");
 
-        Assert.Contains("using let _ = Repro.Open()", printed, StringComparison.Ordinal);
+        Assert.Contains("using let _ = Open()", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("__using", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repro.Open()!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Open()!!", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -245,10 +245,10 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             """,
             "Expression-tree fixtures intentionally omit runtime assertions that G# requires for ordinary delegates.");
 
-        Assert.Contains("Repro.Find()?.Name", oblivious, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repro.Find()!!?.Name", oblivious, StringComparison.Ordinal);
-        Assert.Contains("Repro.Find().Name", oblivious, StringComparison.Ordinal);
-        Assert.DoesNotContain("() -> Repro.Find()!!.Name", oblivious, StringComparison.Ordinal);
+        Assert.Contains("Find()?.Name", oblivious, StringComparison.Ordinal);
+        Assert.DoesNotContain("Find()!!?.Name", oblivious, StringComparison.Ordinal);
+        Assert.Contains("Find().Name", oblivious, StringComparison.Ordinal);
+        Assert.DoesNotContain("() -> Find()!!.Name", oblivious, StringComparison.Ordinal);
 
         string enabled = Translate("""
             #nullable enable
@@ -278,10 +278,10 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
             }
             """);
 
-        Assert.Equal(2, CountOccurrences(enabled, "Repro.ExplicitMaybe()!!.Name"));
-        Assert.DoesNotContain("Repro.ExplicitMaybe().Name", enabled, StringComparison.Ordinal);
-        Assert.Contains("Repro.Always().Name", enabled, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repro.Always()!!.Name", enabled, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(enabled, "ExplicitMaybe()!!.Name"));
+        Assert.DoesNotContain("ExplicitMaybe().Name", enabled, StringComparison.Ordinal);
+        Assert.Contains("Always().Name", enabled, StringComparison.Ordinal);
+        Assert.DoesNotContain("Always()!!.Name", enabled, StringComparison.Ordinal);
         Assert.Contains("return item.Name", enabled, StringComparison.Ordinal);
         Assert.DoesNotContain("item!!.Name", enabled, StringComparison.Ordinal);
     }

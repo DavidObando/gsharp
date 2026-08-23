@@ -269,10 +269,10 @@ namespace Demo
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("var (left, right) = C.Pair()", rendered, StringComparison.Ordinal);
+        Assert.Contains("var (left, right) = Pair()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let (left, right)", rendered, StringComparison.Ordinal);
-        Assert.Contains("C.Touch(&left)", rendered, StringComparison.Ordinal);
-        Assert.Contains("C.Touch(&right)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Touch(&left)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Touch(&right)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -314,7 +314,7 @@ namespace Demo
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
-        Assert.Contains("var (left, right) = C.Pair()", rendered, StringComparison.Ordinal);
+        Assert.Contains("var (left, right) = Pair()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let (left, right)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 

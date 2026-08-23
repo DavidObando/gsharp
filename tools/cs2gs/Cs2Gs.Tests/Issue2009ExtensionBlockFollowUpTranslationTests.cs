@@ -98,7 +98,9 @@ namespace Corpus.Caller
         // `CSharpTypeMapper.QualifiedTypeName` entirely — now correctly
         // qualifies a NESTED owner through its containing-type chain when its
         // simple name collides with another source type, exactly like the
-        // nested-type reference fix in issue #1174. `Holder` is declared twice:
+        // nested-type reference fix in issue #1174 — but issue #3471's
+        // same-type policy now supersedes it at sites lexically inside the
+        // declaring type, where the reference stays bare. `Holder` is declared twice:
         // once as an unrelated top-level class, and once nested inside
         // `Outer`, where the actual sibling static method being called lives.
         string rendered = Render(@"
@@ -129,14 +131,17 @@ namespace Corpus.Sibling
 }
 ");
 
-        // The bare sibling call is rewritten to the FULLY qualified nested
-        // owner...
-        Assert.Contains("Outer.Holder.Read()", rendered, StringComparison.Ordinal);
+        // The sibling call site is lexically inside the declaring nested type
+        // itself, so the same-type policy (issue #3471) keeps it BARE — the
+        // homonym collision is on the OWNER's simple name, not the member's,
+        // and never forces qualification at a same-type site.
+        Assert.Contains("return Read() + Read()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Outer.Holder.Read()", rendered, StringComparison.Ordinal);
 
         AssertRoundTripParses(rendered);
 
-        // Binding the printed G# end to end proves the qualified reference
-        // resolves against the NESTED type — the top-level homonym does not
+        // Binding the printed G# end to end proves the bare reference resolves
+        // against the enclosing NESTED type — the top-level homonym does not
         // declare `Read` at all and would fail member lookup (GS0158) if the
         // bare simple name had bound to it instead.
         var diagnostics = BindDiagnostics(rendered);

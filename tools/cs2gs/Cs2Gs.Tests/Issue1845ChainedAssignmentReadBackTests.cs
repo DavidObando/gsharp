@@ -53,8 +53,8 @@ namespace Demo
 
         Assert.Equal(1, CountOccurrences(printed, "\"get\""));
         Assert.DoesNotContain("__spill", printed);
-        Assert.Contains("a = (obj.P = C.SideEffect())", printed);
-        Assert.Equal(1, CountOccurrences(printed, "C.SideEffect()"));
+        Assert.Contains("a = (obj.P = SideEffect())", printed);
+        Assert.Equal(1, CountOccurrences(printed, "= SideEffect()"));
     }
 
     [Fact]
@@ -76,9 +76,9 @@ namespace Demo
     }
 }");
 
-        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal(1, CountOccurrences(printed, "= Next()"));
         Assert.DoesNotContain("__spill", printed);
-        Assert.Contains("a = (b = (c = C.Next()))", printed);
+        Assert.Contains("a = (b = (c = Next()))", printed);
     }
 
     [Fact]

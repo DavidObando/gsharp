@@ -132,15 +132,15 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Holder.Total(GenericList[int32]{ 1, 2, 3 })",
+            "Total(GenericList[int32]{ 1, 2, 3 })",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Holder.Total(GenericList[int32]{ 4, 5 })",
+            "Total(GenericList[int32]{ 4, 5 })",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Holder.TotalInterface(cast[IEnumerable[int32]](GenericList[int32]{ 6, 7 }))",
+            "TotalInterface(cast[IEnumerable[int32]](GenericList[int32]{ 6, 7 }))",
             printed,
             StringComparison.Ordinal);
 
@@ -261,8 +261,12 @@ public sealed class Issue3466NestedHomonymAliasTests
             "Invoked source values keep their emitted name while the generated type alias moves.");
     }
 
+    // Issue #3471: sibling static member references now print bare inside
+    // their declaring aggregate, and a file-scope import alias would shadow
+    // them, so the readable-alias allocator must step aside to a suffixed
+    // alias whenever a source static member claims the readable name.
     [Fact]
-    public void ReadableAlias_DoesNotAvoidQualifiedMemberValues()
+    public void ReadableAlias_AvoidsBareSiblingMemberValues()
     {
         string printed = Translate("""
             using System;
@@ -298,20 +302,25 @@ public sealed class Issue3466NestedHomonymAliasTests
             """);
 
         Assert.Contains(
-            "import TextStringBuilder = System.Text.StringBuilder",
-            printed,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
             "import TextStringBuilder_2 = System.Text.StringBuilder",
             printed,
             StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(printed, "TextStringBuilder(\""));
-        Assert.Contains("FieldCase.TextStringBuilder()", printed, StringComparison.Ordinal);
-        Assert.Contains("PropertyCase.TextStringBuilder()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(printed, "TextStringBuilder_2(\""));
+        Assert.DoesNotContain("FieldCase.TextStringBuilder()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("PropertyCase.TextStringBuilder()", printed, StringComparison.Ordinal);
+        Assert.Contains("TextStringBuilder()", printed, StringComparison.Ordinal);
     }
 
+    // Issue #3471: uninvoked sibling static value reads also print bare, so
+    // the readable alias steps aside for them too; a same-named LOCAL alone
+    // would not move the alias (locals stay lexically scoped), but the static
+    // field/property cases in this snippet force the suffixed alias.
     [Fact]
-    public void ReadableAlias_DoesNotAvoidUninvokedValueNames()
+    public void ReadableAlias_AvoidsUninvokedSiblingValueNames()
     {
         string printed = Translate("""
             namespace Demo
@@ -355,14 +364,14 @@ public sealed class Issue3466NestedHomonymAliasTests
             """);
 
         Assert.Contains(
-            "import TextStringBuilder = System.Text.StringBuilder",
-            printed,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
             "import TextStringBuilder_2 = System.Text.StringBuilder",
             printed,
             StringComparison.Ordinal);
-        Assert.Equal(3, CountOccurrences(printed, "TextStringBuilder(\""));
+        Assert.DoesNotContain(
+            "import TextStringBuilder = System.Text.StringBuilder",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Equal(3, CountOccurrences(printed, "TextStringBuilder_2(\""));
     }
 
     [Fact]

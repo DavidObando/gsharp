@@ -64,11 +64,14 @@ namespace Corpus.StaticMember
 ";
 
     [Fact]
-    public void StaticFieldReferenced_FromSiblingSharedMethod_IsQualified()
+    public void StaticFieldReferenced_FromSiblingSharedMethod_EmitsBare()
     {
+        // Issue #3471: gsc resolves a bare sibling `shared` member reference
+        // from inside the declaring aggregate, so the qualifier is dropped.
         string rendered = TranslateAndPrint(SiblingSource);
 
-        Assert.Contains("Holder.Tab", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Holder.Tab", rendered, StringComparison.Ordinal);
+        Assert.Contains("return Tab", rendered, StringComparison.Ordinal);
     }
 
     private const string GenericSiblingSource = @"
@@ -94,17 +97,18 @@ namespace Corpus.StaticMember
 ";
 
     [Fact]
-    public void StaticMemberReferenced_FromGenericSibling_IsQualifiedWithTypeArguments()
+    public void StaticMemberReferenced_FromGenericSibling_EmitsBare()
     {
-        // A generic owner (`Box<T>`) that lives beside a non-generic type of the
-        // same simple name (`static class Box`) must be qualified with its type
-        // arguments (`Box[T].Tab` / `Box[T].Read()`), not the bare arity-0 name —
-        // otherwise gsc binds the wrong (non-generic) type and reports GS0158.
+        // Issue #3471: even a generic owner beside a non-generic type of the
+        // same simple name (`static class Box` / `class Box<T>`) references its
+        // own shared members bare — no qualifier means the old wrong-arity
+        // hazard (binding arity-0 `Box` and reporting GS0158) cannot arise.
         string rendered = TranslateAndPrint(GenericSiblingSource);
 
-        Assert.Contains("Box[T].Tab", rendered, StringComparison.Ordinal);
-        Assert.Contains("Box[T].Read()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Box[T].Tab", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("Box.Tab", rendered, StringComparison.Ordinal);
+        Assert.Contains("return Tab", rendered, StringComparison.Ordinal);
+        Assert.Contains("Read().ToString()", rendered, StringComparison.Ordinal);
     }
 
     [Fact]

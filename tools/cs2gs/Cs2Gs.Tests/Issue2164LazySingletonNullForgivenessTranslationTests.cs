@@ -55,7 +55,7 @@ namespace Demo
 }");
 
         Assert.Contains("private var instance Service?", printed);
-        Assert.Contains("return Service.instance!!", printed);
+        Assert.Contains("return instance!!", printed);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("return Service.instance!!", printed);
+        Assert.Contains("return instance!!", printed);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ namespace Demo
 }");
 
         Assert.Contains("!!", printed);
-        Assert.Contains("return Service.instance!!", printed);
+        Assert.Contains("return instance!!", printed);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ namespace Demo
 }");
 
         Assert.Contains("private var instance T?", printed);
-        Assert.Contains("return Singleton[T].instance!!", printed);
+        Assert.Contains("return instance!!", printed);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Service.instance!!.ToString()", printed);
+        Assert.Contains("instance!!.ToString()", printed);
     }
 
     [Fact]

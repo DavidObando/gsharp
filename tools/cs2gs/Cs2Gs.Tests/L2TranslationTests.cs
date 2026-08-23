@@ -141,13 +141,14 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B.18: a C# bare sibling static call inside a non-entry static
-    /// class (<c>Round(value, 2)</c>) is qualified through its owning type
-    /// (<c>RoundHost.Round(value, 2)</c>), because a G# <c>shared</c> method body
-    /// has no implicit type scope.
+    /// ADR-0115 §B.18 / issue #3471: a C# bare sibling static call inside its
+    /// own declaring type (<c>Two(value, 2)</c>) stays bare, because gsc
+    /// resolves bare sibling <c>shared</c> references from anywhere inside the
+    /// declaring aggregate's body; only sites that leave the type scope keep
+    /// the owning-type qualifier.
     /// </summary>
     [Fact]
-    public void SiblingStaticCall_IsQualifiedByOwningType()
+    public void SiblingStaticCall_EmitsBareInsideOwningType()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -160,7 +161,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("RoundHost.Two(value, 2)", printed);
+        Assert.Contains("Two(value, 2)", printed);
+        Assert.DoesNotContain("RoundHost.Two(value, 2)", printed);
     }
 
     /// <summary>

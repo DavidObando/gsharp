@@ -176,7 +176,7 @@ public sealed class Issue3096CollectionSpreadPipelineTests
         Assert.Contains("List[string](){", translated, StringComparison.Ordinal);
         Assert.Contains("[]float64{1", translated, StringComparison.Ordinal);
         Assert.Contains("List[float64](){", translated, StringComparison.Ordinal);
-        Assert.Contains("...Holder.Temperatures", translated, StringComparison.Ordinal);
+        Assert.Contains("...Temperatures", translated, StringComparison.Ordinal);
         Assert.Contains("Property = []string{\"property-head\", ...", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("__spread", translated, StringComparison.Ordinal);
         Assert.DoesNotContain(".AddRange(", translated, StringComparison.Ordinal);

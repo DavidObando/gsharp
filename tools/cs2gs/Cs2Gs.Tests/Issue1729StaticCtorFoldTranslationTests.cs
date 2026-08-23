@@ -181,7 +181,7 @@ namespace Demo
 
         Assert.DoesNotContain(context.Diagnostics, d => d.IsUnsupported);
         Assert.Contains("init {", printed);
-        Assert.Contains("C.A = C.B * 2", printed);
+        Assert.Contains("A = B * 2", printed);
         Assert.DoesNotContain("var A int32 = B * 2", printed);
     }
 

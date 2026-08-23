@@ -49,8 +49,8 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("model.GetChild()!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains("model.Name!!.Echo()", emitted, StringComparison.Ordinal);
         Assert.Contains("let local = model.Name!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("Repro.Required = model.Name!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("Repro.Consume(model.Name!!)", emitted, StringComparison.Ordinal);
+        Assert.Contains("Required = model.Name!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Consume(model.Name!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("Holder(model.Name!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("model.Children!![0]", emitted, StringComparison.Ordinal);
         Assert.Contains("for child in model.Children!!", emitted, StringComparison.Ordinal);
@@ -95,8 +95,8 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
 
         Assert.Contains("Factory.GetItem()!!.Next!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains("Factory.GetItem()!!.Label()", emitted, StringComparison.Ordinal);
-        Assert.Contains("Repro.Consume(Factory.GetItem()!!)", emitted, StringComparison.Ordinal);
-        Assert.Contains("Repro.Required = Factory.GetItem()!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Consume(Factory.GetItem()!!)", emitted, StringComparison.Ordinal);
+        Assert.Contains("Required = Factory.GetItem()!!", emitted, StringComparison.Ordinal);
         Assert.Contains("Factory.GetMap()!![Factory.GetKey()!!]", emitted, StringComparison.Ordinal);
         Assert.Contains("for item in Factory.GetItems()!!", emitted, StringComparison.Ordinal);
         Assert.Contains("yield line!!", emitted, StringComparison.Ordinal);
@@ -150,8 +150,8 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("for current in items!!", emitted, StringComparison.Ordinal);
         Assert.Contains("var required = key!!", emitted, StringComparison.Ordinal);
         Assert.Contains("required = key!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("Repro.Required = key!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("Repro.Consume(key!!)", emitted, StringComparison.Ordinal);
+        Assert.Contains("Required = key!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Consume(key!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("map_[key!!]", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,

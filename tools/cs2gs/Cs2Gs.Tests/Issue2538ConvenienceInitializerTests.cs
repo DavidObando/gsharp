@@ -78,7 +78,7 @@ public sealed class Issue2538ConvenienceInitializerTests
                 });
 
         int delegation = printed.IndexOf(
-            "init(Routed.Trace(seed), Routed.Trace(seed + 1))",
+            "init(Trace(seed), Trace(seed + 1))",
             StringComparison.Ordinal);
         int parameterShadow = printed.IndexOf("var seed = seed", StringComparison.Ordinal);
         Assert.True(delegation >= 0 && parameterShadow > delegation, printed);

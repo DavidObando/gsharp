@@ -428,7 +428,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("C.Consume(type_!!)", printed, StringComparison.Ordinal);
+        Assert.Contains("Consume(type_!!)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -495,7 +495,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
 
         Assert.Equal(1, CountOccurrences(printed, ")!!."));
         Assert.Equal(0, CountOccurrences(printed, "!!!!"));
-        Assert.Contains("C.Maybe()!!.Length", printed, StringComparison.Ordinal);
+        Assert.Contains("Maybe()!!.Length", printed, StringComparison.Ordinal);
         Assert.Contains("explicitlyNullable!!.Length", printed, StringComparison.Ordinal);
         Assert.Contains("mutable!!.Count", printed, StringComparison.Ordinal);
     }
@@ -542,7 +542,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             "case Wrapper { Child: Leaf leaf } wrapper",
             printed,
             StringComparison.Ordinal);
-        Assert.Contains("return C.Consume(leaf) + wrapper.GetHashCode()", printed, StringComparison.Ordinal);
+        Assert.Contains("return Consume(leaf) + wrapper.GetHashCode()", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(" as Leaf", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("!!!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(")!!.", printed, StringComparison.Ordinal);
@@ -631,7 +631,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
 
         Assert.DoesNotContain("})!!", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("(left ?? right)!!", printed, StringComparison.Ordinal);
-        Assert.Contains("C.Maybe()!!.Length", printed, StringComparison.Ordinal);
+        Assert.Contains("Maybe()!!.Length", printed, StringComparison.Ordinal);
         Assert.Contains("(value as string)!!.Length", printed, StringComparison.Ordinal);
         Assert.Contains("return (first ?? second)!!", printed, StringComparison.Ordinal);
         Assert.Contains("value!!", printed, StringComparison.Ordinal);
