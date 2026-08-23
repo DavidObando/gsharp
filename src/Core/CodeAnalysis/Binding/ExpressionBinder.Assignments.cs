@@ -1981,6 +1981,23 @@ internal sealed partial class ExpressionBinder
 
                 if (!scope.TryDeclareVariable(local))
                 {
+                    // Issue #3490: an argument list can legally bind twice —
+                    // BindCallExpression pre-binds every argument for overload
+                    // probing, then the implicit static-self and using-static
+                    // finalizers re-bind the whole call from syntax. When the
+                    // colliding local was declared from THIS SAME syntax node,
+                    // this is that re-bind, not a genuine duplicate: reuse the
+                    // already-declared local (same parameter → same type)
+                    // instead of reporting GS0102 and cascading into GS9002 at
+                    // the out-parameter position.
+                    if (scope.TryLookupSymbol(localName) is LocalVariableSymbol existing
+                        && ReferenceEquals(existing.DeclaringSyntax, syntax))
+                    {
+                        return new BoundAddressOfExpression(
+                            null,
+                            new BoundVariableExpression(null, existing));
+                    }
+
                     Diagnostics.ReportSymbolAlreadyDeclared(resolvedDeclarationIdentifier.Location, localName);
                     return new BoundErrorExpression(null);
                 }
