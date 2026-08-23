@@ -1,0 +1,142 @@
+name: macos-nightly
+
+# Issue #1670: the shipped toolchain (gsc, gsi, Gsharp.NET.Sdk) is only built
+# and tested on Linux by the PR gates; windows-nightly covers the
+# path-sensitive Windows surface, and this nightly covers macOS — the other
+# development platform the team actually ships from. The full test matrix is
+# too expensive to mirror per PR, so this runs the highest-signal macOS
+# surface instead:
+#
+#   - full Release build of GSharp.sln on macos-latest
+#   - test/Core.Tests (fast, broad compiler front-end coverage)
+#   - test/Sdk.Tests (the Gsharp.NET.Sdk path/tool-resolution logic the
+#     issue calls out as platform-sensitive)
+#   - the bash e2e suite, which runs unmodified on macOS — every script
+#     except debugger-e2e.sh, whose netcoredbg dependency only publishes a
+#     linux-amd64 install path in build/install-netcoredbg.sh. New e2e
+#     scripts must be added to the explicit list below to run here.
+#
+# Mirrors windows-nightly's conventions: each suite runs to completion with
+# its exit code captured, results land in the step summary and a trx
+# artifact, and a final gate step turns any failure into a red workflow run.
+
+on:
+  schedule:
+    # 11:23 UTC — clear of cs2gs-nightly (07:17) and windows-nightly (09:23).
+    - cron: '23 11 * * *'
+  workflow_dispatch:
+
+env:
+  # See build.yml: parallel MSBuild nodes corrupt $GITHUB_ENV via
+  # Nerdbank.GitVersioning's GitBuildVersion* emission.
+  NBGV_SetCloudBuildVersionVars: false
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Setup .NET 8 (for multitarget tests)
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore GSharp.sln --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Test Core.Tests
+        id: core
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+        run: |
+          set +e
+          dotnet test test/Core.Tests/Core.Tests.csproj \
+            --configuration Release --no-build --no-restore \
+            --logger "trx" --results-directory TestResults \
+            | tee core-tests.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Core.Tests (macos-latest)"
+            echo ''
+            echo '```'
+            tail -n 20 core-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Test Sdk.Tests
+        id: sdk
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+        run: |
+          set +e
+          dotnet test test/Sdk.Tests/Sdk.Tests.csproj \
+            --configuration Release --no-build --no-restore \
+            --logger "trx" --results-directory TestResults \
+            | tee sdk-tests.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Sdk.Tests (macos-latest)"
+            echo ''
+            echo '```'
+            tail -n 20 sdk-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Run end-to-end tests (all except debugger)
+        id: e2e
+        run: |
+          set +e
+          ./build/run-e2e-tests.sh \
+            debug-info foreign-cs gsanalyzer gsgen hot-reload multifile \
+            multitarget nuget-pack packageref projectref property sdk \
+            templates \
+            | tee e2e-tests.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### e2e suite minus debugger (macos-latest)"
+            echo ''
+            echo '```'
+            tail -n 30 e2e-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: macos-nightly-test-results
+          path: |
+            TestResults/**/*.trx
+            core-tests.log
+            sdk-tests.log
+            e2e-tests.log
+
+      - name: Enforce gate outcome
+        run: |
+          if [[ "${{ steps.core.outputs.exit_code }}" != "0" ||
+                "${{ steps.sdk.outputs.exit_code }}" != "0" ||
+                "${{ steps.e2e.outputs.exit_code }}" != "0" ]]; then
+            exit 1
+          fi
