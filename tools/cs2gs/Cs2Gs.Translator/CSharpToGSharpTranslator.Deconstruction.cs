@@ -1654,7 +1654,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (localFunction.Body != null)
                 {
                     BlockStatement innerBody = this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body));
-                    innerBody = AddIteratorExitLabel(localFunction, innerBody);
+                    innerBody = this.AddIteratorExitLabel(localFunction, innerBody);
                     lambda = isAsyncVoidHandler
                         ? new LambdaExpression(parameters, blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, localFunction.GetLocation()), isAsync: false, returnType: null, isFunctionLiteral: true)
                         : new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);

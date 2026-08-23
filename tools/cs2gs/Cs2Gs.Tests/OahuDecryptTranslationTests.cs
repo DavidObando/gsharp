@@ -386,9 +386,12 @@ namespace Demo
             })
             .ToArray();
 
+        // Issue #3467: exit labels no longer embed SpanStart, so the getter's
+        // label and the local function's label share the readable spelling
+        // `__iteratorExit` — each lives in its own G# function scope, where
+        // duplicate label names are legal.
         Assert.Equal(4, exits.Length);
-        Assert.Equal(2, exits.Distinct().Count());
-        Assert.All(exits.Distinct(), exit => Assert.Equal(2, exits.Count(candidate => candidate == exit)));
+        Assert.All(exits, exit => Assert.Equal("__iteratorExit", exit));
         Assert.DoesNotContain("yield break", printed);
     }
 
