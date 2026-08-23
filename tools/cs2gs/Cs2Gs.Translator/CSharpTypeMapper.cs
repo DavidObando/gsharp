@@ -120,6 +120,14 @@ public sealed class CSharpTypeMapper
     private readonly HashSet<string> reservedInvokedLocalNames =
         new(System.StringComparer.Ordinal);
 
+    // Issue #3471: static member simple names declared by source aggregates in
+    // the contributing trees. Sibling static references print bare inside
+    // their declaring aggregate, and a file-scope import alias shadows class
+    // members in gsc scope resolution, so a synthesized readable alias must
+    // never take one of these names.
+    private readonly HashSet<string> reservedSiblingStaticMemberNames =
+        new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Issue #1174: cached per-compilation census of source-declared top-level
     /// type simple names (built lazily on first use), used to decide whether a
@@ -707,6 +715,21 @@ public sealed class CSharpTypeMapper
                     this.reservedTypeParameterNames.Add(names.GetName(typeParameterSymbol));
                 }
 
+                if (node is TypeDeclarationSyntax memberCensusDeclaration
+                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol
+                        { TypeKind: TypeKind.Class or TypeKind.Struct } declaredAggregate)
+                {
+                    foreach (ISymbol member in declaredAggregate.GetMembers())
+                    {
+                        if (member.IsStatic
+                            && member is IFieldSymbol or IPropertySymbol
+                                or IMethodSymbol { MethodKind: MethodKind.Ordinary })
+                        {
+                            this.reservedSiblingStaticMemberNames.Add(names.GetName(member));
+                        }
+                    }
+                }
+
                 if (node is InvocationExpressionSyntax { Expression: SimpleNameSyntax invokedName })
                 {
                     ISymbol invokedSymbol = semanticModel.GetSymbolInfo(invokedName).Symbol;
@@ -814,6 +837,28 @@ public sealed class CSharpTypeMapper
                 this.reservedImportedTypeNames.Add(names.GetName(type));
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #3471: whether a bare identifier at file scope would bind to an
+    /// import alias, an imported type, a synthesized type alias, or a
+    /// source-declared top-level type of the same name. All of these shadow a
+    /// sibling static member reference inside its declaring aggregate (imports
+    /// and type names win over members in gsc scope resolution), so such
+    /// members keep their type qualifier instead of printing bare.
+    /// </summary>
+    /// <param name="name">The emitted member simple name to probe.</param>
+    /// <param name="context">The active translation context.</param>
+    /// <returns><see langword="true"/> when the name is claimed at file scope.</returns>
+    internal bool ClaimsDocumentScopeName(string name, TranslationContext context)
+    {
+        this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(
+            context.Compilation,
+            this.Names(context));
+        return this.reservedTypeAliases.ContainsKey(name)
+            || this.reservedImportedTypeNames.Contains(name)
+            || this.synthesizedTypeAliases.ContainsKey(name)
+            || this.sourceDeclaredTypeNames.Contains(name);
     }
 
     /// <summary>
@@ -935,6 +980,7 @@ public sealed class CSharpTypeMapper
         reserved.UnionWith(this.reservedTypeParameterNames);
         reserved.UnionWith(this.reservedInvokedLocalNames);
         reserved.UnionWith(this.sourceDeclaredTypeNames);
+        reserved.UnionWith(this.reservedSiblingStaticMemberNames);
 
         string namespaceQualifier = namespaceName?.Split('.').Last() ?? "Global";
         string baseAlias = $"{namespaceQualifier}{simpleName}";
