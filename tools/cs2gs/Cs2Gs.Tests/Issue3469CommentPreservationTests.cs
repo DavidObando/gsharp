@@ -67,9 +67,11 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("/// <summary>", printed, StringComparison.Ordinal);
+            // Issue #3501 B1: doc comments render in the ADR-0057 Markdown
+            // surface, not verbatim XML.
             Assert.Contains("/// Computes the widget's mass in grams.", printed, StringComparison.Ordinal);
-            Assert.Contains("/// <returns>The mass.</returns>", printed, StringComparison.Ordinal);
+            Assert.Contains("/// @returns The mass.", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("<summary>", printed, StringComparison.Ordinal);
             Assert.Contains("// A plain member comment.", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
