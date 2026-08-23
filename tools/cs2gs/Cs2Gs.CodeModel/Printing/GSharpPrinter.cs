@@ -1060,6 +1060,32 @@ public static class GSharpPrinter
 
     private static string RenderStatement(GStatement statement, int indent)
     {
+        string core = RenderStatementCore(statement, indent);
+        return PrependAttachedComments(statement, core, indent);
+    }
+
+    // Issue #3469: author comments captured from the source C# node's leading
+    // trivia print, indented, immediately above the node they rode in on.
+    private static string PrependAttachedComments(GNode node, string rendered, int indent)
+    {
+        if (node?.AttachedComments is not { Count: > 0 } comments)
+        {
+            return rendered;
+        }
+
+        var pad = Indent(indent);
+        var sb = new StringBuilder();
+        foreach (string comment in comments)
+        {
+            sb.Append(pad).Append(comment).Append('\n');
+        }
+
+        sb.Append(rendered);
+        return sb.ToString();
+    }
+
+    private static string RenderStatementCore(GStatement statement, int indent)
+    {
         var pad = Indent(indent);
         switch (statement)
         {
@@ -1235,8 +1261,9 @@ public static class GSharpPrinter
     private static string RenderSimpleStatement(GStatement statement, int indent)
     {
         // A "simple" statement (init/incr clause of a C-style for) is rendered
-        // inline with no leading indentation.
-        return RenderStatement(statement, indent).TrimStart();
+        // inline with no leading indentation — and no leading comments, which
+        // would corrupt the single-line clause (issue #3469).
+        return RenderStatementCore(statement, indent).TrimStart();
     }
 
     private static string RenderIfLet(IfLetStatement ifLet, int indent)
@@ -1476,6 +1503,11 @@ public static class GSharpPrinter
     }
 
     private static string RenderMember(GMember member, int indent)
+    {
+        return PrependAttachedComments(member, RenderMemberCore(member, indent), indent);
+    }
+
+    private static string RenderMemberCore(GMember member, int indent)
     {
         switch (member)
         {
@@ -1901,7 +1933,7 @@ public static class GSharpPrinter
             case AssignmentStatement assignment:
                 return $"{RenderExpression(assignment.Target, indent)} {assignment.Operator} {RenderExpression(assignment.Value, indent)}";
             default:
-                return RenderStatement(statement, 0).TrimStart();
+                return RenderStatementCore(statement, 0).TrimStart();
         }
     }
 

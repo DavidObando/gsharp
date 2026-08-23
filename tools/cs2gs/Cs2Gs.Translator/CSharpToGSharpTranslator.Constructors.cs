@@ -24,6 +24,76 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        // Issue #3469: author comments (`//`, `/* */`, and `///` doc lines)
+        // from the C# node's leading trivia are carried onto the first G#
+        // node the construct translates to; the printer re-emits them above
+        // that node. Block comments normalize to `//` lines; doc-comment
+        // lines keep the `///` marker (G# doc comments, ADR-0057). Synthesized
+        // translator notes stay distinguishable because they are RawStatement
+        // text, never AttachedComments entries.
+        internal static void AttachSourceComments(GNode node, SyntaxNode source)
+        {
+            if (node == null || source == null)
+            {
+                return;
+            }
+
+            List<string> lines = null;
+            foreach (SyntaxTrivia trivia in source.GetLeadingTrivia())
+            {
+                switch (trivia.Kind())
+                {
+                    case SyntaxKind.SingleLineCommentTrivia:
+                        (lines ??= new List<string>()).Add(trivia.ToString().TrimEnd());
+                        break;
+
+                    case SyntaxKind.MultiLineCommentTrivia:
+                        string block = trivia.ToString();
+                        block = block.StartsWith("/*", StringComparison.Ordinal)
+                            ? block.Substring(2)
+                            : block;
+                        block = block.EndsWith("*/", StringComparison.Ordinal)
+                            ? block.Substring(0, block.Length - 2)
+                            : block;
+                        foreach (string raw in block.Split('\n'))
+                        {
+                            string text = raw.Trim().TrimStart('*').TrimStart();
+                            (lines ??= new List<string>()).Add(
+                                text.Length == 0 ? "//" : $"// {text}");
+                        }
+
+                        break;
+
+                    case SyntaxKind.SingleLineDocumentationCommentTrivia:
+                        foreach (string raw in trivia.ToFullString()
+                            .Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            string text = raw.Trim();
+                            if (text.Length == 0)
+                            {
+                                continue;
+                            }
+
+                            (lines ??= new List<string>()).Add(
+                                text.StartsWith("///", StringComparison.Ordinal)
+                                    ? text
+                                    : $"/// {text}");
+                        }
+
+                        break;
+                }
+            }
+
+            if (lines == null)
+            {
+                return;
+            }
+
+            node.AttachedComments = node.AttachedComments is { Count: > 0 } existing
+                ? lines.Concat(existing).ToList()
+                : lines;
+        }
+
         private (GMember Member, bool IsStatic) TranslateIndexer(IndexerDeclarationSyntax node)
         {
             // ADR-0118 / issue #944: a C# indexer (`public T this[int i] => ...`)
@@ -2494,11 +2564,13 @@ public sealed partial class CSharpToGSharpTranslator
                 List<GStatement> core = this.TranslateStatementCore(statement).ToList();
                 if (spillPrologue.Count == 0)
                 {
+                    AttachSourceComments(core.FirstOrDefault(), statement);
                     return core;
                 }
 
                 var combined = new List<GStatement>(spillPrologue);
                 combined.AddRange(core);
+                AttachSourceComments(combined[0], statement);
                 return combined;
             }
             finally
