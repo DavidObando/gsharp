@@ -811,6 +811,35 @@ internal sealed partial class ExpressionBinder
                 implicitPropReceiver.StructType,
                 implicitPropReceiver.Property);
         }
+        else if (variable is ImplicitStaticFieldVariableSymbol implicitStaticFieldReceiver)
+        {
+            // Issue #3489: the STATIC counterparts of the two cases above. A
+            // bare `shared` field/property name used as the receiver of a
+            // member write (`Instance.flush = v`, `Instance.Flag = v`)
+            // resolves to the implicit-static variable symbols, which have no
+            // local slot either — the emitter threw the same GS9998 the
+            // instance shapes did before #689/#1446. Synthesize the static
+            // access the read path (BindNameAccessReceiver) already uses.
+            implicitFieldReceiverExpr = implicitStaticFieldReceiver.InterfaceType != null
+                ? new BoundFieldAccessExpression(
+                    null,
+                    implicitStaticFieldReceiver.Field,
+                    implicitStaticFieldReceiver.InterfaceType)
+                : new BoundFieldAccessExpression(
+                    null,
+                    receiver: null,
+                    implicitStaticFieldReceiver.StructType,
+                    implicitStaticFieldReceiver.Field);
+        }
+        else if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticPropReceiver
+            && implicitStaticPropReceiver.Property.HasGetter)
+        {
+            implicitFieldReceiverExpr = new BoundPropertyAccessExpression(
+                null,
+                receiver: null,
+                implicitStaticPropReceiver.StructType,
+                implicitStaticPropReceiver.Property);
+        }
 
         // Issue #2488: classify and bind the write through the same narrowed
         // receiver view used by reads. The symbol retains its declared nullable
@@ -1981,6 +2010,23 @@ internal sealed partial class ExpressionBinder
 
                 if (!scope.TryDeclareVariable(local))
                 {
+                    // Issue #3490: an argument list can legally bind twice —
+                    // BindCallExpression pre-binds every argument for overload
+                    // probing, then the implicit static-self and using-static
+                    // finalizers re-bind the whole call from syntax. When the
+                    // colliding local was declared from THIS SAME syntax node,
+                    // this is that re-bind, not a genuine duplicate: reuse the
+                    // already-declared local (same parameter → same type)
+                    // instead of reporting GS0102 and cascading into GS9002 at
+                    // the out-parameter position.
+                    if (scope.TryLookupSymbol(localName) is LocalVariableSymbol existing
+                        && ReferenceEquals(existing.DeclaringSyntax, syntax))
+                    {
+                        return new BoundAddressOfExpression(
+                            null,
+                            new BoundVariableExpression(null, existing));
+                    }
+
                     Diagnostics.ReportSymbolAlreadyDeclared(resolvedDeclarationIdentifier.Location, localName);
                     return new BoundErrorExpression(null);
                 }

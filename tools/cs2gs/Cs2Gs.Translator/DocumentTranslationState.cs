@@ -244,6 +244,24 @@ internal sealed class DocumentTranslationState
     public Dictionary<IMethodSymbol, string> LiftedStaticLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
 
+    // Issue #3467: synthesized control-flow label names, allocated per
+    // enclosing function body in first-use order instead of embedding the
+    // syntax node's SpanStart. The node-keyed memo keeps the independent call
+    // sites that must agree on a label (its definition and its gotos)
+    // consistent; the counter map hands out the per-scope ordinals.
+    public Dictionary<SyntaxNode, string> SyntheticLabelNames { get; } =
+        new Dictionary<SyntaxNode, string>();
+
+    public Dictionary<(SyntaxNode Scope, string Prefix), int> SyntheticLabelCounters { get; } =
+        new Dictionary<(SyntaxNode Scope, string Prefix), int>();
+
+    // Issue #3467: lifted local-function helper names already allocated in
+    // this document, so a name collision (same enclosing member name + same
+    // local-function name) takes an ordinal suffix instead of embedding
+    // SpanStart.
+    public HashSet<string> UsedLiftedLocalFunctionNames { get; } =
+        new HashSet<string>(StringComparer.Ordinal);
+
     public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
 

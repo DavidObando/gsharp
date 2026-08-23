@@ -958,7 +958,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 new ConstantPattern(this.TranslateExpression(valueLabel.Value)),
                                 this.TranslateSwitchSectionBody(
                                     section,
-                                    gotoTargets.Contains(valueLabel) ? GotoCaseOrDefaultLabelName(valueLabel) : null)));
+                                    gotoTargets.Contains(valueLabel) ? this.GotoCaseOrDefaultLabelName(valueLabel) : null)));
                             break;
 
                         case DefaultSwitchLabelSyntax defaultLabel:
@@ -966,7 +966,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 null,
                                 this.TranslateSwitchSectionBody(
                                     section,
-                                    gotoTargets.Contains(defaultLabel) ? GotoCaseOrDefaultLabelName(defaultLabel) : null)));
+                                    gotoTargets.Contains(defaultLabel) ? this.GotoCaseOrDefaultLabelName(defaultLabel) : null)));
                             break;
 
                         default:
@@ -997,7 +997,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (needsExitLabel)
             {
                 yield return new LabeledStatement(
-                    SwitchExitLabelName(node),
+                    this.SwitchExitLabelName(node),
                     new BlockStatement(new List<GStatement>()));
             }
         }
@@ -1111,7 +1111,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return System.Array.Empty<GStatement>();
                 }
 
-                return new[] { (GStatement)new GotoStatement(SwitchExitLabelName(targetSwitch)) };
+                return new[] { (GStatement)new GotoStatement(this.SwitchExitLabelName(targetSwitch)) };
             }
 
             return new[] { (GStatement)new BreakStatement() };
@@ -1154,8 +1154,38 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private static string SwitchExitLabelName(SwitchStatementSyntax node)
-            => $"__switchExit{node.SpanStart}";
+        // Issue #3467: synthesized labels used to embed the syntax node's
+        // SpanStart (`__switchExit36386`) — unreadable, and unstable because
+        // any upstream edit shifts every label in the file. Labels are instead
+        // numbered per enclosing function body in first-use order: the first
+        // label of a prefix is bare (`__switchExit`), later ones take an
+        // ordinal (`__switchExit2`). Function literals and local functions are
+        // their own G# function scopes, so each restarts the numbering.
+        private string SyntheticLabelName(string prefix, SyntaxNode node)
+        {
+            if (this.state.SyntheticLabelNames.TryGetValue(node, out string existing))
+            {
+                return existing;
+            }
+
+            SyntaxNode scope = node.AncestorsAndSelf().FirstOrDefault(ancestor =>
+                ancestor is BaseMethodDeclarationSyntax
+                    or AccessorDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or CompilationUnitSyntax)
+                ?? node;
+            (SyntaxNode Scope, string Prefix) key = (scope, prefix);
+            this.state.SyntheticLabelCounters.TryGetValue(key, out int ordinal);
+            ordinal++;
+            this.state.SyntheticLabelCounters[key] = ordinal;
+            string name = ordinal == 1 ? $"__{prefix}" : $"__{prefix}{ordinal}";
+            this.state.SyntheticLabelNames[node] = name;
+            return name;
+        }
+
+        private string SwitchExitLabelName(SwitchStatementSyntax node)
+            => this.SyntheticLabelName("switchExit", node);
 
         private IEnumerable<GStatement> TranslateYieldStatement(YieldStatementSyntax node)
         {
@@ -1166,7 +1196,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (node.Expression == null)
             {
                 SyntaxNode target = this.state.CurrentBodyScope ?? GetBreakTarget(node);
-                return new[] { (GStatement)new GotoStatement(IteratorExitLabelName(target)) };
+                return new[] { (GStatement)new GotoStatement(this.IteratorExitLabelName(target)) };
             }
 
             GExpression value = this.TranslateValueWithNullForgiveness(node.Expression);
@@ -1192,8 +1222,8 @@ public sealed partial class CSharpToGSharpTranslator
                 n => n is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax or LocalFunctionStatementSyntax)
                 ?? node;
 
-        private static string IteratorExitLabelName(SyntaxNode node)
-            => $"__iteratorExit{node.SpanStart}";
+        private string IteratorExitLabelName(SyntaxNode node)
+            => this.SyntheticLabelName("iteratorExit", node);
 
         private GStatement TranslateForEachVariable(ForEachVariableStatementSyntax node)
         {

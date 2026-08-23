@@ -1455,7 +1455,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return new[] { (GStatement)new RawStatement($"// unsupported: {gotoStatement.Kind()}") };
                     }
 
-                    return new[] { (GStatement)new GotoStatement(GotoCaseOrDefaultLabelName(target)) };
+                    return new[] { (GStatement)new GotoStatement(this.GotoCaseOrDefaultLabelName(target)) };
 
                 default:
                     // Plain `goto label;` — Expression is the label name as an
@@ -1517,16 +1517,16 @@ public sealed partial class CSharpToGSharpTranslator
         /// <summary>
         /// The synthesized G# label name for a <c>goto case</c>/<c>goto
         /// default</c> target (issue #1884). Keyed by the target label's own
-        /// source position (<see cref="SyntaxNode.SpanStart"/>), which is
-        /// unique within the file and stable across the two independent call
-        /// sites that must agree on the name: the arm that defines the label
+        /// syntax node, which keeps the two independent call sites that must
+        /// agree on the name — the arm that defines the label
         /// (<see cref="TranslateSwitchStatement"/>) and the <c>goto</c> that
-        /// targets it (<see cref="ResolveGotoCaseOrDefaultTarget"/> callers).
+        /// targets it (<see cref="ResolveGotoCaseOrDefaultTarget"/> callers) —
+        /// consistent through the per-scope ordinal allocation (issue #3467).
         /// </summary>
-        private static string GotoCaseOrDefaultLabelName(SwitchLabelSyntax label)
-            => label is DefaultSwitchLabelSyntax
-                ? $"__gotoDefault{label.SpanStart}"
-                : $"__gotoCase{label.SpanStart}";
+        private string GotoCaseOrDefaultLabelName(SwitchLabelSyntax label)
+            => this.SyntheticLabelName(
+                label is DefaultSwitchLabelSyntax ? "gotoDefault" : "gotoCase",
+                label);
 
         private GStatement TranslateThrow(ThrowStatementSyntax throwStatement)
         {

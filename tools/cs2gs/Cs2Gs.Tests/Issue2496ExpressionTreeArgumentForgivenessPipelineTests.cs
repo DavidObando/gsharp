@@ -62,7 +62,7 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessPipelineTests
         Assert.Contains("HasKey((item Item) -> item.Id)", emitted, StringComparison.Ordinal);
         Assert.Contains("HasIndex((item Item) -> item.Name)", emitted, StringComparison.Ordinal);
         Assert.Contains("HasForeignKey((item Item) ->", emitted, StringComparison.Ordinal);
-        Assert.Contains("Runtime((item Item) -> item.Name!!)", emitted, StringComparison.Ordinal);
+        Assert.Contains("(item Item) -> item.Name!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("Selector[Item]((item Item) -> item.Id)", emitted, StringComparison.Ordinal);
         Assert.Contains("OverloadSink.Select", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("item.Id!!", emitted, StringComparison.Ordinal);

@@ -1250,6 +1250,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // in a different `SyntaxTree`; issue #2821 owned extension methods
                 // can as well. Resolve either through that tree's semantic model.
                 using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
+                bool attachedMemberComments = false;
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(
                     member,
                     kind.Value,
@@ -1259,6 +1260,15 @@ public sealed partial class CSharpToGSharpTranslator
                     callSiteLoweredStructConstructors,
                     ownedExtensionTarget))
                 {
+                    // Issue #3469: the member's leading comments ride on the
+                    // FIRST G# member it translates to, wherever that member
+                    // is placed (instance body, shared block, or top level).
+                    if (!attachedMemberComments && translated != null)
+                    {
+                        AttachSourceComments(translated, member);
+                        attachedMemberComments = true;
+                    }
+
                     // A C# operator overload translates to a receiver-clause
                     // `func (a T) operator <op>(...)`; like every receiver-clause
                     // func it only binds at top level, so it is lifted out as a

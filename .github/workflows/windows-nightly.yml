@@ -9,6 +9,9 @@ name: windows-nightly
 #
 #   - full Release build of GSharp.sln on windows-latest
 #   - test/Core.Tests (fast, broad compiler front-end coverage)
+#   - test/Sdk.Tests (the Gsharp.NET.Sdk path/tool-resolution logic this
+#     issue calls out as Windows-sensitive: backslash tool paths,
+#     response-file quoting)
 #   - Compiler.Tests LanguageConformance (SampleConformanceTests +
 #     MultiPackageEmitShapeTests): every golden sample through the emitted,
 #     evaluating-compiler, and interpreter drivers as real processes — the
@@ -113,6 +116,28 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
+      - name: Test Sdk.Tests
+        id: sdk
+        shell: bash
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+        run: |
+          set +e
+          dotnet test test/Sdk.Tests/Sdk.Tests.csproj \
+            --configuration Release --no-build --no-restore \
+            --logger "trx" --results-directory TestResults \
+            | tee sdk-tests.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Sdk.Tests (windows-latest)"
+            echo ''
+            echo '```'
+            tail -n 20 sdk-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v5
@@ -122,11 +147,13 @@ jobs:
             TestResults/**/*.trx
             core-tests.log
             conformance-tests.log
+            sdk-tests.log
 
       - name: Enforce gate outcome
         shell: bash
         run: |
           if [[ "${{ steps.core.outputs.exit_code }}" != "0" ||
-                "${{ steps.conformance.outputs.exit_code }}" != "0" ]]; then
+                "${{ steps.conformance.outputs.exit_code }}" != "0" ||
+                "${{ steps.sdk.outputs.exit_code }}" != "0" ]]; then
             exit 1
           fi

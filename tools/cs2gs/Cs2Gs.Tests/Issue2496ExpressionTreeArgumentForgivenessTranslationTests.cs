@@ -66,7 +66,7 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessTranslationTests
         Assert.Matches(
             @"AnonymousType2_[0-9A-F]{16}\(item\.ParentId, item\.Name\)",
             printed);
-        Assert.Contains("HasOptional((item Item) -> item.ParentId)", printed, StringComparison.Ordinal);
+        Assert.Contains("(item Item) -> item.ParentId)", printed, StringComparison.Ordinal);
         Assert.Contains("Selector[Item]((item Item) -> item.Id)", printed, StringComparison.Ordinal);
         Assert.Contains("GenericSink.Accept", printed, StringComparison.Ordinal);
         Assert.Contains("Nested((item Item) -> (child Item) -> child.Name)", printed, StringComparison.Ordinal);

@@ -229,8 +229,8 @@ namespace Demo
 
     Assert.DoesNotContain("let A", printed, StringComparison.Ordinal);
     Assert.DoesNotContain("let B", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_M_A_", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_M_B_", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_M_A", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_M_B", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -267,7 +267,7 @@ namespace Demo
     // Issue #3399 hybrid: a capturing recursive local lowers to G#'s
     // nullable function-typed local, not a synthesized capture-passing helper.
     Assert.DoesNotContain("let Add", printed, StringComparison.Ordinal);
-    Assert.DoesNotContain("__local_Run_Add_", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_Run_Add", printed, StringComparison.Ordinal);
     Assert.Contains("var Add", printed, StringComparison.Ordinal);
     Assert.Contains("Add = func", printed, StringComparison.Ordinal);
     Assert.Contains("Add!!(", printed, StringComparison.Ordinal);
@@ -321,8 +321,8 @@ namespace Demo
     // nullable function-typed locals, not synthesized capture-passing helpers.
     Assert.DoesNotContain("let AddEven", printed, StringComparison.Ordinal);
     Assert.DoesNotContain("let AddOdd", printed, StringComparison.Ordinal);
-    Assert.DoesNotContain("__local_Run_AddEven_", printed, StringComparison.Ordinal);
-    Assert.DoesNotContain("__local_Run_AddOdd_", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_Run_AddEven", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_Run_AddOdd", printed, StringComparison.Ordinal);
     Assert.Contains("var AddEven", printed, StringComparison.Ordinal);
     Assert.Contains("var AddOdd", printed, StringComparison.Ordinal);
     Assert.Contains("AddEven!!(", printed, StringComparison.Ordinal);
@@ -362,7 +362,7 @@ namespace Demo
 }");
 
     Assert.DoesNotContain("let Read", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_Run_Read_", printed, StringComparison.Ordinal);
+    Assert.Contains("__local_Run_Read", printed, StringComparison.Ordinal);
     Assert.Contains("out doubled int32", printed, StringComparison.Ordinal);
     CompileAndRun(
         printed,
@@ -439,8 +439,8 @@ namespace Demo
 
         Assert.DoesNotContain("let Visit", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("let IsBaseCase", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Factorial_Visit_", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Factorial_IsBaseCase_", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Factorial_Visit", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Factorial_IsBaseCase", printed, StringComparison.Ordinal);
         CompileAndRun(
             printed,
             "Console.WriteLine(C().Factorial(5))",

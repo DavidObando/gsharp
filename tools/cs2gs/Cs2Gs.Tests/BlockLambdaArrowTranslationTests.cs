@@ -166,7 +166,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__local_F_Fact_", printed);
+        Assert.Contains("__local_F_Fact", printed);
         Assert.DoesNotContain("let Fact = func", printed);
         Assert.DoesNotContain("(n int32) -> {", printed);
     }

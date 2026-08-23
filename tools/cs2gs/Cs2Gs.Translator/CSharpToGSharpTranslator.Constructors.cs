@@ -24,6 +24,76 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        // Issue #3469: author comments (`//`, `/* */`, and `///` doc lines)
+        // from the C# node's leading trivia are carried onto the first G#
+        // node the construct translates to; the printer re-emits them above
+        // that node. Block comments normalize to `//` lines; doc-comment
+        // lines keep the `///` marker (G# doc comments, ADR-0057). Synthesized
+        // translator notes stay distinguishable because they are RawStatement
+        // text, never AttachedComments entries.
+        internal static void AttachSourceComments(GNode node, SyntaxNode source)
+        {
+            if (node == null || source == null)
+            {
+                return;
+            }
+
+            List<string> lines = null;
+            foreach (SyntaxTrivia trivia in source.GetLeadingTrivia())
+            {
+                switch (trivia.Kind())
+                {
+                    case SyntaxKind.SingleLineCommentTrivia:
+                        (lines ??= new List<string>()).Add(trivia.ToString().TrimEnd());
+                        break;
+
+                    case SyntaxKind.MultiLineCommentTrivia:
+                        string block = trivia.ToString();
+                        block = block.StartsWith("/*", StringComparison.Ordinal)
+                            ? block.Substring(2)
+                            : block;
+                        block = block.EndsWith("*/", StringComparison.Ordinal)
+                            ? block.Substring(0, block.Length - 2)
+                            : block;
+                        foreach (string raw in block.Split('\n'))
+                        {
+                            string text = raw.Trim().TrimStart('*').TrimStart();
+                            (lines ??= new List<string>()).Add(
+                                text.Length == 0 ? "//" : $"// {text}");
+                        }
+
+                        break;
+
+                    case SyntaxKind.SingleLineDocumentationCommentTrivia:
+                        foreach (string raw in trivia.ToFullString()
+                            .Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            string text = raw.Trim();
+                            if (text.Length == 0)
+                            {
+                                continue;
+                            }
+
+                            (lines ??= new List<string>()).Add(
+                                text.StartsWith("///", StringComparison.Ordinal)
+                                    ? text
+                                    : $"/// {text}");
+                        }
+
+                        break;
+                }
+            }
+
+            if (lines == null)
+            {
+                return;
+            }
+
+            node.AttachedComments = node.AttachedComments is { Count: > 0 } existing
+                ? lines.Concat(existing).ToList()
+                : lines;
+        }
+
         private (GMember Member, bool IsStatic) TranslateIndexer(IndexerDeclarationSyntax node)
         {
             // ADR-0118 / issue #944: a C# indexer (`public T this[int i] => ...`)
@@ -898,10 +968,33 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.EmittedName(symbol, symbol.Name);
             }
 
+            // Issue #3467: gsc accepts `_` as a (repeatable) discard parameter
+            // name, so an unreferenced C# `_` parameter keeps its spelling. A
+            // single `_` parameter that the body actually READS (legal C#: `_`
+            // is only a discard when it cannot bind) still needs a real
+            // identifier, since G# `_` is a true blank; only that case renames
+            // to `__underscore` (paired with the identifier-reference rewrite
+            // in TranslateIdentifierName).
             int underscoreCount = underscoreParameter.Parent is ParameterListSyntax parameterList
                 ? parameterList.Parameters.Count(p => p.Identifier.ValueText == "_")
                 : 1;
-            return underscoreCount == 1 ? "__underscore" : "_";
+            if (underscoreCount > 1)
+            {
+                return "_";
+            }
+
+            SyntaxNode body = underscoreParameter.Ancestors().FirstOrDefault(ancestor =>
+                ancestor is AnonymousFunctionExpressionSyntax
+                    or LocalFunctionStatementSyntax
+                    or BaseMethodDeclarationSyntax);
+            bool referenced = body != null
+                && body.DescendantNodes()
+                    .OfType<IdentifierNameSyntax>()
+                    .Any(identifier => identifier.Identifier.ValueText == "_"
+                        && SymbolEqualityComparer.Default.Equals(
+                            this.context.GetSymbolInfo(identifier).Symbol,
+                            symbol));
+            return referenced ? "__underscore" : "_";
         }
 
         /// <summary>
@@ -1384,7 +1477,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
                 body = this.WithParameterShadows(bodyOwner, body);
-                return AddIteratorExitLabel(bodyOwner, body);
+                return this.AddIteratorExitLabel(bodyOwner, body);
             }
             finally
             {
@@ -1527,7 +1620,25 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        private static BlockStatement AddIteratorExitLabel(SyntaxNode bodyOwner, BlockStatement body)
+        // Issue #3467: lifted local-function helper names used to embed the
+        // local function's SpanStart, producing 50+ character identifiers that
+        // shift on any upstream edit. The name is now just
+        // `__local_{owner}_{name}`; only a genuine collision (an overload of
+        // the enclosing member declaring a same-named local function, or
+        // same-named locals in sibling scopes) takes an ordinal suffix.
+        private string AllocateLiftedLocalFunctionName(string ownerName, string localName)
+        {
+            string baseName = $"__local_{ownerName}_{localName}";
+            string candidate = baseName;
+            for (int suffix = 2; !this.state.UsedLiftedLocalFunctionNames.Add(candidate); suffix++)
+            {
+                candidate = $"{baseName}_{suffix}";
+            }
+
+            return candidate;
+        }
+
+        private BlockStatement AddIteratorExitLabel(SyntaxNode bodyOwner, BlockStatement body)
         {
             if (!HasYieldBreak(bodyOwner))
             {
@@ -1536,7 +1647,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             var statements = body.Statements.ToList();
             statements.Add(new LabeledStatement(
-                IteratorExitLabelName(bodyOwner),
+                this.IteratorExitLabelName(bodyOwner),
                 new BlockStatement(new List<GStatement>())));
             return new BlockStatement(statements, body.IsUnsafe);
         }
@@ -1915,7 +2026,7 @@ public sealed partial class CSharpToGSharpTranslator
                     pair.Symbol.ContainingSymbol?.Name ?? "scope");
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedStaticLocalFunctions[pair.Symbol] =
-                    $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}";
+                    this.AllocateLiftedLocalFunctionName(ownerName, localName);
             }
 
             var capturingLocals = localFunctions
@@ -2024,7 +2135,7 @@ public sealed partial class CSharpToGSharpTranslator
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedRecursiveLocalFunctions[pair.Symbol] =
                     new LiftedRecursiveLocalFunction(
-                        $"__local_{ownerName}_{localName}_{pair.Syntax.SpanStart}",
+                        this.AllocateLiftedLocalFunctionName(ownerName, localName),
                         containingMethod?.IsStatic != false,
                         captures);
             }
@@ -2494,11 +2605,13 @@ public sealed partial class CSharpToGSharpTranslator
                 List<GStatement> core = this.TranslateStatementCore(statement).ToList();
                 if (spillPrologue.Count == 0)
                 {
+                    AttachSourceComments(core.FirstOrDefault(), statement);
                     return core;
                 }
 
                 var combined = new List<GStatement>(spillPrologue);
                 combined.AddRange(core);
+                AttachSourceComments(combined[0], statement);
                 return combined;
             }
             finally
