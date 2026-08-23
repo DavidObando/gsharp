@@ -164,12 +164,18 @@ namespace Demo
     }
 
     [Fact]
-    public void Translator_LowersYieldBreakToNearestIteratorExit()
+    public void Translator_EmitsNativeYieldBreak()
     {
+        // Issue #3501 A1: `yield break` translates to G#'s native
+        // `yield break`, which exits the iterator from any nesting depth —
+        // including from inside the switch inside the while here. The loop's
+        // own `break` keeps its loop binding (the third "break" match below
+        // is the loop's).
         string printed = TranslateAndValidate(IteratorSource);
 
-        Assert.Equal(2, CountOccurrences(printed, "goto __iteratorExit"));
-        Assert.Equal(1, CountOccurrences(printed, "break"));
+        Assert.Equal(2, CountOccurrences(printed, "yield break"));
+        Assert.Equal(3, CountOccurrences(printed, "break"));
+        Assert.DoesNotContain("__iteratorExit", printed, StringComparison.Ordinal);
     }
 
     [Fact]

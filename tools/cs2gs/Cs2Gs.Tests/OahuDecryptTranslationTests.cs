@@ -298,11 +298,11 @@ namespace Demo
     }
 
     /// <summary>
-    /// <c>yield break</c> maps to the nearest iterator exit label because G#
-    /// has no <c>yield break</c> (ADR-0115 §B).
+    /// <c>yield break</c> maps to G#'s native <c>yield break</c> statement
+    /// (issue #3501 A1), which terminates the iterator from any depth.
     /// </summary>
     [Fact]
-    public void YieldBreak_MappedToIteratorExit()
+    public void YieldBreak_TranslatesNatively()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -321,9 +321,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("goto __iteratorExit", printed);
-        Assert.Contains("__iteratorExit", printed);
-        Assert.DoesNotContain("yield break", printed);
+        Assert.Contains("yield break", printed);
+        Assert.DoesNotContain("__iteratorExit", printed);
+        Assert.DoesNotContain("goto", printed);
         Assert.DoesNotContain("unsupported", printed);
     }
 
@@ -386,13 +386,10 @@ namespace Demo
             })
             .ToArray();
 
-        // Issue #3467: exit labels no longer embed SpanStart, so the getter's
-        // label and the local function's label share the readable spelling
-        // `__iteratorExit` — each lives in its own G# function scope, where
-        // duplicate label names are legal.
-        Assert.Equal(4, exits.Length);
-        Assert.All(exits, exit => Assert.Equal("__iteratorExit", exit));
-        Assert.DoesNotContain("yield break", printed);
+        // Issue #3501 A1: `yield break` translates to G#'s native
+        // `yield break` — no synthesized exit labels remain.
+        Assert.Empty(exits);
+        Assert.Equal(2, printed.Split('\n').Count(line => line.TrimEnd().EndsWith("yield break", StringComparison.Ordinal)));
     }
 
     /// <summary>

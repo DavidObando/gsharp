@@ -59,9 +59,11 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("__iteratorExit", printed, StringComparison.Ordinal);
+            // Issue #3501 A1: `yield break` now translates to G#'s native
+            // `yield break` — no synthesized iterator-exit label at all.
+            Assert.Contains("yield break", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("__iteratorExit", printed, StringComparison.Ordinal);
             Assert.Contains("__local_Label_NewLabel", printed, StringComparison.Ordinal);
-            Assert.DoesNotMatch(new Regex(@"__iteratorExit\d"), printed);
             Assert.DoesNotMatch(new Regex(@"__local_Label_NewLabel_?\d"), printed);
             TranslationTestValidation.AssertBinds(printed);
         }

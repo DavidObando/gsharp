@@ -1171,12 +1171,6 @@ public sealed partial class CSharpToGSharpTranslator
                 .Any();
         }
 
-        private static bool HasYieldBreak(SyntaxNode bodyOwner)
-            => bodyOwner.DescendantNodes(
-                    n => ReferenceEquals(n, bodyOwner) || n is not LocalFunctionStatementSyntax)
-                .OfType<YieldStatementSyntax>()
-                .Any(y => y.Expression == null);
-
         private List<AttributeUse> MapAttributes(IEnumerable<AttributeListSyntax> attributeLists)
         {
             var attributes = new List<AttributeUse>();
@@ -1477,7 +1471,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 BlockStatement body = this.TranslateBodyCore(bodyOwner, description);
                 body = this.WithParameterShadows(bodyOwner, body);
-                return this.AddIteratorExitLabel(bodyOwner, body);
+                return body;
             }
             finally
             {
@@ -1636,20 +1630,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return candidate;
-        }
-
-        private BlockStatement AddIteratorExitLabel(SyntaxNode bodyOwner, BlockStatement body)
-        {
-            if (!HasYieldBreak(bodyOwner))
-            {
-                return body;
-            }
-
-            var statements = body.Statements.ToList();
-            statements.Add(new LabeledStatement(
-                this.IteratorExitLabelName(bodyOwner),
-                new BlockStatement(new List<GStatement>())));
-            return new BlockStatement(statements, body.IsUnsafe);
         }
 
         // Issue #1278 / ADR-0131: a C# expression-bodied member (`=> expr`)

@@ -1122,11 +1122,24 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
+        // Issue #3501: `yield break` terminates the iterator. Bind it as the
+        // bare return the iterator MoveNext builders already lower to a jump
+        // to the shared end label (state = -1, return false) — both the sync
+        // rewriter and the async-iterator rewriter document exactly this
+        // meaning for an expressionless return inside an iterator body.
+        if (syntax.BreakKeyword != null)
+        {
+            return new BoundReturnStatement(syntax, expression: null);
+        }
+
         var elementType = GetIteratorElementType(function.Type);
-        var expression = bindExpression(syntax.Expression);
+        ExpressionSyntax expressionSyntax = Invariant.Required(
+            syntax.Expression,
+            "a yield statement without a break keyword carries an expression");
+        var expression = bindExpression(expressionSyntax);
         if (expression.Type != null && elementType != null && expression.Type != elementType)
         {
-            expression = conversions.BindConversion(syntax.Expression.Location, expression, elementType);
+            expression = conversions.BindConversion(expressionSyntax.Location, expression, elementType);
         }
 
         return new BoundYieldStatement(syntax, expression);
