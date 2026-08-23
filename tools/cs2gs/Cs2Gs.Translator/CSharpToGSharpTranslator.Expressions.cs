@@ -109,11 +109,10 @@ public sealed partial class CSharpToGSharpTranslator
                         staticMember,
                         identifier)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition) &&
-                !(this.IsBareSiblingStaticScope(
-                        owner,
-                        this.EmittedName(staticMember, identifier.Identifier.ValueText),
-                        identifier)
-                    && !IsStoreReceiverPosition(identifier)))
+                !this.IsBareSiblingStaticScope(
+                    owner,
+                    this.EmittedName(staticMember, identifier.Identifier.ValueText),
+                    identifier))
             {
                 return new MemberAccessExpression(
                     this.StaticQualifierReceiver(owner, identifier.GetLocation()),
@@ -211,56 +210,10 @@ public sealed partial class CSharpToGSharpTranslator
         // imported type, or source type name — those shadow class members in
         // gsc scope resolution, so a colliding member reference keeps the
         // qualifier (the readable-alias allocator reciprocally avoids sibling
-        // static member names when synthesizing new aliases). Finally, gsc
-        // resolves bare sibling statics from lambda bodies inside INSTANCE
-        // members, but reports GS0130 for a lambda body inside a `shared`
-        // member body (issue #3487) — while the qualified spelling binds in
-        // both — so a site that is inside an emitted function literal AND
-        // inside a static member context keeps the qualifier. A non-lifted C#
-        // local function counts as a function literal (cs2gs lowers it to a
-        // `let` func binding); a LIFTED static local function instead becomes
-        // a real `shared` helper method, which is a static member context of
-        // its own regardless of the containing C# member.
-        // Issue #3471: gsc's emitter throws GS9998 ("Variable 'X' has no
-        // local slot or parameter index") when a BARE shared member is the
-        // base receiver of a member STORE (`Instance.flush = value`,
-        // `Instance.Flag = v`, compound assignments, ref/out arguments) in any
-        // member body — while reads (`Instance.flush`), call receivers
-        // (`Instance.Apply(v)`), and direct writes to the member itself
-        // (`Count = Count + 1`) all emit fine. Until that is fixed, a sibling
-        // static referenced in store-receiver position keeps its qualifier.
-        private static bool IsStoreReceiverPosition(IdentifierNameSyntax identifier)
-        {
-            SyntaxNode current = identifier;
-            while ((current.Parent is MemberAccessExpressionSyntax memberAccess
-                        && memberAccess.Expression == current)
-                || (current.Parent is ElementAccessExpressionSyntax elementAccess
-                        && elementAccess.Expression == current))
-            {
-                current = current.Parent;
-            }
-
-            if (ReferenceEquals(current, identifier))
-            {
-                return false;
-            }
-
-            return current.Parent switch
-            {
-                AssignmentExpressionSyntax assignment when assignment.Left == current => true,
-                PrefixUnaryExpressionSyntax prefix
-                    when prefix.Operand == current &&
-                         prefix.Kind() is SyntaxKind.PreIncrementExpression or SyntaxKind.PreDecrementExpression => true,
-                PostfixUnaryExpressionSyntax postfix
-                    when postfix.Operand == current &&
-                         postfix.Kind() is SyntaxKind.PostIncrementExpression or SyntaxKind.PostDecrementExpression => true,
-                ArgumentSyntax argument
-                    when argument.Expression == current &&
-                         argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword => true,
-                _ => false,
-            };
-        }
-
+        // static member names when synthesizing new aliases). Function-literal
+        // bodies need no special casing: since gsc issue #3487 was fixed,
+        // bare sibling statics resolve from lambdas in shared members exactly
+        // as they do in instance members.
         private bool IsBareSiblingStaticScope(
             INamedTypeSymbol owner,
             string memberName,
@@ -271,35 +224,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            bool emittedLambdaContext = false;
-            bool staticMemberContext = false;
             for (SyntaxNode node = site; node != null; node = node.Parent)
             {
-                if (node is AnonymousFunctionExpressionSyntax)
-                {
-                    emittedLambdaContext = true;
-                }
-
-                if (node is LocalFunctionStatementSyntax localFunction)
-                {
-                    IMethodSymbol localSymbol =
-                        this.context.GetDeclaredSymbol(localFunction) as IMethodSymbol;
-                    bool liftedStatic = localSymbol != null
-                        && this.state.LiftedStaticLocalFunctions.ContainsKey(localSymbol);
-                    bool liftedRecursive = localSymbol != null
-                        && this.state.LiftedRecursiveLocalFunctions.ContainsKey(localSymbol);
-                    if (liftedStatic
-                        || (liftedRecursive
-                            && this.state.LiftedRecursiveLocalFunctions[localSymbol].IsStatic))
-                    {
-                        staticMemberContext = true;
-                    }
-                    else if (!liftedRecursive)
-                    {
-                        emittedLambdaContext = true;
-                    }
-                }
-
                 if (node is MethodDeclarationSyntax method
                     && this.context.GetDeclaredSymbol(method) is IMethodSymbol
                         { IsExtensionMethod: true })
@@ -309,18 +235,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (node is TypeDeclarationSyntax typeDeclaration)
                 {
-                    return !(emittedLambdaContext && staticMemberContext)
-                        && this.context.GetDeclaredSymbol(typeDeclaration) is INamedTypeSymbol siteType
+                    return this.context.GetDeclaredSymbol(typeDeclaration) is INamedTypeSymbol siteType
                         && SymbolEqualityComparer.Default.Equals(
                             siteType.OriginalDefinition,
                             owner.OriginalDefinition);
-                }
-
-                if (node is MemberDeclarationSyntax member
-                    && node is not BaseTypeDeclarationSyntax
-                    && member.Modifiers.Any(SyntaxKind.StaticKeyword))
-                {
-                    staticMemberContext = true;
                 }
             }
 

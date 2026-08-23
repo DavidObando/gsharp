@@ -200,12 +200,11 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
-        // gsc resolves bare sibling statics from lambda bodies inside INSTANCE
-        // members but reports GS0130 for lambda bodies inside `shared` member
-        // bodies (issue #3487), so a lambda site in a static member keeps the
-        // qualifier while a lambda site in an instance member goes bare.
+        // gsc issue #3487 (fixed): bare sibling statics resolve from lambda
+        // bodies inside shared members just as they do in instance members,
+        // so both lambda sites go bare.
         [Fact]
-        public void LambdaBody_InStaticMember_StaysQualified()
+        public void LambdaBody_InStaticMember_EmitsBare()
         {
             string printed = Translate("""
                 using System;
@@ -224,8 +223,9 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("Events.Hidden()", printed, StringComparison.Ordinal);
-            Assert.Contains("Events.Shown()", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Events.Hidden()", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Events.Shown()", printed, StringComparison.Ordinal);
+            Assert.Contains("Hidden() + Shown()", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -251,11 +251,11 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
-        // gsc's emitter throws GS9998 when a bare shared member is the base
-        // receiver of a member STORE, while reads and call receivers emit
-        // fine — so only the store-receiver position keeps its qualifier.
+        // gsc issue #3489 (fixed): a bare shared member works as the base
+        // receiver of a member STORE, so store positions go bare like every
+        // other sibling static reference.
         [Fact]
-        public void SiblingStaticStoreReceiver_StaysQualified()
+        public void SiblingStaticStoreReceiver_EmitsBare()
         {
             string printed = Translate("""
                 public class Logging
@@ -286,10 +286,10 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("Logging.Instance.flush = value", printed, StringComparison.Ordinal);
+            Assert.Contains("set -> Instance.flush = value", printed, StringComparison.Ordinal);
             Assert.Contains("get -> Instance.flush", printed, StringComparison.Ordinal);
             Assert.Contains("Instance.Set(value)", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("Logging.Instance.Set", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Logging.Instance", printed, StringComparison.Ordinal);
             EmittedOracleResult result = EmittedOracle.Evaluate(
                 printed + Environment.NewLine + "Logging.Run()");
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
@@ -297,12 +297,11 @@ namespace Cs2Gs.Tests
             Assert.Equal(1, result.Value);
         }
 
-        // gsc double-binds the arguments of a BARE sibling call when an
-        // argument subtree carries an inline `out var` declaration (issue
-        // #3490: GS9002 + GS0102 for the same declaration), so such calls
-        // keep the qualifier.
+        // gsc issue #3490 (fixed): a bare sibling call whose argument
+        // subtree carries an inline `out var` declaration binds cleanly, so
+        // it goes bare like every other sibling static call.
         [Fact]
-        public void SiblingStaticCall_WithOutVarArgument_StaysQualified()
+        public void SiblingStaticCall_WithOutVarArgument_EmitsBare()
         {
             string printed = Translate("""
                 using System.Collections.Generic;
@@ -321,7 +320,8 @@ namespace Cs2Gs.Tests
                 }
                 """);
 
-            Assert.Contains("Writer.Format(if row.TryGetValue(k, out var v)", printed, StringComparison.Ordinal);
+            Assert.Contains("Format(if row.TryGetValue(k, out var v)", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Writer.Format(", printed, StringComparison.Ordinal);
             Assert.Contains("string -> Format(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }

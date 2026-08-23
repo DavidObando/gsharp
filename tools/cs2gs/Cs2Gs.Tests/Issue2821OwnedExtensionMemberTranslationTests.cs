@@ -559,8 +559,8 @@ public static class User
 
         string user = Compact(printed["User.cs"]);
 
-        Assert.Equal(1, CountOccurrences(user, "User.GetHost()"));
-        Assert.Contains("() -> User.GetHost()?.Touch()", user);
+        Assert.Equal(1, CountOccurrences(user, "GetHost()?"));
+        Assert.Contains("() -> GetHost()?.Touch()", user);
         Assert.DoesNotContain("__spill", user);
         Assert.DoesNotContain("FirstExtensions.Touch", user);
         Assert.DoesNotContain("default(void", user);

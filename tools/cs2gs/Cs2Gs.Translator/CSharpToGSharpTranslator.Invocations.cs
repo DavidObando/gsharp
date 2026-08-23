@@ -341,20 +341,10 @@ public sealed partial class CSharpToGSharpTranslator
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualCall(staticMethod)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition) &&
-                !(this.IsBareSiblingStaticScope(
-                        owner,
-                        this.EmittedName(staticMethod, staticMethod.Name),
-                        bareName)
-
-                    // Issue #3490: gsc double-binds arguments of a BARE
-                    // sibling call when the argument subtree carries an inline
-                    // `out var` declaration (GS9002 + GS0102 for the same
-                    // declaration), while the qualified spelling compiles —
-                    // so such calls keep the qualifier.
-                    && !invocation.ArgumentList.Arguments.Any(argument =>
-                        argument.DescendantNodesAndSelf()
-                            .OfType<DeclarationExpressionSyntax>()
-                            .Any())))
+                !this.IsBareSiblingStaticScope(
+                    owner,
+                    this.EmittedName(staticMethod, staticMethod.Name),
+                    bareName))
             {
                 // A C# bare sibling static call (`Round(value, 2)`) carries an
                 // implicit type qualifier only where the emitted body leaves the
