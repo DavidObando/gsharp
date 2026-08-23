@@ -811,6 +811,35 @@ internal sealed partial class ExpressionBinder
                 implicitPropReceiver.StructType,
                 implicitPropReceiver.Property);
         }
+        else if (variable is ImplicitStaticFieldVariableSymbol implicitStaticFieldReceiver)
+        {
+            // Issue #3489: the STATIC counterparts of the two cases above. A
+            // bare `shared` field/property name used as the receiver of a
+            // member write (`Instance.flush = v`, `Instance.Flag = v`)
+            // resolves to the implicit-static variable symbols, which have no
+            // local slot either — the emitter threw the same GS9998 the
+            // instance shapes did before #689/#1446. Synthesize the static
+            // access the read path (BindNameAccessReceiver) already uses.
+            implicitFieldReceiverExpr = implicitStaticFieldReceiver.InterfaceType != null
+                ? new BoundFieldAccessExpression(
+                    null,
+                    implicitStaticFieldReceiver.Field,
+                    implicitStaticFieldReceiver.InterfaceType)
+                : new BoundFieldAccessExpression(
+                    null,
+                    receiver: null,
+                    implicitStaticFieldReceiver.StructType,
+                    implicitStaticFieldReceiver.Field);
+        }
+        else if (variable is ImplicitStaticPropertyVariableSymbol implicitStaticPropReceiver
+            && implicitStaticPropReceiver.Property.HasGetter)
+        {
+            implicitFieldReceiverExpr = new BoundPropertyAccessExpression(
+                null,
+                receiver: null,
+                implicitStaticPropReceiver.StructType,
+                implicitStaticPropReceiver.Property);
+        }
 
         // Issue #2488: classify and bind the write through the same narrowed
         // receiver view used by reads. The symbol retains its declared nullable
