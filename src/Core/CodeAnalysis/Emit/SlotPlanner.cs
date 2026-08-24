@@ -739,6 +739,11 @@ internal sealed class SlotPlanner
 
                     break;
                 case BoundListPattern lp:
+                    if (lp.InputVariable != null)
+                    {
+                        AllocatePatternLocal(lp.InputVariable, locals, localTypes);
+                    }
+
                     foreach (var elem in lp.Elements)
                     {
                         AllocatePatternBindings(elem, locals, localTypes, typePatternScratchSlots);
