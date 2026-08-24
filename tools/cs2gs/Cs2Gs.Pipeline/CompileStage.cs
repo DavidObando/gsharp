@@ -79,13 +79,19 @@ public sealed class CompileStage : IMigrationStage
             // Issue #3501 (!! reduction): gsc reports GS0536 on every `!!`
             // whose operand is already non-null — the compiler's own
             // narrowing is the single source of truth. Strip exactly those
-            // spans from the emitted files and recompile once so the shipped
-            // output carries no redundant assertions. Defensive: if the
-            // polished recompile somehow regresses a previously passing
-            // build, restore the original text and keep the first result.
-            if (sdkResult.IsAvailable
-                && sdkResult.Diagnostics.Any(d => d.Id == NullAssertionPolishPass.DiagnosticId))
+            // spans from the emitted files and recompile, iterating to a
+            // small fixpoint: removing one round of assertions can extend
+            // binding far enough to surface the next round. Defensive: if a
+            // polished recompile regresses a previously passing build,
+            // restore the round's text and keep the prior result.
+            for (var polishRound = 0; polishRound < 3; polishRound++)
             {
+                if (!sdkResult.IsAvailable
+                    || !sdkResult.Diagnostics.Any(d => d.Id == NullAssertionPolishPass.DiagnosticId))
+                {
+                    break;
+                }
+
                 // The SDK build also compiles project references, so a
                 // dependency whose own compile stage never ran can surface
                 // GS0536 in files outside this app's emitted set — anything
@@ -97,20 +103,24 @@ public sealed class CompileStage : IMigrationStage
                     .Where(File.Exists)
                     .Distinct(StringComparer.Ordinal)
                     .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
-                if (NullAssertionPolishPass.Strip(sdkResult.Diagnostics, gsFiles, strippableRoot) > 0)
+                if (NullAssertionPolishPass.Strip(sdkResult.Diagnostics, gsFiles, strippableRoot) == 0)
                 {
-                    SdkCompileResult polished = RunSdkCompile();
-                    if (polished.IsAvailable && (polished.Succeeded || !sdkResult.Succeeded))
+                    break;
+                }
+
+                SdkCompileResult polished = RunSdkCompile();
+                if (polished.IsAvailable && (polished.Succeeded || !sdkResult.Succeeded))
+                {
+                    sdkResult = polished;
+                }
+                else
+                {
+                    foreach (KeyValuePair<string, string> backup in backups)
                     {
-                        sdkResult = polished;
+                        File.WriteAllText(backup.Key, backup.Value);
                     }
-                    else
-                    {
-                        foreach (KeyValuePair<string, string> backup in backups)
-                        {
-                            File.WriteAllText(backup.Key, backup.Value);
-                        }
-                    }
+
+                    break;
                 }
             }
 

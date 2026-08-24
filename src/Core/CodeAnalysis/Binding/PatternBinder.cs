@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -1249,13 +1250,13 @@ internal sealed class PatternBinder
 
     private static PropertyInfo? FindIntGetter(Type type, string name)
     {
-        PropertyInfo? property = type.GetProperty(
-            name,
-            BindingFlags.Public | BindingFlags.Instance,
-            binder: null,
-            typeof(int),
-            Type.EmptyTypes,
-            modifiers: null);
+        // Metadata-context safe: never filter GetProperty by a runtime
+        // typeof — a MetadataLoadContext Int32 is a different Type instance.
+        PropertyInfo? property = type
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(p => p.Name == name
+                && p.GetIndexParameters().Length == 0
+                && p.PropertyType.IsSameAs(typeof(int)));
         return property?.GetGetMethod(nonPublic: false) != null ? property : null;
     }
 
