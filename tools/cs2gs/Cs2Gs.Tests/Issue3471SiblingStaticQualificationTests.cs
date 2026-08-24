@@ -139,19 +139,20 @@ namespace Cs2Gs.Tests
         [Fact]
         public void LiftedStaticLocalFunction_SameTypeCall_EmitsBare()
         {
+            // Issue #3501: only a recursion cycle through ANOTHER local
+            // function still lifts (ref-kind signatures now stay native
+            // literals), so the fixture uses a mutual pair.
             string printed = Translate("""
                 public class Labels
                 {
                     public string Make()
                     {
-                        int ordinal = 0;
-                        return NewLabel("switchEnd", ref ordinal);
+                        return NewLabel("switchEnd", 2);
 
-                        static string NewLabel(string prefix, ref int i)
-                        {
-                            i++;
-                            return prefix + i;
-                        }
+                        static string NewLabel(string prefix, int i) =>
+                            i <= 0 ? prefix : Other(prefix, i - 1);
+
+                        static string Other(string prefix, int i) => NewLabel(prefix + "x", i);
                     }
                 }
                 """);

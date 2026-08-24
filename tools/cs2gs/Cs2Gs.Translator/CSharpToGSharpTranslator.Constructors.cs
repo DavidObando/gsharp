@@ -2491,11 +2491,29 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     foreach (LocalFunctionStatementSyntax dependency in SiblingDependenciesOf(entry.Function))
                     {
-                        if (!toHoist.Any(t => ReferenceEquals(t.Function, dependency)))
+                        if (toHoist.Any(t => ReferenceEquals(t.Function, dependency)))
                         {
-                            toHoist.Add((dependency, IndexOfReference(statements, dependency), entry.AnchorIndex));
-                            grew = true;
+                            continue;
                         }
+
+                        // The dependency's own captures bound how early its
+                        // `let` may sit. If its barrier lands AFTER the
+                        // dependent's insertion point, hoisting it there would
+                        // strand its captured locals — leave BOTH functions in
+                        // place instead (the pre-existing ordering-conflict
+                        // fallback).
+                        int? dependencyBarrier = this.SiblingCaptureBarrierIndex(dependency, enclosingSpan, statements);
+                        int dependencyAnchor = dependencyBarrier.HasValue ? dependencyBarrier.Value + 1 : 0;
+                        int dependentAnchor = entry.AnchorIndex.HasValue ? entry.AnchorIndex.Value + 1 : 0;
+                        if (dependencyAnchor > dependentAnchor)
+                        {
+                            toHoist.RemoveAll(t => ReferenceEquals(t.Function, entry.Function));
+                            grew = true;
+                            break;
+                        }
+
+                        toHoist.Add((dependency, IndexOfReference(statements, dependency), entry.AnchorIndex));
+                        grew = true;
                     }
                 }
             }

@@ -121,7 +121,10 @@ public class Issue2467StaticExtensionConditionalReceiverTests
 
         Assert.Contains("(box?.Value).Pick[string?](\"fallback\")", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Pick(\"fallback\")", printed, StringComparison.Ordinal);
-        Assert.Contains("(box?.Value).Flow(&x, out y, z)", printed, StringComparison.Ordinal);
+        // Issue #3501: G# requires the `in` modifier at source-declared
+        // in-parameter call sites (GS0242 is an error), so the argument
+        // keeps its keyword.
+        Assert.Contains("(box?.Value).Flow(&x, out y, in z)", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Join()", printed, StringComparison.Ordinal);
         Assert.Contains("(box?.Value).Join(\"-\", \"a\", \"b\")", printed, StringComparison.Ordinal);
     }
