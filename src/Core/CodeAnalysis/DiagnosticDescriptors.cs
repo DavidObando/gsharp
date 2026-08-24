@@ -84,7 +84,12 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor MultipleTopLevelFiles = new("GS0165", DiagnosticSeverity.Error, "Top-level statements may appear in at most one package per compilation.");
     internal static readonly DiagnosticDescriptor TopLevelStatementsConflictWithMain = new("GS0166", DiagnosticSeverity.Warning, "The entry point of the program is global statements; ignoring the explicit Main function entry point.");
     internal static readonly DiagnosticDescriptor MultiAssignmentMismatch = new("GS0167", DiagnosticSeverity.Error, "Multi-assignment has {0} target(s) but {1} value(s).");
-    internal static readonly DiagnosticDescriptor FallthroughNotSupported = new("GS0168", DiagnosticSeverity.Error, "'fallthrough' is not supported (ADR-0013). GSharp 'switch' cases do not fall through.");
+
+    // Issue #3501 A3: `fallthrough` is now a real statement (Go semantics),
+    // so GS0168 became the placement error instead of a blanket rejection.
+    internal static readonly DiagnosticDescriptor FallthroughNotSupported = new("GS0168", DiagnosticSeverity.Error, "'fallthrough' must be the last statement of a 'switch' case body.");
+    internal static readonly DiagnosticDescriptor FallthroughInFinalArm = new("GS0533", DiagnosticSeverity.Error, "'fallthrough' cannot be used in the final arm of a 'switch' statement.");
+    internal static readonly DiagnosticDescriptor FallthroughTargetHasBindings = new("GS0534", DiagnosticSeverity.Error, "'fallthrough' cannot target a 'switch' arm whose pattern declares bindings or that has a 'when' guard — the jump would skip their assignment.");
     internal static readonly DiagnosticDescriptor DuplicateSwitchDefault = new("GS0169", DiagnosticSeverity.Error, "A 'switch' statement can only have one 'default' arm.");
     internal static readonly DiagnosticDescriptor SwitchCaseValueNotConstant = new("GS0170", DiagnosticSeverity.Error, "Switch case value must be a constant expression.");
     internal static readonly DiagnosticDescriptor SwitchCaseTypeMismatch = new("GS0171", DiagnosticSeverity.Error, "Switch case value of type '{0}' is incompatible with switch expression of type '{1}'.");

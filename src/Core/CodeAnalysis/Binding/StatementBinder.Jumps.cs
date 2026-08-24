@@ -280,8 +280,39 @@ internal sealed partial class StatementBinder
             return BindErrorStatement();
         }
 
+        // Issue #3501 A3: the top frame may be a switch (C#/Go alignment —
+        // an unlabeled `break` in a switch arm exits the switch, not the
+        // enclosing loop). Record the target so the switch appends its
+        // break-label statement only when actually jumped to.
         var breakLabel = binderCtx.LoopStack.Peek().BreakLabel;
+        binderCtx.UsedBreakLabels.Add(breakLabel);
         return new BoundGotoStatement(syntax, breakLabel);
+    }
+
+    /// <summary>
+    /// Issue #3501 A3: binds a <c>fallthrough</c> statement (Go semantics).
+    /// Legal only as the LAST statement of a non-final switch arm's body —
+    /// <c>BindSwitchStatement</c> arms the anchor/target context per arm —
+    /// and lowers to a goto targeting the next arm's body-entry label,
+    /// skipping that arm's pattern test and guard.
+    /// </summary>
+    private BoundStatement BindFallthroughStatement(FallthroughStatementSyntax syntax)
+    {
+        if (!ReferenceEquals(syntax, binderCtx.CurrentFallthroughAnchor))
+        {
+            Diagnostics.ReportFallthroughNotSupported(syntax.Keyword.Location);
+            return BindErrorStatement();
+        }
+
+        if (binderCtx.CurrentFallthroughTarget is not { } target)
+        {
+            // Well-placed, but this is the switch's final arm — there is no
+            // next body to fall into.
+            Diagnostics.ReportFallthroughInFinalArm(syntax.Keyword.Location);
+            return BindErrorStatement();
+        }
+
+        return new BoundGotoStatement(syntax, target);
     }
 
     private BoundStatement BindContinueStatement(ContinueStatementSyntax syntax)
@@ -297,9 +328,9 @@ internal sealed partial class StatementBinder
             var name = syntax.LabelIdentifier.Text;
             foreach (var frame in binderCtx.LoopStack)
             {
-                if (frame.LabelName == name)
+                if (frame.LabelName == name && frame.ContinueLabel is { } labeledContinue)
                 {
-                    return new BoundGotoStatement(syntax, frame.ContinueLabel);
+                    return new BoundGotoStatement(syntax, labeledContinue);
                 }
             }
 
@@ -307,8 +338,18 @@ internal sealed partial class StatementBinder
             return BindErrorStatement();
         }
 
-        var continueLabel = binderCtx.LoopStack.Peek().ContinueLabel;
-        return new BoundGotoStatement(syntax, continueLabel);
+        // Issue #3501 A3: skip switch frames (null ContinueLabel) — `continue`
+        // inside a switch arm still targets the enclosing loop, as in C#/Go.
+        foreach (var frame in binderCtx.LoopStack)
+        {
+            if (frame.ContinueLabel is { } continueLabel)
+            {
+                return new BoundGotoStatement(syntax, continueLabel);
+            }
+        }
+
+        Diagnostics.ReportInvalidBreakOrContinue(syntax.Keyword.Location, syntax.Keyword.Text);
+        return BindErrorStatement();
     }
 
     private BoundStatement BindReturnStatement(ReturnStatementSyntax syntax)

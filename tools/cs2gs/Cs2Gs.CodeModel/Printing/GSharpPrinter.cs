@@ -1344,6 +1344,9 @@ public static class GSharpPrinter
             case ContinueStatement:
                 return $"{pad}continue";
 
+            case FallthroughStatement:
+                return $"{pad}fallthrough";
+
             case GotoStatement gotoStatement:
                 return $"{pad}goto {gotoStatement.Label}";
 
@@ -1389,7 +1392,12 @@ public static class GSharpPrinter
             }
             else
             {
-                head = $"case {RenderPattern(arm.Pattern, indent + 1)}";
+                // Issue #3501 A3: a merged multi-label arm renders as the
+                // Go-style comma list `case 1, 2, 3`.
+                string patterns = string.Join(
+                    ", ",
+                    new[] { arm.Pattern }.Concat(arm.AdditionalPatterns).Select(p => RenderPattern(p, indent + 1)));
+                head = $"case {patterns}";
             }
 
             sb.Append($"{head} {RenderBlock(arm.Body, indent + 1)}");

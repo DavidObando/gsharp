@@ -45,8 +45,46 @@ internal sealed partial class StatementBinder
         Dictionary<AccessPath, TypeSymbol>? mergedExitFrame = null;
         var mergeFailed = false;
 
-        foreach (var caseSyntax in syntax.Cases)
+        // Issue #3501 A3: (a) an unlabeled `break` inside an arm exits the
+        // switch — push a LoopStack frame whose ContinueLabel is null so
+        // `continue` still binds to the enclosing loop; (b) an arm whose
+        // body ENDS in `fallthrough` jumps to the NEXT arm's body-entry
+        // label, skipping that arm's pattern test and guard (Go semantics).
+        binderCtx.LabelCounter++;
+        var switchOrdinal = binderCtx.LabelCounter;
+        var switchBreakLabel = new BoundLabel($"switchBreak{switchOrdinal}");
+        var armEntryLabels = new BoundLabel?[syntax.Cases.Length];
+        var savedFallthroughTarget = binderCtx.CurrentFallthroughTarget;
+        var savedFallthroughAnchor = binderCtx.CurrentFallthroughAnchor;
+        binderCtx.LoopStack.Push((null, switchBreakLabel, null));
+        try
         {
+        for (var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++)
+        {
+            var caseSyntax = syntax.Cases[caseIndex];
+
+            // Issue #3501 A3: arm the fallthrough context for this arm. The
+            // one legal position is the body's last statement; a trailing
+            // fallthrough in a non-final arm targets the next arm's entry
+            // label (created on demand, prepended when that arm binds).
+            var trailingStatement = caseSyntax.Body.Statements.Length > 0
+                ? caseSyntax.Body.Statements[caseSyntax.Body.Statements.Length - 1]
+                : null;
+            var endsInFallthrough = trailingStatement is FallthroughStatementSyntax;
+            binderCtx.CurrentFallthroughAnchor = endsInFallthrough ? trailingStatement : null;
+            binderCtx.CurrentFallthroughTarget = null;
+            if (endsInFallthrough && caseIndex < syntax.Cases.Length - 1)
+            {
+                var nextArmEntry = armEntryLabels[caseIndex + 1];
+                if (nextArmEntry == null)
+                {
+                    nextArmEntry = new BoundLabel($"switchArm{switchOrdinal}_{caseIndex + 1}");
+                    armEntryLabels[caseIndex + 1] = nextArmEntry;
+                }
+
+                binderCtx.CurrentFallthroughTarget = nextArmEntry;
+            }
+
             if (caseSyntax.IsDefault)
             {
                 if (hasDefault)
@@ -56,6 +94,7 @@ internal sealed partial class StatementBinder
 
                 hasDefault = true;
                 var defaultBody = BindBlockStatement(caseSyntax.Body);
+                defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex]);
                 arms.Add(new BoundPatternSwitchArm(null, pattern: null, guard: null, defaultBody));
 
                 if (!EndsInUnconditionalExit(defaultBody))
@@ -73,6 +112,18 @@ internal sealed partial class StatementBinder
             scope = new BoundScope(scope);
             var caseValue = Invariant.Required(caseSyntax.Value, "a non-default switch case has a pattern value");
             var pattern = patterns.BindPattern(caseValue, switchType);
+
+            // Issue #3501 A3: a fallthrough INTO this arm skips its pattern
+            // test — pattern bindings and guards would run unassigned/
+            // unevaluated, so such targets are rejected. Pattern-declared
+            // variables live in the arm scope just pushed above.
+            if (armEntryLabels[caseIndex] != null
+                && (scope.GetDeclaredVariables().Length > 0 || caseSyntax.Guard != null))
+            {
+                var previousCase = syntax.Cases[caseIndex - 1];
+                var fallthroughKeyword = previousCase.Body.Statements[previousCase.Body.Statements.Length - 1];
+                Diagnostics.ReportFallthroughTargetHasBindings(fallthroughKeyword.Location);
+            }
 
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so a guarded discard `case _ when …` does NOT act as a
@@ -111,6 +162,7 @@ internal sealed partial class StatementBinder
                 });
 
             scope = scope.Pop();
+            body = PrependArmEntryLabel(body, armEntryLabels[caseIndex]);
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
 
             // Issue #991: a guarded arm may not actually run even when its
@@ -167,6 +219,13 @@ internal sealed partial class StatementBinder
                 mergedExitFrame = next;
             }
         }
+        }
+        finally
+        {
+            binderCtx.LoopStack.Pop();
+            binderCtx.CurrentFallthroughTarget = savedFallthroughTarget;
+            binderCtx.CurrentFallthroughAnchor = savedFallthroughAnchor;
+        }
 
         var boundArms = arms.ToImmutable();
         var isExhaustive = ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
@@ -191,7 +250,36 @@ internal sealed partial class StatementBinder
             binderCtx.PendingSwitchExitFrames[result] = mergedExitFrame;
         }
 
+        // Issue #3501 A3: when an arm actually used `break`, its goto targets
+        // the statement position right after the switch — append the label
+        // there. Switches with no arm-level break keep their bare shape (so
+        // exhaustive all-arms-return switches still read as unconditional
+        // exits to the all-paths-return check).
+        if (binderCtx.UsedBreakLabels.Contains(switchBreakLabel))
+        {
+            return new BoundBlockStatement(
+                syntax,
+                ImmutableArray.Create<BoundStatement>(result, new BoundLabelStatement(null, switchBreakLabel)));
+        }
+
         return result;
+    }
+
+    /// <summary>
+    /// Issue #3501 A3: prepends the arm's body-entry label — the target a
+    /// <c>fallthrough</c> in the PREVIOUS arm jumps to — when one was
+    /// requested; returns the body unchanged otherwise.
+    /// </summary>
+    private static BoundStatement PrependArmEntryLabel(BoundStatement body, BoundLabel? entryLabel)
+    {
+        if (entryLabel == null)
+        {
+            return body;
+        }
+
+        return new BoundBlockStatement(
+            body.Syntax,
+            ImmutableArray.Create<BoundStatement>(new BoundLabelStatement(null, entryLabel), body));
     }
 
     /// <summary>
@@ -714,6 +802,15 @@ internal sealed partial class StatementBinder
 
         var bound = ImmutableArray.CreateBuilder<BoundSelectCase>();
         var sawDefault = false;
+
+        // Issue #3501 A3: Go alignment — an unlabeled `break` inside a select
+        // arm exits the SELECT (same frame shape as switch: null ContinueLabel
+        // keeps `continue` bound to the enclosing loop).
+        binderCtx.LabelCounter++;
+        var selectBreakLabel = new BoundLabel($"selectBreak{binderCtx.LabelCounter}");
+        binderCtx.LoopStack.Push((null, selectBreakLabel, null));
+        try
+        {
         foreach (var caseSyntax in syntax.Cases)
         {
             if (caseSyntax.CaseKind == SelectCaseKind.Default)
@@ -799,8 +896,21 @@ internal sealed partial class StatementBinder
 
             bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
         }
+        }
+        finally
+        {
+            binderCtx.LoopStack.Pop();
+        }
 
-        return new BoundSelectStatement(syntax, bound.ToImmutable());
+        var selectResult = new BoundSelectStatement(syntax, bound.ToImmutable());
+        if (binderCtx.UsedBreakLabels.Contains(selectBreakLabel))
+        {
+            return new BoundBlockStatement(
+                syntax,
+                ImmutableArray.Create<BoundStatement>(selectResult, new BoundLabelStatement(null, selectBreakLabel)));
+        }
+
+        return selectResult;
     }
 
     private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)

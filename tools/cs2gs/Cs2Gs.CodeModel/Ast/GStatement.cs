@@ -704,6 +704,14 @@ public sealed class SwitchStatementCase : GNode
     /// <summary>Gets the arm pattern, or <see langword="null"/> for the <c>default</c> arm.</summary>
     public GPattern Pattern { get; }
 
+    /// <summary>
+    /// Gets or sets the additional comma-joined patterns of a Go-style
+    /// multi-pattern arm (issue #3501 A3: <c>case 1, 2, 3 { … }</c>).
+    /// Empty for a single-pattern arm. Only meaningful when
+    /// <see cref="Pattern"/> is non-null.
+    /// </summary>
+    public IReadOnlyList<GPattern> AdditionalPatterns { get; set; } = System.Array.Empty<GPattern>();
+
     /// <summary>Gets the arm body block.</summary>
     public BlockStatement Body { get; }
 
@@ -774,6 +782,16 @@ public sealed class BreakStatement : GStatement
 /// <c>continue;</c> directly.
 /// </summary>
 public sealed class ContinueStatement : GStatement
+{
+}
+
+/// <summary>
+/// A <c>fallthrough</c> statement (issue #3501 A3, Go semantics): legal
+/// only as the last statement of a non-final <c>switch</c> arm; transfers
+/// into the next arm's body without evaluating its pattern. The canonical
+/// translation of an adjacent-target C# <c>goto case</c>/<c>goto default</c>.
+/// </summary>
+public sealed class FallthroughStatement : GStatement
 {
 }
 

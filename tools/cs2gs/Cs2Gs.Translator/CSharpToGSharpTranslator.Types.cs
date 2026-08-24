@@ -852,22 +852,19 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression subject = this.TranslateExpression(node.Expression);
             var cases = new List<SwitchStatementCase>();
 
-            // Issue #2462: a non-terminal break still has observable control
-            // flow after C# switch terminators are removed. Lower it to a jump
-            // past the translated switch and emit that target only when needed.
-            bool needsExitLabel = node.DescendantNodes()
-                .OfType<BreakStatementSyntax>()
-                .Any(b => GetBreakTarget(b) == node && !IsRedundantSwitchSectionBreak(b));
-
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its
             // own labels) needs a synthesized label at the top of the arm it
             // targets, so the goto can be lowered to a plain `goto`.
+            // Issue #3501 A3: gotos that qualify as adjacent fallthroughs
+            // print as the native `fallthrough` statement and need no
+            // synthesized arm-top label.
             var gotoTargets = new HashSet<SwitchLabelSyntax>(
                 node.DescendantNodes()
                     .OfType<GotoStatementSyntax>()
                     .Where(g => (g.Kind() == SyntaxKind.GotoCaseStatement || g.Kind() == SyntaxKind.GotoDefaultStatement)
-                             && g.Ancestors().OfType<SwitchStatementSyntax>().First() == node)
+                             && g.Ancestors().OfType<SwitchStatementSyntax>().First() == node
+                             && !this.IsAdjacentFallthroughGoto(g))
                     .Select(this.ResolveGotoCaseOrDefaultTarget)
                     .Where(target => target != null));
 
@@ -880,6 +877,30 @@ public sealed partial class CSharpToGSharpTranslator
                 // label's bindings (issue #1730) must be installed before the body
                 // is translated, and bindings can differ across stacked labels.
                 var labels = section.Labels.ToList();
+
+                // Issue #3501 A3: a section stacking multiple CONSTANT labels
+                // becomes ONE Go-style comma arm (`case 1, 2 { … }`) with the
+                // body translated once, instead of duplicating the body per
+                // label. Pattern labels keep the per-label form (their
+                // bindings can differ), and goto-targeted labels keep their
+                // own arms so `goto case K` still has a distinct target.
+                if (labels.Count > 1
+                    && labels.All(l => l is CaseSwitchLabelSyntax)
+                    && !labels.Any(gotoTargets.Contains))
+                {
+                    var constantLabels = labels.Cast<CaseSwitchLabelSyntax>().ToList();
+                    var mergedArm = new SwitchStatementCase(
+                        new ConstantPattern(this.TranslateExpression(constantLabels[0].Value)),
+                        this.TranslateSwitchSectionBody(section))
+                    {
+                        AdditionalPatterns = constantLabels
+                            .Skip(1)
+                            .Select(l => (GPattern)new ConstantPattern(this.TranslateExpression(l.Value)))
+                            .ToList(),
+                    };
+                    cases.Add(mergedArm);
+                    continue;
+                }
 
                 foreach (SwitchLabelSyntax label in labels)
                 {
@@ -994,12 +1015,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             yield return new SwitchStatement(subject, cases);
-            if (needsExitLabel)
-            {
-                yield return new LabeledStatement(
-                    this.SwitchExitLabelName(node),
-                    new BlockStatement(new List<GStatement>()));
-            }
         }
 
         private bool RequiresEnumStatementFallback(SwitchStatementSyntax node)
@@ -1104,14 +1119,18 @@ public sealed partial class CSharpToGSharpTranslator
         private IEnumerable<GStatement> TranslateBreakStatement(BreakStatementSyntax node)
         {
             SyntaxNode target = GetBreakTarget(node);
-            if (target is SwitchStatementSyntax targetSwitch)
+            if (target is SwitchStatementSyntax)
             {
                 if (IsRedundantSwitchSectionBreak(node))
                 {
                     return System.Array.Empty<GStatement>();
                 }
 
-                return new[] { (GStatement)new GotoStatement(this.SwitchExitLabelName(targetSwitch)) };
+                // Issue #3501 A3: gsc `break` now exits the enclosing switch
+                // (C#/Go alignment), so a non-terminal C# switch break keeps
+                // its spelling — no `goto __switchExit` lowering, no trailing
+                // exit label.
+                return new[] { (GStatement)new BreakStatement() };
             }
 
             return new[] { (GStatement)new BreakStatement() };
@@ -1183,9 +1202,6 @@ public sealed partial class CSharpToGSharpTranslator
             this.state.SyntheticLabelNames[node] = name;
             return name;
         }
-
-        private string SwitchExitLabelName(SwitchStatementSyntax node)
-            => this.SyntheticLabelName("switchExit", node);
 
         private IEnumerable<GStatement> TranslateYieldStatement(YieldStatementSyntax node)
         {

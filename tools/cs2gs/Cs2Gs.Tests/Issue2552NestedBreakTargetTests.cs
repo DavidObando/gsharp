@@ -139,8 +139,12 @@ namespace Demo
     {
         string printed = TranslateAndValidate(Source);
 
-        Assert.Equal(2, CountOccurrences(printed, "break"));
-        Assert.Equal(2, CountOccurrences(printed, "goto __switchExit"));
+        // Issue #3501 A3: gsc `break` exits the innermost switch OR loop
+        // (C#/Go alignment), so the switch-targeting breaks keep their
+        // spelling — the `goto __switchExit` lowering is retired. Two loop
+        // breaks + two switch breaks.
+        Assert.Equal(4, CountOccurrences(printed, "break"));
+        Assert.Equal(0, CountOccurrences(printed, "goto __switchExit"));
     }
 
     [Fact]

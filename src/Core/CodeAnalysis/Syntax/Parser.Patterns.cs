@@ -61,6 +61,18 @@ public partial class Parser
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
         var value = ParsePattern(PatternParseContext.SwitchStatement);
+
+        // Issue #3501 A3: Go-style comma multi-pattern arms — `case 1, 2 { … }`.
+        // Each comma folds into the same disjunction node the `or` combinator
+        // produces (BindBinaryPattern treats any non-`and` operator as `or`),
+        // so downstream binding/emit need no changes.
+        while (Current.Kind == SyntaxKind.CommaToken)
+        {
+            var comma = NextToken();
+            var next = ParsePattern(PatternParseContext.SwitchStatement);
+            value = new BinaryPatternSyntax(syntaxTree, value, comma, next);
+        }
+
         var (whenKeyword, guard) = ParseOptionalWhenGuard(bodyFollows: true);
         var caseBody = ParseBlockStatement();
         return new SwitchCaseSyntax(syntaxTree, caseKeyword, value, whenKeyword, guard, caseBody);
@@ -639,11 +651,11 @@ public partial class Parser
 
     private StatementSyntax ParseFallthroughStatement()
     {
-        // ADR-0013: `fallthrough` is reserved but unsupported. Consume the token and
-        // emit a diagnostic so user code surfaces a clear error.
+        // Issue #3501 A3: `fallthrough` is now a real statement (Go
+        // semantics). The binder enforces placement — last statement of a
+        // non-final switch arm — and reports misuse.
         var keyword = MatchToken(SyntaxKind.FallthroughKeyword);
-        Diagnostics.ReportFallthroughNotSupported(keyword.Location);
-        return new ExpressionStatementSyntax(syntaxTree, new LiteralExpressionSyntax(syntaxTree, keyword, value: 0));
+        return new FallthroughStatementSyntax(syntaxTree, keyword);
     }
 
     private StatementSyntax ParseTryStatement()
