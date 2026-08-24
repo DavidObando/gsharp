@@ -71,7 +71,7 @@ func (self T?) Map[T class, U class](f (T) -> U) U? {
         return nil
     }
 
-    return f(self!!)
+    return f(self)
 }
 
 /// Projects the value of a present value-typed optional through `f`.
@@ -144,7 +144,7 @@ func (self T?) FlatMap[T class, U class](f (T) -> U?) U? {
         return nil
     }
 
-    return f(self!!)
+    return f(self)
 }
 
 /// Projects the value of a present value-typed optional through an
@@ -268,7 +268,7 @@ func (self T?) OrCompute[T class](defaultFactory () -> T) T {
         return defaultFactory()
     }
 
-    return self!!
+    return self
 }
 
 /// Returns the present value-typed value, or the result of invoking
@@ -328,7 +328,7 @@ func (self T?) OrThrow[T class](message string) T {
         throw InvalidOperationException(message)
     }
 
-    return self!!
+    return self
 }
 
 /// Unwraps a present value-typed optional, or throws an
@@ -382,7 +382,7 @@ func (self T?) IfPresent[T class](action (T) -> void) {
     }
 
     if self != nil {
-        action(self!!)
+        action(self)
     }
 }
 
@@ -443,7 +443,7 @@ func (self T?) Filter[T class](predicate (T) -> bool) T? {
         return nil
     }
 
-    if predicate(self!!) {
+    if predicate(self) {
         return self
     }
 

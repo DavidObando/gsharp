@@ -312,6 +312,11 @@ public sealed partial class DiagnosticBag
     public void ReportFallthroughTargetHasBindings(TextLocation location)
     => Report(location, DiagnosticDescriptors.FallthroughTargetHasBindings);
 
+    /// <summary>Reports a redundant <c>!!</c> whose operand is already non-nullable (issue #3501 noise reduction).</summary>
+    /// <param name="location">The text location of the <c>!!</c> operator token.</param>
+    public void ReportRedundantNullAssertion(TextLocation location)
+    => Report(location, DiagnosticDescriptors.RedundantNullAssertion);
+
     /// <summary>
     /// Reports a duplicate <c>default</c> arm in a switch statement.
     /// </summary>

@@ -814,6 +814,18 @@ without evaluating its pattern or guard. GS0168 (above) reports a misplaced
 | GS0533 | Error | `'fallthrough' cannot be used in the final arm of a 'switch' statement.` | `switch x { case 1 { fallthrough } }` |
 | GS0534 | Error | `'fallthrough' cannot target a 'switch' arm whose pattern declares bindings or that has a 'when' guard — the jump would skip their assignment.` | `case 1 { fallthrough } case string s { ... }` |
 
+## Redundant null assertion (GS0536)
+
+Issue #3501 (`!!` noise reduction): a user-written `!!` whose operand is
+already non-nullable — statically, or through ADR-0069 smart-cast narrowing
+— performs no useful work. The warning marks exactly the operator token so
+the assertion can be deleted; cs2gs's migrate pipeline consumes it to strip
+redundant assertions from translated output automatically.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0536 | Warning | `Redundant '!!': the value is already non-null here.` | `if s != nil { return s!! }` |
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 ADR-0166: a designation in a boolean `is`

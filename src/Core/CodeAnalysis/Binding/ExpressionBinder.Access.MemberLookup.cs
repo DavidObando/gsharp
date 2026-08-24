@@ -101,6 +101,7 @@ internal sealed partial class ExpressionBinder
                     return assertedOperand;
                 }
 
+                ReportNullAssertionIfRedundant(unary.OperatorToken, assertedOperand);
                 var assertionOperator = BoundUnaryOperator.Bind(
                     unary.OperatorToken.Kind,
                     assertedOperand.Type);

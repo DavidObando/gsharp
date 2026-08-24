@@ -67,6 +67,7 @@ internal sealed partial class ExpressionBinder
                 Invariant.Required(promotedUnaryType, "a promoted char operand has a target type"));
         }
 
+        ReportNullAssertionIfRedundant(syntax.OperatorToken, boundOperand);
         var boundOperator = BoundUnaryOperator.Bind(syntax.OperatorToken.Kind, boundOperand.Type);
 
         if (boundOperator == null)
@@ -132,6 +133,27 @@ internal sealed partial class ExpressionBinder
         // than Negation (and Negation over float/double/decimal, which never
         // overflows) simply ignores it downstream.
         return new BoundUnaryExpression(null, boundOperator, boundOperand, binderCtx.IsCheckedContext);
+    }
+
+    /// <summary>
+    /// Issue #3501 (!! reduction): reports GS0536 when a user-written
+    /// <c>!!</c> asserts a value whose bound type — narrowing included, since
+    /// reads come back with their narrowed type — is already non-nullable.
+    /// The assertion is then a no-op the author (or cs2gs's polish pass,
+    /// which strips exactly these spans) can drop. Shared by every syntax
+    /// path that binds a user <c>!!</c>.
+    /// </summary>
+    /// <param name="operatorToken">The <c>!!</c> operator token.</param>
+    /// <param name="operand">The bound operand.</param>
+    private void ReportNullAssertionIfRedundant(SyntaxToken operatorToken, BoundExpression operand)
+    {
+        if (operatorToken.Kind == SyntaxKind.BangBangToken
+            && operand.Type is not null
+            && operand.Type != TypeSymbol.Error
+            && operand.Type is not NullableTypeSymbol)
+        {
+            Diagnostics.ReportRedundantNullAssertion(operatorToken.Location);
+        }
     }
 
     /// <summary>ADR-0039: Binds <c>&amp;expr</c> — takes managed pointer to an lvalue.</summary>

@@ -49,7 +49,7 @@ public sealed class CompileStage : IMigrationStage
         if (context.Options.CompileViaSdk)
         {
             var runner = new SdkCompileRunner();
-            SdkCompileResult sdkResult =
+            SdkCompileResult RunSdkCompile() =>
                 context.Options.OutputLayout == MigrationOutputLayout.Repository
                     ? runner.CompileMirroredProject(
                         context.App.ProjectPath,
@@ -73,6 +73,38 @@ public sealed class CompileStage : IMigrationStage
                         context.Options.GeneratedProjectPaths,
                         context.UsesCentralPackageManagement,
                         assemblyName: context.AssemblyName);
+
+            SdkCompileResult sdkResult = RunSdkCompile();
+
+            // Issue #3501 (!! reduction): gsc reports GS0536 on every `!!`
+            // whose operand is already non-null — the compiler's own
+            // narrowing is the single source of truth. Strip exactly those
+            // spans from the emitted files and recompile once so the shipped
+            // output carries no redundant assertions. Defensive: if the
+            // polished recompile somehow regresses a previously passing
+            // build, restore the original text and keep the first result.
+            if (sdkResult.IsAvailable
+                && sdkResult.Diagnostics.Any(d => d.Id == NullAssertionPolishPass.DiagnosticId))
+            {
+                Dictionary<string, string> backups = gsFiles
+                    .Where(File.Exists)
+                    .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
+                if (NullAssertionPolishPass.Strip(sdkResult.Diagnostics, gsFiles) > 0)
+                {
+                    SdkCompileResult polished = RunSdkCompile();
+                    if (polished.IsAvailable && (polished.Succeeded || !sdkResult.Succeeded))
+                    {
+                        sdkResult = polished;
+                    }
+                    else
+                    {
+                        foreach (KeyValuePair<string, string> backup in backups)
+                        {
+                            File.WriteAllText(backup.Key, backup.Value);
+                        }
+                    }
+                }
+            }
 
             if (sdkResult.IsAvailable)
             {

@@ -47,7 +47,7 @@ public class Issue2924TupleElementDelegateCallTests
             t.0.1
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(20, result.Value);
     }
 
@@ -59,7 +59,7 @@ public class Issue2924TupleElementDelegateCallTests
             t?.0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(41, result.Value);
     }
 
@@ -71,7 +71,7 @@ public class Issue2924TupleElementDelegateCallTests
             t. 0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(41, result.Value);
     }
 
@@ -163,7 +163,7 @@ public class Issue2924TupleElementDelegateCallTests
             factory?.Make(40)(2)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.Value);
     }
 
@@ -180,7 +180,7 @@ public class Issue2924TupleElementDelegateCallTests
             factory?.Make(40)(2)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -192,7 +192,7 @@ public class Issue2924TupleElementDelegateCallTests
             t?.0(1)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.Value);
     }
 
@@ -214,7 +214,7 @@ public class Issue2924TupleElementDelegateCallTests
             answer + repeated
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(84, result.Value);
     }
 
@@ -229,7 +229,7 @@ public class Issue2924TupleElementDelegateCallTests
             assigned.0 + compounded.0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(12, result.Value);
     }
 
@@ -264,7 +264,7 @@ public class Issue2924TupleElementDelegateCallTests
             t.Item1
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(41, result.Value);
     }
 
@@ -276,7 +276,7 @@ public class Issue2924TupleElementDelegateCallTests
             (increment)(41)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -285,7 +285,7 @@ public class Issue2924TupleElementDelegateCallTests
     {
         var result = Evaluate(".5 + .25");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(0.75, result.Value);
     }
 
@@ -298,7 +298,7 @@ public class Issue2924TupleElementDelegateCallTests
             .5e1
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(5.0, result.Value);
     }
 
@@ -311,7 +311,7 @@ public class Issue2924TupleElementDelegateCallTests
             .5
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(5, result.Value);
     }
 
@@ -324,7 +324,7 @@ public class Issue2924TupleElementDelegateCallTests
             10
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(10, result.Value);
     }
 

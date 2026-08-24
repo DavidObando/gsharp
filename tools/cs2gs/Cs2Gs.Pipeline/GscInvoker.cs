@@ -220,7 +220,9 @@ public sealed class GscInvoker
                 match.Groups["sev"].Value,
                 match.Groups["file"].Value.Trim(),
                 int.Parse(match.Groups["line"].Value),
-                int.Parse(match.Groups["col"].Value)));
+                int.Parse(match.Groups["col"].Value),
+                int.Parse(match.Groups["eline"].Value),
+                int.Parse(match.Groups["ecol"].Value)));
         }
 
         return diagnostics;
@@ -272,6 +274,24 @@ public sealed class GscDiagnostic
     /// <param name="line">The 1-based line.</param>
     /// <param name="column">The 1-based column.</param>
     public GscDiagnostic(string id, string message, string severity, string file, int line, int column)
+        : this(id, message, severity, file, line, column, line, column)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="GscDiagnostic"/> class
+    /// with an explicit end position (issue #3501 polish pass — the
+    /// GS0536 strip needs the exact span of the `!!` token).
+    /// </summary>
+    /// <param name="id">The diagnostic id (e.g. <c>GS0001</c>).</param>
+    /// <param name="message">The diagnostic message.</param>
+    /// <param name="severity">The severity (<c>error</c>/<c>warning</c>/<c>info</c>).</param>
+    /// <param name="file">The G# source file the diagnostic anchors to.</param>
+    /// <param name="line">The 1-based start line.</param>
+    /// <param name="column">The 1-based start column.</param>
+    /// <param name="endLine">The 1-based end line.</param>
+    /// <param name="endColumn">The 1-based end column (exclusive).</param>
+    public GscDiagnostic(string id, string message, string severity, string file, int line, int column, int endLine, int endColumn)
     {
         this.Id = id;
         this.Message = message;
@@ -279,6 +299,8 @@ public sealed class GscDiagnostic
         this.File = file;
         this.Line = line;
         this.Column = column;
+        this.EndLine = endLine;
+        this.EndColumn = endColumn;
     }
 
     /// <summary>Gets the diagnostic id.</summary>
@@ -298,6 +320,12 @@ public sealed class GscDiagnostic
 
     /// <summary>Gets the 1-based column.</summary>
     public int Column { get; }
+
+    /// <summary>Gets the 1-based end line (issue #3501 polish pass).</summary>
+    public int EndLine { get; }
+
+    /// <summary>Gets the 1-based end column, exclusive (issue #3501 polish pass).</summary>
+    public int EndColumn { get; }
 
     /// <summary>Gets a value indicating whether this is an error-severity diagnostic.</summary>
     public bool IsError => string.Equals(this.Severity, "error", StringComparison.OrdinalIgnoreCase);
