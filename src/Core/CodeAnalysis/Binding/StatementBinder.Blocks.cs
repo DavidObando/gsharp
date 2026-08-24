@@ -72,9 +72,18 @@ internal sealed partial class StatementBinder
                 : null;
             var endsInFallthrough = trailingStatement is FallthroughStatementSyntax;
             binderCtx.CurrentFallthroughAnchor = endsInFallthrough ? trailingStatement : null;
-            binderCtx.CurrentFallthroughTarget = endsInFallthrough && caseIndex < syntax.Cases.Length - 1
-                ? armEntryLabels[caseIndex + 1] ??= new BoundLabel($"switchArm{switchOrdinal}_{caseIndex + 1}")
-                : null;
+            binderCtx.CurrentFallthroughTarget = null;
+            if (endsInFallthrough && caseIndex < syntax.Cases.Length - 1)
+            {
+                var nextArmEntry = armEntryLabels[caseIndex + 1];
+                if (nextArmEntry == null)
+                {
+                    nextArmEntry = new BoundLabel($"switchArm{switchOrdinal}_{caseIndex + 1}");
+                    armEntryLabels[caseIndex + 1] = nextArmEntry;
+                }
+
+                binderCtx.CurrentFallthroughTarget = nextArmEntry;
+            }
 
             if (caseSyntax.IsDefault)
             {
