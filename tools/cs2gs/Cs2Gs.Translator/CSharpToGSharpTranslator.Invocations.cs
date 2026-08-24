@@ -1528,17 +1528,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Issue #3501 A5: variance-direct emission is safe only when the
-            // CALLEE is imported CLR — its delegate slots are real CLR
-            // delegate types, where gsc creates variant method-group
-            // delegates correctly (proven end-to-end). A source-defined
-            // callee's slot translates to a NATIVE function type, whose
-            // erased-delegate semantics do not support variant groups yet
-            // (gsc emits NotSupported or unsound IL) — those keep wrappers.
-            ISymbol targetMethod = argumentOperation.Parameter?.ContainingSymbol;
-            bool calleeIsImported = targetMethod != null
-                && targetMethod.DeclaringSyntaxReferences.IsDefaultOrEmpty;
-            isImplicitConversion = delegateCreation.IsImplicit && calleeIsImported;
+            // Issue #3505 (fixed): gsc now binds reference-variant method
+            // groups AT native function-type slots too (the resolved group is
+            // built at the target type, so emit is a plain target-typed
+            // ldftn+newobj), and rejects the unsound value-type variance C#
+            // never allowed either. Variance-direct emission is therefore
+            // safe for imported and source-defined callees alike; the A5
+            // imported-callee carve-out is retired.
+            isImplicitConversion = delegateCreation.IsImplicit;
 
             method = methodReference.Method;
             invoke = delegateType.DelegateInvokeMethod;

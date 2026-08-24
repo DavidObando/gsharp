@@ -1639,6 +1639,31 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// Issue #3505: true when <paramref name="from"/> implicitly converts to
+    /// <paramref name="to"/> AND both ends are reference-like — the only
+    /// variance a directly-created delegate can honor. Boxing, numeric
+    /// widening, and nullable lifts ride the general implicit lattice but
+    /// require a real coercion at the boundary, which neither CLR delegate
+    /// variance nor a target-typed <c>ldftn</c>+<c>newobj</c> binding can
+    /// perform.
+    /// </summary>
+    /// <param name="from">The value-producing side of the slot.</param>
+    /// <param name="to">The value-consuming side of the slot.</param>
+    /// <returns><see langword="true"/> for a strict implicit reference conversion.</returns>
+    internal static bool IsImplicitReferenceVariantSlot(TypeSymbol from, TypeSymbol to)
+    {
+        if (from == null || to == null
+            || from == TypeSymbol.Void || to == TypeSymbol.Void
+            || !IsReferenceLikeTarget(from) || !IsReferenceLikeTarget(to))
+        {
+            return false;
+        }
+
+        var conversion = ClassifyNonStructural(from, to);
+        return conversion.Exists && conversion.IsImplicit && !conversion.IsStructuralProjection;
+    }
+
+    /// <summary>
     /// True when <paramref name="type"/> is a reference-capable type for
     /// conversion purposes — a G# interface, a G# <c>class</c> (as opposed to
     /// a value-kind <c>struct</c>), a reference-constrained type parameter, or
@@ -2432,9 +2457,12 @@ public sealed class Conversion
         for (var i = 0; i < from.Arity; i++)
         {
             // Function parameters are contravariant: every value the target
-            // may supply must be accepted by the source callable.
-            var parameterConversion = ClassifyNonStructural(to.ParameterTypes[i], from.ParameterTypes[i]);
-            if (!parameterConversion.IsImplicit
+            // may supply must be accepted by the source callable. Issue #3505:
+            // the relaxation is restricted to REFERENCE conversions — CLR
+            // delegate variance cannot box, so a value-type difference (e.g.
+            // `(object) -> R` into an `(int32) -> R` slot) used to compile
+            // and then NRE at runtime. Value-typed slots must match exactly.
+            if (!IsImplicitReferenceVariantSlot(to.ParameterTypes[i], from.ParameterTypes[i])
                 && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     to.ParameterTypes[i],
                     from.ParameterTypes[i]))
