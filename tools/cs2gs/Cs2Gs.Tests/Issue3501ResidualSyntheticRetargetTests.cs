@@ -173,6 +173,62 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void GuardedNullableArrayElement_KeepsTheUserSuppression()
+    {
+        // C# flow proves `items[i]` non-null inside the guard, but G# never
+        // narrows an indexed read — dropping the user's `!` produced GS0154
+        // (the OverloadResolver.Constructors self-migration blocker).
+        string printed = Translate("""
+            #nullable enable
+            public class Node
+            {
+                public string Render() => "n";
+            }
+
+            public class C
+            {
+                private static Node Unwrap(Node value) => value;
+
+                public static string Run(Node?[] items, int i)
+                {
+                    var chosen = i < items.Length && items[i] != null
+                        ? Unwrap(items[i]!)
+                        : null;
+                    return chosen?.Render() ?? "none";
+                }
+            }
+            """);
+
+        Assert.Contains("Unwrap(items[i]!!)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void ObjectTypedMemberConstantPattern_KeepsTheIsForm()
+    {
+        // `token.Value is true` over `object?` has no `==` in G# (GS0129, the
+        // OverloadResolver.Candidates self-migration blocker); the constant
+        // pattern binds over object natively, so the `is` form stays.
+        string printed = Translate("""
+            #nullable enable
+            public class Token
+            {
+                public object? Value { get; init; }
+            }
+
+            public class C
+            {
+                public static bool IsLiteralTrue(object condition) =>
+                    condition is Token { Value: true };
+            }
+            """);
+
+        Assert.Contains("is true", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("== true", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

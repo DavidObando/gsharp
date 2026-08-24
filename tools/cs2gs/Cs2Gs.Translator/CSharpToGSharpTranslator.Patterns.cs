@@ -913,6 +913,17 @@ public sealed partial class CSharpToGSharpTranslator
                         "is",
                         new TypeExpression(this.MapTypeReferenceExpression(constant.Expression)));
 
+                case ConstantPatternSyntax constant
+                    when receiverType?.SpecialType == SpecialType.System_Object:
+                    // Issue #3501: an `object?`-typed receiver (`token.Value is
+                    // true`) has no `==` against the constant's type (GS0129),
+                    // but gsc binds the constant PATTERN over object natively —
+                    // keep the `is` form.
+                    return new BinaryExpression(
+                        receiver,
+                        "is",
+                        this.TranslateExpression(constant.Expression));
+
                 case ConstantPatternSyntax constant:
                     // `x is 0` / `x is "moov"` / `x is true`. G# `is` only tests a
                     // type, so a constant pattern lowers to an equality test
