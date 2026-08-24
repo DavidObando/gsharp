@@ -131,7 +131,7 @@ public class Issue2342PackageScopedTypeCollisionTests
     [InlineData("data struct Widget(X int32) { }")]
     [InlineData("enum Widget { Red, Green }")]
     [InlineData("interface Widget { func Do() int32 }")]
-    [InlineData("type Widget = delegate func() int32")]
+    [InlineData("delegate Widget() int32;")]
     public void EachSymbolKind_SameSimpleName_DifferentPackages_DoesNotCollide(string decl)
     {
         var scope = BindSource(

@@ -285,7 +285,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
         yield return new SourceCase(
             "Lambda",
             """
-            type TryDelegate = delegate func(out r int32) bool
+            delegate TryDelegate(out r int32) bool;
             func Outer() {
                 let tryIt TryDelegate = (out r int32) -> {
                     r = 11
@@ -294,7 +294,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
             }
             """,
             """
-            type TryDelegate = delegate func(out r int32) bool
+            delegate TryDelegate(out r int32) bool;
             func Outer() {
                 let tryIt TryDelegate = (out r int32) -> {
                     return true
@@ -375,7 +375,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
         yield return new SourceCase(
             "PropertyGetterLambda",
             """
-            type TryDelegate = delegate func(out r int32) bool
+            delegate TryDelegate(out r int32) bool;
             class Holder {
                 prop Value int32 {
                     get {
@@ -389,7 +389,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
             }
             """,
             """
-            type TryDelegate = delegate func(out r int32) bool
+            delegate TryDelegate(out r int32) bool;
             class Holder {
                 prop Value int32 {
                     get {
@@ -433,7 +433,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
         yield return new SourceCase(
             "DeinitializerLambda",
             """
-            type TryDelegate = delegate func(out r int32) bool
+            delegate TryDelegate(out r int32) bool;
             class Holder {
                 deinit {
                     let tryIt TryDelegate = (out r int32) -> {
@@ -444,7 +444,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
             }
             """,
             """
-            type TryDelegate = delegate func(out r int32) bool
+            delegate TryDelegate(out r int32) bool;
             class Holder {
                 deinit {
                     let tryIt TryDelegate = (out r int32) -> {
@@ -694,7 +694,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
         yield return new SourceCase(
             "CapturedRefArgument",
             """
-            type RefAction = delegate func()
+            delegate RefAction();
             class CapturedRefHolder {
                 shared {
                     func Touch(ref value int32) {
@@ -711,7 +711,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
             }
             """,
             """
-            type RefAction = delegate func()
+            delegate RefAction();
             class CapturedRefHolder {
                 shared {
                     func Touch(ref value int32) {
@@ -1006,7 +1006,7 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
         yield return new SourceCase(
             "IndirectDelegateCall",
             """
-            type TryDelegate = delegate func(value int32, out r int32) bool
+            delegate TryDelegate(value int32, out r int32) bool;
 
             class Holder {
                 shared {

@@ -22,10 +22,10 @@ public class Issue2457CrossFileDelegateTypeBindingTests
         package Demo
         import System.Collections.Generic
 
-        type Work[T ICancellation] = delegate func(
+        delegate Work[T ICancellation](
             cancellation ICancellation,
-            values List[ConfigurationTokenResult]) Dictionary[string, ConfigurationTokenResult]
-        internal type GetResult = delegate func() ConfigurationTokenResult
+            values List[ConfigurationTokenResult]) Dictionary[string, ConfigurationTokenResult];
+        internal delegate GetResult() ConfigurationTokenResult;
         """;
 
     private const string Types = """
@@ -59,7 +59,7 @@ public class Issue2457CrossFileDelegateTypeBindingTests
             import Shared
             import System.Collections.Generic
 
-            type Convert[T IConstraint] = delegate func(value Result) List[Result]
+            delegate Convert[T IConstraint](value Result) List[Result];
             """;
 
         AssertNoErrors(new[] { consumer, shared });
@@ -71,7 +71,7 @@ public class Issue2457CrossFileDelegateTypeBindingTests
         const string consumer = """
             package Demo
 
-            internal type Read = delegate func(value Hidden) Hidden
+            internal delegate Read(value Hidden) Hidden;
             """;
         const string hidden = """
             package Demo
@@ -99,7 +99,7 @@ public class Issue2457CrossFileDelegateTypeBindingTests
             package Consumer
             import Left
 
-            type Read = delegate func() Result
+            delegate Read() Result;
             """;
         const string unrelated = """
             package Unrelated
@@ -117,7 +117,7 @@ public class Issue2457CrossFileDelegateTypeBindingTests
         const string source = """
             package Demo
 
-            type Read = delegate func(value Missing) Missing
+            delegate Read(value Missing) Missing;
             """;
 
         var errors = Errors(new[] { source }).ToArray();
@@ -143,7 +143,7 @@ public class Issue2457CrossFileDelegateTypeBindingTests
             import Left
             import Right
 
-            type Read = delegate func() Result
+            delegate Read() Result;
             """;
 
         var errors = Errors(new[] { left, right, consumer }).ToArray();

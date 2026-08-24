@@ -202,7 +202,7 @@ public sealed class EnumDeclaration : GMember
 }
 
 /// <summary>
-/// A named delegate declaration <c>type Name = delegate func(params) R</c>
+/// A named delegate declaration <c>delegate Name(params) R</c>;
 /// (ADR-0059, ADR-0115 §B.8) — the one place the <c>func</c> keyword stays in a
 /// type position.
 /// </summary>
@@ -218,7 +218,7 @@ public sealed class NamedDelegateDeclaration : GMember
     /// <param name="attributes">The delegate attributes.</param>
     /// <param name="typeParameters">
     /// The generic type parameters (issue #1960, ADR-0059 "Follow-up work" —
-    /// generic delegate aliases <c>type Predicate[T any] = delegate func(value T) bool</c>
+    /// generic delegate aliases <c>delegate Predicate[T any](value T) bool</c>;
     /// are supported by gsc; a null/empty list is a non-generic delegate.
     /// </param>
     public NamedDelegateDeclaration(

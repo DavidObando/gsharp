@@ -167,7 +167,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             package Test
             import System
 
-            type Reducer = delegate func(a int32, b int32) int32
+            delegate Reducer(a int32, b int32) int32;
 
             func Apply(seed int32, f Reducer) int32 {
                 if f == nil {

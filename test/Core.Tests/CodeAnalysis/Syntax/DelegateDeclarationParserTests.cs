@@ -16,7 +16,7 @@ public class DelegateDeclarationParserTests
     [Fact]
     public void ParsesVoidDelegate()
     {
-        const string source = "package P\ntype Greeter = delegate func(name string)\n";
+        const string source = "package P\ndelegate Greeter(name string);\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 
@@ -30,7 +30,7 @@ public class DelegateDeclarationParserTests
     [Fact]
     public void ParsesValueReturningDelegate()
     {
-        const string source = "package P\ntype Combine = delegate func(a int32, b int32) int32\n";
+        const string source = "package P\ndelegate Combine(a int32, b int32) int32;\n";
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);
 

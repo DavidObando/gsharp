@@ -1,6 +1,6 @@
-# ADR-0059: Named delegate types — `type Name = delegate func(...)`
+# ADR-0059: Named delegate types — `delegate Name(...) `;
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by issue #3510 (2026-08-23) — the declaration spelling changed from `type Name = delegate func(params) R` to the standalone `delegate Name(params) R;` (trailing semicolon required), and `type` left the reserved keyword set (erased aliases parse contextually). Code examples below have been updated to the current spelling.
 - **Date**: 2026-06-05
 - **Phase**: Phase 9 — language depth (post-primitive)
 - **Related**: ADR-0052 (event declarations); ADR-0036 (event subscription); issue #255; issue #140
@@ -27,13 +27,13 @@ A declaration of this form produces a new TypeDef in metadata: a `sealed class` 
 
 ```gs
 // Simple handler shape — emits a sealed MulticastDelegate-derived class.
-public type ClickHandler = delegate func(sender Object, e EventArgs)
+public delegate ClickHandler(sender Object, e EventArgs);
 
 // Returning a value — same shape, with a return type.
-type Mapper = delegate func(input string) int32
+delegate Mapper(input string) int32;
 ```
 
-Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`) are accepted by the parser but rejected by the binder in v1; they are listed as follow-up work below.
+Generic delegate declarations (`delegate Predicate[T any](value T) bool`) are accepted by the parser but rejected by the binder in v1;; they are listed as follow-up work below.
 
 A function literal of a compatible shape converts implicitly to a named delegate:
 
@@ -47,7 +47,7 @@ button.Click += handler
 A named delegate may serve as an `event` handler type, replacing the previous `Action<…>` shape (ADR-0052 carve-out):
 
 ```gs
-public type PropertyChangedHandler = delegate func(sender Object, e PropertyChangedEventArgs)
+public delegate PropertyChangedHandler(sender Object, e PropertyChangedEventArgs);
 
 class Button {
     public event Changed PropertyChangedHandler
@@ -59,14 +59,14 @@ class Button {
 `func(...)`-shaped function types currently use anonymous positional parameters (the binder synthesises names `arg0`, `arg1`, …). For *named* delegates the parameter names matter to consumers — C# uses them in IntelliSense for `+=` handler tab-completion. The grammar therefore allows the same `name type` syntax used in `func` declarations:
 
 ```gs
-public type MouseHandler = delegate func(sender Object, e MouseEventArgs)
+public delegate MouseHandler(sender Object, e MouseEventArgs);
 ```
 
 When no name is provided the emitter falls back to `arg0`/`arg1`/…, matching what C# emits for unnamed delegate parameters.
 
 ### CLR metadata shape
 
-For `public type ClickHandler = delegate func(sender Object, e EventArgs)`:
+For `public delegate ClickHandler(sender Object, e EventArgs) `:;
 
 | Metadata row | Content |
 |--------------|---------|
@@ -89,7 +89,7 @@ For `public type ClickHandler = delegate func(sender Object, e EventArgs)`:
 | Form | Meaning |
 |------|---------|
 | `type Handler = func(string) int32` | Type alias — `Handler` is `func(string) int32`, erased at emit, no new TypeDef. |
-| `type Handler = delegate func(string) int32` | Delegate declaration — emits a sealed `MulticastDelegate`-derived TypeDef called `Handler`. |
+| `delegate Handler(string) int32` | Delegate declaration — emits a sealed `MulticastDelegate`-derived TypeDef called `Handler`. |;
 
 ### Why a contextual keyword
 
@@ -122,7 +122,7 @@ ADR-0052 §1 said the event's `type_clause` "must resolve to a function type (`f
 
 ## Follow-up work (out of scope)
 
-- Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`) are now supported (issue #1503): the binder binds the type-parameter list, and the emitter mangles the delegate TypeDef name with the backtick-arity suffix, threads one `GenericParam` row per type parameter, and references the slots as `VAR(idx)` in the `Invoke`/`.ctor` signatures — reusing the existing generic struct/class/interface emit mechanism. Constructed instantiations (`Predicate[int32]`) are constructed from a lambda/method group and invoked through a `MemberRef` parented at the delegate `TypeSpec`. **GS0234** has been retired.
+- Generic delegate declarations (`delegate Predicate[T any](value T) bool`) are now supported (issue #1503): the binder binds the type-parameter list, and the emitter mangles the delegate TypeDef name with the backtick-arity suffix, threads one `GenericParam` row per type parameter, and references the slots as `VAR(idx)` in the `Invoke`/`.ctor` signatures — reusing the existing generic struct/class/interface emit mechanism. Constructed instantiations (`Predicate[int32]`) are constructed from a lambda/method group and invoked through a `MemberRef` parented at the delegate `TypeSpec`. **GS0234** has been retired.;
 - A `where T : delegate` constraint to make `Predicate[T]` instantiations of a generic delegate work as a generic-type-parameter constraint target.
 - Emitting `BeginInvoke` / `EndInvoke` if a project enables a legacy-delegate compatibility flag.
-- Variance annotations on generic delegate type parameters (`type Func[in T, out R] = delegate func(value T) R`).
+- Variance annotations on generic delegate type parameters (`delegate Func[in T, out R](value T) R`).;

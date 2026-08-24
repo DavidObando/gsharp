@@ -24,7 +24,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <remarks>
 /// The bug's original fingerprint (Oahu's <c>DownloadDecryptJob</c>) is a
 /// nullable, <em>named</em> G# delegate type
-/// (<c>type X = delegate func(...) ...</c>) invoked via direct call syntax
+/// (<c>delegate X(...) ...</c>) invoked via direct call syntax;
 /// inside <c>Task.Run(() -&gt; ...)</c>. A bare native G# arrow function type
 /// (<c>(...) -&gt; ...)?</c>) or an imported CLR generic delegate
 /// (<c>System.Func&lt;...&gt;</c>/<c>Action&lt;...&gt;</c>) both erase to a
@@ -35,7 +35,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// </remarks>
 public class Issue2442ClosureCallableNarrowingBinderTests
 {
-    private const string NamedDelegate = "type ConvertFunc = delegate func(data []uint8) []uint8\n";
+    private const string NamedDelegate = "delegate ConvertFunc(data []uint8) []uint8;\n";
 
     // ---- Positive: the exact reported shape -------------------------------
 
@@ -238,7 +238,7 @@ Run(nil, []uint8{}, true)
     public void GenericNamedDelegate_NarrowsInsideClosure()
     {
         var result = Evaluate(@"
-type Transform[T any] = delegate func(v T) T
+delegate Transform[T any](v T) T;
 func Run[T](a Transform[T]?, v T) T {
     if a != nil {
         let f = () -> { return a(v) }

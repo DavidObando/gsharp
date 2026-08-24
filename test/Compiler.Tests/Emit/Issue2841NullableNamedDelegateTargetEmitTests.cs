@@ -35,7 +35,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841assign
             import System
 
-            type PlainDel = delegate func(x int32, cb (string) -> void) void
+            delegate PlainDel(x int32, cb (string) -> void) void;
 
             func Main() {
                 var h PlainDel? = nil
@@ -57,7 +57,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841init
             import System
 
-            type PlainDel = delegate func(x int32, cb (string) -> void) void
+            delegate PlainDel(x int32, cb (string) -> void) void;
 
             func Main() {
                 let h PlainDel? = (x int32, cb (string) -> void) -> { cb("b" + System.Convert.ToString(x)) }
@@ -79,7 +79,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841param
             import System
 
-            type PlainDel = delegate func(x int32) void
+            delegate PlainDel(x int32) void;
 
             func Apply(h PlainDel?) {
                 if h != nil {
@@ -104,7 +104,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841prop
             import System
 
-            type PlainDel = delegate func(x int32) void
+            delegate PlainDel(x int32) void;
 
             class C {
                 prop H PlainDel? { get; set; }
@@ -130,7 +130,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841ret
             import System
 
-            type PlainDel = delegate func(x int32) void
+            delegate PlainDel(x int32) void;
 
             func Make(enabled bool) PlainDel? {
                 if !enabled {
@@ -162,7 +162,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841mg
             import System
 
-            type PlainDel = delegate func(x int32) void
+            delegate PlainDel(x int32) void;
 
             func Show(x int32) {
                 System.Console.WriteLine(x * 4)
@@ -194,7 +194,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841widen
             import System
 
-            type PlainDel = delegate func(x int32) void
+            delegate PlainDel(x int32) void;
 
             func Apply(h PlainDel?) {
                 if h != nil {
@@ -250,7 +250,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841control
             import System
 
-            type PlainDel = delegate func(x int32) void
+            delegate PlainDel(x int32) void;
 
             func Apply(h PlainDel) {
                 h(3)
@@ -278,7 +278,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             package i2841generic
             import System
 
-            type Conv[T] = delegate func(value T, cb (string) -> void) void
+            delegate Conv[T](value T, cb (string) -> void) void;
 
             func Run(c Conv[int32]?, v int32) {
                 if c != nil {

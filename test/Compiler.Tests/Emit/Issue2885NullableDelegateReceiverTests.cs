@@ -99,7 +99,7 @@ public class Issue2885NullableDelegateReceiverTests
         const string namedDelegate = """
             package Issue2885QualifiedNamed
 
-            type Handler = delegate func(value int32) void
+            delegate Handler(value int32) void;
 
             class Holder {
                 var Named Handler?
@@ -177,7 +177,7 @@ public class Issue2885NullableDelegateReceiverTests
             "named-delegate" => """
                 package Issue2885Named
 
-                type Handler = delegate func(value int32) void
+                delegate Handler(value int32) void;
                 func RunNamed(h Handler?) { h(1) }
                 """,
             _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
@@ -429,7 +429,7 @@ public class Issue2885NullableDelegateReceiverTests
             package Issue2885Remedies
             import System
 
-            type Handler = delegate func(value int32) void
+            delegate Handler(value int32) void;
 
             func Get(write System.Action[int32]) System.Action[int32]? -> write
             func WriteNamed(value int32) { Console.WriteLine(value) }

@@ -963,9 +963,9 @@ public sealed partial class CSharpToGSharpTranslator
         private GMember TranslateDelegateDeclaration(DelegateDeclarationSyntax node)
         {
             // `public delegate R Name(params);` → G# named delegate type alias
-            // `type Name = delegate func(params) R` (ADR-0059). Generic delegates
+            // `delegate Name(params) R` (ADR-0059). Generic delegates;
             // (issue #1960) carry their type parameters into the bracket section,
-            // `type Name[T] = delegate func(params) R` — gsc's binder/emitter
+            // `delegate Name[T](params) R` — gsc's binder/emitter;
             // support this (ADR-0059 "Follow-up work", issue #1503; GS0234 retired).
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
             IMethodSymbol invoke = symbol?.DelegateInvokeMethod;

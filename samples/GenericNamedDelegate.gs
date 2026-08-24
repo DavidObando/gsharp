@@ -18,13 +18,13 @@ package GSharp.Samples.GenericNamedDelegate
 import System
 
 // Single type parameter, used in parameter position.
-type Predicate[T any] = delegate func(value T) bool
+delegate Predicate[T any](value T) bool;
 
 // Two type parameters: one in parameter position, one in return position.
-type Converter[TIn any, TOut any] = delegate func(x TIn) TOut
+delegate Converter[TIn any, TOut any](x TIn) TOut;
 
 // Type parameter nested inside a composite type (`[]T`) in both positions.
-type Mapper[T any] = delegate func(items []T) []T
+delegate Mapper[T any](items []T) []T;
 
 var isPositive Predicate[int32] = func(value int32) bool {
     return value > 0

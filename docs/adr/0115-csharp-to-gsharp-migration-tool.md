@@ -213,7 +213,7 @@ nested type or members whose signatures contain it.
 
 #### B.8 Delegate types — arrow form, ADR-0075
 
-Delegate **types** render in the canonical arrow form `(A, B) -> R`, **never** `func(A, B) R` (that legacy spelling emits `GS0303`). Void returns spell `-> void`; multi-return spell `-> (T1, T2)`; async spell `async (T) -> R`. C# `Func<int,int>` → `(int32) -> int32`; `Action<string>` → `(string) -> void`; `Func<Task<int>>` → `async () -> int32`. A C# **named** `delegate` declaration becomes `type Name = delegate func(...) R` (ADR-0059, `samples/NamedDelegate.gs`) — the one place the `func` keyword stays, because it is a *named delegate declaration*, not a type clause. Function-literal expressions keep `func(x int32) int32 { … }`; arrow lambdas use `(x int32) -> expr` (ADR-0074).
+Delegate **types** render in the canonical arrow form `(A, B) -> R`, **never** `func(A, B) R` (that legacy spelling emits `GS0303`). Void returns spell `-> void`; multi-return spell `-> (T1, T2)`; async spell `async (T) -> R`. C# `Func<int,int>` → `(int32) -> int32`; `Action<string>` → `(string) -> void`; `Func<Task<int>>` → `async () -> int32`. A C# **named** `delegate` declaration becomes `delegate Name(...) R` (ADR-0059, `samples/NamedDelegate.gs`) — the one place the `func` keyword stays, because it is a *named delegate declaration*, not a type clause. Function-literal expressions keep `func(x int32) int32 { … }`;; arrow lambdas use `(x int32) -> expr` (ADR-0074).
 
 #### B.9 String interpolation — ADR-0055, ADR-0007, ADR-0011
 

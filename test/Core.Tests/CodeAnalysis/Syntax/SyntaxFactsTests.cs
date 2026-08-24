@@ -104,7 +104,13 @@ public class SyntaxFactsTests
     public void GetText_RoundTripsThroughGetKeywordKind()
     {
         var keywordKinds = Enum.GetValues<SyntaxKind>()
-            .Where(k => k.ToString().EndsWith("Keyword", StringComparison.Ordinal));
+            .Where(k => k.ToString().EndsWith("Keyword", StringComparison.Ordinal)
+
+                // Issue #3510: `type` left the reserved keyword set (aliases
+                // parse it contextually), so the lexer no longer produces
+                // TypeKeyword — GetText keeps the spelling for legacy nodes
+                // but the round-trip through GetKeywordKind is one-way now.
+                && k != SyntaxKind.TypeKeyword);
         foreach (var kind in keywordKinds)
         {
             var text = SyntaxFacts.GetText(kind);

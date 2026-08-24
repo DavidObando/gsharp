@@ -22,7 +22,7 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
         var source = """
             import System.Runtime.InteropServices
 
-            type Comparer = delegate func(a nint, b nint) int32
+            delegate Comparer(a nint, b nint) int32;
 
             @DllImport("libc", EntryPoint: "qsort")
             func native_qsort(base nint, nmemb nint, size nint, cmp Comparer) void;
@@ -41,7 +41,7 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             import System.Runtime.InteropServices
 
             @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-            type Callback = delegate func() void
+            delegate Callback() void;
 
             @DllImport("libc", EntryPoint: "f")
             func bad() Callback;

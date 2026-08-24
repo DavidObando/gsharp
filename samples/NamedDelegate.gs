@@ -16,10 +16,10 @@ package GSharp.Samples.NamedDelegate
 import System
 
 // `void`-returning named delegate.
-type Greeter = delegate func(name string)
+delegate Greeter(name string);
 
 // Value-returning named delegate.
-type Combine = delegate func(a int32, b int32) int32
+delegate Combine(a int32, b int32) int32;
 
 // A `func` literal converts implicitly to the matching named delegate type,
 // just like it converts to Action/Func today (issue #295).

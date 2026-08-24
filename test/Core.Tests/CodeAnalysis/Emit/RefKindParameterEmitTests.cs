@@ -359,7 +359,7 @@ Console.WriteLine(b.Value)
         const string Source = @"package DelegateRef
 import System
 
-type IntRefAction = delegate func(ref counter int32, by int32)
+delegate IntRefAction(ref counter int32, by int32);
 ";
         var asm = CompileToAssembly(Source, "DelegateRef_Meta");
         var del = asm.GetTypes().Single(t => t.Name == "IntRefAction");
@@ -379,7 +379,7 @@ type IntRefAction = delegate func(ref counter int32, by int32)
         const string Source = @"package DelegateOut
 import System
 
-type IntOutPredicate = delegate func(out result int32) bool
+delegate IntOutPredicate(out result int32) bool;
 ";
         var asm = CompileToAssembly(Source, "DelegateOut_Meta");
         var del = asm.GetTypes().Single(t => t.Name == "IntOutPredicate");
@@ -396,7 +396,7 @@ type IntOutPredicate = delegate func(out result int32) bool
         const string Source = @"package DelegateIn
 import System
 
-type IntInObserver = delegate func(in value int32)
+delegate IntInObserver(in value int32);
 ";
         var asm = CompileToAssembly(Source, "DelegateIn_Meta");
         var del = asm.GetTypes().Single(t => t.Name == "IntInObserver");
@@ -415,9 +415,9 @@ type IntInObserver = delegate func(in value int32)
         const string Source = @"package DelegateByRefInvoke
 import System
 
-type RefAction = delegate func(ref value int32)
-type OutAction = delegate func(out value int32)
-type InPredicate = delegate func(in value int32) bool
+delegate RefAction(ref value int32);
+delegate OutAction(out value int32);
+delegate InPredicate(in value int32) bool;
 
 var refAction RefAction = (ref value int32) -> { value = value + 2 }
 var outAction OutAction = (out value int32) -> { value = 42 }
@@ -441,9 +441,9 @@ Console.WriteLine(inPredicate.Invoke(in value))
         const string Source = @"package GenericDelegateByRefInvoke
 import System
 
-type RefAction[T] = delegate func(ref value T)
-type OutAction[T] = delegate func(out value T)
-type InPredicate[T] = delegate func(in value T) bool
+delegate RefAction[T](ref value T);
+delegate OutAction[T](out value T);
+delegate InPredicate[T](in value T) bool;
 
 func Apply[T](action RefAction[T], ref value T) {
     action(ref value)

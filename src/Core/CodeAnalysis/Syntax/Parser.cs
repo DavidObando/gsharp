@@ -440,9 +440,25 @@ public partial class Parser
             // ParseAggregateDeclaration so it composes with the other modifiers.
             member = ParseAggregateDeclaration(accessibilityModifier);
         }
-        else if (Current.Kind == SyntaxKind.TypeKeyword)
+        else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "type"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
+            // Issue #3510: `type` is contextual now — it heads a declaration
+            // only when followed by an identifier at member position (the
+            // erased-alias form `type Name [TParams]? = Target`, plus the
+            // ADR-0078 legacy-aggregate and retired-delegate recoveries).
             member = ParseTypeAliasDeclaration(accessibilityModifier);
+        }
+        else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "delegate"
+            && Peek(1).Kind == SyntaxKind.IdentifierToken
+            && (Peek(2).Kind == SyntaxKind.OpenParenthesisToken || Peek(2).Kind == SyntaxKind.OpenSquareBracketToken))
+        {
+            // Issue #3510: named delegate declaration —
+            // `delegate Name[TParams]?(params) ReturnType? ;`. The required
+            // trailing semicolon terminates the optional return-type clause
+            // (matching extern natives and interface bodiless members), so a
+            // void delegate can no longer consume the next declaration.
+            member = ParseDelegateDeclaration(accessibilityModifier);
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "record"
             && Peek(1).Kind == SyntaxKind.IdentifierToken)

@@ -399,6 +399,12 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RectangularArrayInitializerLengthMismatch = new("GS0530", DiagnosticSeverity.Error, "Rectangular array initializer requires {0} element(s), but {1} were supplied.");
     internal static readonly DiagnosticDescriptor ConstructorInitializerCannotReferenceInstanceMember = new("GS0531", DiagnosticSeverity.Error, "Constructor initializer arguments cannot reference instance member '{0}' before the delegated or base constructor has run.");
     internal static readonly DiagnosticDescriptor PatternVariableNotDefinitelyAssigned = new("GS0532", DiagnosticSeverity.Error, "Pattern variable '{0}' is not definitely assigned here; it is only usable where its pattern is known to have matched — the right operand of '&&' (or of '||' after a negated test), the branches selected by the condition, and the statements after an 'if' whose other branch always exits (ADR-0166, issue #3409).");
+
+    // Issue #3510: named delegate declarations moved to the standalone
+    // `delegate Name(params) R;` form; the ADR-0059 `type … = delegate func`
+    // spelling reports this migration error (with recovery). GS0533/GS0534
+    // are taken by the #3501-A3 fallthrough diagnostics.
+    internal static readonly DiagnosticDescriptor RetiredDelegateDeclarationForm = new("GS0535", DiagnosticSeverity.Error, "The 'type {0} = delegate func(...)' spelling is retired. Declare the delegate as 'delegate {0}(parameters) ReturnType;' (trailing semicolon required; omit the return type for void).");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");
