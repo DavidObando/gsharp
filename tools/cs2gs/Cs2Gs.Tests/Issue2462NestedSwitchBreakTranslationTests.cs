@@ -72,7 +72,13 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("break", printed, StringComparison.Ordinal);
+        // Issue #3501 A3: section-terminal breaks (even through transparent
+        // block nesting) still vanish — a G# arm ends there naturally. The
+        // conditional/protected-region breaks that DO have observable flow
+        // now keep the `break` spelling (gsc break exits the switch) instead
+        // of the retired `goto __switchExit` lowering.
+        Assert.DoesNotContain("__switchExit", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("case 0 {\n            break", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -172,9 +178,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("goto __switchExit", printed, StringComparison.Ordinal);
-        Assert.Contains("__switchExit", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("break", printed, StringComparison.Ordinal);
+        // Issue #3501 A3: gsc `break` now exits the switch, so the
+        // non-terminal C# break keeps its spelling — no `goto __switchExit`
+        // lowering — and the stacked `case 1: case 2:` labels merge into one
+        // comma arm instead of duplicating the body.
+        Assert.DoesNotContain("__switchExit", printed, StringComparison.Ordinal);
+        Assert.Contains("break", printed, StringComparison.Ordinal);
+        Assert.Contains("case 1, 2", printed, StringComparison.Ordinal);
         Assert.Equal("start|done", CompileAndRun(printed, "C.Run(1, true)").Trim());
         Assert.Equal("startafter|done", CompileAndRun(printed, "C.Run(2, false)").Trim());
         Assert.Equal("default|done", CompileAndRun(printed, "C.Run(9, true)").Trim());
@@ -210,7 +220,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("goto __gotoCase", printed, StringComparison.Ordinal);
+        // Issue #3501 A3: `goto case 1` in case 0 targets the lexically next
+        // arm, so it prints as the native `fallthrough`; `goto default` in
+        // case 2 skips over case 3 and keeps the synthesized-label lowering.
+        Assert.Contains("fallthrough", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gotoCase", printed, StringComparison.Ordinal);
         Assert.Contains("goto __gotoDefault", printed, StringComparison.Ordinal);
         Assert.Contains("tagged:", printed, StringComparison.Ordinal);
         Assert.Contains("return 1", printed, StringComparison.Ordinal);

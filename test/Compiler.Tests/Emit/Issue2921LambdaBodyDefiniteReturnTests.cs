@@ -26,9 +26,9 @@ public class Issue2921LambdaBodyDefiniteReturnTests
             func G(f (int32) -> int32) int32 { return f(1) }
             func F(x int32) int32 {
                 return G(func(v int32) int32 {
-                    for {
+                    outer: for {
                         switch v {
-                            case 1 { break }
+                            case 1 { break outer }
                             default { return 1 }
                         }
                     }

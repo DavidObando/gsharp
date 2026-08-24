@@ -201,8 +201,39 @@ internal sealed class BinderContext
     /// labeled <c>break</c> / <c>continue</c> resolve their target by
     /// scanning this stack for a matching label name.
     /// </summary>
-    public Stack<(string? LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)> LoopStack { get; }
-        = new Stack<(string? LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
+    /// <remarks>
+    /// Issue #3501 A3: a <c>switch</c> statement also pushes a frame so an
+    /// unlabeled <c>break</c> in an arm exits the switch (C#/Go alignment).
+    /// A switch frame has a <see langword="null"/> <c>ContinueLabel</c> and
+    /// a <see langword="null"/> <c>LabelName</c> — <c>continue</c> binding
+    /// skips such frames to reach the enclosing loop.
+    /// </remarks>
+    public Stack<(string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)> LoopStack { get; }
+        = new Stack<(string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)>();
+
+    /// <summary>
+    /// Gets the set of break labels that were actually targeted by a bound
+    /// <c>break</c> statement (issue #3501 A3) — a switch appends its
+    /// break-label statement only when someone jumped to it, so exhaustive
+    /// all-paths-return switches keep their exit shape.
+    /// </summary>
+    public HashSet<BoundLabel> UsedBreakLabels { get; } = new HashSet<BoundLabel>();
+
+    /// <summary>
+    /// Gets or sets the label a legal <c>fallthrough</c> in the CURRENT
+    /// switch arm jumps to — the next arm's body-entry label (issue #3501
+    /// A3). <see langword="null"/> when the current arm cannot fall through
+    /// (final arm, or no fallthrough present). Set by
+    /// <c>BindSwitchStatement</c> per arm; cleared by lambda nested frames.
+    /// </summary>
+    public BoundLabel? CurrentFallthroughTarget { get; set; }
+
+    /// <summary>
+    /// Gets or sets the one syntax node in the current switch arm where a
+    /// <c>fallthrough</c> is legal — the arm body's LAST statement (issue
+    /// #3501 A3). Any other <c>fallthrough</c> reports GS0168.
+    /// </summary>
+    public Syntax.StatementSyntax? CurrentFallthroughAnchor { get; set; }
 
     /// <summary>
     /// Gets the enclosing function's user-defined <c>goto</c> labels

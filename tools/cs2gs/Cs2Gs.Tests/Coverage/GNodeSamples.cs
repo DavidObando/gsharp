@@ -181,6 +181,9 @@ public static class GNodeSamples
                 body: Block(new YieldStatement(Int("1"))))),
             [typeof(BreakStatement)] = () => Stmts(new WhileStatement(Id("c"), Block(new BreakStatement()))),
             [typeof(ContinueStatement)] = () => Stmts(new WhileStatement(Id("c"), Block(new ContinueStatement()))),
+            [typeof(FallthroughStatement)] = () => Stmts(new SwitchStatement(Id("v"), List(
+                new SwitchStatementCase(new ConstantPattern(Int("0")), Block(new FallthroughStatement())),
+                new SwitchStatementCase(null, Block())))),
             [typeof(GotoStatement)] = () => Stmts(new GotoStatement("retry")),
             [typeof(LabeledStatement)] = () => Stmts(new LabeledStatement("retry", new GotoStatement("retry"))),
             [typeof(DoWhileStatement)] = () => Stmts(new DoWhileStatement(Block(), Id("c"))),

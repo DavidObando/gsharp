@@ -130,7 +130,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements. |
 | GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins and the explicit `Main` is shadowed. |
 | GS0167 | Error | Multi-assignment target/value count mismatch. | `a, b = 1, 2, 3` — three values for two targets. |
-| GS0168 | Error | `fallthrough` is not supported. | `fallthrough` keyword used in a `switch` case body. |
+| GS0168 | Error | `fallthrough` must be the last statement of a `switch` case body. | `fallthrough` followed by more statements in the same case body (issue #3501 A3: a trailing `fallthrough` is now legal Go-style control flow). |
 | GS0169 | Error | Duplicate `default` arm in `switch`. | Two `default:` arms inside one `switch` statement. |
 | GS0170 | Error | Switch case value is not a constant expression. | `case x:` where `x` is a mutable variable. |
 | GS0171 | Error | Switch case type is incompatible with the switch expression. | `switch (s) { case 42: }` where `s` is `string`. |
@@ -801,6 +801,18 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0531 | Error | `Constructor initializer arguments cannot reference instance member '<name>' before the delegated or base constructor has run.` | `init() : base({ let self = this 1 }) { }` |
+
+## `fallthrough` placement (GS0533–GS0534)
+
+Issue #3501 A3: `fallthrough` gained Go semantics — legal only as the LAST
+statement of a non-final `switch` arm, transferring into the next arm's body
+without evaluating its pattern or guard. GS0168 (above) reports a misplaced
+`fallthrough`; these report the two structural misuses.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0533 | Error | `'fallthrough' cannot be used in the final arm of a 'switch' statement.` | `switch x { case 1 { fallthrough } }` |
+| GS0534 | Error | `'fallthrough' cannot target a 'switch' arm whose pattern declares bindings or that has a 'when' guard — the jump would skip their assignment.` | `case 1 { fallthrough } case string s { ... }` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 

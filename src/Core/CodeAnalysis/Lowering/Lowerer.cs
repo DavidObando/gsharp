@@ -128,8 +128,13 @@ public sealed class Lowerer : BoundTreeRewriter
     {
         var discriminant = RewriteExpression(node.Discriminant);
         if (discriminant is not BoundLiteralExpression literal
-            || node.Arms.Any(arm => arm.Guard != null))
+            || node.Arms.Any(arm => arm.Guard != null)
+            || node.Arms.Any(HasFallthroughEntryLabel))
         {
+            // Issue #3501 A3: an arm carrying a fallthrough entry label is a
+            // goto target from the PREVIOUS arm — the constant fast path
+            // keeps only one arm's body, so the label (and the fallthrough
+            // chain) would vanish. Keep the full switch shape.
             return base.RewritePatternSwitchStatement(node);
         }
 
@@ -1700,6 +1705,15 @@ public sealed class Lowerer : BoundTreeRewriter
 
         return new BoundBlockStatement(null, builder.ToImmutable());
     }
+
+    /// <summary>
+    /// Issue #3501 A3: true when the arm's body starts with the synthesized
+    /// <c>switchArm…</c> body-entry label a <c>fallthrough</c> in the
+    /// previous arm jumps to (see <c>StatementBinder.BindSwitchStatement</c>).
+    /// </summary>
+    private static bool HasFallthroughEntryLabel(BoundPatternSwitchArm arm)
+        => arm.Body is BoundBlockStatement { Statements: [BoundLabelStatement { Label.Name: { } labelName }, ..] }
+            && labelName.StartsWith("switchArm", System.StringComparison.Ordinal);
 
     private BoundLabel GenerateLabel()
     {

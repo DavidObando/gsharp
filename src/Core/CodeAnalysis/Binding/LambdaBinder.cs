@@ -1640,6 +1640,8 @@ internal sealed class LambdaBinder
         binderCtx.DefinedUserLabels.Clear();
         binderCtx.UnresolvedGotoLabels.Clear();
         binderCtx.LoopStack.Clear();
+        binderCtx.CurrentFallthroughTarget = null;
+        binderCtx.CurrentFallthroughAnchor = null;
         return saved;
     }
 
@@ -1697,6 +1699,9 @@ internal sealed class LambdaBinder
         {
             binderCtx.LoopStack.Push(saved.LoopStack[i]);
         }
+
+        binderCtx.CurrentFallthroughTarget = saved.FallthroughTarget;
+        binderCtx.CurrentFallthroughAnchor = saved.FallthroughAnchor;
     }
 
     private static TypeSymbol? ResolveLexicalEnclosingType(FunctionSymbol? outerFunction)
@@ -2290,6 +2295,8 @@ internal sealed class LambdaBinder
             DefinedUserLabels = new HashSet<string>(ctx.DefinedUserLabels);
             UnresolvedGotoLabels = new Dictionary<string, TextLocation>(ctx.UnresolvedGotoLabels);
             LoopStack = ctx.LoopStack.ToArray();
+            FallthroughTarget = ctx.CurrentFallthroughTarget;
+            FallthroughAnchor = ctx.CurrentFallthroughAnchor;
         }
 
         public Dictionary<string, BoundLabel> UserLabels { get; }
@@ -2298,7 +2305,13 @@ internal sealed class LambdaBinder
 
         public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
 
-        public (string? LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)[] LoopStack { get; }
+        public (string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)[] LoopStack { get; }
+
+        // Issue #3501 A3: a lambda body inside a switch arm must not see the
+        // enclosing arm's fallthrough context — same isolation as LoopStack.
+        public BoundLabel? FallthroughTarget { get; }
+
+        public Syntax.StatementSyntax? FallthroughAnchor { get; }
     }
 
     // Issue #1451: collects the locals declared by inline `out var`/`out let`

@@ -1441,6 +1441,15 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case SyntaxKind.GotoCaseStatement:
                 case SyntaxKind.GotoDefaultStatement:
+                    // Issue #3501 A3: a trailing `goto case`/`goto default`
+                    // that targets the LEXICALLY NEXT section is exactly Go's
+                    // `fallthrough` — the native gsc statement replaces the
+                    // synthesized-label lowering below.
+                    if (this.IsAdjacentFallthroughGoto(gotoStatement))
+                    {
+                        return new[] { (GStatement)new FallthroughStatement() };
+                    }
+
                     // ADR-0139 / issue #1884: `goto case K;` jumps to the
                     // statement list of the case labeled with the constant K
                     // WITHOUT re-evaluating the switch subject; `goto default;`
@@ -1527,6 +1536,50 @@ public sealed partial class CSharpToGSharpTranslator
             => this.SyntheticLabelName(
                 label is DefaultSwitchLabelSyntax ? "gotoDefault" : "gotoCase",
                 label);
+
+        /// <summary>
+        /// Issue #3501 A3: true when a <c>goto case</c>/<c>goto default</c>
+        /// is exactly Go's <c>fallthrough</c>: it is the DIRECT last
+        /// statement of a single-label section (so the section prints as one
+        /// G# arm), and it targets a label of the LEXICALLY NEXT section
+        /// whose labels are all binding-free (constants or <c>default</c> —
+        /// gsc rejects fallthrough into an arm with pattern bindings or a
+        /// guard). Such gotos print as the native <c>fallthrough</c>
+        /// statement and need no synthesized arm-top label.
+        /// </summary>
+        private bool IsAdjacentFallthroughGoto(GotoStatementSyntax gotoStatement)
+        {
+            if (gotoStatement.Kind() is not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement))
+            {
+                return false;
+            }
+
+            SwitchSectionSyntax section = gotoStatement.Ancestors().OfType<SwitchSectionSyntax>().FirstOrDefault();
+            if (section == null
+                || section.Statements.LastOrDefault() != gotoStatement
+                || section.Labels.Count != 1)
+            {
+                return false;
+            }
+
+            if (section.Parent is not SwitchStatementSyntax switchStatement
+                || gotoStatement.Ancestors().OfType<SwitchStatementSyntax>().FirstOrDefault() != switchStatement)
+            {
+                return false;
+            }
+
+            int sectionIndex = switchStatement.Sections.IndexOf(section);
+            if (sectionIndex < 0 || sectionIndex + 1 >= switchStatement.Sections.Count)
+            {
+                return false;
+            }
+
+            SwitchSectionSyntax nextSection = switchStatement.Sections[sectionIndex + 1];
+            SwitchLabelSyntax resolvedTarget = this.ResolveGotoCaseOrDefaultTarget(gotoStatement);
+            return resolvedTarget != null
+                && nextSection.Labels.Contains(resolvedTarget)
+                && nextSection.Labels.All(l => l is CaseSwitchLabelSyntax or DefaultSwitchLabelSyntax);
+        }
 
         private GStatement TranslateThrow(ThrowStatementSyntax throwStatement)
         {

@@ -54,6 +54,7 @@ ContinueStatement
 DeferStatement
 DoWhileStatement
 ExpressionStatement
+FallthroughStatement
 FixedStatement
 ForInStatement
 ForStatement

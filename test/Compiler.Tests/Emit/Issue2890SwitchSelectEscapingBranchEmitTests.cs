@@ -26,9 +26,9 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
             package Issue2890.EmitSwitchBreak
 
             func F(x int32) int32 {
-                for {
+                outer: for {
                     switch x {
-                        default { break }
+                        default { break outer }
                     }
                 }
             }
@@ -45,9 +45,9 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
             import Gsharp.Extensions.Go
 
             func F() int32 {
-                for {
+                outer: for {
                     select {
-                        default { break }
+                        default { break outer }
                     }
                 }
             }
