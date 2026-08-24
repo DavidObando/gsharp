@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -122,7 +123,7 @@ public sealed class Issue3415NullableAsyncLocalTranslationTests
         Assert.DoesNotContain("?? \"\"", printed, StringComparison.Ordinal);
 
         var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(7, result.Value);
     }

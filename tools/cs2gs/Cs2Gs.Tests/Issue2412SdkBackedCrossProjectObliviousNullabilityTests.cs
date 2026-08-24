@@ -165,7 +165,10 @@ public class Issue2412SdkBackedCrossProjectObliviousNullabilityTests
         // deliberately leaves that receiver rule untouched and relies solely
         // on restoring `TranslateStage`'s sibling-compilation loading, which
         // resolves the reopened issue with zero new errors.)
-        Assert.Contains("Target{First: widget.Wrapped!!.Value.Name!!}", compact);
+        // Issue #3501: gsc types the receiver-position `Wrapped` hop non-null,
+        // so the polish pass strips its forgiveness; the trailing `Name` read
+        // stays genuinely nullable and keeps the assertion.
+        Assert.Contains("Target{First: widget.Wrapped.Value.Name!!}", compact);
 
         // Issue #2429: an object-initializer member value read from an
         // oblivious sibling member with NO taint evidence anywhere
@@ -188,7 +191,9 @@ public class Issue2412SdkBackedCrossProjectObliviousNullabilityTests
         // harmless over-forgiveness here that the receiver rule already
         // accepts for `Wrapped` is consistent with that corpus-validated
         // policy.
-        Assert.Contains("Target{Untainted: widget.FixedLabel!!}", compact);
+        // Issue #3501: the polish pass strips this one too — gsc types the
+        // oblivious literal-returning property non-null.
+        Assert.Contains("Target{Untainted: widget.FixedLabel}", compact);
 
         // Genuinely-nullable negative: a DIFFERENT sibling project that is
         // nullable-ENABLED (a real `string?` annotation, not oblivious taint)
