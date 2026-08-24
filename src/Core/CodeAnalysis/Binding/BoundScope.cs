@@ -51,6 +51,10 @@ public sealed class BoundScope
     // per-compilation anonymous-type cache.
     private AnonymousTypeCache? anonymousTypeCache;
 
+    // Issue #3501 A2: synthesized ref-kind delegate cache, held at the root
+    // of the chain, exactly like anonymousTypeCache above.
+    private SynthesizedRefDelegateCache? synthesizedRefDelegateCache;
+
     // Issue #2342: the ambient "current declaring package" (see
     // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
     // of the chain, exactly like anonymousTypeCache above.
@@ -1562,6 +1566,42 @@ public sealed class BoundScope
     /// <returns>The shared <see cref="AnonymousTypeCache"/> for this scope's chain.</returns>
     internal AnonymousTypeCache GetAnonymousTypeCache()
         => Parent != null ? Parent.GetAnonymousTypeCache() : anonymousTypeCache ??= new AnonymousTypeCache();
+
+    /// <summary>
+    /// Issue #3501 A2: gets the per-compile-pass synthesized ref-kind
+    /// delegate cache (see <see cref="SynthesizedRefDelegateCache"/>), walking
+    /// to the root of this scope's chain so every scope in one bind pass
+    /// shares the same cache instance — mirrors <see cref="GetAnonymousTypeCache"/>.
+    /// </summary>
+    /// <returns>The shared <see cref="SynthesizedRefDelegateCache"/> for this scope's chain.</returns>
+    internal SynthesizedRefDelegateCache GetSynthesizedRefDelegateCache()
+        => Parent != null ? Parent.GetSynthesizedRefDelegateCache() : synthesizedRefDelegateCache ??= new SynthesizedRefDelegateCache();
+
+    /// <summary>
+    /// Issue #3501 A2: installs an existing ref-kind delegate cache on this
+    /// chain's root — used by <c>BindProgram</c> to continue the global-scope
+    /// pass's cache so shapes unify across the two binding passes.
+    /// </summary>
+    /// <param name="cache">The cache to share.</param>
+    internal void InstallSynthesizedRefDelegateCache(SynthesizedRefDelegateCache cache)
+    {
+        if (Parent != null)
+        {
+            Parent.InstallSynthesizedRefDelegateCache(cache);
+            return;
+        }
+
+        synthesizedRefDelegateCache = cache;
+    }
+
+    /// <summary>
+    /// Issue #3501 A2: gets the ambient declaring package name set by
+    /// <see cref="SetCurrentDeclaringPackage"/>, used to place synthesized
+    /// ref-kind delegates in the package whose declaration is being bound.
+    /// </summary>
+    /// <returns>The ambient package name, or <see langword="null"/>.</returns>
+    internal string? GetCurrentDeclaringPackageName()
+        => Parent != null ? Parent.GetCurrentDeclaringPackageName() : currentDeclaringPackageName.Value;
 
     /// <summary>
     /// Issue #2342: sets the package name of the top-level (or nested) type or

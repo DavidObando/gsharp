@@ -1,7 +1,7 @@
 {
-  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps (translate+compile+ilverify+parity); the *Ceiling metrics cap readability regressions in the migrated output. Calibrated 2026-08-23 against the full 55-project corpus (25 green; 255 synthetic labels; 111 __local_ lifts; 3766 lines >300 chars). Improve a metric, then tighten the corresponding number in the same PR.",
+  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps (translate+compile+ilverify+parity); the *Ceiling metrics cap readability regressions in the migrated output. Recalibrated 2026-08-23 after the #3503-#3507 merges plus the doc-line re-wrap fix (25 green; 84 synthetic labels; 77 __local_ lifts (A2 self-recursion retarget); 3625 lines >300 chars). Improve a metric, then tighten the corresponding number in the same PR.",
   "greenFloor": 25,
-  "syntheticLabelCeiling": 260,
-  "liftedLocalCeiling": 115,
-  "longLineCeiling": 3800
+  "syntheticLabelCeiling": 100,
+  "liftedLocalCeiling": 85,
+  "longLineCeiling": 3700
 }

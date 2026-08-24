@@ -1961,12 +1961,22 @@ public sealed partial class CSharpToGSharpTranslator
                             pair.Symbol)
                         && (identifier.Parent is not InvocationExpressionSyntax invocation
                             || !ReferenceEquals(invocation.Expression, identifier)));
+
+                // Issue #3501 A2: gsc `let`-bound function literals can now
+                // reference their own binding, so DIRECT self-recursion no
+                // longer forces a lift — only a cycle that passes through
+                // ANOTHER local function does (the partner would have to be
+                // forward-referenced before its `let` declaration).
+                bool recursiveThroughOthers = edges.TryGetValue(pair.Symbol, out HashSet<IMethodSymbol> ownDependencies)
+                    && ownDependencies.Any(dependency =>
+                        !SymbolEqualityComparer.Default.Equals(dependency, pair.Symbol)
+                        && IsRecursive(
+                            pair.Symbol,
+                            dependency,
+                            new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { dependency }));
                 if ((!usedAsMethodGroup
                         && pair.Symbol.Parameters.Any(parameter => parameter.RefKind != RefKind.None))
-                    || IsRecursive(
-                        pair.Symbol,
-                        pair.Symbol,
-                        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default)))
+                    || recursiveThroughOthers)
                 {
                     toLift.Add(pair.Symbol);
                 }
@@ -2260,6 +2270,17 @@ public sealed partial class CSharpToGSharpTranslator
                 // visibility. SCCs with no capturing member therefore keep the
                 // canonical `let`/hoist path entirely.
                 if (!group.Any(f => this.CapturesOuterState(f.Syntax, f.Symbol)))
+                {
+                    continue;
+                }
+
+                // Issue #3501 A2: gsc `let`-bound literals now see their own
+                // binding, so a single-member SCC (direct self-recursion) works
+                // on the canonical `let name = func …` path even when it
+                // captures — no nullable-forward-declaration scheme needed.
+                // Only MUTUAL recursion still requires it (a partner would be
+                // referenced before its `let` declaration).
+                if (group.Count == 1)
                 {
                     continue;
                 }

@@ -89,6 +89,16 @@ internal sealed partial class StatementBinder
     private readonly BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes;
     private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType;
+
+    /// <summary>
+    /// Issue #3501 A2: binds a function-literal initializer with a hook that
+    /// fires after the literal's signature binds (and before its body does),
+    /// letting <c>BindVariableDeclaration</c> declare the variable first so
+    /// the body can self-reference. See
+    /// <c>LambdaBinder.BindFunctionLiteralExpression</c>'s
+    /// <c>onSignatureBound</c> parameter.
+    /// </summary>
+    private readonly Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration;
     private readonly Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration;
     private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
@@ -117,7 +127,8 @@ internal sealed partial class StatementBinder
         Func<FunctionSymbol?> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
         Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration = null,
-        Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
+        Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null,
+        Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -138,6 +149,7 @@ internal sealed partial class StatementBinder
         this.bindLambdaWithTargetType = bindLambdaWithTargetType;
         this.bindGenericLocalFunctionDeclaration = bindGenericLocalFunctionDeclaration;
         this.checkNonGenericLocalFunctionEnclosingTypeParameterReference = checkNonGenericLocalFunctionEnclosingTypeParameterReference;
+        this.bindFunctionLiteralWithSelfDeclaration = bindFunctionLiteralWithSelfDeclaration;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
