@@ -1338,6 +1338,18 @@ public sealed partial class CSharpToGSharpTranslator
                 && declaredReceiverType is { IsReferenceType: true }
                 && declaredReceiverType.NullableAnnotation != NullableAnnotation.Annotated;
 
+            // ADR-0159 / issue #3501: a C# `params` array subject
+            // (`args is { Length: > 0 }`) can be null in C# but a G# variadic
+            // always materializes an array — gsc rejects the defensive
+            // `!= nil` guard outright (GS0523), so skip it even though this is
+            // a top-level subject.
+            if (recursive.Type == null
+                && receiverSyntax != null
+                && this.context.GetSymbolInfo(receiverSyntax).Symbol is IParameterSymbol { IsParams: true })
+            {
+                receiverIsNonNullableReference = true;
+            }
+
             GExpression test = recursive.Type != null
                 ? new BinaryExpression(receiver, "is", new TypeExpression(this.MapTypeSyntax(recursive.Type)))
                 : ((receiverIsValueType && !receiverIsNullableValueType) || receiverIsNonNullableReference) ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());

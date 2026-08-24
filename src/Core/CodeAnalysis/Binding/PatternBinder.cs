@@ -1161,8 +1161,15 @@ internal sealed class PatternBinder
         PropertyInfo? lengthProperty = null;
         PropertyInfo? indexerProperty = null;
         LocalVariableSymbol? inputVariable = null;
+
+        // The discriminant may reach here wrapped in a nullability
+        // annotation (NRT-annotated member reads); the indexable probe cares
+        // only about the underlying imported construction.
+        var indexableSource = discriminantType is NullabilityAnnotatedTypeSymbol annotatedIndexable
+            ? annotatedIndexable.BaseType
+            : discriminantType;
         if (elementType == TypeSymbol.Error
-            && discriminantType is ImportedTypeSymbol importedIndexable
+            && indexableSource is ImportedTypeSymbol importedIndexable
             && importedIndexable.ClrType is Type indexableClr)
         {
             PropertyInfo? length =

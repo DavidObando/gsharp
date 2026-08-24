@@ -128,6 +128,29 @@ public class Issue3501ResidualSyntheticRetargetTests
     }
 
     [Fact]
+    public void ParamsArrayPropertyPattern_SkipsTheNilGuard()
+    {
+        // `args is { Length: > 0 }` guards a C# params array that a G#
+        // variadic can never leave nil — gsc rejects the defensive guard
+        // (GS0523), so only the member test survives.
+        string printed = Translate("""
+            public class C
+            {
+                public static string Render(string format, params object?[] args)
+                {
+                    return args is { Length: > 0 }
+                        ? string.Format(format, args)
+                        : format;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("!= nil", printed, StringComparison.Ordinal);
+        Assert.Contains(".Length > 0", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void SiblingLocalFunctionDependency_HoistsCalleeFirst()
     {
         // `Scan` calls its sibling `Deep`; the hoist must order `Deep`'s
