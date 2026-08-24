@@ -318,6 +318,30 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void StaticConstructorDoc_DowngradesToRegularComment()
+    {
+        // A G# static `init` block is not a documentable declaration; the C#
+        // static constructor's doc comment becomes a regular comment instead
+        // of a detached `///` block (GS0227).
+        string printed = Translate("""
+            public class Registry
+            {
+                /// <summary>Static-initializer hook.</summary>
+                static Registry()
+                {
+                    Count = 1;
+                }
+
+                public static int Count { get; set; }
+            }
+            """);
+
+        Assert.Contains("// Static-initializer hook.", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("/// Static-initializer hook.", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

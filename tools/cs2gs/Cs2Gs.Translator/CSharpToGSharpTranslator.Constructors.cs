@@ -86,6 +86,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
+            // Issue #3501 (GS0227): a static initializer block is not a
+            // documentable declaration in G# — a C# static constructor's doc
+            // comment downgrades to a regular comment.
+            if (node is StaticInitializerBlock
+                && lines.Any(l => l.StartsWith("///", StringComparison.Ordinal)))
+            {
+                lines = lines
+                    .Select(l => l.StartsWith("///", StringComparison.Ordinal)
+                        ? "//" + l.Substring(3)
+                        : l)
+                    .ToList();
+            }
+
             // Issue #3501 (GS0227): C# tolerates an ordinary comment BETWEEN
             // a doc comment and its declaration; gsc requires the `///` block
             // to be adjacent. Partition so regular comments print first and
