@@ -2462,18 +2462,69 @@ public sealed partial class CSharpToGSharpTranslator
                 return statements;
             }
 
+            // Issue #3501: a hoisted local function's body may call a sibling
+            // local function — the callee's `let` binding must lexically
+            // precede the caller's, so every sibling dependency joins the
+            // hoist set (carrying the dependent's anchor) and each insertion
+            // group is ordered callee-first.
+            Dictionary<LocalFunctionStatementSyntax, IMethodSymbol> functionSymbols = localFunctions
+                .Select(f => (Function: f, Symbol: this.context.GetDeclaredSymbol(f) as IMethodSymbol))
+                .Where(pair => pair.Symbol is not null)
+                .ToDictionary(pair => pair.Function, pair => pair.Symbol);
+            List<LocalFunctionStatementSyntax> SiblingDependenciesOf(LocalFunctionStatementSyntax function) =>
+                function.DescendantNodes()
+                    .OfType<IdentifierNameSyntax>()
+                    .Select(id => this.context.GetSymbolInfo(id).Symbol)
+                    .OfType<IMethodSymbol>()
+                    .SelectMany(symbol => functionSymbols
+                        .Where(pair => !ReferenceEquals(pair.Key, function)
+                            && SymbolEqualityComparer.Default.Equals(pair.Value, symbol))
+                        .Select(pair => pair.Key))
+                    .Distinct()
+                    .ToList();
+
+            bool grew = true;
+            while (grew)
+            {
+                grew = false;
+                foreach (var entry in toHoist.ToList())
+                {
+                    foreach (LocalFunctionStatementSyntax dependency in SiblingDependenciesOf(entry.Function))
+                    {
+                        if (!toHoist.Any(t => ReferenceEquals(t.Function, dependency)))
+                        {
+                            toHoist.Add((dependency, IndexOfReference(statements, dependency), entry.AnchorIndex));
+                            grew = true;
+                        }
+                    }
+                }
+            }
+
             var hoistSet = new HashSet<StatementSyntax>(toHoist.Select(t => (StatementSyntax)t.Function));
             var reordered = statements.Where(s => !hoistSet.Contains(s)).ToList();
 
             // Group by anchor statement (the sibling local's declaring statement,
-            // or the front of the block) and re-insert each group, preserving the
-            // original relative order of the local functions within the group.
+            // or the front of the block) and re-insert each group, ordered
+            // callee-first (stable by original declaration order otherwise).
             foreach (var group in toHoist
                 .OrderBy(t => t.DeclIndex)
                 .GroupBy(t => t.AnchorIndex.HasValue ? statements[t.AnchorIndex.Value] : null))
             {
+                List<LocalFunctionStatementSyntax> members = group.Select(t => t.Function).ToList();
+                var placed = new List<LocalFunctionStatementSyntax>();
+                var remaining = new List<LocalFunctionStatementSyntax>(members);
+                while (remaining.Count > 0)
+                {
+                    LocalFunctionStatementSyntax next = remaining.FirstOrDefault(candidate =>
+                        !SiblingDependenciesOf(candidate).Any(dep => remaining.Contains(dep)
+                            && !ReferenceEquals(dep, candidate)))
+                        ?? remaining[0];
+                    remaining.Remove(next);
+                    placed.Add(next);
+                }
+
                 int insertAt = group.Key is null ? 0 : reordered.IndexOf(group.Key) + 1;
-                reordered.InsertRange(insertAt, group.Select(t => (StatementSyntax)t.Function));
+                reordered.InsertRange(insertAt, placed.Cast<StatementSyntax>());
             }
 
             return reordered;
