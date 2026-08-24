@@ -1409,6 +1409,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
             }
 
+            // ADR-0060: G# requires the `in` modifier at call sites of
+            // source-declared functions (GS0242, an error — the binder never
+            // silently spills), so an explicit C# `in x` argument keeps its
+            // keyword and an implicit one targeting a source-declared `in`
+            // parameter gains it. Imported CLR targets keep the plain value —
+            // that path spills to a temp itself. Non-identifier lvalues use
+            // the universal `&expr` back-compat form the binder accepts at
+            // any ref-kind parameter.
+            if (refKind == SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(argument))
+            {
+                GExpression translatedIn = this.TranslateExpression(argument.Expression);
+                return translatedIn is IdentifierExpression inIdentifier
+                    ? new OutArgumentExpression("in", inIdentifier.Name)
+                    : new UnaryExpression("&", translatedIn);
+            }
+
             // A declared-nullable reference argument that C# flow analysis has
             // narrowed to non-null (e.g. a `string?` field read inside an
             // `if (field == null) … else …` guard) is passed by value, but G#
@@ -1478,6 +1494,15 @@ public sealed partial class CSharpToGSharpTranslator
 
             return translated;
         }
+
+        // ADR-0060: whether this argument binds (implicitly, in C#) to an `in`
+        // parameter of a SOURCE-declared method — one that migrates to a G#
+        // func whose call sites must spell the `in` modifier (GS0242).
+        // Metadata-imported targets are excluded: the imported-call path
+        // accepts a plain value and spills it to a temp itself.
+        private bool TargetsSourceDeclaredInParameter(ArgumentSyntax argument) =>
+            this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { RefKind: RefKind.In } parameter }
+            && !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty;
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature
         // at a direct argument. Preserve it when the callable's natural signature

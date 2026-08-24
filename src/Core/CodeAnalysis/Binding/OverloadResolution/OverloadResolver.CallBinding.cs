@@ -1745,10 +1745,11 @@ internal sealed partial class OverloadResolver
                 {
                     if (parameter.RefKind == RefKind.In && argRefKind == RefKind.None)
                     {
-                        // GS0242: warn on `in` without explicit modifier; the call site is
-                        // still rejected as a type error (the value isn't an address) unless
-                        // we rebind under the `in` modifier — but ADR §1 says we do NOT
-                        // silently spill. So this remains a hard error.
+                        // GS0242 (error): `in` without the explicit modifier. ADR-0060
+                        // says we do NOT silently spill a value to a temp, and no
+                        // downstream type error is guaranteed to fire, so the diagnostic
+                        // itself carries error severity (issue #3501: it was a warning,
+                        // and the mis-bound argument reached the emitter as GS9998).
                         Diagnostics.ReportInArgumentMissingInModifier(argSyntax?.Location ?? syntax.Location, i + 1, parameter.Name);
                         hasErrors = true;
                         continue;

@@ -378,7 +378,7 @@ ADR-0060 introduces explicit `ref`, `out`, and `in` parameter passing modes at b
 | GS0239 | Error | The variable `{name}` must be definitely assigned before it can be passed by 'ref'. |
 | GS0240 | Error | Override of `{name}` must match the base ref-kind on parameter `{parameter}` (`{baseKind}` vs `{overrideKind}`). |
 | GS0241 | Error | A variadic parameter cannot carry a ref-kind modifier ('ref'/'out'/'in'). |
-| GS0242 | Warning | Argument `{index}` (parameter `{name}`) is passed by 'in' implicitly; add 'in' at the call site to make the read-only pass explicit. |
+| GS0242 | Error | Argument `{index}` (parameter `{name}`) is an 'in' parameter but the call does not use the 'in' modifier; pass 'in <lvalue>' or change the parameter to by-value. |
 | GS0243 | Error | A pointer type '*T' is not a valid parameter type; use the appropriate ref-kind modifier instead (e.g. 'ref T', 'out T', 'in T'). |
 
 Cause/fix examples:
@@ -390,7 +390,7 @@ Cause/fix examples:
 - **GS0239** — passing an uninitialized variable by `ref`: `var x int32; f(ref x)` with no prior assignment. Fix: assign before the call (e.g. `var x = 0`).
 - **GS0240** — override changes the ref-kind of an inherited parameter: `func override f(in p int32) { … }` when the base declares `f(ref p int32)`. Fix: match the base declaration.
 - **GS0241** — variadic combined with ref-kind: `func g(ref values ...int32) {}`. Fix: remove the modifier or remove the variadic decoration.
-- **GS0242** (warning) — passing a plain identifier to an `in` parameter without writing `in`: `f(x)` where `f(in x int32)`. Fix: write `f(in x)` to make the pass-by-readonly-ref explicit. The compiler does NOT silently spill the value (a deliberate departure from C#).
+- **GS0242** (error) — passing a plain value to an `in` parameter without writing `in`: `f(x)` where `f(in x int32)`. Fix: write `f(in x)` (binding a `let` first for a value expression). The compiler does NOT silently spill the value (a deliberate departure from C#); the call is rejected, since accepting it would mis-bind the argument.
 - **GS0243** — declaring a parameter whose type is the raw pointer `*T`: `func f(p *int32)`. Fix: use a ref-kind modifier instead — `func f(ref p int32)` (or `in`/`out`).
 
 ## Named-argument diagnostics (GS0244–GS0247)

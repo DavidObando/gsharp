@@ -858,15 +858,19 @@ public sealed partial class CSharpToGSharpTranslator
             // targets, so the goto can be lowered to a plain `goto`.
             // Issue #3501 A3: gotos that qualify as adjacent fallthroughs
             // print as the native `fallthrough` statement and need no
-            // synthesized arm-top label.
+            // synthesized arm-top label. Issue #3501: neither do gotos to a
+            // do-nothing arm, which print as a bare `break` (see
+            // TranslateGotoStatement).
             var gotoTargets = new HashSet<SwitchLabelSyntax>(
                 node.DescendantNodes()
                     .OfType<GotoStatementSyntax>()
                     .Where(g => (g.Kind() == SyntaxKind.GotoCaseStatement || g.Kind() == SyntaxKind.GotoDefaultStatement)
                              && g.Ancestors().OfType<SwitchStatementSyntax>().First() == node
                              && !this.IsAdjacentFallthroughGoto(g))
-                    .Select(this.ResolveGotoCaseOrDefaultTarget)
-                    .Where(target => target != null));
+                    .Select(g => (Goto: g, Target: this.ResolveGotoCaseOrDefaultTarget(g)))
+                    .Where(pair => pair.Target != null
+                        && !(TargetArmIsEmptyBreak(pair.Target) && !HasInterveningBreakTarget(pair.Goto)))
+                    .Select(pair => pair.Target));
 
             foreach (SwitchSectionSyntax section in node.Sections)
             {

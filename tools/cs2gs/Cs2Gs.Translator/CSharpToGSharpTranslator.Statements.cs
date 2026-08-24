@@ -1464,6 +1464,18 @@ public sealed partial class CSharpToGSharpTranslator
                         return new[] { (GStatement)new RawStatement($"// unsupported: {gotoStatement.Kind()}") };
                     }
 
+                    // Issue #3501: a goto whose target arm does nothing (an
+                    // empty section or a bare `break;`) just exits the
+                    // switch — G#'s break-in-arm (A3) says that directly, no
+                    // synthesized label pair needed. Guarded against an
+                    // intervening loop or nested switch, where a bare `break`
+                    // would bind to the inner construct instead.
+                    if (TargetArmIsEmptyBreak(target)
+                        && !HasInterveningBreakTarget(gotoStatement))
+                    {
+                        return new[] { (GStatement)new BreakStatement() };
+                    }
+
                     return new[] { (GStatement)new GotoStatement(this.GotoCaseOrDefaultLabelName(target)) };
 
                 default:
@@ -1473,6 +1485,40 @@ public sealed partial class CSharpToGSharpTranslator
                     string label = this.EmittedName(labelName, labelName.Identifier);
                     return new[] { (GStatement)new GotoStatement(label) };
             }
+        }
+
+        /// <summary>
+        /// Issue #3501: true when the arm a <c>goto case</c>/<c>goto
+        /// default</c> targets does nothing — its section body is empty or a
+        /// single bare <c>break;</c> — so the jump is equivalent to exiting
+        /// the switch.
+        /// </summary>
+        private static bool TargetArmIsEmptyBreak(SwitchLabelSyntax target) =>
+            target.Parent is SwitchSectionSyntax section
+            && (section.Statements.Count == 0
+                || (section.Statements.Count == 1 && section.Statements[0] is BreakStatementSyntax));
+
+        /// <summary>
+        /// Issue #3501: true when a loop or a nested <c>switch</c> sits
+        /// between the <c>goto</c> and its enclosing switch, so a bare
+        /// <c>break</c> emitted in the goto's position would bind to that
+        /// inner construct instead of the switch.
+        /// </summary>
+        private static bool HasInterveningBreakTarget(GotoStatementSyntax gotoStatement)
+        {
+            for (SyntaxNode node = gotoStatement.Parent; node is not null; node = node.Parent)
+            {
+                switch (node)
+                {
+                    case SwitchStatementSyntax:
+                        return false;
+                    case ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax
+                        or WhileStatementSyntax or DoStatementSyntax:
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

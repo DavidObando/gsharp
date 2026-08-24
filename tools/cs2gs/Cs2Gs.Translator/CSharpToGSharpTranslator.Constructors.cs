@@ -1953,15 +1953,6 @@ public sealed partial class CSharpToGSharpTranslator
             var toLift = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             foreach (var pair in localFunctions)
             {
-                bool usedAsMethodGroup = statements
-                    .SelectMany(statement => statement.DescendantNodes().OfType<IdentifierNameSyntax>())
-                    .Any(identifier =>
-                        SymbolEqualityComparer.Default.Equals(
-                            this.context.GetSymbolInfo(identifier).Symbol,
-                            pair.Symbol)
-                        && (identifier.Parent is not InvocationExpressionSyntax invocation
-                            || !ReferenceEquals(invocation.Expression, identifier)));
-
                 // Issue #3501 A2: gsc `let`-bound function literals can now
                 // reference their own binding, so DIRECT self-recursion no
                 // longer forces a lift — only a cycle that passes through
@@ -1974,9 +1965,14 @@ public sealed partial class CSharpToGSharpTranslator
                             pair.Symbol,
                             dependency,
                             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { dependency }));
-                if ((!usedAsMethodGroup
-                        && pair.Symbol.Parameters.Any(parameter => parameter.RefKind != RefKind.None))
-                    || recursiveThroughOthers)
+
+                // Issue #3501: gsc `let`-bound function literals now declare
+                // and call through ref/out/in parameters (A2 + the GS0242
+                // call-site modifier), so a ref-kind signature alone no longer
+                // forces a lift — only a recursion cycle through ANOTHER local
+                // function does (the partner would be forward-referenced
+                // before its `let` declaration).
+                if (recursiveThroughOthers)
                 {
                     toLift.Add(pair.Symbol);
                 }
