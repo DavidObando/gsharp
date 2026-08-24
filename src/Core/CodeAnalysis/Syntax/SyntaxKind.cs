@@ -207,6 +207,7 @@ public enum SyntaxKind
     GotoStatement,
     BreakStatement,
     ContinueStatement,
+    FallthroughStatement,
     ReturnStatement,
     MultiAssignmentStatement,
     MultiAssignmentDeclarationExpression,

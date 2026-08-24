@@ -20,7 +20,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue2890SwitchSelectEscapingBranchFlowTests
 {
     [Fact]
-    public void BreakOutOfPatternSwitchArm_ReportsGs0100()
+    public void BreakOutOfPatternSwitchArm_ExitsSwitchAndBindsClean()
     {
         const string Source = """
             package Issue2890.SwitchBreak
@@ -34,11 +34,11 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
-    public void BreakOutOfSelectDefaultArm_ReportsGs0100()
+    public void BreakOutOfSelectDefaultArm_ExitsSelectAndBindsClean()
     {
         const string Source = """
             package Issue2890.SelectBreak
@@ -53,11 +53,11 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
-    public void BreakOutOfRealSelectArm_ReportsGs0100()
+    public void BreakOutOfRealSelectArm_ExitsSelectAndBindsClean()
     {
         const string Source = """
             package Issue2890.SelectRealBreak
@@ -75,11 +75,11 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
-    public void BreakOutOfNestedPatternSwitchArm_ReportsGs0100()
+    public void BreakOutOfNestedPatternSwitchArm_ExitsInnerSwitchAndBindsClean()
     {
         const string Source = """
             package Issue2890.NestedSwitchBreak
@@ -98,7 +98,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     }
 
     [Fact]
-    public void PatternSwitchInsideFixedBreak_ReportsGs0100()
+    public void PatternSwitchInsideFixedBreak_ExitsSwitchAndBindsClean()
     {
         const string Source = """
             package Issue2890.SwitchFixedBreak
@@ -180,11 +180,11 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
-    public void PatternSwitchInsideScopeBreak_ReportsGs0100()
+    public void PatternSwitchInsideScopeBreak_ExitsSwitchAndBindsClean()
     {
         const string Source = """
             package Issue2890.SwitchScopeBreak
@@ -201,7 +201,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     }
 
     [Fact]
-    public void FalseGuardArmBreak_ReportsGs0100()
+    public void FalseGuardArmBreak_ExitsSwitchAndBindsClean()
     {
         const string Source = """
             package Issue2890.FalseGuardBreak
@@ -255,7 +255,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
@@ -395,7 +395,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     }
 
     [Fact]
-    public void LiteralSwitchImpossibleEscapingArms_ReportsGs0100()
+    public void LiteralSwitchImpossibleEscapingArms_ExitSwitchAndBindClean()
     {
         const string Source = """
             package Issue2890.LiteralSwitch
@@ -411,7 +411,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertBindsClean(Source);
     }
 
     [Fact]
@@ -465,6 +465,19 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             """;
 
         AssertNoErrors(Source);
+    }
+
+
+    // Issue #3501 A3: an unlabeled `break` inside a switch/select arm now
+    // exits the switch/select (Go/C# alignment), so the enclosing infinite
+    // `for` never terminates and the function binds clean — the shapes above
+    // stopped being GS0100 escapes. Labeled break still targets the loop and
+    // keeps its GS0100 coverage (see the Labeled* tests).
+    private static void AssertBindsClean(string source)
+    {
+        var (result, _) = Compile(source);
+        Assert.Empty(result.Diagnostics.Where(candidate => candidate.IsError));
+        Assert.True(result.Success);
     }
 
     private static void AssertOnlyGs0100(string source)

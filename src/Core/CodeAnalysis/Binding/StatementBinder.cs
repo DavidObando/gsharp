@@ -213,6 +213,8 @@ internal sealed partial class StatementBinder
                 return BindBreakStatement((BreakStatementSyntax)syntax);
             case SyntaxKind.ContinueStatement:
                 return BindContinueStatement((ContinueStatementSyntax)syntax);
+            case SyntaxKind.FallthroughStatement:
+                return BindFallthroughStatement((FallthroughStatementSyntax)syntax);
             case SyntaxKind.ReturnStatement:
                 return BindReturnStatement((ReturnStatementSyntax)syntax);
             case SyntaxKind.ExpressionStatement:

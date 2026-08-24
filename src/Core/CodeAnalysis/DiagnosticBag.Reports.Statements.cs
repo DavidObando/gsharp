@@ -294,12 +294,23 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.InvalidMultiAssignmentTarget);
 
     /// <summary>
-    /// Reports a use of the reserved <c>fallthrough</c> keyword (ADR-0013: GSharp
-    /// does not support Go-style implicit case fallthrough).
+    /// Reports a misplaced <c>fallthrough</c> statement (issue #3501 A3:
+    /// <c>fallthrough</c> is legal only as the LAST statement of a switch
+    /// case body).
     /// </summary>
     /// <param name="location">The text location where <c>fallthrough</c> was found.</param>
     public void ReportFallthroughNotSupported(TextLocation location)
     => Report(location, DiagnosticDescriptors.FallthroughNotSupported);
+
+    /// <summary>Reports a <c>fallthrough</c> in the final arm of a switch (issue #3501 A3).</summary>
+    /// <param name="location">The text location of the <c>fallthrough</c> keyword.</param>
+    public void ReportFallthroughInFinalArm(TextLocation location)
+    => Report(location, DiagnosticDescriptors.FallthroughInFinalArm);
+
+    /// <summary>Reports a <c>fallthrough</c> whose target arm declares pattern bindings or a guard (issue #3501 A3).</summary>
+    /// <param name="location">The text location of the <c>fallthrough</c> keyword.</param>
+    public void ReportFallthroughTargetHasBindings(TextLocation location)
+    => Report(location, DiagnosticDescriptors.FallthroughTargetHasBindings);
 
     /// <summary>
     /// Reports a duplicate <c>default</c> arm in a switch statement.

@@ -89,6 +89,7 @@ EventSubscriptionExpression
 ExpressionCollectionElement
 ExpressionStatement
 FallthroughKeyword
+FallthroughStatement
 FalseKeyword
 FieldAccessExpression
 FieldAssignmentExpression

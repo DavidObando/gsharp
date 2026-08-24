@@ -76,6 +76,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // infinite for
         "package p\nfunc F() {\n  for {\n    break\n  }\n}\n",
 
+        // issue #3501 A3: fallthrough statement + comma multi-pattern arm
+        "package p\nfunc F(v int32) {\n  switch v {\n    case 1, 2 {\n      fallthrough\n    }\n    default {\n    }\n  }\n}\n",
+
         // unsafe: fixed, stackalloc, sizeof, indirect assignment
         "package p\nunsafe func F(dest []uint8) {\n  fixed pD *uint8 = dest { }\n  var buf = stackalloc [4]uint8\n  let sz = sizeof(int32)\n  var x = 1\n  var px = &x\n  *px = 2\n}\n",
 

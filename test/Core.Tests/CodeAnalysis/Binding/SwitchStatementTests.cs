@@ -104,8 +104,12 @@ public class SwitchStatementTests
     }
 
     [Fact]
-    public void Fallthrough_Reports_Error()
+    public void Fallthrough_ToPlainConstantArm_BindsClean()
     {
+        // Issue #3501 A3: `fallthrough` gained Go semantics — a trailing
+        // fallthrough into a binding-free arm is legal (the target's
+        // body-local declarations still run normally). Misuse coverage lives
+        // in Issue3501SwitchFamilyTests (GS0168/GS0533/GS0534).
         var src = @"func F() {
  var x = 1
  switch x {
@@ -114,8 +118,7 @@ public class SwitchStatementTests
  }
 }
 ";
-        var diagnostics = Bind(src);
-        Assert.Contains(diagnostics, d => d.Message.Contains("fallthrough", System.StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(Bind(src));
     }
 
     [Fact]

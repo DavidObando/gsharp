@@ -79,10 +79,48 @@ namespace Corpus.Issue1884
 }
 ");
 
-        // The `goto case 2;` lowers to a `goto` of a synthesized label
-        // (`__gotoCase<pos>`) placed at the top of case 2's translated body.
+        // Issue #3501 A3: the trailing `goto case 2;` targets the LEXICALLY
+        // NEXT arm, so it is exactly Go's `fallthrough` — the native gsc
+        // statement replaces the synthesized-label lowering.
+        Assert.Contains("fallthrough", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gotoCase", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void GotoCase_NonAdjacentTarget_StillLowersToSynthesizedLabel()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1884
+{
+    public class Switcher
+    {
+        public string Run(int value)
+        {
+            string trace = """";
+            switch (value)
+            {
+                case 1:
+                    trace += ""one"";
+                    goto case 3;
+                case 2:
+                    trace += ""two"";
+                    break;
+                case 3:
+                    trace += ""three"";
+                    break;
+            }
+
+            return trace;
+        }
+    }
+}
+");
+
+        // A goto that skips over an arm cannot be a fallthrough; it keeps
+        // the synthesized-label lowering (issue #1884).
         Assert.Contains("goto __gotoCase", rendered, StringComparison.Ordinal);
-        Assert.Contains("__gotoCase", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("fallthrough", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -113,8 +151,11 @@ namespace Corpus.Issue1884
 }
 ");
 
-        Assert.Contains("goto __gotoDefault", rendered, StringComparison.Ordinal);
-        Assert.Contains("__gotoDefault", rendered, StringComparison.Ordinal);
+        // Issue #3501 A3: `goto default` targeting the lexically next arm is
+        // Go's `fallthrough`; the synthesized-label lowering remains only for
+        // non-adjacent targets (see GotoCase_NonAdjacentTarget test).
+        Assert.Contains("fallthrough", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gotoDefault", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

@@ -243,11 +243,11 @@ public class Issue2891TryRegionFlowTests
             """);
         yield return Case("TryInsideSwitchArmBreak", """
             func F(x int32) int32 {
-                for {
+                outer: for {
                     switch x {
                         default {
                             try {
-                                break
+                                break outer
                             } finally {
                             }
                         }
@@ -257,10 +257,10 @@ public class Issue2891TryRegionFlowTests
             """);
         yield return Case("SwitchInsideTryBreak", """
             func F(x int32) int32 {
-                for {
+                outer: for {
                     try {
                         switch x {
-                            default { break }
+                            default { break outer }
                         }
                     } finally {
                     }
@@ -270,11 +270,11 @@ public class Issue2891TryRegionFlowTests
         yield return Case("TryInsideSelectBreak", """
             import Gsharp.Extensions.Go
             func F() int32 {
-                for {
+                outer: for {
                     select {
                         default {
                             try {
-                                break
+                                break outer
                             } finally {
                             }
                         }
@@ -285,10 +285,10 @@ public class Issue2891TryRegionFlowTests
         yield return Case("SelectInsideTryBreak", """
             import Gsharp.Extensions.Go
             func F() int32 {
-                for {
+                outer: for {
                     try {
                         select {
-                            default { break }
+                            default { break outer }
                         }
                     } finally {
                     }
