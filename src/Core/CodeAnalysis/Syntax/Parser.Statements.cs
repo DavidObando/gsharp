@@ -257,7 +257,8 @@ public partial class Parser
                     Peek(1).Kind != SyntaxKind.CommaToken &&
                     Peek(1).Kind != SyntaxKind.DotToken &&
                     Peek(1).Kind != SyntaxKind.EqualsToken &&
-                    Peek(1).Kind != SyntaxKind.OpenSquareBracketToken &&
+                    (Peek(1).Kind != SyntaxKind.OpenSquareBracketToken ||
+                        Peek(2).Kind == SyntaxKind.CloseSquareBracketToken) &&
                     (Peek(1).Kind != SyntaxKind.OpenParenthesisToken || LooksLikeYieldTupleLiteral(1)))
                 {
                     // Issue #813: `yield (a, b)` is a yield-statement that
@@ -267,6 +268,11 @@ public partial class Parser
                     // tuple-literal lookahead, `yield (` was uniformly
                     // forwarded to expression-statement parsing where it
                     // became the call `yield(args)` and reported GS0130.
+                    //
+                    // Issue #3501: `yield [` is indexing a variable named
+                    // `yield` — except when the bracket pair is empty, since
+                    // `[]` can only begin an array-literal type
+                    // (`yield []T{…}`).
                     return ParseYieldStatement();
                 }
 

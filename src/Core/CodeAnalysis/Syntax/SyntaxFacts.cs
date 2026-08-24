@@ -293,7 +293,7 @@ public static class SyntaxFacts
         }
 
         if ((context & IdentifierNameContext.Pattern) != 0
-            && text is "and" or "or" or "when")
+            && text is "and" or "or" or "when" or "not")
         {
             return true;
         }

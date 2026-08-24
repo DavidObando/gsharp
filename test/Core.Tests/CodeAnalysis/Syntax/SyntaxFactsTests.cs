@@ -48,6 +48,7 @@ public class SyntaxFactsTests
     [InlineData("when", IdentifierNameContext.Pattern)]
     [InlineData("and", IdentifierNameContext.Pattern)]
     [InlineData("or", IdentifierNameContext.Pattern)]
+    [InlineData("not", IdentifierNameContext.Pattern)]
     [InlineData("event", IdentifierNameContext.Type)]
     [InlineData("prop", IdentifierNameContext.Type)]
     [InlineData("init", IdentifierNameContext.Type)]
