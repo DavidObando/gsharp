@@ -2243,7 +2243,13 @@ public abstract class BoundTreeRewriter
                 node.FunctionType,
                 node.StaticOwnerType,
                 node.MethodTypeArguments)
-            : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates, node.StaticOwnerType);
+            {
+                ForceNonVirtualDispatch = node.ForceNonVirtualDispatch,
+            }
+            : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates, node.StaticOwnerType)
+            {
+                ForceNonVirtualDispatch = node.ForceNonVirtualDispatch,
+            };
     }
 
     /// <summary>Rewrites a CLR method-group expression (issue #337).</summary>

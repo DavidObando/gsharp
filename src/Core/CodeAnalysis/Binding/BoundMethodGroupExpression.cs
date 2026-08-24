@@ -95,6 +95,14 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     /// <summary>Gets the inferred type arguments for a generic source method.</summary>
     public ImmutableArray<TypeSymbol> MethodTypeArguments { get; }
 
+    /// <summary>
+    /// Gets a value indicating whether the delegate must capture the BASE
+    /// implementation non-virtually (issue #3501: <c>base.M</c> used as a
+    /// method group — <c>ldftn</c> even though the method is open/override,
+    /// exactly like C#'s <c>base.M</c> delegate conversion).
+    /// </summary>
+    public bool ForceNonVirtualDispatch { get; init; }
+
     public override TypeSymbol Type => FunctionType ?? (TypeSymbol)TypeSymbol.Error;
 
     public override BoundNodeKind Kind => BoundNodeKind.MethodGroupExpression;
