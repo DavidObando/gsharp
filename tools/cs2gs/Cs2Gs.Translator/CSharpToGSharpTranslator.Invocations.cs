@@ -388,6 +388,25 @@ public sealed partial class CSharpToGSharpTranslator
                 target = new NonNullAssertionExpression(target);
             }
 
+            // Issue #3501 (GS0155): C# inferred a generic overload whose type
+            // arguments include a same-compilation user type (e.g.
+            // `builder.AddRange(fields)` selecting `AddRange<TDerived>` with
+            // `TDerived = FieldSymbol`). gsc's erased inference collapses the
+            // user type to `object`, letting an invariant same-name sibling win
+            // and fail conversion — spell the type arguments explicitly so the
+            // C#-chosen overload binds.
+            if ((typeArguments == null || typeArguments.Count == 0)
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { IsGenericMethod: true, MethodKind: MethodKind.Ordinary or MethodKind.ReducedExtension } inferredGeneric
+                && !inferredGeneric.TypeArguments.IsDefaultOrEmpty
+                && inferredGeneric.TypeArguments.All(t => t.TypeKind != TypeKind.Error)
+                && inferredGeneric.TypeArguments.Any(t => !t.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                && inferredGeneric.ContainingType?.GetMembers(inferredGeneric.Name).Length > 1)
+            {
+                typeArguments = inferredGeneric.TypeArguments
+                    .Select(t => this.typeMapper.Map(t, this.context, invocation.GetLocation()))
+                    .ToList();
+            }
+
             return new InvocationExpression(target, arguments, typeArguments);
         }
 

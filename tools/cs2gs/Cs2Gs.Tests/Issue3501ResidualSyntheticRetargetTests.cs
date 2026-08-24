@@ -252,6 +252,34 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void InferredGenericOverload_WithUserTypeArguments_SpellsThemExplicitly()
+    {
+        // GS0155: gsc's erased inference collapses FieldSymbol to object,
+        // letting the invariant non-generic AddRange sibling win and fail
+        // conversion. The C#-chosen generic overload keeps its inferred
+        // user-type arguments explicitly.
+        string printed = Translate("""
+            using System.Collections.Immutable;
+
+            public class Symbol { }
+            public sealed class FieldSymbol : Symbol { }
+
+            public static class C
+            {
+                public static ImmutableArray<Symbol> Collect(ImmutableArray<FieldSymbol> fields)
+                {
+                    var builder = ImmutableArray.CreateBuilder<Symbol>();
+                    builder.AddRange(fields);
+                    return builder.ToImmutable();
+                }
+            }
+            """);
+
+        Assert.Contains("builder.AddRange[FieldSymbol](fields)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
