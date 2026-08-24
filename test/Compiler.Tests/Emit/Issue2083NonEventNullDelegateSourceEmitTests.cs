@@ -30,7 +30,7 @@ public class Issue2083NonEventNullDelegateSourceEmitTests
             package Issue2083Pkg
             import System
 
-            type Handler = delegate func() void
+            delegate Handler() void;
 
             class Box {
                 var H (() -> void)

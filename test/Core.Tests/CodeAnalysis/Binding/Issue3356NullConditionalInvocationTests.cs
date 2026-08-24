@@ -167,9 +167,9 @@ public class Issue3356NullConditionalInvocationTests
     public void NullConditionalCallResult_GenericNamedDelegates_PreserveRefKinds()
     {
         var result = EmittedOracle.Evaluate("""
-            type RefAction[T] = delegate func(ref value T)
-            type OutAction[T] = delegate func(out value T)
-            type InPredicate[T] = delegate func(in value T) bool
+            delegate RefAction[T](ref value T);
+            delegate OutAction[T](out value T);
+            delegate InPredicate[T](in value T) bool;
 
             func RefOrNil[T any](action RefAction[T]?) RefAction[T]? -> action
             func OutOrNil[T any](action OutAction[T]?) OutAction[T]? -> action

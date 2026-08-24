@@ -16,11 +16,11 @@ namespace Cs2Gs.Tests;
 /// Issue #1734: <c>SanitizeIdentifier</c> is applied at every C# *reference*
 /// site (<c>TranslateIdentifierName</c> and friends) but was skipped at many
 /// *declaration*/*synthesis* sites, so a member/parameter/local/pattern
-/// designator whose C# name collides with a G# reserved word (e.g. <c>type</c>,
+/// designator whose C# name collides with a G# reserved word (e.g. <c>defer</c>,
 /// <c>select</c>) was declared under its raw name while every reference to it
-/// was emitted sanitized (<c>type_</c>) — producing G# that either fails to
+/// was emitted sanitized (<c>defer_</c>) — producing G# that either fails to
 /// parse (a bare keyword in declaration position) or fails to bind (declared
-/// <c>type</c> vs referenced <c>type_</c>).
+/// <c>defer</c> vs referenced <c>defer_</c>).
 /// <para>
 /// Every case below asserts that (1) the declaration and every reference use
 /// the identical sanitized spelling, (2) the unsanitized raw form never leaks
@@ -35,25 +35,25 @@ public class Issue1734DeclarationSiteSanitizationTests
         string rendered = Render(@"
 namespace Corpus.Issue1734
 {
-    public class type
+    public class defer
     {
         public int Value;
     }
 
     public class Holder
     {
-        public type Make()
+        public defer Make()
         {
-            return new type();
+            return new defer();
         }
     }
 }
 ");
 
-        Assert.Contains("class type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("Make() type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("return type_()", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("Make() defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("return defer_()", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -65,14 +65,14 @@ namespace Corpus.Issue1734
 {
     public class Holder
     {
-        public readonly string type;
+        public readonly string defer;
 
-        public Holder(string type)
+        public Holder(string defer)
         {
-            this.type = type;
+            this.defer = defer;
         }
 
-        public string Read() => type;
+        public string Read() => defer;
     }
 }
 ");
@@ -80,8 +80,8 @@ namespace Corpus.Issue1734
         // The lifted primary-constructor parameter and the member it feeds must
         // agree on the sanitized spelling everywhere: the parameter list, the
         // parameter-field read inside 'Read', and (if retained) the field itself.
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -95,15 +95,15 @@ namespace Corpus.Issue1734
     {
         public int Compute()
         {
-            int type() => 5;
-            return type() + type();
+            int defer() => 5;
+            return defer() + defer();
         }
     }
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -151,8 +151,8 @@ namespace Corpus.Issue1734
         {
             switch (shape)
             {
-                case Circle type:
-                    return type.Radius;
+                case Circle defer:
+                    return defer.Radius;
                 default:
                     return 0;
             }
@@ -161,8 +161,8 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -185,8 +185,8 @@ namespace Corpus.Issue1734
         {
             switch (shape)
             {
-                case Circle { Radius: var r } type:
-                    return r + type.Radius;
+                case Circle { Radius: var r } defer:
+                    return r + defer.Radius;
                 default:
                     return 0;
             }
@@ -195,8 +195,8 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -238,7 +238,7 @@ namespace Corpus.Issue1734
 {
     public class Circle
     {
-        public int type;
+        public int defer;
     }
 
     public class Holder
@@ -247,7 +247,7 @@ namespace Corpus.Issue1734
         {
             switch (circle)
             {
-                case Circle { type: var t }:
+                case Circle { defer: var t }:
                     return t;
                 default:
                     return 0;
@@ -257,8 +257,8 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -270,21 +270,21 @@ namespace Corpus.Issue1734
 {
     public class Circle
     {
-        public int type;
+        public int defer;
     }
 
     public class Holder
     {
         public Circle Make()
         {
-            return new Circle { type = 3 };
+            return new Circle { defer = 3 };
         }
     }
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -294,17 +294,17 @@ namespace Corpus.Issue1734
         string rendered = Render(@"
 namespace Corpus.Issue1734
 {
-    public sealed record Circle(int type);
+    public sealed record Circle(int defer);
 
     public class Holder
     {
-        public Circle Recolor(Circle circle) => circle with { type = 4 };
+        public Circle Recolor(Circle circle) => circle with { defer = 4 };
     }
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -337,17 +337,17 @@ namespace Corpus.Issue1734
         string rendered = Render(@"
 namespace Corpus.Issue1734
 {
-    public class Box<type>
+    public class Box<defer>
     {
-        public type Value;
+        public defer Value;
 
-        public type Read() => Value;
+        public defer Read() => Value;
     }
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -364,16 +364,16 @@ namespace Corpus.Issue1734
     {
         public IEnumerable<int> Filter(IEnumerable<int> values)
         {
-            return from type in values
-                   where type > 0
-                   select type;
+            return from defer in values
+                   where defer > 0
+                   select defer;
         }
     }
 }
 ");
 
-        Assert.Contains("type_", rendered, StringComparison.Ordinal);
-        AssertNoRawKeywordCollision(rendered, "type");
+        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
 
@@ -382,6 +382,30 @@ namespace Corpus.Issue1734
     // sanitized '<keyword>_' spelling may appear. A bare match would mean some
     // declaration or reference site still emits the unsanitized, unparseable /
     // unbound name (issue #1734).
+    [Fact]
+    public void TypeIdentifier_IsNoLongerSanitized()
+    {
+        // Issue #3510: `type` left the G# reserved keyword set (aliases parse
+        // contextually), so a C# identifier named `type` keeps its spelling.
+        string rendered = Render(@"
+namespace Corpus.Issue3510
+{
+    public class Holder
+    {
+        public string Describe(string type)
+        {
+            string local = type;
+            return local + type;
+        }
+    }
+}
+");
+
+        Assert.Contains("Describe(type string)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("type_", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
     private static void AssertNoRawKeywordCollision(string rendered, string keyword)
     {
         var regex = new System.Text.RegularExpressions.Regex(

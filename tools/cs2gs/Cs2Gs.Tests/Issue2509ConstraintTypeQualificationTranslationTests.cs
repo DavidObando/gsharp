@@ -61,7 +61,7 @@ public sealed class Issue2509ConstraintTypeQualificationTranslationTests
 
         Assert.Contains("class BaseHost[T A.Base]", printed, StringComparison.Ordinal);
         Assert.Contains("interface InterfaceHost[T A.IContract]", printed, StringComparison.Ordinal);
-        Assert.Contains("type Handler[T A.IContract] = delegate", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Handler[T A.IContract](", printed, StringComparison.Ordinal);
         Assert.Contains("func Generic[T A.IGeneric[T]]", printed, StringComparison.Ordinal);
         Assert.Contains("func Nested[T A.Outer.IContract]", printed, StringComparison.Ordinal);
         Assert.Contains("func Multiple[T A.Base init()]", printed, StringComparison.Ordinal);

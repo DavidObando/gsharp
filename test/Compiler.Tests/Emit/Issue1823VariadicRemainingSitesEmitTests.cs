@@ -60,7 +60,7 @@ public class Issue1823VariadicRemainingSitesEmitTests
             package Probe1823b
             import System
 
-            type LongSumDelegate1823 = delegate func(xs ...int64) int64
+            delegate LongSumDelegate1823(xs ...int64) int64;
 
             func Main() {
                 var s LongSumDelegate1823 = (xs) -> xs[0] + xs[1] + xs[2]

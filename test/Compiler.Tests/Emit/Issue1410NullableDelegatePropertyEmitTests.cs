@@ -130,7 +130,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             package P
             import System
 
-            type Getter = delegate func() string
+            delegate Getter() string;
 
             func NamedValue() string -> "named"
 

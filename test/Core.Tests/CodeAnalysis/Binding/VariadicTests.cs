@@ -325,7 +325,7 @@ len(t.Values)
     {
         var diagnostics = Bind(@"
 package P
-type Adder = delegate func(nums ...int32) int32
+delegate Adder(nums ...int32) int32;
 var d Adder = func(nums ...int32) int32 { return 0 }
 let r = d(1, 2, 3, 4)
 ");
@@ -337,7 +337,7 @@ let r = d(1, 2, 3, 4)
     {
         var diagnostics = Bind(@"
 package P
-type Adder = delegate func(nums ...int32) int32
+delegate Adder(nums ...int32) int32;
 var d Adder = func(nums ...int32) int32 { return 0 }
 let r = d.Invoke(1, 2, 3, 4)
 ");
@@ -349,7 +349,7 @@ let r = d.Invoke(1, 2, 3, 4)
     {
         var diagnostics = Bind(@"
 package P
-type Counter = delegate func(nums ...int32) int32
+delegate Counter(nums ...int32) int32;
 var d Counter = func(nums ...int32) int32 { return 0 }
 let r = d([]int32{1, 2, 3})
 ");
@@ -361,7 +361,7 @@ let r = d([]int32{1, 2, 3})
     {
         var diagnostics = Bind(@"
 package P
-type Counter = delegate func(nums ...int32) int32
+delegate Counter(nums ...int32) int32;
 var d Counter = func(nums ...int32) int32 { return 0 }
 let r = d()
 ");

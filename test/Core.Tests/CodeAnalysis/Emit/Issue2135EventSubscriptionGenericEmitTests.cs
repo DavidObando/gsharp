@@ -62,7 +62,7 @@ class Bus[T] {
     public void DelegateParamHandler_OnGenericUserDelegateEvent_EmitsWithoutCrash()
     {
         const string Source = @"package Issue2135UserDelegate
-type Handler[T] = delegate func(v T)
+delegate Handler[T](v T);
 class Bus[T] {
     event OnMsg Handler[T]
     func Wire(h Handler[T]) {

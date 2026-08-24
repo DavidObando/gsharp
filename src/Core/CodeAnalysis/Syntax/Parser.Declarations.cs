@@ -633,9 +633,50 @@ public partial class Parser
         return interfaceDecl;
     }
 
+    /// <summary>
+    /// Issue #3510: parses the canonical named delegate declaration
+    /// <c>delegate Name[TParams]?(params) ReturnType? ;</c>. The required
+    /// trailing semicolon terminates the optional return-type clause — the
+    /// retired <c>type Name = delegate func(...)</c> spelling had no
+    /// terminator, so a void delegate greedily consumed whatever declaration
+    /// followed it.
+    /// </summary>
+    /// <param name="accessibilityModifier">The optional accessibility modifier.</param>
+    /// <returns>The parsed delegate declaration.</returns>
+    private MemberSyntax ParseDelegateDeclaration(SyntaxToken? accessibilityModifier)
+    {
+        var delegateKeyword = NextToken();
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var typeParameterList = ParseOptionalTypeParameterList();
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var parameters = ParseParameterList();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        TypeClauseSyntax? returnType = null;
+        if (Current.Kind != SyntaxKind.SemicolonToken && CanStartTypeClause(Current))
+        {
+            returnType = ParseTypeClause();
+        }
+
+        var semicolon = MatchToken(SyntaxKind.SemicolonToken);
+        return new DelegateDeclarationSyntax(
+            syntaxTree,
+            accessibilityModifier,
+            delegateKeyword,
+            identifier,
+            typeParameterList,
+            openParen,
+            parameters,
+            closeParen,
+            returnType,
+            semicolon);
+    }
+
     private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken? accessibilityModifier)
     {
-        var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
+        // Issue #3510: `type` is a contextual identifier now (the dispatcher
+        // guarantees an identifier follows at member position).
+        var typeKeyword = NextToken();
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
 
         // Phase 4.3 / ADR-0020: optional type-parameter list directly after the
@@ -656,14 +697,14 @@ public partial class Parser
 
         var equalsToken = MatchToken(SyntaxKind.EqualsToken);
 
-        // ADR-0059 / issue #255: `type Name [TParams] = delegate func(...) R`
-        // declares a named CLR delegate type. The `delegate` contextual keyword
-        // (an IdentifierToken whose text is "delegate") differentiates this
-        // case from the erased type-alias form below. We require `func` to
-        // immediately follow `delegate`; anything else trips GS0233.
+        // Issue #3510: the ADR-0059 `type Name [TParams] = delegate func(...) R`
+        // spelling is RETIRED — report the migration diagnostic and recover by
+        // parsing the old shape into the same node so downstream binding
+        // continues with one clean error.
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "delegate")
         {
-            return ParseDelegateDeclaration(accessibilityModifier, typeKeyword, identifier, typeParameterList, equalsToken);
+            Diagnostics.ReportRetiredDelegateDeclarationForm(typeKeyword.Location, identifier.Text);
+            return ParseLegacyDelegateDeclaration(accessibilityModifier, typeKeyword, identifier, typeParameterList, equalsToken);
         }
 
         var aliasedIdentifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -875,7 +916,7 @@ public partial class Parser
         return sb.ToString();
     }
 
-    private MemberSyntax ParseDelegateDeclaration(
+    private MemberSyntax ParseLegacyDelegateDeclaration(
         SyntaxToken? accessibilityModifier,
         SyntaxToken? typeKeyword,
         SyntaxToken identifier,
@@ -900,10 +941,13 @@ public partial class Parser
         var parameters = ParseParameterList();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
 
-        // Return type clause is optional; absence means `void` per the existing
-        // `func` declaration convention.
+        // Return type clause is optional; absence means `void`. Issue #3510:
+        // this recovery path deliberately does NOT treat a following `func`
+        // keyword as a return-type head — the retired spelling's greediness
+        // (a void delegate consuming the next declaration) is exactly why it
+        // was retired, and GS0535 already fired above.
         TypeClauseSyntax? returnType = null;
-        if (CanStartTypeClause(Current))
+        if (Current.Kind != SyntaxKind.FuncKeyword && CanStartTypeClause(Current))
         {
             returnType = ParseTypeClause();
         }

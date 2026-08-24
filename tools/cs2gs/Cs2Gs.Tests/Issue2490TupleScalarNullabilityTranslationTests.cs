@@ -195,7 +195,7 @@ public static class Repro
     }
 }");
 
-        Assert.Contains("type Counter = delegate func(value string?) int32", printed);
+        Assert.Contains("delegate Counter(value string?) int32;", printed);
         Assert.Contains("func Forward[T class](value T?) T?", printed);
         Assert.Contains("let Core = func (item T?) T?", printed);
         Assert.Contains("async func RunAsync(missing bool) string?", printed);

@@ -33,7 +33,7 @@ namespace Corpus.Issue1960
 }
 ");
 
-        Assert.Contains("type Selector[T] = delegate func(value T) T", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Selector[T](value T) T;", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -47,7 +47,7 @@ namespace Corpus.Issue1960
 }
 ");
 
-        Assert.Contains("type Mapper[TIn, TResult] = delegate func(input TIn) TResult", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Mapper[TIn, TResult](input TIn) TResult;", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -61,7 +61,7 @@ namespace Corpus.Issue1960
 }
 ");
 
-        Assert.Contains("type Handler[T] = delegate func(value T)", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Handler[T](value T);", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("func(value T) ", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
@@ -76,7 +76,7 @@ namespace Corpus.Issue1960
 }
 ");
 
-        Assert.Contains("type Handler[T class] = delegate func(value T)", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Handler[T class](value T);", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

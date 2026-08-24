@@ -189,8 +189,8 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
         const string contracts = """
             package DelegateContracts
 
-            type FirstHandler = delegate func(value int32) void
-            type SecondHandler = delegate func(value int32) void
+            delegate FirstHandler(value int32) void;
+            delegate SecondHandler(value int32) void;
 
             class Dispatcher {
                 shared {
@@ -227,7 +227,7 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
             package Issue2718.Generic
             import System
 
-            type ChangeHandler[T] = delegate func(value T) void
+            delegate ChangeHandler[T](value T) void;
 
             interface IChanges[T] {
                 event Changed ChangeHandler[T]
@@ -276,7 +276,7 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
         const string source = """
             package Issue2718.Negative
 
-            type ChangeHandler[T] = delegate func(value T) void
+            delegate ChangeHandler[T](value T) void;
 
             interface IChanges {
                 event Changed ChangeHandler[int32]

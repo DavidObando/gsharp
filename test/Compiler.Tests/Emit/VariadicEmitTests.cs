@@ -485,7 +485,7 @@ public class VariadicEmitTests
             package P
             import System
 
-            type Adder = delegate func(nums ...int32) int32
+            delegate Adder(nums ...int32) int32;
 
             var d Adder = func(nums ...int32) int32 {
               var total = 0
@@ -618,7 +618,7 @@ public class VariadicEmitTests
             File.WriteAllText(gsSrc, """
                 package GsVariadicDelegateLib
 
-                public type StringJoiner = delegate func(sep string, parts ...string) string
+                public delegate StringJoiner(sep string, parts ...string) string;
                 """);
 
             CompileLibrary(gsSrc, gsDll);

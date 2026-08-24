@@ -111,7 +111,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
         // shape through a nil-typed local; no named-delegate instance needs to
         // materialize.
         var source = """
-            type Reducer = delegate func(a int32, b int32) int32
+            delegate Reducer(a int32, b int32) int32;
 
             func IsBound(f Reducer) string {
                 if f == nil {

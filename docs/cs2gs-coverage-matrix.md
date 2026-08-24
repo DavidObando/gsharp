@@ -79,7 +79,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | DefaultExpression | DefaultExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/DefaultExpression.cs |  |  |
 | DefaultLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/DefaultLiteralExpression.cs |  |  |
 | DefaultSwitchLabel | DefaultSwitchLabelSyntax | ADR-0115 §B.33 |  |  |  |  |
-| DelegateDeclaration | DelegateDeclarationSyntax | ADR-0059 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DelegateDeclaration.cs |  | Maps to the G# named delegate type alias `type Name = delegate func(params) R` (ADR-0059), including a generic delegate's type-parameter list (any arity, with constraints) — `type Name[T constraint] = delegate func(...) R` (issue #1960 item 1). |
+| DelegateDeclaration | DelegateDeclarationSyntax | ADR-0059 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DelegateDeclaration.cs |  | Maps to the G# named delegate declaration `delegate Name(params) R;` (issue #3510; originally ADR-0059), including a generic delegate's type-parameter list (any arity, with constraints) — `delegate Name[T constraint](...) R;` (issue #1960 item 1). |
 | DestructorDeclaration | DestructorDeclarationSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/DestructorDeclaration.cs |  |  |
 | DiscardDesignation | DiscardDesignationSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
 | DiscardPattern | DiscardPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/DiscardPattern.cs |  |  |

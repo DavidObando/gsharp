@@ -29,7 +29,7 @@ public sealed class Issue3461IdentifierAttributeEmitTests
                 """
                 import GSharp.Core.Tests.Fixtures
 
-                @ImportedReservedNamed("a", "b", type__: "c", type_: "d")
+                @ImportedReservedNamed("a", "b", type: "c", type_: "d")
                 class Tagged {
                 }
                 """)));
@@ -51,7 +51,7 @@ public sealed class Issue3461IdentifierAttributeEmitTests
                     ? typeof(ImportedReservedNamedAttribute).Assembly
                     : null;
             Assembly assembly = loadContext.LoadFromStream(stream);
-            Type tagged = assembly.GetTypes().Single(type => type.Name == "Tagged");
+            Type tagged = assembly.GetTypes().Single(candidateType => candidateType.Name == "Tagged");
             CustomAttributeData attribute = tagged.GetCustomAttributesData()
                 .Single(candidate =>
                     candidate.AttributeType == typeof(ImportedReservedNamedAttribute));

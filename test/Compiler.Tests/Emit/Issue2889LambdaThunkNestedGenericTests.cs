@@ -196,9 +196,9 @@ public class Issue2889LambdaThunkNestedGenericTests
         const string library = """
             package i2889contracts
 
-            type ImportedSink[T any] = delegate func(value T) void
-            type ImportedPair[T any, U any] = delegate func(first T, second U) void
-            type ImportedFactory[T any] = delegate func() T
+            delegate ImportedSink[T any](value T) void;
+            delegate ImportedPair[T any, U any](first T, second U) void;
+            delegate ImportedFactory[T any]() T;
             """;
 
         const string consumer = """
@@ -297,9 +297,9 @@ public class Issue2889LambdaThunkNestedGenericTests
                 init(value T) { Value = value }
             }
 
-            type Sink[T any] = delegate func(value T) void
-            type PairSink[T any, U any] = delegate func(first T, second U) void
-            type Factory[T any] = delegate func() T
+            delegate Sink[T any](value T) void;
+            delegate PairSink[T any, U any](first T, second U) void;
+            delegate Factory[T any]() T;
 
             func PrintNamed(items List[Src]) { Console.WriteLine(items[0].N) }
             func PrintBare(items List[Src]) { Console.WriteLine(items[0].N) }

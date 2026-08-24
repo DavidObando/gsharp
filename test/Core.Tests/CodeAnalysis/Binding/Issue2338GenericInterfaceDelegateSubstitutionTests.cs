@@ -54,7 +54,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Getter[T any] = delegate func() T
+            delegate Getter[T any]() T;
             interface IFactory[T any] { func Make() Getter[T]; }
             class Concrete : IFactory[int32] {
                 func Make() Getter[int32] { return func() int32 { return 42 } }
@@ -68,7 +68,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Getter[T any] = delegate func() T
+            delegate Getter[T any]() T;
             interface IFactory[T any] { func Make() Getter[T]; }
             class Concrete : IFactory[int32] {
                 func Make() Getter[int32] { return func() int32 { return 42 } }
@@ -93,7 +93,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Consumer[T any] = delegate func(item T) void
+            delegate Consumer[T any](item T) void;
             interface ISink[T any] { func Accept(c Consumer[T]) void; }
             class ConcreteSink : ISink[int32] {
                 func Accept(c Consumer[int32]) void { c.Invoke(1) }
@@ -121,7 +121,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Getter[T any] = delegate func() T
+            delegate Getter[T any]() T;
             interface IFactory { func Make[T](seed T) Getter[T]; }
             class Concrete : IFactory {
                 func Make[T](seed T) Getter[T] { return func() T { return seed } }
@@ -135,7 +135,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Combiner[A any, B any] = delegate func(item A) B
+            delegate Combiner[A any, B any](item A) B;
             interface ITransformer[TIn any] { func Transform[TOut](conv Combiner[TIn, TOut]) TOut; }
             class Concrete : ITransformer[int32] {
                 func Transform[TOut](conv Combiner[int32, TOut]) TOut { return conv.Invoke(1) }
@@ -160,7 +160,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Combiner[A any, B any] = delegate func(item A) B
+            delegate Combiner[A any, B any](item A) B;
             interface ITransformer[TIn any] { func Transform[TOut](conv Combiner[TIn, TOut]) TOut; }
             class Concrete : ITransformer[int32] {
                 func Transform[TOut](conv Combiner[int32, TOut]) TOut { return conv.Invoke(1) }
@@ -178,7 +178,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
         // delegate signature.
         const string source = """
             package t
-            type Combiner[A any, B any] = delegate func(item A) B
+            delegate Combiner[A any, B any](item A) B;
             interface ITransformer[TIn any] { func Transform[TOut](conv Combiner[TIn, TOut]) TOut; }
             class GenericConcrete[TIn any](Seed TIn) : ITransformer[TIn] {
                 func Transform[TOut](conv Combiner[TIn, TOut]) TOut { return conv.Invoke(Seed) }
@@ -195,7 +195,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
         const string source = """
             package t
             class Box[T any](Value T)
-            type Getter[T any] = delegate func() T
+            delegate Getter[T any]() T;
             interface IFactory[T any] { func Make() Getter[Box[T]]; }
             class Concrete : IFactory[int32] {
                 func Make() Getter[Box[int32]] { return func() Box[int32] { return Box[int32](1) } }
@@ -209,7 +209,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Getter[T any] = delegate func() T
+            delegate Getter[T any]() T;
             interface IFactory[T any] { func Make() Getter[T]; }
             class WrongConcrete : IFactory[int32] {
                 func Make() Getter[string] { return func() string { return "oops" } }
@@ -223,8 +223,8 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Getter[T any] = delegate func() T
-            type Setter[T any] = delegate func(value T) void
+            delegate Getter[T any]() T;
+            delegate Setter[T any](value T) void;
             interface IFactory { func Make[T](seed T) Getter[T]; }
             class WrongConcrete : IFactory {
                 func Make[T](seed T) Setter[T] { return func(value T) void { } }
@@ -238,7 +238,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionTests
     {
         const string source = """
             package t
-            type Combiner[A any, B any] = delegate func(item A) B
+            delegate Combiner[A any, B any](item A) B;
             interface ITransformer[TIn any] { func Transform[TOut](conv Combiner[TIn, TOut]) TOut; }
             class WrongArity : ITransformer[int32] {
                 func Transform[TOut, TExtra](conv Combiner[int32, TOut]) TOut { return conv.Invoke(1) }

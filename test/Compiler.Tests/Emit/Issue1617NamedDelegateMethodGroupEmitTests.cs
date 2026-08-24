@@ -52,7 +52,7 @@ public class Issue1617NamedDelegateMethodGroupEmitTests
                 func Greet() string { return "hello-1617" }
             }
 
-            type StringFn1617 = delegate func() string
+            delegate StringFn1617() string;
 
             func Main() {
                 var g IGreeter1617 = Greeter1617()
@@ -82,7 +82,7 @@ public class Issue1617NamedDelegateMethodGroupEmitTests
                 func Tag() int32 { return tag }
             }
 
-            type IntFn1617 = delegate func() int32
+            delegate IntFn1617() int32;
 
             func Main() {
                 var b = Box1617[int32](42, 7)

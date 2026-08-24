@@ -15,7 +15,7 @@ Issue #140 requests support for declaring events with the same metadata shape th
 
 GSharp has no `delegate` keyword. First-class function types (`func(T1, T2) R`) lower to `Action<…>`/`Func<…>` BCL delegates (via `FunctionTypeSymbol`). CLR events carry a *named* delegate type, but nothing prevents using `Action<…>` as the handler type — it produces valid, subscribable events from C#.
 
-Custom delegate types (`EventHandler<T>`, `PropertyChangedEventHandler`, etc.) would require a separate `delegate` declaration. This ADR defers that to a follow-up: for v1, events carry `Action<…>`/`Func<…>` handler types. If interop demand arises, a future ADR will introduce `type MyHandler = delegate func(sender Object, e MyEventArgs)` syntax.
+Custom delegate types (`EventHandler<T>`, `PropertyChangedEventHandler`, etc.) would require a separate `delegate` declaration. This ADR defers that to a follow-up: for v1, events carry `Action<…>`/`Func<…>` handler types. If interop demand arises, a future ADR will introduce `delegate MyHandler(sender Object, e MyEventArgs) ` syntax.;
 
 ## Decision
 
@@ -157,7 +157,7 @@ This matches exactly what a C# `public event Action<object, EventArgs> Click;` p
 
 ## Follow-up work (out of scope)
 
-- `type MyHandler = delegate func(…)` syntax for named delegate types
+- `delegate MyHandler(…) ` syntax for named delegate types;
 - Thread-safe field-like event accessors (Interlocked.CompareExchange pattern)
 - `raise` accessor support (C#-style, rarely used)
 - Static events on user types

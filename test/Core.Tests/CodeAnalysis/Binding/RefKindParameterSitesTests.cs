@@ -97,9 +97,9 @@ class Box {
     public void NamedDelegate_RefOutInParameters_BindsCleanly()
     {
         var source = @"
-type IntRefAction = delegate func(ref counter int32, by int32)
-type IntOutPredicate = delegate func(out result int32) bool
-type StructInObserver = delegate func(in box int32)
+delegate IntRefAction(ref counter int32, by int32);
+delegate IntOutPredicate(out result int32) bool;
+delegate StructInObserver(in box int32);
 0
 ";
         var result = Evaluate(source);
@@ -114,7 +114,7 @@ type StructInObserver = delegate func(in box int32)
             @"
 package RefDelegateMismatch
 
-type RefAction = delegate func(ref value int32)
+delegate RefAction(ref value int32);
 var callback RefAction = (ref value int32) -> { }
 var value = 0
 callback(out value)
@@ -123,7 +123,7 @@ callback(out value)
             @"
 package GenericOutDelegateMismatch
 
-type OutAction[T] = delegate func(out value T) bool
+delegate OutAction[T](out value T) bool;
 func Bad[T](callback OutAction[T], ref value T) {
     callback(ref value)
 }
@@ -132,7 +132,7 @@ func Bad[T](callback OutAction[T], ref value T) {
             @"
 package GenericInDelegateMismatch
 
-type InAction[T] = delegate func(in value T) bool
+delegate InAction[T](in value T) bool;
 func Bad[T](callback InAction[T], ref value T) {
     callback(ref value)
 }
@@ -152,7 +152,7 @@ func Bad[T](callback InAction[T], ref value T) {
         var missingIn = Evaluate(@"
 package InDelegateMissingModifier
 
-type InAction = delegate func(in value int32)
+delegate InAction(in value int32);
 var callback InAction = (in value int32) -> { }
 var value = 0
 callback(value)

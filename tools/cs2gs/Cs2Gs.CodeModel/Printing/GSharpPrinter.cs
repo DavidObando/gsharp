@@ -1884,7 +1884,11 @@ public static class GSharpPrinter
         sb.Append(RenderAttributeBlock(declaration.Attributes, indent));
         sb.Append(pad);
         sb.Append(RenderVisibility(declaration.Visibility));
-        sb.Append($"type {declaration.Name}{RenderTypeParameterList(declaration.TypeParameters)} = delegate func({RenderParameterList(declaration.Parameters)}){returnClause}");
+
+        // Issue #3510: the canonical named-delegate spelling —
+        // `delegate Name[TParams]?(params) ReturnType? ;`. The required
+        // trailing semicolon terminates the optional return-type clause.
+        sb.Append($"delegate {declaration.Name}{RenderTypeParameterList(declaration.TypeParameters)}({RenderParameterList(declaration.Parameters)}){returnClause};");
         return sb.ToString();
     }
 

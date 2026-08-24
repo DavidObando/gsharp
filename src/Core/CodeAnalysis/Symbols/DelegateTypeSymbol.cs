@@ -13,7 +13,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
 /// Represents a user-declared named delegate type (ADR-0059 / issue #255).
-/// A <c>type Name = delegate func(...)</c> declaration produces a
+/// A <c>delegate Name(...) </c> declaration produces a;
 /// <see cref="DelegateTypeSymbol"/> that the emitter materialises as a sealed
 /// CLR class deriving from <c>System.MulticastDelegate</c> with a
 /// runtime-implemented <c>.ctor</c> + <c>Invoke</c>.
@@ -82,7 +82,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     /// <summary>
     /// Gets the delegate's generic type parameters (issue #1503, ADR-0059
     /// follow-up). A non-generic named delegate carries an empty array; a
-    /// generic named delegate (<c>type Predicate[T any] = delegate func(value T) bool</c>)
+    /// generic named delegate (<c>delegate Predicate[T any](value T) bool</c>);
     /// carries one <see cref="TypeParameterSymbol"/> per declared parameter.
     /// Both the open definition and every constructed instance expose the same
     /// type parameters (mirroring <see cref="StructSymbol.TypeParameters"/>);

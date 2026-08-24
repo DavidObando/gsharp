@@ -74,7 +74,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 prop N int32 -> 6
             }
 
-            type PD = delegate func(s Src) void
+            delegate PD(s Src) void;
 
             func Main() {
                 var f ((Src) -> void)? = nil
@@ -99,7 +99,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             package i2840namedbcl
             import System
 
-            type PD = delegate func(x int32) void
+            delegate PD(x int32) void;
 
             func Main() {
                 var f ((int32) -> void)? = nil
@@ -131,7 +131,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 prop N int32 -> 8
             }
 
-            type PD = delegate func(s Src) void
+            delegate PD(s Src) void;
 
             func Main() {
                 let f ((Src) -> void) = (s Src) -> System.Console.WriteLine(s.N)
@@ -155,7 +155,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 prop IsCancelled bool { get }
             }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Jobb[T ICanc] {
                 func Do(ctx T, convertAction Conv[T]?) {
@@ -197,7 +197,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 prop IsCancelled bool { get }
             }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Jobb[T ICanc] {
                 func Do(ctx T, convertAction Conv[T]?) {
@@ -245,7 +245,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 prop IsCancelled bool { get }
             }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Jobb {
                 func Do[T ICanc](ctx T, convertAction Conv[T]?) {
@@ -284,7 +284,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 prop IsCancelled bool { get }
             }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Cancel : ICanc {
                 prop IsCancelled bool -> false

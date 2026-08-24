@@ -18,7 +18,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 ///   <item>interface method (including DIM default body)</item>
 ///   <item>constructor (init)</item>
 ///   <item>function-literal and arrow lambda</item>
-///   <item>named delegate (<c>type X = delegate func(...) R</c>)</item>
+///   <item>named delegate (<c>delegate X(...) R</c>)</item>;
 /// </list>
 /// The parser already accepted the spelling at every site before #812 —
 /// the binder is what rejected it with GS0146. These tests pin the
@@ -147,7 +147,7 @@ public class Issue812VariadicAdditionalSitesParserTests
     {
         const string source = """
             package P
-            type StringJoiner = delegate func(sep string, parts ...string) string
+            delegate StringJoiner(sep string, parts ...string) string;
             """;
         var tree = SyntaxTree.Parse(source);
         Assert.Empty(tree.Diagnostics);

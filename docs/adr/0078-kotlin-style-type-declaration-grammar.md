@@ -17,7 +17,7 @@ type Name <kind> { ... }
 where `<kind>` was one of `class`, `struct`, `enum`, `interface`, plus
 the standalone `record` keyword introduced by ADR-0029. The pattern was
 inherited from the original Go-flavoured surface and kept consistent
-with `type Count = int32` aliases and `type Greeter = delegate func(...)`
+with `type Count = int32` aliases and `delegate Greeter(...) `;
 named delegates.
 
 Modernising the language with Kotlin/Swift ergonomics (ADR-0070..0077)
@@ -174,7 +174,7 @@ separate discriminated-union backend.
 
 The `type` keyword is **not** deleted from the lexer. It is retained
 for type aliases (`type Count = int32`) and named delegates
-(`type Greeter = delegate func(name string)`), where the head reads
+(`delegate Greeter(name string) `), where the head reads;
 naturally and there is no aggregate keyword to take its place. The
 `type` keyword is rejected only when followed by an aggregate keyword
 (`class`, `struct`, `enum`, `interface`) — that combination triggers
@@ -259,7 +259,7 @@ record Name ...      →   data struct Name ...
 ```
 
 with `kind ∈ {class, struct, enum, interface}`. Type aliases and named
-delegates (`type Count = int32`, `type F = delegate func(...)`) are
+delegates (`type Count = int32`, `delegate F(...) `) are;
 untouched.
 
 ## Notes
