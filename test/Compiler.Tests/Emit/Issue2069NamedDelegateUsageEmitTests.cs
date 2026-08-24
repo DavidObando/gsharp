@@ -11,7 +11,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2069 — a NAMED delegate type (<c>type Name = delegate func(...) ...</c>)
+/// Issue #2069 — a NAMED delegate type (<c>delegate Name(...) ...</c>);
 /// used as the type of a local variable, a class field/auto-property, or a
 /// function parameter crashed emit with <c>InvalidOperationException: Delegate
 /// '...' has no emitted TypeDef</c>.
@@ -43,7 +43,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             package i2069local
             import System
 
-            type TickHandler = delegate func(n int32) void
+            delegate TickHandler(n int32) void;
 
             func Main() {
                 var h TickHandler = (n int32) -> System.Console.WriteLine(n * 2)
@@ -66,7 +66,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             package i2069fieldparam
             import System
 
-            type TickHandler = delegate func(n int32) void
+            delegate TickHandler(n int32) void;
 
             class C {
                 prop H TickHandler { get; set; }
@@ -94,7 +94,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             package i2069plainfield
             import System
 
-            type TickHandler = delegate func(n int32) void
+            delegate TickHandler(n int32) void;
 
             class C {
                 var H TickHandler
@@ -118,7 +118,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             package i2069param
             import System
 
-            type TickHandler = delegate func(n int32) void
+            delegate TickHandler(n int32) void;
 
             func Apply(h TickHandler) {
                 h(5)

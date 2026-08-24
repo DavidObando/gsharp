@@ -28,7 +28,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             import System.Collections.Generic
             import System.Threading.Tasks
 
-            type ConvertFunc = delegate func(data []uint8) []uint8
+            delegate ConvertFunc(data []uint8) []uint8;
 
             class DownloadDecryptJob {
                 var runningTasks List[Task] = List[Task]()
@@ -61,7 +61,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             package Issue2442Pkg
             import System
 
-            type ConvertFunc = delegate func(data int32) int32
+            delegate ConvertFunc(data int32) int32;
 
             func Run(convertAction ConvertFunc?, data int32) {
                 if convertAction != nil {
@@ -84,7 +84,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             package Issue2442Pkg
             import System
 
-            type ConvertFunc = delegate func(data int32) int32
+            delegate ConvertFunc(data int32) int32;
 
             func Make(convertAction ConvertFunc?, data int32) (() -> void)? {
                 if convertAction != nil {
@@ -111,7 +111,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             import System
             import System.Threading.Tasks
 
-            type ConvertFunc = delegate func(data int32) int32
+            delegate ConvertFunc(data int32) int32;
 
             func Run(convertAction ConvertFunc?, data int32) {
                 if convertAction != nil {
@@ -137,7 +137,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             package Issue2442Pkg
             import System
 
-            type ConvertFunc = delegate func(data int32) int32
+            delegate ConvertFunc(data int32) int32;
 
             func Run(convertAction ConvertFunc?, data int32) {
                 if convertAction != nil {

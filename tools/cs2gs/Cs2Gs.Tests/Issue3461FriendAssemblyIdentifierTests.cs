@@ -45,7 +45,7 @@ public sealed class Issue3461FriendAssemblyIdentifierTests
 
                     public class Base
                     {
-                        internal int type_() => 100;
+                        internal int defer_() => 100;
                     }
                     """),
             },
@@ -70,9 +70,9 @@ public sealed class Issue3461FriendAssemblyIdentifierTests
 
                     public sealed class Derived : Base
                     {
-                        public int @type() => 7;
+                        public int @defer() => 7;
 
-                        public int Run() => @type();
+                        public int Run() => @defer();
                     }
 
                     public static class Holder
@@ -94,8 +94,8 @@ public sealed class Issue3461FriendAssemblyIdentifierTests
             document.FilePath);
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.Contains("func type__()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func Run() int32 -> type__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func defer__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func Run() int32 -> defer__()", rendered, StringComparison.Ordinal);
 
         using var resolver = GSharpReferenceResolver.WithReferences(
             new[] { libraryPath });
@@ -128,7 +128,7 @@ public sealed class Issue3461FriendAssemblyIdentifierTests
                     ? loadContext.LoadFromAssemblyPath(libraryPath)
                     : null;
             Assembly assembly = loadContext.LoadFromStream(image);
-            Type holder = assembly.GetTypes().Single(type => type.Name == "Holder");
+            Type holder = assembly.GetTypes().Single(defer => defer.Name == "Holder");
             MethodInfo run = holder.GetMethod(
                 "Run",
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);

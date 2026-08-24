@@ -359,11 +359,11 @@ ADR-0029 / Issue #410: every `data struct` synthesizes a fixed contract of value
 
 ## Named delegate type diagnostics (GS0233)
 
-ADR-0059 / Issue #255: `type Name = delegate func(...)` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). Anything other than a function signature on the right-hand side is rejected. Issue #1503 lifted the v1 restriction on generic delegate declarations: `type Predicate[T any] = delegate func(value T) bool` now binds and emits a verifiable generic delegate `TypeDef` (one `GenericParam` row per type parameter, threaded through the `Invoke`/`.ctor` signatures), so GS0234 is no longer reported and has been retired.
+Issue #3510 (originally ADR-0059 / issue #255): `delegate Name(params) ReturnType;` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). GS0233 now fires only on the retired `type Name = delegate …` recovery path when `func` is missing. Issue #1503 lifted the v1 restriction on generic delegate declarations: `type Predicate[T any] = delegate func(value T) bool` now binds and emits a verifiable generic delegate `TypeDef` (one `GenericParam` row per type parameter, threaded through the `Invoke`/`.ctor` signatures), so GS0234 is no longer reported and has been retired.
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)'). |
+| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (retired `type Name = delegate …` recovery form only; the canonical spelling is `delegate Name(params) ReturnType;` — see GS0535 / issue #3510). |
 
 ## Ref-kind parameter diagnostics (GS0235–GS0243)
 
@@ -672,6 +672,20 @@ without evaluating its pattern or guard. GS0168 (above) reports a misplaced
 |---|---|---|---|
 | GS0533 | Error | `'fallthrough' cannot be used in the final arm of a 'switch' statement.` | `switch x { case 1 { fallthrough } }` |
 | GS0534 | Error | `'fallthrough' cannot target a 'switch' arm whose pattern declares bindings or that has a 'when' guard — the jump would skip their assignment.` | `case 1 { fallthrough } case string s { ... }` |
+
+## Retired delegate-declaration spelling (GS0535)
+
+Issue #3510: named delegates are declared with the standalone
+`delegate Name(parameters) ReturnType;` form (trailing semicolon required —
+it terminates the optional return-type clause the way extern natives and
+interface bodiless members do, so a void delegate can no longer consume the
+declaration that follows it). The ADR-0059 `type Name = delegate func(...)`
+spelling reports this error and recovers, and `type` itself is no longer a
+reserved keyword (erased aliases `type Name = Target` parse contextually).
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0535 | Error | `The 'type <Name> = delegate func(...)' spelling is retired. Declare the delegate as 'delegate <Name>(parameters) ReturnType;' (trailing semicolon required; omit the return type for void).` | `type Greeter = delegate func(name string)` |
 
 ## Redundant null assertion (GS0536)
 

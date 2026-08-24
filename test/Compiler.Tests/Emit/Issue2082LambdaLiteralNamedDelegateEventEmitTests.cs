@@ -26,7 +26,7 @@ public class Issue2082LambdaLiteralNamedDelegateEventEmitTests
             package Issue2082Pkg
             import System
 
-            type TickHandler = delegate func(count int32) void
+            delegate TickHandler(count int32) void;
 
             class Clock {
                 public event Ticked TickHandler
@@ -48,7 +48,7 @@ public class Issue2082LambdaLiteralNamedDelegateEventEmitTests
             package Issue2082Pkg2
             import System
 
-            type TickHandler = delegate func(count int32) void
+            delegate TickHandler(count int32) void;
 
             class Clock {
                 event Ticked TickHandler

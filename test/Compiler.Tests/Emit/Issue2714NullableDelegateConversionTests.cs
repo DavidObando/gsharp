@@ -208,7 +208,7 @@ public sealed class Issue2714NullableDelegateConversionTests
         {
             """
             package Issue2714RefKind
-            type RefCallback = delegate func(ref value int32)
+            delegate RefCallback(ref value int32);
             class Source {
                 func Change(value int32) { }
                 func Change(value string) { }

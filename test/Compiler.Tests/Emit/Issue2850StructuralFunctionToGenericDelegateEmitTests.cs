@@ -37,7 +37,7 @@ public class Issue2850StructuralFunctionToGenericDelegateEmitTests
 
             interface ICanc { prop IsCancelled bool { get } }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Cancel : ICanc { prop IsCancelled bool -> false }
 
@@ -95,7 +95,7 @@ public class Issue2850StructuralFunctionToGenericDelegateEmitTests
 
             interface ICanc { prop IsCancelled bool { get } }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Cancel : ICanc { prop IsCancelled bool -> false }
 
@@ -131,7 +131,7 @@ public class Issue2850StructuralFunctionToGenericDelegateEmitTests
 
             interface ICanc { prop IsCancelled bool { get } }
 
-            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+            delegate Conv[T ICanc](book int32, ctx T, cb (string) -> void) void;
 
             class Cancel : ICanc { prop IsCancelled bool -> false }
 

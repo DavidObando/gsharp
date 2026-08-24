@@ -23,7 +23,7 @@ namespace Cs2Gs.Tests;
 /// "System.Action`1[System.String]"</c>.
 /// <para>
 /// A source-declared delegate now keeps its nominal name in every type
-/// position — cs2gs already emits a real <c>type X = delegate func(…)</c>
+/// position — cs2gs already emits a real <c>delegate X(…) </c>;
 /// declaration for it. Imported/BCL delegates (<c>Func</c>, <c>Action</c>,
 /// <c>Predicate</c>) still render in arrow form (ADR-0115 §B.8).
 /// </para>
@@ -94,7 +94,7 @@ namespace Corpus.Delegates
     {
         string rendered = Render();
 
-        Assert.Contains("type MessageHandler = delegate func(message string)", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate MessageHandler(message string);", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -167,8 +167,8 @@ namespace Corpus.Delegates
         CompilationUnit unit = Translate(nestedSource);
         string rendered = GSharpPrinter.Print(unit);
 
-        Assert.Contains("type First_Transform = delegate func", rendered, StringComparison.Ordinal);
-        Assert.Contains("type Second_Transform = delegate func", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate First_Transform(", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Second_Transform(", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("First.Transform", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("Second.Transform", rendered, StringComparison.Ordinal);
 

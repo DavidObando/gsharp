@@ -1407,7 +1407,7 @@ public sealed class CSharpTypeMapper
             // Issue #2835: EXCEPT a delegate declared in the source being
             // translated. CLR delegates are nominally typed — structurally
             // equivalent delegates are not interchangeable — and cs2gs emits a
-            // real `type X = delegate func(…)` declaration for every source
+            // real `delegate X(…) ` declaration for every source;
             // delegate, so erasing its uses to `(string) -> void` (i.e.
             // `Action[string]`) makes the translated program fail at runtime the
             // moment a value crosses between the two spellings. This is the same
@@ -2079,7 +2079,7 @@ public sealed class CSharpTypeMapper
     /// Issue #2835: whether <paramref name="named"/> is a delegate type declared
     /// in the compilation being translated (as opposed to an imported/BCL
     /// delegate such as <c>Func</c>/<c>Action</c>). Source delegates are emitted
-    /// by cs2gs as real <c>type X = delegate func(…)</c> declarations, so their
+    /// by cs2gs as real <c>delegate X(…) </c> declarations, so their;
     /// uses must keep the nominal name to preserve CLR delegate identity.
     /// </summary>
     /// <param name="named">The candidate delegate type.</param>

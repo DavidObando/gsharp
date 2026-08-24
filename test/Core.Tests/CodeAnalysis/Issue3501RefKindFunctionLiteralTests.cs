@@ -204,7 +204,7 @@ func Run() int32 {
 
 Run()
 
-type BumpShape = delegate func(ref n int32)
+delegate BumpShape(ref n int32);
 ";
         var result = EmittedOracle.Evaluate(source);
         Assert.Empty(result.Diagnostics.Where(d => d.IsError));

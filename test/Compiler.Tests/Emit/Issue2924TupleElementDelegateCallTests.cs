@@ -109,7 +109,7 @@ public class Issue2924TupleElementDelegateCallTests
             package Issue2924NullConditional
             import System
 
-            type Mapper = delegate func(value int32) int32
+            delegate Mapper(value int32) int32;
 
             class Guard {
                 func Plain(value int32) {

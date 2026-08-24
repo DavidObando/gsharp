@@ -179,7 +179,7 @@ func Guard(f () -> int32) bool {
         const string source = @"
 package P
 
-type Reducer = delegate func(a int32, b int32) int32
+delegate Reducer(a int32, b int32) int32;
 
 func Guard(f Reducer) bool {
     return f == nil
@@ -194,7 +194,7 @@ func Guard(f Reducer) bool {
         const string source = @"
 package P
 
-type Reducer = delegate func(a int32, b int32) int32
+delegate Reducer(a int32, b int32) int32;
 
 func IsBound(f Reducer) bool {
     return f != nil

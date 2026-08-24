@@ -226,8 +226,13 @@ public static class SyntaxFacts
                 return SyntaxKind.TrueKeyword;
             case "try":
                 return SyntaxKind.TryKeyword;
-            case "type":
-                return SyntaxKind.TypeKeyword;
+
+            // Issue #3510: `type` is no longer a reserved keyword. The erased
+            // type-alias declaration (`type Name = Target`) parses the
+            // spelling contextually at member position, and `type` is usable
+            // as an ordinary identifier everywhere else (so cs2gs no longer
+            // sanitizes C# identifiers named `type`). Named delegates moved
+            // to the standalone `delegate Name(params) R;` declaration.
             case "using":
                 return SyntaxKind.UsingKeyword;
             case "var":

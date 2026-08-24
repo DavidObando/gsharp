@@ -25,7 +25,7 @@ public class Issue2085FieldLikeEventBareDeclarationEmitTests
             package Issue2085Pkg
             import System
 
-            type TickHandler = delegate func(count int32) void
+            delegate TickHandler(count int32) void;
 
             class Clock {
                 public event Ticked TickHandler

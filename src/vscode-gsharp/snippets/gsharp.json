@@ -177,9 +177,9 @@
   "Named delegate type": {
     "prefix": "delegate",
     "body": [
-      "type ${1:Name} = delegate func(${2:params}) ${3:returnType}"
+      "delegate ${1:Name}(${2:params}) ${3:returnType};"
     ],
-    "description": "Named delegate type (ADR-0059)."
+    "description": "Named delegate type (issue #3510)."
   },
   "Property declaration": {
     "prefix": "prop",

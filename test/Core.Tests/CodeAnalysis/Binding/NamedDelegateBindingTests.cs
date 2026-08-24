@@ -24,7 +24,7 @@ public class NamedDelegateBindingTests
 package P
 import System
 
-type Combine = delegate func(a int32, b int32) int32
+delegate Combine(a int32, b int32) int32;
 
 var sum Combine = func(a int32, b int32) int32 {
     return a + b
@@ -45,9 +45,9 @@ Console.WriteLine(sum.Invoke(2, 40))
         var source = @"
 package P
 
-type Box[T any] = delegate func(value T) T
-type Converter[TIn any, TOut any] = delegate func(x TIn) TOut
-type Mapper[T any] = delegate func(items []T) []T
+delegate Box[T any](value T) T;
+delegate Converter[TIn any, TOut any](x TIn) TOut;
+delegate Mapper[T any](items []T) []T;
 ";
         var diagnostics = Bind(source);
         Assert.Empty(diagnostics);
@@ -64,7 +64,7 @@ type Mapper[T any] = delegate func(items []T) []T
 package P
 import System
 
-type Predicate1503[T any] = delegate func(value T) bool
+delegate Predicate1503[T any](value T) bool;
 
 var isPositive Predicate1503[int32] = func(value int32) bool {
     return value > 0

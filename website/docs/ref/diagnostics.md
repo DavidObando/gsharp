@@ -347,11 +347,11 @@ Every `data struct` synthesizes a fixed contract of value-semantics members — 
 
 ## Named delegate type diagnostics (GS0233)
 
-`type Name = delegate func(...)` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). Anything other than a function signature on the right-hand side is rejected. Generic delegate declarations such as `type Predicate[T any] = delegate func(value T) bool` now bind and emit a verifiable generic delegate `TypeDef` (one `GenericParam` row per type parameter, threaded through the `Invoke`/`.ctor` signatures), so the former GS0234 ("generic delegate declaration not yet supported") has been retired.
+`delegate Name(...) ` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). Anything other than a function signature on the right-hand side is rejected. Generic delegate declarations such as `type Predicate[T any] = delegate func(value T) bool` now bind and emit a verifiable generic delegate `TypeDef` (one `GenericParam` row per type parameter, threaded through the `Invoke`/`.ctor` signatures), so the former GS0234 (;"generic delegate declaration not yet supported") has been retired.
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'type Name = delegate func(sender Object, e EventArgs)'). |
+| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (retired `type Name = delegate …` recovery form only; the canonical spelling is `delegate Name(params) ReturnType;` — see GS0535 / issue #3510). |
 
 ## Ref-kind parameter diagnostics (GS0235–GS0243)
 
@@ -704,7 +704,7 @@ Cause/fix:
 
 - **GS0306** — `type Foo class { … }` → `class Foo { … }`. Same for
   `struct`, `enum`, `interface`. Type aliases (`type Count = int32`) and
-  named delegates (`type Greeter = delegate func(name string)`) are
+  named delegates (`delegate Greeter(name string) `) are;
   unaffected.
 - **GS0307** — `record Point { x int32; y int32 }` →
   `data struct Point(x int32, y int32)` (preserves value semantics) or
@@ -814,6 +814,20 @@ without evaluating its pattern or guard. GS0168 (above) reports a misplaced
 | GS0533 | Error | `'fallthrough' cannot be used in the final arm of a 'switch' statement.` | `switch x { case 1 { fallthrough } }` |
 | GS0534 | Error | `'fallthrough' cannot target a 'switch' arm whose pattern declares bindings or that has a 'when' guard — the jump would skip their assignment.` | `case 1 { fallthrough } case string s { ... }` |
 
+## Retired delegate-declaration spelling (GS0535)
+
+Issue #3510: named delegates are declared with the standalone
+`delegate Name(parameters) ReturnType;` form (trailing semicolon required —
+it terminates the optional return-type clause the way extern natives and
+interface bodiless members do, so a void delegate can no longer consume the
+declaration that follows it). The ADR-0059 `type Name = delegate func(...)`
+spelling reports this error and recovers, and `type` itself is no longer a
+reserved keyword (erased aliases `type Name = Target` parse contextually).
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0535 | Error | `The 'type <Name> = delegate func(...)' spelling is retired. Declare the delegate as 'delegate <Name>(parameters) ReturnType;' (trailing semicolon required; omit the return type for void).` | `type Greeter = delegate func(name string)` |
+
 ## Redundant null assertion (GS0536)
 
 Issue #3501 (`!!` noise reduction): a user-written `!!` whose operand is
@@ -825,6 +839,7 @@ redundant assertions from translated output automatically.
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0536 | Warning | `Redundant '!!': the value is already non-null here.` | `if s != nil { return s!! }` |
+
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
@@ -1569,7 +1584,7 @@ Cause/fix:
   passed to a native callback parameter is marshalled through a
   runtime-synthesized thunk that needs an explicit calling
   convention. Add `@UnmanagedFunctionPointer(CallingConvention.Cdecl)`
-  on the `type Name = delegate func(...) R` declaration.
+  on the `delegate Name(...) R` declaration.;
 - **GS0354 — unknown calling convention.** Only the four CLR-defined
   unmanaged conventions are accepted. `Cdecl` is the right choice for
   almost all libc-style APIs; pick `Stdcall` only for the legacy

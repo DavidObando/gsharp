@@ -153,7 +153,7 @@ public class Issue2793UserGenericLambdaCacheEmitTests
             package Probe2793d
             import System
 
-            type Holder[T] = delegate func(value T) T
+            delegate Holder[T](value T) T;
 
             func Build[TA, TB](a TA, b TB) TB {
                 var outer Holder[TB] = (v TB) -> v

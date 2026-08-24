@@ -110,7 +110,7 @@ class Dog(@Note(""derived"") Name string) : Animal(Name) {
 import System
 import GSharp.Core.Tests.Fixtures
 
-type IntPredicate = delegate func(@ImportedDefault a int32) bool
+delegate IntPredicate(@ImportedDefault a int32) bool;
 ";
         var asm = CompileToAssembly(Source, nameof(DelegateInvokeParameter_UserAttribute_RoundTripsThroughReflection));
         var del = asm.GetTypes().Single(t => t.Name == "IntPredicate");

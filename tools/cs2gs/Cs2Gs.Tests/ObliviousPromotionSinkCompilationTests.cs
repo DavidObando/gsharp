@@ -194,7 +194,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("type Counter = delegate func(value string?) int32", printed);
+        Assert.Contains("delegate Counter(value string?) int32;", printed);
         Assert.Contains("init(value string?)", printed);
         Assert.Contains("prop this[key string?] int32", printed);
         Assert.Contains("func Count(value string?) int32", printed);

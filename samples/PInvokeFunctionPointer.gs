@@ -30,7 +30,7 @@ import System
 import System.Runtime.InteropServices
 
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Int64Comparer = delegate func(a nint, b nint) int32
+delegate Int64Comparer(a nint, b nint) int32;
 
 // Shape A — delegate parameter. The CLR marshals `cmp` as a stable
 // function pointer with the calling convention specified on the

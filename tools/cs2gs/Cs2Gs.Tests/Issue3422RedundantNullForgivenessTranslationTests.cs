@@ -432,7 +432,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("Consume(type_!!)", printed, StringComparison.Ordinal);
+        Assert.Contains("Consume(type!!)", printed, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -307,7 +307,7 @@ public class NamedArgumentEmitTests
         var source = """
             package P
 
-            type Operation = delegate func(x int32, y int32) int32
+            delegate Operation(x int32, y int32) int32;
 
             func subtract(x int32, y int32) int32 {
                 return x - y

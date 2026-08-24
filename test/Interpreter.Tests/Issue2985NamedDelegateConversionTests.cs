@@ -21,7 +21,7 @@ public class Issue2985NamedDelegateConversionTests
         {
             "void",
             """
-            type Recorder = delegate func(value int32)
+            delegate Recorder(value int32);
 
             class Box {
                 var Value int32
@@ -39,7 +39,7 @@ public class Issue2985NamedDelegateConversionTests
         {
             "value",
             """
-            type Transformer = delegate func(value int32) int32
+            delegate Transformer(value int32) int32;
 
             var transform Transformer = func(value int32) int32 {
                 return value * 2
@@ -51,7 +51,7 @@ public class Issue2985NamedDelegateConversionTests
         {
             "generic",
             """
-            type Mapper[T any] = delegate func(value T) T
+            delegate Mapper[T any](value T) T;
 
             var mapper Mapper[string] = func(value string) string {
                 return value + "-generic"
@@ -63,7 +63,7 @@ public class Issue2985NamedDelegateConversionTests
         {
             "variadic",
             """
-            type Scorer = delegate func(seed int32, values ...int32) int32
+            delegate Scorer(seed int32, values ...int32) int32;
 
             var score Scorer = func(seed int32, values ...int32) int32 {
                 return seed + values.Length * 10
@@ -85,7 +85,7 @@ public class Issue2985NamedDelegateConversionTests
     public void ZeroParameterFunctionLiteral_ConvertsToNamedDelegate()
     {
         const string Source = """
-            type Ticker = delegate func() int32
+            delegate Ticker() int32;
 
             var tick Ticker = func() int32 {
                 return 77
@@ -100,7 +100,7 @@ public class Issue2985NamedDelegateConversionTests
     public void TwoParameterFunctionLiteral_ConvertsToNamedDelegate()
     {
         const string Source = """
-            type Adder = delegate func(left int32, right int32) int32
+            delegate Adder(left int32, right int32) int32;
 
             var add Adder = func(left int32, right int32) int32 {
                 return left * 100 + right
@@ -115,7 +115,7 @@ public class Issue2985NamedDelegateConversionTests
     public void MethodGroup_ConvertsToNamedDelegate()
     {
         const string Source = """
-            type Transformer = delegate func(value int32) int32
+            delegate Transformer(value int32) int32;
 
             func AddThree(value int32) int32 {
                 return value + 3
@@ -132,7 +132,7 @@ public class Issue2985NamedDelegateConversionTests
     public void FunctionDelegate_ConvertsToNamedDelegateArgument()
     {
         const string Source = """
-            type Transformer = delegate func(value int32) int32
+            delegate Transformer(value int32) int32;
 
             func Apply(transform Transformer, value int32) int32 {
                 return transform.Invoke(value)
@@ -151,8 +151,8 @@ public class Issue2985NamedDelegateConversionTests
     public void StructurallyEquivalentNamedDelegates_RemainDistinct()
     {
         const string Source = """
-            type Alpha = delegate func(value int32) int32
-            type Beta = delegate func(value int32) int32
+            delegate Alpha(value int32) int32;
+            delegate Beta(value int32) int32;
 
             var alpha Alpha = func(value int32) int32 {
                 return value * 2

@@ -242,7 +242,7 @@ package Tour.Interop.NativeFunctionPointers
 import System.Runtime.InteropServices
 
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Comparer = delegate func(a nint, b nint) int32
+delegate Comparer(a nint, b nint) int32;
 
 @DllImport("libc", EntryPoint: "qsort")
 func NativeQsort(base nint, nmemb nint, size nint, cmp Comparer) void;

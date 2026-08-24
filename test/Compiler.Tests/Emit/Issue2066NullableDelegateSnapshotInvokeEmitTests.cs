@@ -27,7 +27,7 @@ public class Issue2066NullableDelegateSnapshotInvokeEmitTests
             package Issue2066Pkg
             import System
 
-            type TickHandler = delegate func(count int32) void
+            delegate TickHandler(count int32) void;
 
             class Clock {
                 event Ticked TickHandler

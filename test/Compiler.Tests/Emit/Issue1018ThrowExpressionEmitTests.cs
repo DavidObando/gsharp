@@ -198,7 +198,7 @@ public class Issue1018ThrowExpressionEmitTests
                 func Auth() IAuthService -> this._auth()
             }
 
-            type NumberFactory = delegate func() int32
+            delegate NumberFactory() int32;
 
             let numberFactory Func[int32] = () -> throw InvalidOperationException("number")
             let namedFactory NumberFactory = () -> throw InvalidOperationException("named")

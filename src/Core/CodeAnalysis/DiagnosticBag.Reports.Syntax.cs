@@ -347,6 +347,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.DelegateDeclarationRequiresFunc);
 
     /// <summary>
+    /// Issue #3510: reports the retired <c>type Name = delegate func(...)</c>
+    /// delegate spelling, pointing at the canonical
+    /// <c>delegate Name(parameters) ReturnType;</c> replacement.
+    /// </summary>
+    /// <param name="location">The text location of the legacy <c>type</c> token.</param>
+    /// <param name="delegateName">The declared delegate name, spliced into the migration suggestion.</param>
+    public void ReportRetiredDelegateDeclarationForm(TextLocation location, string delegateName)
+    => Report(location, DiagnosticDescriptors.RetiredDelegateDeclarationForm, delegateName);
+
+    /// <summary>
     /// Reports that the identifier <c>null</c> was used where the G# null
     /// literal <c>nil</c> is required. G# does not recognise <c>null</c> as
     /// a keyword — the correct spelling is <c>nil</c> (ADR-0081).

@@ -203,7 +203,7 @@ namespace Demo
         // promotion of the delegate's own parameter lands once, on the delegate
         // declaration, instead of being re-encoded into an erased arrow form at
         // all three forwarding parameters.
-        Assert.Contains("type Handler = delegate func(item Item?)", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Handler(item Item?);", printed, StringComparison.Ordinal);
         Assert.Equal(3, printed.Split("handler Handler", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("(Item?) -> void", printed, StringComparison.Ordinal);
     }
@@ -234,7 +234,7 @@ namespace Demo
 }");
 
         Assert.True(
-            printed.Contains("type Handler = delegate func(value Item?)", StringComparison.Ordinal),
+            printed.Contains("delegate Handler(value Item?);", StringComparison.Ordinal),
             printed);
         Assert.Contains("handler(value)", printed);
         Assert.DoesNotContain("handler(value!!)", printed);
@@ -285,7 +285,7 @@ namespace Demo
         // parameter rather than on an erased arrow form. The BCL `Action<T>`
         // nested inside the delegate's own signature still erases to arrow form.
         Assert.Contains(
-            "type ConvertDelegate[T] = delegate func(book Book, context T, callback (Conversion) -> void)",
+            "delegate ConvertDelegate[T](book Book, context T, callback (Conversion) -> void);",
             printed,
             StringComparison.Ordinal);
         Assert.Equal(3, printed.Split("convertAction ConvertDelegate[T]?", StringSplitOptions.None).Length - 1);

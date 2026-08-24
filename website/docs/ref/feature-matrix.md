@@ -65,7 +65,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Default parameter values in G# declarations | Supported | Supported | Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
 | Method overloading (user functions) | Supported | Supported | Functions can carry overload sets differing by parameter types, ref-kinds, or generic-parameter constraints (`where T : class` / `where T : struct`); duplicates report `GS0264`, ambiguous calls report `GS0266` or `GS0160`, no-applicable reports `GS0267`. |
 | Variadic parameters (`name ...T`) | Supported (all declaration sites) | Supported (all declaration sites) | Canonical Go-style spelling `name ...T`; body sees `[]T`; at most one variadic per signature and must be last (`GS0145`, `GS0364`). Call site packs N trailing args into a fresh `[]T`; a single trailing `[]T` argument passes through unwrapped (identity preserved). The emitter stamps `[System.ParamArrayAttribute]` so C# / F# / VB consumers see it as `params T[]`. The C# `params` keyword is rejected with `GS0363` pointing at the canonical form. Accepted on top-level `func`, class instance/static methods, interface methods (incl. default-body), constructors, lambdas, and named delegate declarations. |
-| Named delegate types | Supported | Supported | `type X = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type; generic delegates (`type X[T any] = delegate func(...)`) supported; diagnostic `GS0233`. |
+| Named delegate types | Supported | Supported | `delegate X(...) ` declares a real CLR `MulticastDelegate`-derived type;; generic delegates (`delegate X[T any](...) `) supported;; diagnostic `GS0233`. |
 
 ## Statements and control flow
 
