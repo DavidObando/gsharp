@@ -109,7 +109,9 @@ public sealed class Issue2521ImportedInitializerTargetContractPipelineTests
         Assert.Contains("Holder(1){Values = { source.Value!! }}", compact);
         Assert.Contains("\"key\": source.Value!!", compact);
         Assert.Contains("[\"key\"] = source.Value!!", compact);
-        Assert.Contains("Target{Value: value!!}", compact);
+        // Issue #3501: `value` here is nil-guard-narrowed, so the emitted
+        // forgiveness is provably redundant and the polish pass strips it.
+        Assert.Contains("Target{Value: value}", compact);
 
         Assert.Contains("LocalTarget{Value: source.Value}", compact);
         Assert.DoesNotContain("LocalTarget{Value: source.Value!!}", compact);

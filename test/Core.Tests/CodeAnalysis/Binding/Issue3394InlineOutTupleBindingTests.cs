@@ -150,7 +150,7 @@ public class Issue3394InlineOutTupleBindingTests
             handle.IsNil
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(true, result.Value);
     }
 
@@ -176,7 +176,7 @@ public class Issue3394InlineOutTupleBindingTests
             read()
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -193,7 +193,7 @@ public class Issue3394InlineOutTupleBindingTests
             change(1)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -213,7 +213,7 @@ public class Issue3394InlineOutTupleBindingTests
             pick(Derived())
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(1, result.Value);
     }
 
@@ -233,7 +233,7 @@ public class Issue3394InlineOutTupleBindingTests
             outer(values)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -246,7 +246,7 @@ public class Issue3394InlineOutTupleBindingTests
             values[0]
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("filled", result.Value);
     }
 
@@ -266,7 +266,7 @@ public class Issue3394InlineOutTupleBindingTests
             0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public class Issue3394InlineOutTupleBindingTests
             Outer.make()
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.NotNull(result.Value);
     }
 
@@ -309,7 +309,7 @@ public class Issue3394InlineOutTupleBindingTests
             Outer.make()
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -342,7 +342,7 @@ public class Issue3394InlineOutTupleBindingTests
             Derived().Value()
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(3, result.Value);
     }
 
@@ -369,7 +369,7 @@ public class Issue3394InlineOutTupleBindingTests
             Outer.Run()
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(3, result.Value);
     }
 
@@ -386,7 +386,7 @@ public class Issue3394InlineOutTupleBindingTests
             values.Length
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(0, result.Value);
     }
 
@@ -401,7 +401,7 @@ public class Issue3394InlineOutTupleBindingTests
             MetadataTokens.GetToken(handle)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(0x06000000, result.Value);
     }
 
@@ -426,7 +426,7 @@ public class Issue3394InlineOutTupleBindingTests
             check("x")
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(true, result.Value);
     }
 
@@ -443,7 +443,7 @@ public class Issue3394InlineOutTupleBindingTests
             items.Count
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(1, result.Value);
     }
 
@@ -480,7 +480,7 @@ public class Issue3394InlineOutTupleBindingTests
             0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -521,7 +521,7 @@ public class Issue3394InlineOutTupleBindingTests
             42
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -545,7 +545,7 @@ public class Issue3394InlineOutTupleBindingTests
             0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -569,7 +569,7 @@ public class Issue3394InlineOutTupleBindingTests
             run(C(), out value)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(true, result.Value);
     }
 
@@ -592,7 +592,7 @@ public class Issue3394InlineOutTupleBindingTests
             destination!!.Value
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -616,7 +616,7 @@ public class Issue3394InlineOutTupleBindingTests
             values.Length
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(0, result.Value);
     }
 
@@ -645,7 +645,7 @@ public class Issue3394InlineOutTupleBindingTests
             count
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(1, result.Value);
     }
 
@@ -672,7 +672,7 @@ public class Issue3394InlineOutTupleBindingTests
             """;
 
         var result = EmittedOracle.Evaluate(Source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(0, result.Value);
     }
 
@@ -691,7 +691,7 @@ public class Issue3394InlineOutTupleBindingTests
             cache.GetOrAdd(typeof(Item), create, "consumer").GetType().Name
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("Item", result.Value);
     }
 
@@ -706,7 +706,7 @@ public class Issue3394InlineOutTupleBindingTests
             nullableValues.Length
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(1, result.Value);
     }
 
@@ -727,7 +727,7 @@ public class Issue3394InlineOutTupleBindingTests
             42
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -747,7 +747,7 @@ public class Issue3394InlineOutTupleBindingTests
             42
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -764,7 +764,7 @@ public class Issue3394InlineOutTupleBindingTests
             name(property)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("Length", result.Value);
     }
 
@@ -787,7 +787,7 @@ public class Issue3394InlineOutTupleBindingTests
                 """,
             });
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -804,7 +804,7 @@ public class Issue3394InlineOutTupleBindingTests
             0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -846,7 +846,7 @@ public class Issue3394InlineOutTupleBindingTests
             values.Any(Item.Keep)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(true, result.Value);
     }
 
@@ -872,7 +872,7 @@ public class Issue3394InlineOutTupleBindingTests
             0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(0, result.Value);
     }
 
@@ -891,7 +891,7 @@ public class Issue3394InlineOutTupleBindingTests
             directMissing && missing
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(true, result.Value);
     }
 
@@ -909,7 +909,7 @@ public class Issue3394InlineOutTupleBindingTests
             !found && handle.IsNil
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(true, result.Value);
     }
 
@@ -926,7 +926,7 @@ public class Issue3394InlineOutTupleBindingTests
             0
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     private static class OptionalNullFixture

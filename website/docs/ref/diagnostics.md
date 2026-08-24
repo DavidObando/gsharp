@@ -828,6 +828,19 @@ reserved keyword (erased aliases `type Name = Target` parse contextually).
 |---|---|---|---|
 | GS0535 | Error | `The 'type <Name> = delegate func(...)' spelling is retired. Declare the delegate as 'delegate <Name>(parameters) ReturnType;' (trailing semicolon required; omit the return type for void).` | `type Greeter = delegate func(name string)` |
 
+## Redundant null assertion (GS0536)
+
+Issue #3501 (`!!` noise reduction): a user-written `!!` whose operand is
+already non-nullable — statically, or through ADR-0069 smart-cast narrowing
+— performs no useful work. The warning marks exactly the operator token so
+the assertion can be deleted; cs2gs's migrate pipeline consumes it to strip
+redundant assertions from translated output automatically.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0536 | Warning | `Redundant '!!': the value is already non-null here.` | `if s != nil { return s!! }` |
+
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 ADR-0166: a designation in a boolean `is`

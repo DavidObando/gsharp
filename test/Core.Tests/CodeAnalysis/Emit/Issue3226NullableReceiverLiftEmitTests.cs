@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Linq;
 using GSharp.Tests;
 using Xunit;
 
@@ -38,7 +39,7 @@ func (self T?) MyOrElse[T](fb T) T {
 var v int32? = nil
 v.MyOrElse(99)
 ");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(99, result.Value);
     }
 
@@ -52,7 +53,7 @@ v.MyOrElse(99)
 var v int32? = 5
 v.MyOrElse(99)
 ");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(5, result.Value);
     }
 
@@ -73,7 +74,7 @@ var def = Point{X: 1, Y: 2}
 var r = pt.MyOrElse(def)
 r.X
 ");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(1, result.Value);
     }
 
@@ -91,7 +92,7 @@ var def = Point{X: 1, Y: 2}
 var r = pt.MyOrElse(def)
 r.X
 ");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(7, result.Value);
     }
 
@@ -109,7 +110,7 @@ func MyOrElse[T](self T?, fb T) T {
 var v int32? = nil
 MyOrElse(v, 99)
 ");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(99, result.Value);
     }
 
@@ -122,7 +123,7 @@ MyOrElse(v, 99)
 var s string? = nil
 s.MyOrElse(""def"")
 ");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("def", result.Value);
     }
 }

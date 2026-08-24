@@ -65,7 +65,7 @@ public class Issue773GenericReceiverEmittedSessionTests
     {
         var source = """
             func (self T?) MyOrElse[T](fb T) T {
-                if self != nil { return self!! }
+                if self != nil { return self }
                 return fb
             }
 
@@ -81,7 +81,7 @@ public class Issue773GenericReceiverEmittedSessionTests
     {
         var source = """
             func (self T?) MyOrElse[T](fb T) T {
-                if self != nil { return self!! }
+                if self != nil { return self }
                 return fb
             }
 

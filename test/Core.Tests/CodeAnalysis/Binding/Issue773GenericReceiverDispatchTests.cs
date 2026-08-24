@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Linq;
 using GSharp.Tests;
 using Xunit;
 
@@ -38,7 +39,7 @@ var arr = []int32{10, 20, 30}
 arr.MyFirst(99)
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(99, result.Value);
     }
 
@@ -57,7 +58,7 @@ var arr = []int32{1, 2, 3}
 arr.HeadOr(7)
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(7, result.Value);
     }
 
@@ -76,7 +77,7 @@ var arr = []string{""a"", ""b""}
 arr.HeadOr(""z"")
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("z", result.Value);
     }
 
@@ -101,7 +102,7 @@ d[""a""] = 1
 d.Keys.HeadOr(""z"")
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("z", result.Value);
     }
 
@@ -121,7 +122,7 @@ var s string? = nil
 s.MyOrElse(""def"")
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("def", result.Value);
     }
 
@@ -144,7 +145,7 @@ v.MyOrElse(99)
         // Nullable<int32> through the unconstrained-nullable lift (MethodSpec
         // at Nullable<int32>).
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(99, result.Value);
     }
 
@@ -174,7 +175,7 @@ r.X
         // fallback on the emitted path too (the lift boxes Nullable<Point> for
         // the nil probe instead of reinterpreting it as a bare Point).
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(1, result.Value);
     }
 
@@ -194,7 +195,7 @@ var d = Dictionary[string, int32]()
 d.MyCount()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 
@@ -251,7 +252,7 @@ var c = Card()
 c.Branded()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("card", result.Value);
     }
 
@@ -272,7 +273,7 @@ var greeting = ""hi""
 greeting.Loud()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("hi!", result.Value);
     }
 
@@ -298,7 +299,7 @@ var arr = []int32{1, 2}
 arr.Tag()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal("closed", result.Value);
     }
 
@@ -317,7 +318,7 @@ var a = []int32{1, 2, 3}
 a.MyCount()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(7, result.Value);
     }
 
@@ -338,7 +339,7 @@ var a = []int32{1, 2, 3}
 a.FirstOr(99)
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(99, result.Value);
     }
 

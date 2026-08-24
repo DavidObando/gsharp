@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using System.Linq;
 using GSharp.Tests;
 using Xunit;
 
@@ -48,7 +49,10 @@ class C {
     }
 }
 ";
-        Assert.Empty(Bind(source));
+
+        // Issue #3501: the throw-guard narrows the parameter, so the kept
+        // `!!` now draws GS0536 (warning) — only errors gate this test.
+        Assert.DoesNotContain(Bind(source), d => d.IsError);
     }
 
     [Fact]
@@ -71,7 +75,7 @@ var c = C()
 var r = c.M(7)
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(7, result.Value);
     }
 
@@ -95,7 +99,7 @@ var c = C()
 var r = c.M(7)
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(107, result.Value);
     }
 
@@ -121,7 +125,7 @@ var c = C(5)
 var r = c.Get()
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(5, result.Value);
     }
 
@@ -148,7 +152,7 @@ var c = C()
 var r = c.M(42)
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
     }
 

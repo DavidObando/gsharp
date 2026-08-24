@@ -139,7 +139,7 @@ bag += 7
 bag!!.Total
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(12, result.Value);
     }
 
@@ -170,7 +170,7 @@ bag += 5
 bag!!.Total
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(5, result.Value);
     }
 
@@ -198,7 +198,7 @@ bag += 5
 bag!!.Total
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(100, result.Value);
     }
 
@@ -280,7 +280,7 @@ bag += 9
 bag!!.Total
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(9, result.Value);
     }
 
@@ -356,7 +356,7 @@ x -= 3
 x
 ";
         var result = Evaluate(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(12, result.Value);
     }
 

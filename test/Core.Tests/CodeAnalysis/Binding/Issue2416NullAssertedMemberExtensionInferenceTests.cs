@@ -96,7 +96,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Direct(source IEnumerable[Chapter]?) bool { return source!!.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Bare(ch Chapter) bool { return ch.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(source ChapterInfo?) bool { return source!!.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(ch Chapter?) bool { return ch!!.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(ch Chapter?) bool { return ch!!.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(h Holder?) bool { return h!!.GetChapters().IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(h Holder?) bool { return h!!.Map["k"].IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(w Wrapper?) bool { return w!!.Info.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -272,7 +272,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(source ChapterInfo?) bool { return source!!.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]
@@ -299,7 +299,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceTests
             func Chained(source ChapterInfo?) bool { return source!!.Chapters.IsNullOrEmpty() }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
     }
 
     [Fact]

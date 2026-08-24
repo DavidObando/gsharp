@@ -161,14 +161,16 @@ public class Issue2924TupleElementDelegateCallTests
             }
             let live = Factory()
             Console.WriteLine(live?.Make(40)!!(2))
-            Console.WriteLine(live?.Make(40)!!!!(2))
             let missing Factory = nil
             missing?.Make(40)!!(2)
-            missing?.Make(40)!!!!(2)
             Console.WriteLine("end")
             """);
 
-        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}end{Environment.NewLine}", output);
+        // Issue #3501: the `!!!!` double-assertion variants moved out of this
+        // output-comparing harness — the second assertion is redundant by
+        // construction and now draws GS0536 into the compared stream. Chain
+        // coverage lives in the Core.Tests/Compiler.Tests Issue2924 twins.
+        Assert.Equal($"42{Environment.NewLine}end{Environment.NewLine}", output);
     }
 
     [Fact]

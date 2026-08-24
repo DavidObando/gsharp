@@ -90,6 +90,13 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor FallthroughNotSupported = new("GS0168", DiagnosticSeverity.Error, "'fallthrough' must be the last statement of a 'switch' case body.");
     internal static readonly DiagnosticDescriptor FallthroughInFinalArm = new("GS0533", DiagnosticSeverity.Error, "'fallthrough' cannot be used in the final arm of a 'switch' statement.");
     internal static readonly DiagnosticDescriptor FallthroughTargetHasBindings = new("GS0534", DiagnosticSeverity.Error, "'fallthrough' cannot target a 'switch' arm whose pattern declares bindings or that has a 'when' guard — the jump would skip their assignment.");
+
+    // Issue #3501 (!! reduction): a user-written `!!` whose operand is
+    // already non-nullable (statically, or through smart-cast narrowing) is
+    // a no-op — surfaced as a warning so authors (and the cs2gs polish
+    // pass, which strips exactly these spans) can drop the noise. GS0535 is
+    // taken by the #3510 retired-delegate-spelling diagnostic.
+    internal static readonly DiagnosticDescriptor RedundantNullAssertion = new("GS0536", DiagnosticSeverity.Warning, "Redundant '!!': the value is already non-null here.");
     internal static readonly DiagnosticDescriptor DuplicateSwitchDefault = new("GS0169", DiagnosticSeverity.Error, "A 'switch' statement can only have one 'default' arm.");
     internal static readonly DiagnosticDescriptor SwitchCaseValueNotConstant = new("GS0170", DiagnosticSeverity.Error, "Switch case value must be a constant expression.");
     internal static readonly DiagnosticDescriptor SwitchCaseTypeMismatch = new("GS0171", DiagnosticSeverity.Error, "Switch case value of type '{0}' is incompatible with switch expression of type '{1}'.");

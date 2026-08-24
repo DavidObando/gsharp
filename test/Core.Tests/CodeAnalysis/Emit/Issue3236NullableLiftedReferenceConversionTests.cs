@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Linq;
 using GSharp.Tests;
 using Xunit;
 
@@ -48,7 +49,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             lifted!!.Value
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(42, result.Value);
     }
@@ -72,7 +73,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             },
             new EmittedOracleOptions { IsLibrary = true });
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -104,7 +105,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             },
             new EmittedOracleOptions { IsLibrary = true });
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -124,7 +125,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             },
             new EmittedOracleOptions { IsLibrary = true });
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
 
     [Fact]
@@ -147,7 +148,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             r
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal("AB", result.Value);
     }
@@ -172,7 +173,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             r
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal("AB", result.Value);
     }
@@ -196,7 +197,7 @@ public class Issue3236NullableLiftedReferenceConversionTests
             Pass(v1, 99) * 100 + Pass(v2, 0)
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(9907, result.Value);
     }

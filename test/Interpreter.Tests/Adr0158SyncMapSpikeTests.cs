@@ -102,7 +102,7 @@ public class Adr0158SyncMapSpikeTests
                 lock items {
                     var e = items.GetEnumerator()
                     while e.MoveNext() {
-                        action(e.Current.Key!!, e.Current.Value)
+                        action(e.Current.Key, e.Current.Value)
                     }
                 }
             }

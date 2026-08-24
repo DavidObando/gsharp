@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -93,7 +94,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(91235, result.Value);
     }
@@ -125,7 +126,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(112, result.Value);
     }
@@ -171,7 +172,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(223475, result.Value);
     }
@@ -215,7 +216,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(125, result.Value);
     }
@@ -266,7 +267,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(125325, result.Value);
     }
@@ -310,7 +311,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(125, result.Value);
     }
@@ -369,7 +370,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(125125, result.Value);
     }
@@ -416,7 +417,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(1, result.Value);
     }
@@ -466,7 +467,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(24544, result.Value);
     }
@@ -502,7 +503,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(237234, result.Value);
     }
@@ -552,7 +553,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(99251113, result.Value);
     }
@@ -607,7 +608,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(992524, result.Value);
     }
@@ -666,7 +667,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(992599722, result.Value);
     }
@@ -716,7 +717,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(992522, result.Value);
     }
@@ -765,7 +766,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(915911, result.Value);
     }
@@ -820,7 +821,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(915911, result.Value);
     }
@@ -860,7 +861,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(1511, result.Value);
     }
@@ -901,7 +902,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(15, result.Value);
     }
@@ -942,7 +943,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(15, result.Value);
     }
@@ -967,7 +968,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe.Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(10, result.Value);
     }
@@ -1002,7 +1003,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(1112, result.Value);
     }
@@ -1037,7 +1038,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe.Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(1010, result.Value);
     }
@@ -1072,7 +1073,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe.Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(11, result.Value);
     }
@@ -1103,7 +1104,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe.Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(11, result.Value);
     }
@@ -1136,7 +1137,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe.Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(1, result.Value);
     }
@@ -1218,7 +1219,7 @@ public sealed class Issue3462DiscardAssignmentTranslationTests
         TranslationTestValidation.AssertBinds(rendered);
         EmittedOracleResult result = EmittedOracle.Evaluate(
             rendered + Environment.NewLine + "Probe().Run()");
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Null(result.UnhandledException);
         Assert.Equal(45, result.Value);
     }
