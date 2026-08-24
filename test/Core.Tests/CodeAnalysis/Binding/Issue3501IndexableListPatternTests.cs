@@ -97,6 +97,37 @@ F(ImmutableArray.Create[int32](7))
     }
 
     [Fact]
+    public void ParamsForwarding_WithConstructedUserGenericMiddleArgs_IsNotAmbiguous()
+    {
+        // Issue #3501 (GS0266): constructed imported generics over user type
+        // arguments are freshly allocated, so the identity classification
+        // missed and a normal-form slot tied with a params-expanded sibling.
+        var source = @"
+import System.Collections.Immutable
+
+class Loc {
+}
+
+class Diag {
+    shared {
+        func Create(name string, code int32, messageArguments ...object?) string {
+            return Create(name, code, ImmutableArray[Loc].Empty, ImmutableDictionary[string, string?].Empty, messageArguments)
+        }
+
+        func Create(name string, code int32, locations ImmutableArray[Loc], properties ImmutableDictionary[string, string?]?, messageArguments ...object?) string {
+            return name + code.ToString() + messageArguments.Length.ToString()
+        }
+    }
+}
+
+Diag.Create(""d"", 1, ""a"", ""b"")
+";
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("d12", result.Value);
+    }
+
+    [Fact]
     public void NonIndexableDiscriminant_StillReportsGS0175()
     {
         var source = @"

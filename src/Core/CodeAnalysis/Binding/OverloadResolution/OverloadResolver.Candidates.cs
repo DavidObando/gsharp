@@ -898,7 +898,12 @@ internal sealed partial class OverloadResolver
             return ClrOverloadResolution.ImplicitConversionKind.None;
         }
 
-        if (argType == paramType)
+        // Issue #3501: constructed imported generics over user type arguments
+        // (`ImmutableArray[Loc]`) are freshly allocated per construction, so
+        // reference equality misses the identity case and the argument ranked
+        // as a mere reference conversion — making a same-typed normal-form
+        // slot tie with a params-expanded sibling (spurious GS0266).
+        if (argType == paramType || DeclarationBinder.TypeSignaturesEquivalent(argType, paramType))
         {
             return ClrOverloadResolution.ImplicitConversionKind.Identity;
         }
