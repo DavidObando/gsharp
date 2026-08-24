@@ -465,7 +465,15 @@ internal sealed class ConversionClassifier
 
         // ADR-0063 §9: a user-function method group with multiple candidates
         // resolves here against the target delegate/function-type signature.
-        if (expression is BoundMethodGroupExpression { FunctionType: null } userMethodGroup)
+        // Issue #3505: an ALREADY-resolved group whose function type differs
+        // from a native function-type target re-resolves here too, so a
+        // reference-variant slot binds the delegate AT the target type — the
+        // fall-through path would wrap it in a delegate-to-delegate variance
+        // conversion the emitter cannot express.
+        if (expression is BoundMethodGroupExpression userMethodGroup
+            && (userMethodGroup.FunctionType == null
+                || (type is FunctionTypeSymbol targetFn
+                    && HasReferenceVariantSlotMismatch(userMethodGroup.FunctionType, targetFn))))
         {
             return BindUserMethodGroupConversion(diagnosticLocation, userMethodGroup, type);
         }
@@ -1758,6 +1766,14 @@ internal sealed class ConversionClassifier
         ImmutableArray<TypeSymbol> pickMethodTypeArguments = default;
         TypeSymbol[]? pickParameterTypes = null;
         TypeSymbol? pickReturnType = null;
+
+        // Issue #3505: exact-signature candidates are preferred; the
+        // reference-variance relaxation only runs as a second pass when no
+        // candidate matched exactly, mirroring C#'s better-function-member
+        // preference for identity conversions.
+        for (var selectionPass = 0; selectionPass < 2 && pick == null; selectionPass++)
+        {
+        var allowVariance = selectionPass == 1;
         foreach (var candidate in group.Candidates)
         {
             var candidateOwner = group.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
@@ -1792,7 +1808,9 @@ internal sealed class ConversionClassifier
                     || !TryCanonicalizeMethodGroupType(
                         candidateParameterTypes[i],
                         targetParameterTypes[i],
-                        out candidateParameterTypes[i]))
+                        out candidateParameterTypes[i],
+                        parameterPosition: true,
+                        allowVariance: allowVariance))
                 {
                     paramsMatch = false;
                     break;
@@ -1807,7 +1825,9 @@ internal sealed class ConversionClassifier
             if (!TryCanonicalizeMethodGroupType(
                 canonicalCandidateReturn,
                 targetReturnType,
-                out canonicalCandidateReturn))
+                out canonicalCandidateReturn,
+                parameterPosition: false,
+                allowVariance: allowVariance))
             {
                 continue;
             }
@@ -1839,6 +1859,7 @@ internal sealed class ConversionClassifier
             pickMethodTypeArguments = candidateMethodTypeArguments;
             pickParameterTypes = candidateParameterTypes;
             pickReturnType = canonicalCandidateReturn;
+        }
         }
 
         if (pick == null)
@@ -2716,10 +2737,59 @@ internal sealed class ConversionClassifier
         return ClrTypeUtilities.IsAssignableByName(invokeReturn, methodReturn);
     }
 
+    /// <summary>
+    /// Issue #3505: true when <paramref name="from"/> and <paramref name="to"/>
+    /// share an arity and differ in at least one slot by a strict implicit
+    /// REFERENCE conversion (contravariant parameters, covariant return) with
+    /// every remaining slot runtime-equivalent. Such a group must re-resolve
+    /// AT the target type — the generic conversion path would wrap it in a
+    /// delegate-to-delegate variance conversion the emitter cannot express.
+    /// Shapes that differ any other way stay on the generic path so its
+    /// richer equivalence rules (and diagnostics) apply.
+    /// </summary>
+    private static bool HasReferenceVariantSlotMismatch(FunctionTypeSymbol from, FunctionTypeSymbol to)
+    {
+        if (from == null || to == null || from.Arity != to.Arity)
+        {
+            return false;
+        }
+
+        var anyVariant = false;
+        for (var i = 0; i < from.Arity; i++)
+        {
+            if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from.ParameterTypes[i], to.ParameterTypes[i]))
+            {
+                continue;
+            }
+
+            if (Conversion.IsImplicitReferenceVariantSlot(to.ParameterTypes[i], from.ParameterTypes[i]))
+            {
+                anyVariant = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from.ReturnType, to.ReturnType))
+        {
+            if (!Conversion.IsImplicitReferenceVariantSlot(from.ReturnType, to.ReturnType))
+            {
+                return false;
+            }
+
+            anyVariant = true;
+        }
+
+        return anyVariant;
+    }
+
     private static bool TryCanonicalizeMethodGroupType(
         TypeSymbol actual,
         TypeSymbol expected,
-        out TypeSymbol canonical)
+        out TypeSymbol canonical,
+        bool parameterPosition = false,
+        bool allowVariance = true)
     {
         canonical = actual;
         if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual, expected))
@@ -2727,10 +2797,31 @@ internal sealed class ConversionClassifier
             return true;
         }
 
-        return MemberLookup.TryCanonicalizeStructuralFunctionType(actual, expected, out canonical)
+        if (MemberLookup.TryCanonicalizeStructuralFunctionType(actual, expected, out canonical)
             && actual.ClrType != null
             && expected.ClrType != null
-            && ClrTypeUtilities.AreSame(actual.ClrType, expected.ClrType);
+            && ClrTypeUtilities.AreSame(actual.ClrType, expected.ClrType))
+        {
+            return true;
+        }
+
+        // Issue #3505: a reference-variant slot canonicalizes to the TARGET's
+        // slot type, so the resolved group is built AT the target function
+        // type and the emitter creates the target-typed delegate directly
+        // over the method (plain ldftn+newobj — valid IL for reference
+        // variance; a delegate-to-delegate variance conversion is not).
+        // Parameters are contravariant (target flows into the candidate),
+        // returns covariant (candidate flows into the target); value-typed
+        // slots stay exact — CLR delegate variance is reference-only.
+        var (variantFrom, variantTo) = parameterPosition ? (expected, actual) : (actual, expected);
+        if (allowVariance && Conversion.IsImplicitReferenceVariantSlot(variantFrom, variantTo))
+        {
+            canonical = expected;
+            return true;
+        }
+
+        canonical = actual;
+        return false;
     }
 
     private static ImmutableArray<RefKind> GetMethodGroupTargetRefKinds(

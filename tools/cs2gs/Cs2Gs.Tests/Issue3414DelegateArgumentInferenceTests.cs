@@ -202,11 +202,11 @@ public sealed class Issue3414DelegateArgumentInferenceTests
         Assert.Contains("Count(", consumer, StringComparison.Ordinal);
         Assert.Contains("DiagnosticsOf", consumer, StringComparison.Ordinal);
         Assert.Contains("IsError", consumer, StringComparison.Ordinal);
-        Assert.Contains(
-            "ApplyDescription(cell, func (value Cell) object",
-            consumer,
-            StringComparison.Ordinal);
-        Assert.Contains("return Program.Describe(value)", consumer, StringComparison.Ordinal);
+        // Issue #3505 (fixed): a reference-variant method group against a
+        // source-defined callee's native slot now emits the direct reference
+        // — gsc binds it at the target type — instead of the wrapper lambda.
+        Assert.Contains("ApplyDescription(cell, Describe)", consumer, StringComparison.Ordinal);
+        Assert.DoesNotContain("return Program.Describe(value)", consumer, StringComparison.Ordinal);
         Assert.Contains(
             "Rebuilder(func (value Cell) object",
             consumer,
