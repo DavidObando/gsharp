@@ -351,7 +351,7 @@ Every `data struct` synthesizes a fixed contract of value-semantics members — 
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (e.g. 'delegate Name(sender Object, e EventArgs) '). |;
+| GS0233 | Error | Named delegate declaration requires 'func(...)' after 'delegate' (retired `type Name = delegate …` recovery form only; the canonical spelling is `delegate Name(params) ReturnType;` — see GS0535 / issue #3510). |
 
 ## Ref-kind parameter diagnostics (GS0235–GS0243)
 

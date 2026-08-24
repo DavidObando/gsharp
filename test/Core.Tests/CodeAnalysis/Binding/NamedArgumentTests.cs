@@ -313,14 +313,14 @@ operation(y: 3, x: 10)
     }
 
     [Fact]
-    public void ImportedClrKeywordParameter_UsesCanonicalSuffixedName()
+    public void ImportedClrKeywordParameter_TypeSpellsUnsuffixed()
     {
         using var resolver = ReferenceResolver.WithReferences(
             new[] { typeof(KeywordNamedParameterFixture).Assembly.Location });
         var tree = SyntaxTree.Parse(SourceText.From(@"
 import GSharp.Core.Tests.CodeAnalysis.Binding
 
-KeywordNamedParameterFixture.Combine(type_: ""cat"", value: 2)
+KeywordNamedParameterFixture.Combine(type: ""cat"", value: 2)
 "));
         var compilation = new Compilation(resolver, tree);
         var diagnostics = compilation.GlobalScope.Diagnostics

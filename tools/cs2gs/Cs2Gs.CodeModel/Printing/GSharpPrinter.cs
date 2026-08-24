@@ -1876,6 +1876,7 @@ public static class GSharpPrinter
         sb.Append(RenderAttributeBlock(declaration.Attributes, indent));
         sb.Append(pad);
         sb.Append(RenderVisibility(declaration.Visibility));
+
         // Issue #3510: the canonical named-delegate spelling —
         // `delegate Name[TParams]?(params) ReturnType? ;`. The required
         // trailing semicolon terminates the optional return-type clause.
