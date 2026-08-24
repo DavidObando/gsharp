@@ -280,6 +280,44 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void DocComments_SanitizedParamNames_AndDocAdjacency()
+    {
+        // GS0229: the @param spelling follows the parameter's EMITTED name
+        // (keyword collisions gain the underscore); an extension receiver's
+        // @param is dropped. GS0227: a regular comment between the doc block
+        // and its declaration detaches it in G#, so docs print last.
+        string printed = Translate("""
+            public class Widget
+            {
+                /// <summary>Renders a widget.</summary>
+                /// <param name="package">The declaring package.</param>
+                /// <param name="count">The repeat count.</param>
+                // Regular note that used to wedge between doc and decl.
+                public string Render(string package, int count) => package + count;
+            }
+
+            public static class WidgetExtensions
+            {
+                /// <summary>Describes the widget.</summary>
+                /// <param name="widget">The receiver.</param>
+                /// <param name="suffix">The suffix.</param>
+                public static string Describe(this Widget widget, string suffix) =>
+                    widget.Render("p", 1) + suffix;
+            }
+            """);
+
+        Assert.Contains("@param package_ The declaring package.", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("@param package ", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("@param widget", printed, StringComparison.Ordinal);
+        Assert.Contains("@param suffix", printed, StringComparison.Ordinal);
+
+        int note = printed.IndexOf("// Regular note", StringComparison.Ordinal);
+        int doc = printed.IndexOf("/// Renders a widget.", StringComparison.Ordinal);
+        Assert.True(note >= 0 && doc >= 0 && note < doc, printed);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

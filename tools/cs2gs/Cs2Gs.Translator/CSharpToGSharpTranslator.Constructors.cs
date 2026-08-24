@@ -86,9 +86,87 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
+            // Issue #3501 (GS0227): C# tolerates an ordinary comment BETWEEN
+            // a doc comment and its declaration; gsc requires the `///` block
+            // to be adjacent. Partition so regular comments print first and
+            // the doc block hugs the declaration.
+            if (lines.Any(l => l.StartsWith("///", StringComparison.Ordinal))
+                && lines.Any(l => !l.StartsWith("///", StringComparison.Ordinal)))
+            {
+                lines = lines
+                    .Where(l => !l.StartsWith("///", StringComparison.Ordinal))
+                    .Concat(lines.Where(l => l.StartsWith("///", StringComparison.Ordinal)))
+                    .ToList();
+            }
+
             node.AttachedComments = node.AttachedComments is { Count: > 0 } existing
                 ? lines.Concat(existing).ToList()
                 : lines;
+        }
+
+        // Issue #3501 (GS0229): rewrites `@param` names in the node's
+        // attached doc comments to the parameters' EMITTED spellings
+        // (`package` → `package_` when the name collides with a G# keyword)
+        // and drops the receiver's `@param` for a C# extension method — its
+        // receiver is a G# receiver clause (or `this`), not a parameter.
+        private void SanitizeDocParamComments(GNode node, SyntaxNode source)
+        {
+            if (node?.AttachedComments is not { Count: > 0 } comments
+                || !comments.Any(l => l.Contains("@param", StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            IMethodSymbol method = this.context.GetDeclaredSymbol(source) as IMethodSymbol;
+            ImmutableArray<IParameterSymbol> parameters =
+                method?.Parameters
+                ?? (this.context.GetDeclaredSymbol(source) as IPropertySymbol)?.Parameters
+                ?? ImmutableArray<IParameterSymbol>.Empty;
+            if (parameters.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            var receiverName = method is { IsExtensionMethod: true }
+                ? parameters[0].Name
+                : null;
+            var updated = new List<string>(comments.Count);
+            foreach (string line in comments)
+            {
+                int at = line.IndexOf("@param ", StringComparison.Ordinal);
+                if (at < 0)
+                {
+                    updated.Add(line);
+                    continue;
+                }
+
+                int nameStart = at + "@param ".Length;
+                int nameEnd = nameStart;
+                while (nameEnd < line.Length && !char.IsWhiteSpace(line[nameEnd]))
+                {
+                    nameEnd++;
+                }
+
+                string documented = line.Substring(nameStart, nameEnd - nameStart);
+                if (documented == receiverName)
+                {
+                    continue;
+                }
+
+                IParameterSymbol parameter = parameters.FirstOrDefault(p => p.Name == documented);
+                if (parameter == null)
+                {
+                    updated.Add(line);
+                    continue;
+                }
+
+                string emitted = this.EmittedName(parameter, parameter.Name);
+                updated.Add(emitted == documented
+                    ? line
+                    : line.Substring(0, nameStart) + emitted + line.Substring(nameEnd));
+            }
+
+            node.AttachedComments = updated;
         }
 
         private (GMember Member, bool IsStatic) TranslateIndexer(IndexerDeclarationSyntax node)
@@ -2724,6 +2802,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (spillPrologue.Count == 0)
                 {
                     AttachSourceComments(core.FirstOrDefault(), statement);
+                    this.SanitizeDocParamComments(core.FirstOrDefault(), statement);
                     AttachTrailingComment(core.LastOrDefault(), statement);
                     return core;
                 }
@@ -2731,6 +2810,7 @@ public sealed partial class CSharpToGSharpTranslator
                 var combined = new List<GStatement>(spillPrologue);
                 combined.AddRange(core);
                 AttachSourceComments(combined[0], statement);
+                this.SanitizeDocParamComments(combined[0], statement);
                 AttachTrailingComment(combined[^1], statement);
                 return combined;
             }
