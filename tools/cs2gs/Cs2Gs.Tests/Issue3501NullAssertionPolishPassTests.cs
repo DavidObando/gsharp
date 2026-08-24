@@ -65,6 +65,46 @@ public sealed class Issue3501NullAssertionPolishPassTests
     }
 
     [Fact]
+    public void Strip_PolishesDependencyFilesUnderTheStrippableRoot()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            nameof(Issue3501NullAssertionPolishPassTests),
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "Dep"));
+        string owned = Path.Combine(root, "Owned.gs");
+        string dependency = Path.Combine(root, "Dep", "Sibling.gs");
+        string outside = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".gs");
+        try
+        {
+            File.WriteAllLines(owned, new[] { "let a = b!!" });
+            File.WriteAllLines(dependency, new[] { "let c = d!!" });
+            File.WriteAllLines(outside, new[] { "let e = f!!" });
+
+            var diagnostics = new[]
+            {
+                new GscDiagnostic("GS0536", "Redundant '!!'…", "warning", dependency, 1, 10, 1, 12),
+                new GscDiagnostic("GS0536", "Redundant '!!'…", "warning", outside, 1, 10, 1, 12),
+            };
+
+            Assert.Equal(
+                new[] { dependency },
+                NullAssertionPolishPass.CandidateFiles(diagnostics, new[] { owned }, root));
+
+            int stripped = NullAssertionPolishPass.Strip(diagnostics, new[] { owned }, root);
+
+            Assert.Equal(1, stripped);
+            Assert.Equal(new[] { "let c = d" }, File.ReadAllLines(dependency));
+            Assert.Equal(new[] { "let e = f!!" }, File.ReadAllLines(outside));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
     public void Strip_IgnoresFilesOutsideTheEmittedSet()
     {
         string directory = Path.Combine(

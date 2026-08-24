@@ -86,10 +86,18 @@ public sealed class CompileStage : IMigrationStage
             if (sdkResult.IsAvailable
                 && sdkResult.Diagnostics.Any(d => d.Id == NullAssertionPolishPass.DiagnosticId))
             {
-                Dictionary<string, string> backups = gsFiles
+                // The SDK build also compiles project references, so a
+                // dependency whose own compile stage never ran can surface
+                // GS0536 in files outside this app's emitted set — anything
+                // under the shared output root is fair game for the polish.
+                string strippableRoot = context.Options.OutputRoot;
+                Dictionary<string, string> backups = NullAssertionPolishPass
+                    .CandidateFiles(sdkResult.Diagnostics, gsFiles, strippableRoot)
+                    .Concat(gsFiles)
                     .Where(File.Exists)
+                    .Distinct(StringComparer.Ordinal)
                     .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
-                if (NullAssertionPolishPass.Strip(sdkResult.Diagnostics, gsFiles) > 0)
+                if (NullAssertionPolishPass.Strip(sdkResult.Diagnostics, gsFiles, strippableRoot) > 0)
                 {
                     SdkCompileResult polished = RunSdkCompile();
                     if (polished.IsAvailable && (polished.Succeeded || !sdkResult.Succeeded))

@@ -32,10 +32,18 @@ public static class NullAssertionPolishPass
     /// </summary>
     /// <param name="diagnostics">The compile run's parsed diagnostics.</param>
     /// <param name="emittedGsFiles">The emitted .gs file paths owned by this app.</param>
+    /// <param name="strippableRoot">
+    /// Optional directory under which ANY emitted <c>.gs</c> may be polished —
+    /// an app's SDK build also compiles its project references, and a
+    /// dependency whose own compile stage never ran (translation-unsupported)
+    /// still carries redundant assertions that fail this app's
+    /// warnings-as-errors build.
+    /// </param>
     /// <returns>The number of assertions removed.</returns>
     public static int Strip(
         IReadOnlyList<GscDiagnostic> diagnostics,
-        IReadOnlyCollection<string> emittedGsFiles)
+        IReadOnlyCollection<string> emittedGsFiles,
+        string strippableRoot = null)
     {
         if (diagnostics is null || diagnostics.Count == 0 || emittedGsFiles is null || emittedGsFiles.Count == 0)
         {
@@ -52,7 +60,7 @@ public static class NullAssertionPolishPass
             .Where(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal)
                 && d.Line == d.EndLine
                 && d.EndColumn - d.Column == 2)
-            .GroupBy(d => ResolveOwnedFile(d.File, ownedByFullPath))
+            .GroupBy(d => ResolveStrippableFile(d.File, ownedByFullPath, strippableRoot))
             .Where(g => g.Key != null);
 
         foreach (IGrouping<string, GscDiagnostic> group in byFile)
@@ -92,9 +100,41 @@ public static class NullAssertionPolishPass
         return stripped;
     }
 
-    private static string ResolveOwnedFile(
+    /// <summary>
+    /// Lists the files a <see cref="Strip"/> call with the same arguments
+    /// would touch, so callers can snapshot them for rollback first.
+    /// </summary>
+    /// <param name="diagnostics">The compile run's parsed diagnostics.</param>
+    /// <param name="emittedGsFiles">The emitted .gs file paths owned by this app.</param>
+    /// <param name="strippableRoot">The optional shared emitted-output root.</param>
+    /// <returns>The distinct resolved file paths.</returns>
+    public static IReadOnlyCollection<string> CandidateFiles(
+        IReadOnlyList<GscDiagnostic> diagnostics,
+        IReadOnlyCollection<string> emittedGsFiles,
+        string strippableRoot = null)
+    {
+        if (diagnostics is null || diagnostics.Count == 0 || emittedGsFiles is null || emittedGsFiles.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        Dictionary<string, string> ownedByFullPath = emittedGsFiles
+            .Where(File.Exists)
+            .GroupBy(p => Path.GetFullPath(p), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        return diagnostics
+            .Where(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal))
+            .Select(d => ResolveStrippableFile(d.File, ownedByFullPath, strippableRoot))
+            .Where(f => f != null)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string ResolveStrippableFile(
         string diagnosticFile,
-        IReadOnlyDictionary<string, string> ownedByFullPath)
+        IReadOnlyDictionary<string, string> ownedByFullPath,
+        string strippableRoot)
     {
         if (string.IsNullOrEmpty(diagnosticFile))
         {
@@ -111,7 +151,21 @@ public static class NullAssertionPolishPass
             return null;
         }
 
-        return ownedByFullPath.TryGetValue(normalized, out string owned) ? owned : null;
+        if (ownedByFullPath.TryGetValue(normalized, out string owned))
+        {
+            return owned;
+        }
+
+        if (string.IsNullOrEmpty(strippableRoot)
+            || !normalized.EndsWith(".gs", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(normalized))
+        {
+            return null;
+        }
+
+        string root = Path.GetFullPath(strippableRoot)
+            .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return normalized.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? normalized : null;
     }
 
     private sealed class SpanComparer : IEqualityComparer<GscDiagnostic>

@@ -147,6 +147,14 @@ internal sealed partial class ExpressionBinder
     /// <param name="operand">The bound operand.</param>
     private void ReportNullAssertionIfRedundant(SyntaxToken operatorToken, BoundExpression operand)
     {
+        // Generated trees (`.g.gs`) are rewritten on every build — advisory
+        // polish warnings there are pure noise nobody can act on, the same
+        // reason the ADR-0169 analyzer driver skips generated code.
+        if (operatorToken.Location.FileName?.EndsWith(".g.gs", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return;
+        }
+
         if (operatorToken.Kind == SyntaxKind.BangBangToken
             && operand.Type is not null
             && operand.Type != TypeSymbol.Error

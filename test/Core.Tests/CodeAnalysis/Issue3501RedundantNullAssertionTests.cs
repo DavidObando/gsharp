@@ -110,6 +110,28 @@ F(Box())
     }
 
     [Fact]
+    public void GeneratedTree_RedundantAssertion_DoesNotWarn()
+    {
+        // Generated files are rewritten on every build; nobody can act on a
+        // polish warning there (and warnings-as-errors builds would wedge).
+        var source = @"
+func F(s string) string {
+    return s!!
+}
+
+F(""x"")
+";
+        var generated = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From(source, "Probe.generated.g.gs"));
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(generated);
+        using var peStream = new System.IO.MemoryStream();
+        var emit = compilation.Emit(peStream);
+
+        Assert.True(emit.Success, string.Join("; ", emit.Diagnostics.Select(d => d.Message)));
+        Assert.DoesNotContain(emit.Diagnostics, d => d.Id == "GS0536");
+    }
+
+    [Fact]
     public void ValueTypeNullable_NecessaryAssertion_DoesNotWarn()
     {
         var source = @"
