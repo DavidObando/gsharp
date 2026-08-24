@@ -605,7 +605,7 @@
     "rule": "ADR-0059",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DelegateDeclaration.cs",
-    "notes": "Maps to the G# named delegate type alias \u0060delegate Name(params) R\u0060 (ADR-0059), including a generic delegate\u0027s type-parameter list (any arity, with constraints) \u2014 \u0060type Name[T constraint] = delegate func(...) R\u0060 (issue #1960 item 1).;"
+    "notes": "Maps to the G# named delegate declaration \u0060delegate Name(params) R;\u0060 (issue #3510; originally ADR-0059), including a generic delegate\u0027s type-parameter list (any arity, with constraints) \u2014 \u0060delegate Name[T constraint](...) R;\u0060 (issue #1960 item 1)."
   },
   {
     "kind": "DescendingOrdering",

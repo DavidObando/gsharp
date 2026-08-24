@@ -167,8 +167,8 @@ namespace Corpus.Delegates
         CompilationUnit unit = Translate(nestedSource);
         string rendered = GSharpPrinter.Print(unit);
 
-        Assert.Contains("type First_Transform = delegate func", rendered, StringComparison.Ordinal);
-        Assert.Contains("type Second_Transform = delegate func", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate First_Transform(", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Second_Transform(", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("First.Transform", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("Second.Transform", rendered, StringComparison.Ordinal);
 

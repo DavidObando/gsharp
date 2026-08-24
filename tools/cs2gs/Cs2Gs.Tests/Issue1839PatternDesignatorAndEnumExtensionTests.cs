@@ -20,8 +20,8 @@ namespace Cs2Gs.Tests;
 /// Issue #1839: a follow-up to #1836/#1734's declaration-site sanitization
 /// fix. Two corner cases remained in <c>GetRightmostTypeName</c>'s synthesized
 /// recursive-pattern designator:
-/// <list type="bullet">
-/// <item>N2 — a predefined/composite type pattern (<c>int?</c>, <c>int[]</c>,
+/// <list defer="bullet">
+/// <item>N2 — a predefined/composite defer pattern (<c>int?</c>, <c>int[]</c>,
 /// a tuple, a pointer) fell back to <c>Type.ToString()</c>, which is not a
 /// valid identifier, and was emitted unsanitized.</item>
 /// <item>N3 — two typed recursive subpatterns within the SAME arm whose
@@ -38,10 +38,10 @@ public class Issue1839PatternDesignatorAndEnumExtensionTests
     [Fact]
     public void RecursivePatternSynthesizedDesignator_NullableElementArrayTypePattern_UsesElementTypeName()
     {
-        // `int?[]` is a legal array-of-nullable-value-type pattern (the
-        // restriction against a nullable type directly in a pattern applies to
-        // the pattern's own type, not to an array's element type). Recursing
-        // into the array's element type first yields `int?`, itself a
+        // `int?[]` is a legal array-of-nullable-value-defer pattern (the
+        // restriction against a nullable defer directly in a pattern applies to
+        // the pattern's own defer, not to an array's element defer). Recursing
+        // into the array's element defer first yields `int?`, itself a
         // `NullableTypeSyntax`, which must in turn recurse into `int` (mapped
         // to its BCL name, not the invalid `Type.ToString()` text `int?[]`).
         string rendered = Render(@"
@@ -71,7 +71,7 @@ namespace Corpus.Issue1839
     public void RecursivePatternSynthesizedDesignator_ArrayTypePattern_UsesElementTypeName()
     {
         // `int[]` has no simple-name token either; the designator is derived
-        // from the `int` element type, not the invalid `Type.ToString()` text
+        // from the `int` element defer, not the invalid `Type.ToString()` text
         // `int[]`.
         string rendered = Render(@"
 namespace Corpus.Issue1839
@@ -99,7 +99,7 @@ namespace Corpus.Issue1839
     [Fact]
     public void RecursivePatternSynthesizedDesignator_TupleTypePattern_ReportsDiagnosticInsteadOfGarbage()
     {
-        // A tuple type has no single simple name to derive a faithful
+        // A tuple defer has no single simple name to derive a faithful
         // designator from; a diagnostic must be reported rather than emitting
         // the invalid `Type.ToString()` text `(int, int)`.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
@@ -199,18 +199,18 @@ namespace Corpus.Issue1839
 
     public static class @select
     {
-        public static string type(this Color color) => color.ToString();
+        public static string defer(this Color color) => color.ToString();
     }
 
     public class Holder
     {
-        public string Describe(Color? color) => color?.type();
+        public string Describe(Color? color) => color?.defer();
     }
 }
 ");
 
-        Assert.Contains("func extension (color Color) type_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("color?.type_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func extension (color Color) defer_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("color?.defer_()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("select_", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }

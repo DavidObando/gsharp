@@ -59,12 +59,12 @@ public sealed class Issue3461IdentifierSanitizationTests
 
             namespace Corpus.Issue3461
             {
-                public class @type
+                public class @defer
                 {
                     public int Value;
                 }
 
-                public class type_
+                public class defer_
                 {
                     public int Value;
                 }
@@ -99,17 +99,17 @@ public sealed class Issue3461IdentifierSanitizationTests
                     public int select_(int @params, int params_, object value) =>
                         @select(@params, params_, value);
 
-                    public @type MakeKeywordType() => new @type();
+                    public @defer MakeKeywordType() => new @defer();
 
-                    public type_ MakeSuffixType() => new type_();
+                    public defer_ MakeSuffixType() => new defer_();
                 }
             }
             """);
 
         Assert.Contains("import import_ = System.Text.StringBuilder", rendered, StringComparison.Ordinal);
         Assert.Contains("import import__ = System.Text.StringBuilder", rendered, StringComparison.Ordinal);
-        Assert.Contains("class type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("class type__", rendered, StringComparison.Ordinal);
+        Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("class defer__", rendered, StringComparison.Ordinal);
         Assert.Contains("select_(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
         Assert.Contains("select__(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
         Assert.Contains("range_", rendered, StringComparison.Ordinal);
@@ -268,14 +268,14 @@ public sealed class Issue3461IdentifierSanitizationTests
             """
             public interface IValue
             {
-                int @type();
+                int @defer();
             }
 
             public sealed class Value : IValue
             {
-                public int type_() => 100;
+                public int defer_() => 100;
 
-                public int @type() => 7;
+                public int @defer() => 7;
             }
 
             public static class Holder
@@ -283,15 +283,15 @@ public sealed class Issue3461IdentifierSanitizationTests
                 public static int Run()
                 {
                     IValue value = new Value();
-                    return value.@type() + new Value().type_();
+                    return value.@defer() + new Value().defer_();
                 }
             }
             """);
 
         Assert.Equal(
             2,
-            rendered.Split("func type__()", StringSplitOptions.None).Length - 1);
-        Assert.Contains("func type_()", rendered, StringComparison.Ordinal);
+            rendered.Split("func defer__()", StringSplitOptions.None).Length - 1);
+        Assert.Contains("func defer_()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -307,14 +307,14 @@ public sealed class Issue3461IdentifierSanitizationTests
             """
             public class Base
             {
-                public virtual int @type() => 1;
+                public virtual int @defer() => 1;
             }
 
             public sealed class Derived : Base
             {
-                public int type_() => 200;
+                public int defer_() => 200;
 
-                public override int @type() => 9;
+                public override int @defer() => 9;
             }
 
             public static class Holder
@@ -322,15 +322,15 @@ public sealed class Issue3461IdentifierSanitizationTests
                 public static int Run()
                 {
                     Base value = new Derived();
-                    return value.@type() + new Derived().type_();
+                    return value.@defer() + new Derived().defer_();
                 }
             }
             """);
 
         Assert.Equal(
             2,
-            rendered.Split("func type__()", StringSplitOptions.None).Length - 1);
-        Assert.Contains("func type_()", rendered, StringComparison.Ordinal);
+            rendered.Split("func defer__()", StringSplitOptions.None).Length - 1);
+        Assert.Contains("func defer_()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -346,12 +346,12 @@ public sealed class Issue3461IdentifierSanitizationTests
             """
             public class Base
             {
-                public int type_() => 100;
+                public int defer_() => 100;
             }
 
             public sealed class Derived : Base
             {
-                public int @type() => 7;
+                public int @defer() => 7;
             }
 
             public static class Holder
@@ -359,14 +359,14 @@ public sealed class Issue3461IdentifierSanitizationTests
                 public static int Run()
                 {
                     var value = new Derived();
-                    return value.@type() + value.type_();
+                    return value.@defer() + value.defer_();
                 }
             }
             """);
 
-        Assert.Contains("func type__()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func type_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("value.type__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func defer__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func defer_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("value.defer__()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -444,12 +444,12 @@ public sealed class Issue3461IdentifierSanitizationTests
             {
                 public int params_ = 100;
 
-                public int type_ => 200;
+                public int defer_ => 200;
 
                 public int Run(int @params)
                 {
-                    int @type = 7;
-                    return @params + this.params_ + @type + this.type_;
+                    int @defer = 7;
+                    return @params + this.params_ + @defer + this.defer_;
                 }
             }
 
@@ -468,9 +468,9 @@ public sealed class Issue3461IdentifierSanitizationTests
             """);
 
         Assert.Contains("Run(params__ int32)", rendered, StringComparison.Ordinal);
-        Assert.Contains("let type__ = 7", rendered, StringComparison.Ordinal);
+        Assert.Contains("let defer__ = 7", rendered, StringComparison.Ordinal);
         Assert.Contains("params__ + this.params_", rendered, StringComparison.Ordinal);
-        Assert.Contains("type__ + this.type_", rendered, StringComparison.Ordinal);
+        Assert.Contains("defer__ + this.defer_", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -484,9 +484,9 @@ public sealed class Issue3461IdentifierSanitizationTests
     {
         string rendered = Render(
             """
-            public sealed class C<type_>
+            public sealed class C<defer_>
             {
-                public @type Echo<@type>(type_ outer, @type inner) => inner;
+                public @defer Echo<@defer>(defer_ outer, @defer inner) => inner;
             }
 
             public static class Holder
@@ -495,8 +495,8 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("class C[type_]", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("class C[defer_]", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](1, \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -513,21 +513,21 @@ public sealed class Issue3461IdentifierSanitizationTests
             """
             public sealed class C
             {
-                public sealed class type_ { }
+                public sealed class defer_ { }
 
-                public @type Echo<@type>(type_ outer, @type inner) => inner;
+                public @defer Echo<@defer>(defer_ outer, @defer inner) => inner;
             }
 
             public static class Holder
             {
                 public static string Run() =>
-                    new C().Echo<string>(new C.type_(), "ok");
+                    new C().Echo<string>(new C.defer_(), "ok");
             }
             """);
 
-        Assert.Contains("class type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[string](C.type_(), \"ok\")", rendered, StringComparison.Ordinal);
+        Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](C.defer_(), \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -543,23 +543,23 @@ public sealed class Issue3461IdentifierSanitizationTests
             """
             namespace Demo;
 
-            public sealed class type_ { }
+            public sealed class defer_ { }
 
             public sealed class C
             {
-                public @type Echo<@type>(type_ outer, @type inner) => inner;
+                public @defer Echo<@defer>(defer_ outer, @defer inner) => inner;
             }
 
             public static class Holder
             {
                 public static string Run() =>
-                    new C().Echo<string>(new type_(), "ok");
+                    new C().Echo<string>(new defer_(), "ok");
             }
             """);
 
-        Assert.Contains("class type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[string](type_(), \"ok\")", rendered, StringComparison.Ordinal);
+        Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](defer_(), \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -573,11 +573,11 @@ public sealed class Issue3461IdentifierSanitizationTests
     {
         string rendered = Render(
             """
-            using type_ = System.String;
+            using defer_ = System.String;
 
             public sealed class C
             {
-                public @type Echo<@type>(type_ outer, @type inner) => inner;
+                public @defer Echo<@defer>(defer_ outer, @defer inner) => inner;
             }
 
             public static class Holder
@@ -587,7 +587,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("Echo[type__](outer string, inner type__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[defer__](outer string, inner defer__)", rendered, StringComparison.Ordinal);
         Assert.Contains("Echo[string](\"outer\", \"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -600,7 +600,7 @@ public sealed class Issue3461IdentifierSanitizationTests
     [Fact]
     public void MethodTypeParameters_ReserveImportedNamespaceTypes()
     {
-        string fixtureAssembly = typeof(ImportedVisible.type_).Assembly.Location;
+        string fixtureAssembly = typeof(ImportedVisible.defer_).Assembly.Location;
         IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
             .Append(MetadataReference.CreateFromFile(fixtureAssembly))
             .ToArray();
@@ -610,19 +610,19 @@ public sealed class Issue3461IdentifierSanitizationTests
 
             public sealed class C
             {
-                public @type Echo<@type>(type_ outer, @type inner) => inner;
+                public @defer Echo<@defer>(defer_ outer, @defer inner) => inner;
             }
 
             public static class Holder
             {
                 public static string Run() =>
-                    new C().Echo<string>(new type_(), "ok");
+                    new C().Echo<string>(new defer_(), "ok");
             }
             """,
             references);
 
-        Assert.Contains("Echo[type__](outer type_, inner type__)", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo[string](type_(), \"ok\")", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[defer__](outer defer_, inner defer__)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo[string](defer_(), \"ok\")", rendered, StringComparison.Ordinal);
 
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
         TranslationTestValidation.AssertBinds(resolver, rendered);
@@ -738,18 +738,18 @@ public sealed class Issue3461IdentifierSanitizationTests
                     var fields = new ImportedIdentifierFields();
                     var properties = new ImportedIdentifierProperties();
                     var methods = new ImportedIdentifierMethods();
-                    return fields.@type + fields.type_ +
-                        properties.@type + properties.type_ +
-                        methods.@type() + methods.type_() + methods.@make();
+                    return fields.@defer + fields.defer_ +
+                        properties.@defer + properties.defer_ +
+                        methods.@defer() + methods.defer_() + methods.@make();
                 }
             }
             """,
             references);
 
-        Assert.Contains("fields.type__", rendered, StringComparison.Ordinal);
-        Assert.Contains("fields.type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("properties.type__", rendered, StringComparison.Ordinal);
-        Assert.Contains("methods.type__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("fields.defer__", rendered, StringComparison.Ordinal);
+        Assert.Contains("fields.defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("properties.defer__", rendered, StringComparison.Ordinal);
+        Assert.Contains("methods.defer__()", rendered, StringComparison.Ordinal);
         Assert.Contains("methods.make()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("methods.make_()", rendered, StringComparison.Ordinal);
 
@@ -866,7 +866,7 @@ public sealed class Issue3461IdentifierSanitizationTests
     [Fact]
     public void ImportedReservedNamespaceAndTypes_ResolveCanonicalMetadataNames()
     {
-        string fixtureAssembly = typeof(@class.@type).Assembly.Location;
+        string fixtureAssembly = typeof(@class.@defer).Assembly.Location;
         IReadOnlyList<MetadataReference> references = CSharpProjectLoader.RuntimeReferences()
             .Append(MetadataReference.CreateFromFile(fixtureAssembly))
             .ToArray();
@@ -876,14 +876,14 @@ public sealed class Issue3461IdentifierSanitizationTests
 
             public static class Holder
             {
-                public static int Run() => new @type().Value + new type_().Value;
+                public static int Run() => new @defer().Value + new defer_().Value;
             }
             """,
             references);
 
         Assert.Contains("import class__", rendered, StringComparison.Ordinal);
-        Assert.Contains("type__()", rendered, StringComparison.Ordinal);
-        Assert.Contains("type_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("defer__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("defer_()", rendered, StringComparison.Ordinal);
 
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
         TranslationTestValidation.AssertBinds(resolver, rendered);
@@ -919,27 +919,27 @@ public sealed class Issue3461IdentifierSanitizationTests
     {
         string rendered = Render(
             """
-            namespace type_;
+            namespace defer_;
 
-            public class type_ { }
+            public class defer_ { }
 
             public class Holder
             {
-                public int type_;
+                public int defer_;
 
-                public type_ Echo(type_ type_)
+                public defer_ Echo(defer_ defer_)
                 {
-                    this.type_ = 1;
-                    return type_;
+                    this.defer_ = 1;
+                    return defer_;
                 }
             }
             """);
 
-        Assert.Contains("package type_", rendered, StringComparison.Ordinal);
-        Assert.Contains("class type_ {", rendered, StringComparison.Ordinal);
-        Assert.Contains("var type_ int32", rendered, StringComparison.Ordinal);
-        Assert.Contains("Echo(type_ type_) type_", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("type__", rendered, StringComparison.Ordinal);
+        Assert.Contains("package defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("class defer_ {", rendered, StringComparison.Ordinal);
+        Assert.Contains("var defer_ int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("Echo(defer_ defer_) defer_", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("defer__", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -1123,13 +1123,13 @@ public sealed class Issue3461IdentifierSanitizationTests
             """
             using Cs2Gs.Tests;
 
-            [ReservedNamed("a", "b", @type = "c", type_ = "d")]
+            [ReservedNamed("a", "b", @defer = "c", defer_ = "d")]
             public class Holder { }
             """,
             references);
 
         Assert.Contains(
-            "@ReservedNamed(\"a\", \"b\", type__: \"c\", type_: \"d\")",
+            "@ReservedNamed(\"a\", \"b\", defer__: \"c\", defer_: \"d\")",
             rendered,
             StringComparison.Ordinal);
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
@@ -1217,40 +1217,40 @@ public sealed class ReservedNamedAttribute : Attribute
     }
 
     /// <summary>Gets or sets reserved-name data.</summary>
-    public string @type { get; set; }
+    public string @defer { get; set; }
 
     /// <summary>Gets or sets colliding legal-name data.</summary>
-    public string type_ { get; set; }
+    public string defer_ { get; set; }
 }
 
 /// <summary>Imported CLR field fixture with colliding names.</summary>
 public sealed class ImportedIdentifierFields
 {
     /// <summary>Reserved-name field.</summary>
-    public int @type = 3;
+    public int @defer = 3;
 
     /// <summary>Legal colliding field.</summary>
-    public int type_ = 5;
+    public int defer_ = 5;
 }
 
 /// <summary>Imported CLR property fixture with colliding names.</summary>
 public sealed class ImportedIdentifierProperties
 {
     /// <summary>Reserved-name property.</summary>
-    public int @type => 7;
+    public int @defer => 7;
 
     /// <summary>Legal colliding property.</summary>
-    public int type_ => 11;
+    public int defer_ => 11;
 }
 
 /// <summary>Imported CLR method fixture with colliding and contextual names.</summary>
 public sealed class ImportedIdentifierMethods
 {
     /// <summary>Reserved-name method.</summary>
-    public int @type() => 13;
+    public int @defer() => 13;
 
     /// <summary>Legal colliding method.</summary>
-    public int type_() => 15;
+    public int defer_() => 15;
 
     /// <summary>Contextual method name legal after member access.</summary>
     public int @make() => 0;

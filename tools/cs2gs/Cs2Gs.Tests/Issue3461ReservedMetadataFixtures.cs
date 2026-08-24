@@ -4,15 +4,15 @@
 
 namespace @class
 {
-    /// <summary>Imported reserved-name type.</summary>
-    public sealed class @type
+    /// <summary>Imported reserved-name defer.</summary>
+    public sealed class @defer
     {
         /// <summary>Gets fixture value.</summary>
         public int Value => 19;
     }
 
-    /// <summary>Imported legal colliding type.</summary>
-    public sealed class type_
+    /// <summary>Imported legal colliding defer.</summary>
+    public sealed class defer_
     {
         /// <summary>Gets fixture value.</summary>
         public int Value => 23;
@@ -29,8 +29,8 @@ namespace class_
 
 namespace ImportedVisible
 {
-    /// <summary>Imported namespace-visible type used by generic scope tests.</summary>
-    public sealed class type_
+    /// <summary>Imported namespace-visible defer used by generic scope tests.</summary>
+    public sealed class defer_
     {
     }
 }

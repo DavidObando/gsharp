@@ -186,7 +186,7 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             """,
             "G# cannot yet convert this open generic method group to the constructed named delegate.");
 
-        Assert.Contains("delegate func() T?", printed, StringComparison.Ordinal);
+        Assert.Contains("() T?;", printed, StringComparison.Ordinal);
         Assert.Contains("delegate TaskCallback() Task[Result?];", printed, StringComparison.Ordinal);
         Assert.Contains("delegate ValueTaskCallback() ValueTask[Result?];", printed, StringComparison.Ordinal);
         Assert.Contains("delegate TupleCallback() (Result?, Result);", printed, StringComparison.Ordinal);
