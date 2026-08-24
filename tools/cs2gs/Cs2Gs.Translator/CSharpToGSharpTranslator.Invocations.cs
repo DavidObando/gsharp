@@ -399,8 +399,9 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { IsGenericMethod: true, MethodKind: MethodKind.Ordinary or MethodKind.ReducedExtension } inferredGeneric
                 && !inferredGeneric.TypeArguments.IsDefaultOrEmpty
                 && inferredGeneric.TypeArguments.All(t => t.TypeKind != TypeKind.Error)
-                && inferredGeneric.TypeArguments.Any(t => !t.DeclaringSyntaxReferences.IsDefaultOrEmpty)
-                && inferredGeneric.ContainingType?.GetMembers(inferredGeneric.Name).Length > 1)
+                && inferredGeneric.TypeArguments.Any(t =>
+                    !t.DeclaringSyntaxReferences.IsDefaultOrEmpty && t.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Interface)
+                && HasErasureCollidingNonGenericSibling(inferredGeneric))
             {
                 typeArguments = inferredGeneric.TypeArguments
                     .Select(t => this.typeMapper.Map(t, this.context, invocation.GetLocation()))
@@ -408,6 +409,42 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        // Issue #3501 (GS0155): true when the containing type declares a
+        // NON-generic same-name sibling of equal arity whose corresponding
+        // parameter shares a generic original definition with the chosen
+        // method's — the exact shape where gsc's erased inference lets the
+        // invariant sibling win (AddRange(ImmutableArray<T>) vs
+        // AddRange<TDerived>(ImmutableArray<TDerived>)). Anything looser
+        // sprays explicit type arguments over ordinary LINQ shapes.
+        private static bool HasErasureCollidingNonGenericSibling(IMethodSymbol chosen)
+        {
+            IMethodSymbol definition = chosen.OriginalDefinition;
+            foreach (ISymbol member in chosen.ContainingType?.GetMembers(chosen.Name)
+                ?? ImmutableArray<ISymbol>.Empty)
+            {
+                if (member is not IMethodSymbol sibling
+                    || sibling.IsGenericMethod
+                    || SymbolEqualityComparer.Default.Equals(sibling, definition)
+                    || sibling.Parameters.Length != definition.Parameters.Length)
+                {
+                    continue;
+                }
+
+                for (var i = 0; i < sibling.Parameters.Length; i++)
+                {
+                    if (sibling.Parameters[i].Type is INamedTypeSymbol { IsGenericType: true } siblingParam
+                        && definition.Parameters[i].Type is INamedTypeSymbol { IsGenericType: true } chosenParam
+                        && SymbolEqualityComparer.Default.Equals(
+                            siblingParam.OriginalDefinition, chosenParam.OriginalDefinition))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static bool RequiresQualifiedImportedContextualCall(
