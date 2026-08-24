@@ -242,7 +242,7 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0059 / issue #255: binds a <c>type Name = delegate func(...)</c>
+    /// ADR-0059 / issue #255: binds a <c>delegate Name(...) </c>;
     /// declaration into a <see cref="DelegateTypeSymbol"/> registered with the
     /// current scope. Unlike a plain type alias, a named delegate produces a
     /// real CLR TypeDef at emit time.

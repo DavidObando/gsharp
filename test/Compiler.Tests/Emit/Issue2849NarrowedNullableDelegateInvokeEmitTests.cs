@@ -80,7 +80,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             import System
 
             class Src { prop N int32 -> 21 }
-            type Handler[T] = delegate func(value T) void
+            delegate Handler[T](value T) void;
 
             func Main() {
                 let write Handler[Src] = (s Src) -> System.Console.WriteLine(s.N)
@@ -208,7 +208,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             package i2849matrixlib
             import System
 
-            type Handler[T] = delegate func(value T) void
+            delegate Handler[T](value T) void;
 
             class ImportedRelay[T] {
                 func Run(handler System.Action[T]?, value T) {
@@ -252,7 +252,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
         const string library = """
             package i2849lib2
 
-            type Handler[T] = delegate func(value T) void
+            delegate Handler[T](value T) void;
             """;
 
         const string consumer = """

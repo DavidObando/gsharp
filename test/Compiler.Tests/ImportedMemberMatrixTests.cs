@@ -746,12 +746,12 @@ public class ImportedMemberMatrixTests
             package SourceRefKindDelegates.Probe
             import System
 
-            type RefAction = delegate func(ref value int32)
-            type OutAction = delegate func(out value int32)
-            type InPredicate = delegate func(in value int32) bool
-            type GenericRefAction[T] = delegate func(ref value T)
-            type GenericOutAction[T] = delegate func(out value T)
-            type GenericInPredicate[T] = delegate func(in value T) bool
+            delegate RefAction(ref value int32);
+            delegate OutAction(out value int32);
+            delegate InPredicate(in value int32) bool;
+            delegate GenericRefAction[T](ref value T);
+            delegate GenericOutAction[T](out value T);
+            delegate GenericInPredicate[T](in value T) bool;
 
             var refAction RefAction = (ref value int32) -> { value = value + 1 }
             var outAction OutAction = (out value int32) -> { value = 42 }
@@ -780,12 +780,12 @@ public class ImportedMemberMatrixTests
             package SourceRefKindMethodGroups.Probe
             import System
 
-            type RefAction = delegate func(ref value int32)
-            type OutAction = delegate func(out value int32)
-            type InPredicate = delegate func(in value int32) bool
-            type GenericRefAction[T] = delegate func(ref value T)
-            type GenericOutAction[T] = delegate func(out value T)
-            type GenericInPredicate[T] = delegate func(in value T) bool
+            delegate RefAction(ref value int32);
+            delegate OutAction(out value int32);
+            delegate InPredicate(in value int32) bool;
+            delegate GenericRefAction[T](ref value T);
+            delegate GenericOutAction[T](out value T);
+            delegate GenericInPredicate[T](in value T) bool;
 
             func AddOne(ref value int32) { value = value + 1 }
             func Set42(out value int32) { value = 42 }
@@ -937,9 +937,9 @@ public class ImportedMemberMatrixTests
         const string sourceDefined = """
             package SourceMethodGroupRefKindMismatch.Probe
 
-            type RefAction = delegate func(ref value int32)
-            type OutAction = delegate func(out value int32)
-            type InPredicate = delegate func(in value int32) bool
+            delegate RefAction(ref value int32);
+            delegate OutAction(out value int32);
+            delegate InPredicate(in value int32) bool;
 
             func AddOne(ref value int32) { value = value + 1 }
             func Set42(out value int32) { value = 42 }
@@ -1028,12 +1028,12 @@ public class ImportedMemberMatrixTests
         const string sourceDefined = """
             package SourceRefKindDelegateMismatch.Probe
 
-            type RefAction = delegate func(ref value int32)
-            type OutAction = delegate func(out value int32)
-            type InPredicate = delegate func(in value int32) bool
-            type GenericRefAction[T] = delegate func(ref value T)
-            type GenericOutAction[T] = delegate func(out value T)
-            type GenericInPredicate[T] = delegate func(in value T) bool
+            delegate RefAction(ref value int32);
+            delegate OutAction(out value int32);
+            delegate InPredicate(in value int32) bool;
+            delegate GenericRefAction[T](ref value T);
+            delegate GenericOutAction[T](out value T);
+            delegate GenericInPredicate[T](in value T) bool;
 
             var refCallback RefAction = (value int32) -> { }
             var outCallback OutAction = (ref value int32) -> { }
@@ -1077,7 +1077,7 @@ public class ImportedMemberMatrixTests
             package OptionalDelegate.Probe
             import System
 
-            type Toggle = delegate func(enabled bool = true) string
+            delegate Toggle(enabled bool = true) string;
 
             var callback Toggle = func(enabled bool) string {
                 return enabled ? "yes" : "no"

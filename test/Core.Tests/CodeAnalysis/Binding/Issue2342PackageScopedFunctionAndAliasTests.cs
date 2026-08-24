@@ -181,8 +181,8 @@ public class Issue2342PackageScopedFunctionAndAliasTests
         // — mirroring GenericArity_SameSimpleName_DifferentPackages_DoesNotCollide
         // in Issue2342PackageScopedTypeCollisionTests, but for aliases.
         var scope = BindSource(
-            "package Foo\ntype Callback[T any] = delegate func() T",
-            "package Baz\ntype Callback[T any] = delegate func() T");
+            "package Foo\ndelegate Callback[T any]() T;",
+            "package Baz\ndelegate Callback[T any]() T;");
 
         Assert.Empty(scope.Diagnostics);
 

@@ -13,7 +13,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #1503 / ADR-0059 follow-up: end-to-end emit tests for GENERIC named
-/// delegate type declarations (<c>type Predicate[T any] = delegate func(value T) bool</c>).
+/// delegate type declarations (<c>delegate Predicate[T any](value T) bool</c>).;
 /// The emitter mangles the delegate TypeDef name with the backtick-arity
 /// suffix, threads one <c>GenericParam</c> row per type parameter, and
 /// references the slots as <c>VAR(idx)</c> in the <c>Invoke</c>/<c>.ctor</c>
@@ -37,7 +37,7 @@ public class Issue1503GenericDelegateEmitTests
             package Gen1503Single
             import System
 
-            type Pred1503S[T any] = delegate func(value T) bool
+            delegate Pred1503S[T any](value T) bool;
 
             func Main() {
                 var isPositive Pred1503S[int32] = func(value int32) bool {
@@ -61,7 +61,7 @@ public class Issue1503GenericDelegateEmitTests
 
             interface ICancellation { }
             class Cancellation : ICancellation { }
-            type Convert1503N[T ICancellation] = delegate func(context T) void
+            delegate Convert1503N[T ICancellation](context T) void;
 
             func Main() {
                 var convert Convert1503N[Cancellation]? = nil
@@ -83,7 +83,7 @@ public class Issue1503GenericDelegateEmitTests
             package Gen1503MethodGroup
             import System
 
-            type Pred1503MG[T any] = delegate func(value T) bool
+            delegate Pred1503MG[T any](value T) bool;
 
             func IsEven(value int32) bool {
                 return value % 2 == 0
@@ -109,7 +109,7 @@ public class Issue1503GenericDelegateEmitTests
             package Gen1503Converter
             import System
 
-            type Conv1503[TIn any, TOut any] = delegate func(x TIn) TOut
+            delegate Conv1503[TIn any, TOut any](x TIn) TOut;
 
             func Main() {
                 var toStr Conv1503[int32, string] = func(x int32) string {
@@ -137,8 +137,8 @@ public class Issue1503GenericDelegateEmitTests
             package Gen1503Composite
             import System
 
-            type Mapper1503[T any] = delegate func(items []T) []T
-            type Folder1503[T any] = delegate func(items []T) T
+            delegate Mapper1503[T any](items []T) []T;
+            delegate Folder1503[T any](items []T) T;
 
             func Main() {
                 var passthrough Mapper1503[int32] = func(items []int32) []int32 {
@@ -166,7 +166,7 @@ public class Issue1503GenericDelegateEmitTests
             package Gen1503Usage
             import System
 
-            type Op1503[T any] = delegate func(a T, b T) T
+            delegate Op1503[T any](a T, b T) T;
 
             class Calculator1503 {
                 var combine Op1503[int32]
@@ -212,8 +212,8 @@ public class Issue1503GenericDelegateEmitTests
             package Gen1503Regression
             import System
 
-            type IntCombine1503 = delegate func(a int32, b int32) int32
-            type Pred1503R[T any] = delegate func(value T) bool
+            delegate IntCombine1503(a int32, b int32) int32;
+            delegate Pred1503R[T any](value T) bool;
 
             func Main() {
                 var sum IntCombine1503 = func(a int32, b int32) int32 {
@@ -241,7 +241,7 @@ public class Issue1503GenericDelegateEmitTests
         var source = """
             package Gen1503Meta
 
-            type Pred1503Meta[T any] = delegate func(value T) bool
+            delegate Pred1503Meta[T any](value T) bool;
             """;
 
         var assembly = CompileToLibrary(source);
@@ -290,7 +290,7 @@ public class Issue1503GenericDelegateEmitTests
         var source = """
             package Gen1503MetaConv
 
-            type Conv1503Meta[TIn any, TOut any] = delegate func(x TIn) TOut
+            delegate Conv1503Meta[TIn any, TOut any](x TIn) TOut;
             """;
 
         var assembly = CompileToLibrary(source);

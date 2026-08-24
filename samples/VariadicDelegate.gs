@@ -8,7 +8,7 @@ package GSharp.Example.VariadicDelegate
 
 import System
 
-type StringJoiner = delegate func(sep string, parts ...string) string
+delegate StringJoiner(sep string, parts ...string) string;
 
 var sj StringJoiner = func(sep string, parts ...string) string {
     var s = ""

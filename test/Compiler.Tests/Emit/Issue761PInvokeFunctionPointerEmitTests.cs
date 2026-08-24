@@ -42,7 +42,7 @@ public class Issue761PInvokeFunctionPointerEmitTests
             import System.Runtime.InteropServices
 
             @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-            type Int64Comparer = delegate func(a nint, b nint) int32
+            delegate Int64Comparer(a nint, b nint) int32;
 
             @DllImport("libc", EntryPoint: "qsort")
             func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
@@ -102,7 +102,7 @@ public class Issue761PInvokeFunctionPointerEmitTests
             import System.Runtime.InteropServices
 
             @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-            type Int64Comparer = delegate func(a nint, b nint) int32
+            delegate Int64Comparer(a nint, b nint) int32;
 
             @LibraryImport("libc", EntryPoint: "qsort")
             func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
@@ -266,7 +266,7 @@ public class Issue761PInvokeFunctionPointerEmitTests
             import System.Runtime.InteropServices
 
             @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-            type MyCallback = delegate func(a nint) int32
+            delegate MyCallback(a nint) int32;
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_761_attr_").FullName;

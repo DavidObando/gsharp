@@ -298,7 +298,7 @@ subtract(y: 3, x: 10)
     public void NamedDelegateVariable_NamedArguments_BindAndEvaluate()
     {
         var source = @"
-type Operation = delegate func(x int32, y int32) int32
+delegate Operation(x int32, y int32) int32;
 
 func subtract(x int32, y int32) int32 {
     return x - y

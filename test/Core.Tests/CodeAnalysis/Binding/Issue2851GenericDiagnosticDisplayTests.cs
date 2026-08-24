@@ -30,7 +30,7 @@ public class Issue2851GenericDiagnosticDisplayTests
 
             class Box[T] {}
             struct Cell[T] { var Value T }
-            type Conv[T] = delegate func(v T) void
+            delegate Conv[T](v T) void;
 
             func Test() {
                 var box Box[int32] = Box[int32]()
@@ -189,7 +189,7 @@ public class Issue2851GenericDiagnosticDisplayTests
         var compilation = CreateCompilation("""
             package P
             class Box[T] {}
-            type Conv[T] = delegate func(v T) void
+            delegate Conv[T](v T) void;
             func Make() Box[int32] { return Box[int32]() }
             """);
         var boxDefinition = compilation.GlobalScope.Structs.Single(s => s.Name == "Box");

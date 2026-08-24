@@ -125,14 +125,14 @@ Expression-bodied members use the G# arrow `->`, not C# `=>`. The form is availa
 A named delegate type is a top-level type alias whose RHS is `delegate func(...)`:
 
 ```gsharp
-type Handler = delegate func(sender Object, e EventArgs)
+delegate Handler(sender Object, e EventArgs);
 ```
 
 Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types.
 
 ## Type declarations
 
-The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. The `type` keyword is retained for aliases (`type Count = int32`) and named delegates (`type Greeter = delegate func(name string)`).
+The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. The `type` keyword is retained for aliases (`type Count = int32`) and named delegates (`delegate Greeter(name string) `).;
 
 ```gsharp
 data struct Point {

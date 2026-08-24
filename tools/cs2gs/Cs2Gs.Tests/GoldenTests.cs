@@ -265,7 +265,7 @@ public class GoldenTests
             "    return f(v)",
             "}",
             string.Empty,
-            "type Combine = delegate func(a int32, b int32) int32");
+            "delegate Combine(a int32, b int32) int32;");
 
         AssertGolden(expected, unit);
     }

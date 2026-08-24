@@ -542,7 +542,7 @@ The aggregate keyword IS the declaration keyword. Unsupported modifier combinati
 
 `partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
 
-A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`) are supported, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.
+A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool`) are supported, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.;
 
 ### Members
 
@@ -1655,13 +1655,13 @@ Classes follow a stricter rule: a `class` must carry an explicit `@StructLayout(
 
  /  lifts the v1 deferral on function-typed and delegate-typed P/Invoke parameters and returns. Two shapes are supported:
 
-**Shape A — managed delegate callbacks.** A `type Name = delegate func(...) R` declaration annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or any of `Stdcall`, `Thiscall`, `Fastcall`) may appear as a P/Invoke parameter type. The runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`. A delegate-typed P/Invoke parameter without `@UnmanagedFunctionPointer` is rejected with GS0353.
+**Shape A — managed delegate callbacks.** A `delegate Name(...) R` declaration annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or any of `Stdcall`, `Thiscall`, `Fastcall`) may appear as a P/Invoke parameter type. The runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`. A delegate-typed P/Invoke parameter without `@UnmanagedFunctionPointer` is rejected with GS0353.;
 
 **Shape B — raw function pointers.** A type clause of the form `unmanaged[CC] (T1, T2, ...) -> R` denotes a CLR function-pointer type (encoded as `ELEMENT_TYPE_FNPTR` in the metadata blob). The bracketed calling-convention slot is mandatory; omitting it is GS0356. The four accepted conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall` — any other identifier is rejected with GS0354. Returning a managed delegate from a P/Invoke is rejected with GS0355 because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
 
 ```gs
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Int64Comparer = delegate func(a nint, b nint) int32
+delegate Int64Comparer(a nint, b nint) int32;
 
 @DllImport("libc", EntryPoint: "qsort")
 func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;

@@ -49,7 +49,7 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             }
             """);
 
-        Assert.Contains("type Callback = delegate func() Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback() Result?;", printed, StringComparison.Ordinal);
         // Issue #2835: source-declared delegates keep their nominal name, so the
         // return promotion reads off the `type Callback = ...` declaration above
         // and the field carries only its own envelope nullability.
@@ -91,7 +91,7 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             """,
             "G# currently does not bind source event names inside shared method bodies.");
 
-        Assert.Contains("type Callback = delegate func(enforce bool = false) Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback(enforce bool = false) Result?;", printed, StringComparison.Ordinal);
         Assert.Contains("func Clean(enforce bool) Result?", printed, StringComparison.Ordinal);
         Assert.Contains("func Produce(enforce bool) Result?", printed, StringComparison.Ordinal);
         // Issue #2835: nominal, not erased. The `Result?` return promotion lives
@@ -125,9 +125,9 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             }
             """);
 
-        Assert.Contains("type CleanCallback = delegate func() Result", printed, StringComparison.Ordinal);
-        Assert.Contains("type NullableResultCallback = delegate func() Result?", printed, StringComparison.Ordinal);
-        Assert.Contains("type OptionalNullableResultCallback = delegate func() Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate CleanCallback() Result;", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate NullableResultCallback() Result?;", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate OptionalNullableResultCallback() Result?;", printed, StringComparison.Ordinal);
         // Issue #2835: with nominal delegate names the two dimensions stay
         // independently observable -- the RETURN promotion is carried by the
         // delegate declaration (`CleanCallback` vs `NullableResultCallback`
@@ -187,12 +187,12 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             "G# cannot yet convert this open generic method group to the constructed named delegate.");
 
         Assert.Contains("delegate func() T?", printed, StringComparison.Ordinal);
-        Assert.Contains("type TaskCallback = delegate func() Task[Result?]", printed, StringComparison.Ordinal);
-        Assert.Contains("type ValueTaskCallback = delegate func() ValueTask[Result?]", printed, StringComparison.Ordinal);
-        Assert.Contains("type TupleCallback = delegate func() (Result?, Result)", printed, StringComparison.Ordinal);
-        Assert.Contains("type LambdaTupleCallback = delegate func() (Result?, Result)", printed, StringComparison.Ordinal);
-        Assert.Contains("type ArrayCallback = delegate func() []?Result", printed, StringComparison.Ordinal);
-        Assert.Contains("type NestedCallback = delegate func() Box[Result]?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate TaskCallback() Task[Result?];", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate ValueTaskCallback() ValueTask[Result?];", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate TupleCallback() (Result?, Result);", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate LambdaTupleCallback() (Result?, Result);", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate ArrayCallback() []?Result;", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate NestedCallback() Box[Result]?;", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -237,8 +237,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
 
         Assert.Contains("func Get() Result?;", printed, StringComparison.Ordinal);
         Assert.Contains("open func Get() Result?;", printed, StringComparison.Ordinal);
-        Assert.Contains("type Callback = delegate func() Result?", printed, StringComparison.Ordinal);
-        Assert.Contains("type Variant = delegate func(value string) Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback() Result?;", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Variant(value string) Result?;", printed, StringComparison.Ordinal);
         Assert.Contains("func VariantProduce(value object) Result?", printed, StringComparison.Ordinal);
     }
 
@@ -273,7 +273,7 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
 
         string printed = TranslateCompilation(contracts, new[] { contracts, producer });
 
-        Assert.Contains("type Callback = delegate func() Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback() Result?;", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             new[] { producer, consumer },
             "Consumer-only fixture omits the referenced producer project from emitted G#.");
 
-        Assert.Contains("type Callback = delegate func() Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback() Result?;", printed, StringComparison.Ordinal);
         Assert.Contains("Factory.Produce", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Factory.Produce!!", printed, StringComparison.Ordinal);
     }
@@ -343,8 +343,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
             """,
             NullableContextOptions.Enable);
 
-        Assert.Contains("type Callback = delegate func() Result", printed, StringComparison.Ordinal);
-        Assert.Contains("type NullableCallback = delegate func() Result?", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback() Result;", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate NullableCallback() Result?;", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Clean() Result?", printed, StringComparison.Ordinal);
     }
 

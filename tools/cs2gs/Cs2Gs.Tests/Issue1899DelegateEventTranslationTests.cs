@@ -14,7 +14,7 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Issue #1899: <c>delegate</c> and <c>event</c> DECLARATIONS reported
 /// CS2GS-GAP even though G# has canonical forms for both — a named delegate
-/// type alias (ADR-0059, <c>type Name = delegate func(params) R</c>) and an
+/// type alias (ADR-0059, <c>delegate Name(params) R</c>) and an;
 /// event declaration (ADR-0052), field-like or with explicit add/remove
 /// accessors. Covers: a delegate with parameters and a return type, a void
 /// delegate, a field-like event, an explicit add/remove event, and a generic
@@ -33,7 +33,7 @@ namespace Corpus.Issue1899
 }
 ");
 
-        Assert.Contains("type Combine = delegate func(a int32, b int32) int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Combine(a int32, b int32) int32;", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -47,7 +47,7 @@ namespace Corpus.Issue1899
 }
 ");
 
-        Assert.Contains("type Note = delegate func(message string)", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Note(message string);", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("func(message string) ", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
@@ -128,7 +128,7 @@ namespace Corpus.Issue1899
 }
 ");
 
-        Assert.Contains("type Selector[T] = delegate func(value T) T", rendered, StringComparison.Ordinal);
+        Assert.Contains("delegate Selector[T](value T) T;", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

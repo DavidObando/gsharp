@@ -15,7 +15,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// Issue #2338 follow-up (root cause of the "generic named-delegate call-site
 /// defect" discovered while testing <c>EmitFunctionLiteralToNamedDelegate</c>):
 /// calling a generic G# user function/method whose parameter or return type is
-/// a NAMED delegate (<c>type Getter[T any] = delegate func() T</c>) constructed
+/// a NAMED delegate (<c>delegate Getter[T any]() T</c>) constructed;
 /// over the callee's OWN type parameter produced a <em>caller-side</em> type
 /// mismatch, independent of any closure/capture.
 /// <para>
@@ -88,7 +88,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsReturn
             import System
 
-            type Getter2338CsReturn[T any] = delegate func() T
+            delegate Getter2338CsReturn[T any]() T;
 
             func MakeGetter2338CsReturn[T](item T) Getter2338CsReturn[T] {
                 return () -> item
@@ -113,7 +113,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsRoundTrip
             import System
 
-            type Getter2338CsRoundTrip[T any] = delegate func() T
+            delegate Getter2338CsRoundTrip[T any]() T;
 
             func RoundTrip2338Cs[T](g Getter2338CsRoundTrip[T]) Getter2338CsRoundTrip[T] {
                 return g
@@ -137,7 +137,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsMethodLevel
             import System
 
-            type Getter2338CsMethodLevel[T any] = delegate func() T
+            delegate Getter2338CsMethodLevel[T any]() T;
 
             class Utils2338CsMethodLevel {
                 func Wrap[T](item T) Getter2338CsMethodLevel[T] {
@@ -165,7 +165,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsContainingType
             import System
 
-            type Getter2338CsContainingType[T any] = delegate func() T
+            delegate Getter2338CsContainingType[T any]() T;
 
             open class Holder2338CsContainingType[T] {
                 let value T
@@ -194,7 +194,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsShared
             import System
 
-            type Getter2338CsShared[T any] = delegate func() T
+            delegate Getter2338CsShared[T any]() T;
 
             class Factory2338CsShared[T] {
                 shared {
@@ -221,7 +221,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsChain
             import System
 
-            type Getter2338CsChain[T any] = delegate func() T
+            delegate Getter2338CsChain[T any]() T;
 
             func MakeGetter2338CsChain[T](item T) Getter2338CsChain[T] {
                 return () -> item
@@ -250,7 +250,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsMulti
             import System
 
-            type Conv2338CsMulti[TIn any, TOut any] = delegate func(x TIn) TOut
+            delegate Conv2338CsMulti[TIn any, TOut any](x TIn) TOut;
 
             func MakeConv2338CsMulti[TIn, TOut](fn (TIn) -> TOut) Conv2338CsMulti[TIn, TOut] {
                 return (x TIn) -> fn(x)
@@ -275,7 +275,7 @@ public class Issue2338GenericNamedDelegateCallSiteEmitTests
             package Cap2338CsControl
             import System
 
-            type Getter2338CsControl = delegate func() int32
+            delegate Getter2338CsControl() int32;
 
             func MakeGetter2338CsControl(item int32) Getter2338CsControl {
                 return () -> item

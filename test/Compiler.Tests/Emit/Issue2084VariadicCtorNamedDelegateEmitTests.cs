@@ -31,7 +31,7 @@ public class Issue2084VariadicCtorNamedDelegateEmitTests
             package i2084variadicctor
             import System
 
-            type TickHandler = delegate func(n int32) void
+            delegate TickHandler(n int32) void;
 
             class C {
                 var H TickHandler

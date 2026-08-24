@@ -74,7 +74,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             package Cap2338IfaceReturn
             import System
 
-            type Getter2338IfaceReturn[T any] = delegate func() T
+            delegate Getter2338IfaceReturn[T any]() T;
 
             interface IFactory2338IfaceReturn[T any] {
                 func Make() Getter2338IfaceReturn[T];
@@ -111,7 +111,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             package Cap2338IfaceParam
             import System
 
-            type Consumer2338IfaceParam[T any] = delegate func(item T) void
+            delegate Consumer2338IfaceParam[T any](item T) void;
 
             interface ISink2338IfaceParam[T any] {
                 func Accept(c Consumer2338IfaceParam[T]) void;
@@ -171,7 +171,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             package Cap2338MethodLevel
             import System
 
-            type Getter2338MethodLevel[T any] = delegate func() T
+            delegate Getter2338MethodLevel[T any]() T;
 
             interface IFactory2338MethodLevel {
                 func Make[T](seed T) Getter2338MethodLevel[T];
@@ -201,7 +201,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             package Cap2338Combined
             import System
 
-            type Combiner2338Combined[A any, B any] = delegate func(item A) B
+            delegate Combiner2338Combined[A any, B any](item A) B;
 
             interface ITransformer2338Combined[TIn any] {
                 func Transform[TOut](conv Combiner2338Combined[TIn, TOut]) TOut;
@@ -237,7 +237,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             package Cap2338Containing
             import System
 
-            type Combiner2338Containing[A any, B any] = delegate func(item A) B
+            delegate Combiner2338Containing[A any, B any](item A) B;
 
             interface ITransformer2338Containing[TIn any] {
                 func Transform[TOut](conv Combiner2338Containing[TIn, TOut]) TOut;
@@ -272,7 +272,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             import System
 
             class Box2338Nested[T any](Value T)
-            type Getter2338Nested[T any] = delegate func() T
+            delegate Getter2338Nested[T any]() T;
 
             interface IFactory2338Nested[T any] {
                 func Make() Getter2338Nested[Box2338Nested[T]];
@@ -303,7 +303,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             package Cap2338Control
             import System
 
-            type Getter2338Control = delegate func() int32
+            delegate Getter2338Control() int32;
 
             interface IFactory2338Control {
                 func Make() Getter2338Control;

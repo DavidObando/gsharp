@@ -130,7 +130,7 @@ data struct Point {
             import System.Collections.Generic
 
             /// Handles a value.
-            public type Handler[T] = delegate func(value T) void
+            public delegate Handler[T](value T) void;
 
             /// Owns nested types.
             public class Outer[T] {

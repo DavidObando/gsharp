@@ -15,7 +15,7 @@ public sealed class Issue2613StaticDelegateMemberEmitTests
         package Issue2613
         import System
 
-        type Transform = delegate func(value int32) int32
+        delegate Transform(value int32) int32;
 
         class Callbacks {
             shared {

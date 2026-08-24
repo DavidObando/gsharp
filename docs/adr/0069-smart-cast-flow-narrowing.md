@@ -422,7 +422,7 @@ This is deliberately **not** keyed on symbol *kind* (e.g. "parameters always nar
 
 Concretely, this covers:
 
-- A bare nil-guarded `let`/by-value-parameter binding of any callable type — a native G# function type (`(...) -> T`), a same-compilation named delegate (`type F = delegate func(...) T`), a generic named delegate, or an imported CLR delegate (`Func<...>`/custom `delegate`) — invoked directly or indirectly inside a nested lambda, a local function, an async lambda, an escaping/returned closure, or multiple sibling closures capturing the same binding.
+- A bare nil-guarded `let`/by-value-parameter binding of any callable type — a native G# function type (`(...) -> T`), a same-compilation named delegate (`delegate F(...) T`), a generic named delegate, or an imported CLR delegate (`Func<...>`/custom `delegate`) — invoked directly or indirectly inside a nested lambda, a local function, an async lambda, an escaping/returned closure, or multiple sibling closures capturing the same binding.;
 - Conditional invocation and branch-only narrowing carried into the closure (the guard may be nested inside further `if`/branch structure before the closure is created, as long as no write to the root occurs on the path reaching the closure's declaration).
 
 It explicitly does **not** cover, and these continue to drop narrowing (or were never narrowed) exactly as before:
@@ -446,7 +446,7 @@ A `let` local or by-value/`in` parameter is, by construction, assigned exactly o
 ### Examples (addendum)
 
 ```gs
-type ConvertFunc = delegate func(data []uint8) []uint8
+delegate ConvertFunc(data []uint8) []uint8;
 
 class DownloadDecryptJob {
     var runningTasks List[Task] = List[Task]()

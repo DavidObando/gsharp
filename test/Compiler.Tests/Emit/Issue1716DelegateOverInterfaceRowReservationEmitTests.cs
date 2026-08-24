@@ -52,7 +52,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
                 func Greet() string { return "hi-1716" }
             }
 
-            type StringFn1716 = delegate func() string
+            delegate StringFn1716() string;
 
             func Main() {
                 var g IGreeter1716 = Greeter1716()
@@ -91,8 +91,8 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
                 func SecondOp() int32 { return 2 }
             }
 
-            type IntFn1716 = delegate func() int32
-            type IntFn1716B = delegate func() int32
+            delegate IntFn1716() int32;
+            delegate IntFn1716B() int32;
 
             func Main() {
                 var f IFirst1716 = Impl1716()
@@ -160,7 +160,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
             package i1716del
             import System
 
-            type IntFn1716D = delegate func(n int32) int32
+            delegate IntFn1716D(n int32) int32;
 
             interface IConverter1716 {
                 shared {

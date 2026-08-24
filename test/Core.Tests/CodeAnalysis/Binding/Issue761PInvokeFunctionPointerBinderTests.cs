@@ -30,7 +30,7 @@ public class Issue761PInvokeFunctionPointerBinderTests
 package P
 import System.Runtime.InteropServices
 
-type Comparer = delegate func(a nint, b nint) int32
+delegate Comparer(a nint, b nint) int32;
 
 @DllImport(""libc"", EntryPoint: ""qsort"")
 func native_qsort(base nint, nmemb nint, size nint, cmp Comparer) void;
@@ -47,7 +47,7 @@ package P
 import System.Runtime.InteropServices
 
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Comparer = delegate func(a nint, b nint) int32
+delegate Comparer(a nint, b nint) int32;
 
 @DllImport(""libc"", EntryPoint: ""qsort"")
 func native_qsort(base nint, nmemb nint, size nint, cmp Comparer) void;
@@ -101,7 +101,7 @@ package P
 import System.Runtime.InteropServices
 
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Callback = delegate func() void
+delegate Callback() void;
 
 @DllImport(""libc"", EntryPoint: ""f"")
 func bad() Callback;
@@ -174,7 +174,7 @@ func native_qsort(base nint, nmemb nint, size nint, cmp unmanaged[Cdecl] (nint, 
 package P
 import System.Runtime.InteropServices
 
-type Cb = delegate func() void
+delegate Cb() void;
 
 @LibraryImport(""libc"", EntryPoint: ""f"")
 func native_f(cb Cb) void;

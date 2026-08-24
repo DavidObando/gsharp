@@ -22,7 +22,7 @@ public class NamedDelegateEmitTests
         var source = """
             package MyLib
 
-            type MyHandler = delegate func(a int32, b int32) int32
+            delegate MyHandler(a int32, b int32) int32;
             """;
 
         var assembly = CompileToAssembly(source);
@@ -41,7 +41,7 @@ public class NamedDelegateEmitTests
         var source = """
             package MyLib
 
-            type MyHandler = delegate func(a int32, b int32) int32
+            delegate MyHandler(a int32, b int32) int32;
             """;
 
         var assembly = CompileToAssembly(source);
@@ -67,7 +67,7 @@ public class NamedDelegateEmitTests
         var source = """
             package MyLib
 
-            type MyHandler = delegate func(a int32, b int32) int32
+            delegate MyHandler(a int32, b int32) int32;
             """;
 
         var assembly = CompileToAssembly(source);
@@ -98,7 +98,7 @@ public class NamedDelegateEmitTests
         var source = """
             package MyLib
 
-            type Greeter = delegate func(name string)
+            delegate Greeter(name string);
             """;
 
         var assembly = CompileToAssembly(source);

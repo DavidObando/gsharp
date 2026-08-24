@@ -13,7 +13,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #2338 follow-up: <c>EmitFunctionLiteralToNamedDelegate</c> (a lambda
 /// literal converted to a user-declared NAMED delegate type, e.g.
-/// <c>type Getter[T any] = delegate func() T</c>) was missing the same
+/// <c>delegate Getter[T any]() T</c>) was missing the same;
 /// generic-closure-reification handling that its sibling
 /// <c>EmitFunctionLiteral</c> already had for issue #1477. When the lambda
 /// captured a value whose type referenced an enclosing generic type/method
@@ -69,7 +69,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             package Cap2338NamedA
             import System
 
-            type Getter2338NamedA[T any] = delegate func() T
+            delegate Getter2338NamedA[T any]() T;
 
             class HolderNamedA2338[T] {
                 let value T
@@ -103,7 +103,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             package Cap2338NamedB
             import System
 
-            type Getter2338NamedB[T any] = delegate func() T
+            delegate Getter2338NamedB[T any]() T;
 
             func RunGetter2338NamedB[T](item T) {
                 var g Getter2338NamedB[T] = () -> item
@@ -132,7 +132,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             package Cap2338NamedC
             import System
 
-            type Getter2338NamedC[T any] = delegate func() T
+            delegate Getter2338NamedC[T any]() T;
 
             class OuterNamedC2338[T] {
                 let outerValue T
@@ -166,7 +166,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             package Cap2338NamedD
             import System
 
-            type Getter2338NamedD[T any] = delegate func() T
+            delegate Getter2338NamedD[T any]() T;
 
             func Main() {
                 var captured = 99

@@ -42,7 +42,7 @@ import System.Runtime.InteropServices
 // runtime marshaller reads it to decide which native ABI the generated
 // thunk should expose.
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Int64Comparer = delegate func(a nint, b nint) int32
+delegate Int64Comparer(a nint, b nint) int32;
 
 @DllImport("libc", EntryPoint: "qsort")
 func native_qsort(base nint, nmemb nuint, size nuint, compar Int64Comparer);

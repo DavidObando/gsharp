@@ -59,7 +59,7 @@ public sealed class Issue2504NamedDelegateReturnTaintPipelineTests
         string contracts = ReadAppOutput(outputRoot, result.RunId, "test_Contracts");
         string producer = ReadAppOutput(outputRoot, result.RunId, "test_Producer");
         Assert.Contains("class Result", contracts, StringComparison.Ordinal);
-        Assert.Contains("type Callback = delegate func(enforce bool = false) Result?", producer, StringComparison.Ordinal);
+        Assert.Contains("delegate Callback(enforce bool = false) Result?;", producer, StringComparison.Ordinal);
         // Issue #2835: `Callback` is source-declared, so it keeps its nominal
         // name; the `Result?` return promotion is carried by the `type Callback`
         // declaration asserted above, and the field keeps its own `?` envelope.
