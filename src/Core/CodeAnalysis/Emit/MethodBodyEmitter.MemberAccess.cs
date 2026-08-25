@@ -243,7 +243,8 @@ internal sealed partial class MethodBodyEmitter
         // Issue #191: top-level globals store via stsfld into their backing
         // <Program> static field (initialized in declaration order from
         // the entry-point method body).
-        if (variable is GlobalVariableSymbol { IsConst: false } gv
+        if (variable is GlobalVariableSymbol gv
+            && (!gv.IsConst || this.outer.emitCtx.CurrentStaticConstructorOwner is PackageSymbol)
             && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
         {
             this.il.OpCode(ILOpCode.Stsfld);
@@ -474,9 +475,9 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitFieldAccess(BoundFieldAccessExpression fa)
     {
-        // Issue #948: a const field has no runtime storage — its read is
-        // inlined as the compile-time constant value (matching C# semantics
-        // and the literal field's lack of an ldsfld-able location).
+        // Issue #948: inline const-field reads from their compile-time value.
+        // Decimal retains C#-style runtime metadata storage for interop, but
+        // source reads still inline and never depend on initialization order.
         if (fa.Field.IsConst)
         {
             this.EmitLiteral(new BoundLiteralExpression(null, fa.Field.ConstantValue, fa.Field.Type));

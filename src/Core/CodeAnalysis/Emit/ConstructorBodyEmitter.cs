@@ -79,6 +79,20 @@ internal sealed class ConstructorBodyEmitter
         // Build a synthetic body: for each field with an initializer,
         // emit the expression + stsfld.
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var field in typeSym.ConstFields)
+        {
+            if (ConstantFieldMetadataEmitter.RequiresRuntimeInitialization(field.ConstantValue))
+            {
+                var assignment = new BoundFieldAssignmentExpression(
+                    null,
+                    receiver: null,
+                    typeSym,
+                    field,
+                    new BoundLiteralExpression(null, field.ConstantValue, field.Type));
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+        }
+
         foreach (var field in typeSym.StaticFields)
         {
             if (typeSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))
@@ -143,6 +157,55 @@ internal sealed class ConstructorBodyEmitter
             parameterList: this.nextParameterHandle());
     }
 
+    /// <summary>Emits the package <c>&lt;Program&gt;</c> initializer for constants that require runtime storage.</summary>
+    /// <param name="package">The package whose <c>&lt;Program&gt;</c> owns the fields.</param>
+    /// <param name="constants">Constants represented by static read-only fields.</param>
+    internal void EmitProgramStaticConstructor(
+        PackageSymbol package,
+        ImmutableArray<GlobalVariableSymbol> constants)
+    {
+        int bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>(constants.Length);
+            foreach (var constant in constants)
+            {
+                var assignment = new BoundAssignmentExpression(
+                    null,
+                    constant,
+                    new BoundLiteralExpression(null, constant.ConstantValue, constant.Type));
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+
+            var body = Lowerer.Lower(new BoundBlockStatement(null, statements.MoveToImmutable()));
+            var previousOwner = this.emitCtx.CurrentStaticConstructorOwner;
+            this.emitCtx.CurrentStaticConstructorOwner = package;
+            try
+            {
+                bodyOffset = this.EmitStaticConstructorBodyFromBlock(
+                    body,
+                    Invariant.Required(constants[0].DeclaringSyntax, "a package constant has declaring syntax"));
+            }
+            finally
+            {
+                this.emitCtx.CurrentStaticConstructorOwner = previousOwner;
+            }
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: false)
+            .Parameters(0, returns => returns.Void(), _ => { });
+
+        this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName | MethodAttributes.Static,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(".cctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(signature),
+            bodyOffset: bodyOffset,
+            parameterList: this.nextParameterHandle());
+    }
+
     /// <summary>
     /// ADR-0089 / issue #1030: builds the IL body for an interface
     /// <c>.cctor</c> running each interface static-field initializer in
@@ -155,6 +218,19 @@ internal sealed class ConstructorBodyEmitter
     private int EmitInterfaceStaticConstructorBodyBytes(InterfaceSymbol ifaceSym)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var field in ifaceSym.ConstFields)
+        {
+            if (ConstantFieldMetadataEmitter.RequiresRuntimeInitialization(field.ConstantValue))
+            {
+                var assignment = new BoundFieldAssignmentExpression(
+                    null,
+                    field,
+                    ifaceSym,
+                    new BoundLiteralExpression(null, field.ConstantValue, field.Type));
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+        }
+
         foreach (var field in ifaceSym.StaticFields)
         {
             if (ifaceSym.StaticFieldInitializers.TryGetValue(field, out var initExpr))

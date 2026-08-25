@@ -86,8 +86,9 @@ internal sealed class FunctionEmitter
     /// <c>&lt;Program&gt;</c> TypeDef. Runtime initialization of
     /// <c>var</c>/<c>let</c> stays in the entry-point method body and runs via
     /// <c>stsfld</c> as each declaration is reached, preserving existing
-    /// side-effect ordering. Compile-time constants are emitted as literal
-    /// fields carrying Constant rows and are inlined at read sites.
+    /// side-effect ordering. ECMA constants emit as literal fields carrying
+    /// Constant rows; decimal uses initialized static read-only storage. All
+    /// package-constant reads are inlined.
     /// </summary>
     /// <remarks>
     /// The <c>InitOnly</c> flag remains intentionally omitted for
@@ -105,7 +106,7 @@ internal sealed class FunctionEmitter
             var attrs = AccessibilityMap.MapFieldAccessibility(g.Accessibility) | FieldAttributes.Static;
             if (g.IsConst)
             {
-                attrs |= FieldAttributes.Literal | FieldAttributes.HasDefault;
+                attrs |= ConstantFieldMetadataEmitter.GetAttributes(g.ConstantValue);
             }
 
             var handle = this.emitCtx.Metadata.AddFieldDefinition(
@@ -115,7 +116,11 @@ internal sealed class FunctionEmitter
 
             if (g.IsConst)
             {
-                this.emitCtx.Metadata.AddConstant(handle, g.ConstantValue);
+                ConstantFieldMetadataEmitter.Emit(
+                    this.emitCtx,
+                    this.memberRefs.GetTypeReference,
+                    handle,
+                    g.ConstantValue);
             }
 
             this.cache.GlobalFieldDefs[g] = handle;

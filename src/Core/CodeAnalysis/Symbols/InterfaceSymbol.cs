@@ -176,10 +176,9 @@ public sealed class InterfaceSymbol : TypeSymbol
 
     /// <summary>
     /// Gets the compile-time <c>const</c> fields declared inside the interface
-    /// <c>shared { … }</c> block (issue #1030). Emitted as CLR <c>literal</c>
-    /// fields with a <c>Constant</c> row; their reads are inlined. Held
-    /// separately from <see cref="StaticFields"/> so no <c>.cctor</c> assignment
-    /// is generated for them.
+    /// <c>shared { … }</c> block (issue #1030). Reads are inlined. ECMA
+    /// constants emit as literal fields; decimal constants use static read-only
+    /// storage initialized by the interface type constructor.
     /// </summary>
     public ImmutableArray<FieldSymbol> ConstFields { get; private set; } = ImmutableArray<FieldSymbol>.Empty;
 

@@ -850,6 +850,15 @@ remain supported.
 |---|---|---|---|
 | GS0537 | Error | `Operator '<name>' cannot declare method type parameters; put generic parameters on the containing type instead.` | `func (left Value) op_Addition[T](right Value) Value` |
 
+## Native-width emitted constants (GS0538)
+
+CLR constant metadata has no architecture-independent `nint`/`nuint`
+representation. Use `int64`/`uint64` for a compile-time package constant, or
+`let` when runtime native width is required.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0538 | Error | `Constant '<name>' cannot use native-width type '<type>' when emitted as a field because CLR constant metadata has no native-width representation; use 'int64'/'uint64' or an immutable runtime 'let' binding.` | `const PageSize nint = 4096` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 

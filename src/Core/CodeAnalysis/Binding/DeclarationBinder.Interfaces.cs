@@ -841,6 +841,15 @@ internal sealed partial class DeclarationBinder
                     // const → compile-time literal field (reads inlined).
                     if (fieldSyntax.IsConst)
                     {
+                        if (fieldType == TypeSymbol.NInt || fieldType == TypeSymbol.NUInt)
+                        {
+                            Diagnostics.ReportConstNativeIntegerNotSupported(
+                                fieldSyntax.Identifier.Location,
+                                fieldName,
+                                fieldType.Name);
+                            continue;
+                        }
+
                         var constField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
                         Binder.AttachDocumentation(constField, fieldSyntax);
 
@@ -856,7 +865,7 @@ internal sealed partial class DeclarationBinder
                             var convertedConst = fieldSyntax.Initializer is BlockExpressionSyntax
                                 ? boundConst
                                 : conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
-                            if (TryFoldConstantFieldValue(convertedConst, fieldType, out var constValue))
+                            if (TryFoldConstantValue(convertedConst, fieldType, out var constValue))
                             {
                                 constField.SetConstantValue(constValue);
                             }

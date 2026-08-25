@@ -457,11 +457,10 @@ public sealed class StructSymbol : TypeSymbol
 
     /// <summary>
     /// Gets the compile-time constant fields declared with <c>const</c>
-    /// (Issue #948). Const fields are implicitly static and read-only; they are
-    /// emitted as CLR <c>literal</c> fields with a <c>Constant</c> row and their
-    /// reads are inlined. Held separately from <see cref="StaticFields"/> so the
-    /// emitter never produces a runtime static field or a <c>.cctor</c>
-    /// assignment for them. Populated by the binder; defaults to empty.
+    /// (Issue #948). Const fields are implicitly static and read-only, and reads
+    /// are inlined. ECMA constants emit as literal fields; decimal constants use
+    /// static read-only storage initialized by the type constructor. Held
+    /// separately from <see cref="StaticFields"/> and populated by the binder.
     /// </summary>
     public ImmutableArray<FieldSymbol> ConstFields
     {

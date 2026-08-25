@@ -39,8 +39,8 @@ public sealed class GlobalVariableSymbol : VariableSymbol
 
     /// <summary>
     /// Gets a value indicating whether this global is a compile-time constant.
-    /// Compile-time constants are emitted as CLR literal fields and their reads
-    /// are inlined from <see cref="ConstantValue"/>.
+    /// Reads are inlined from <see cref="ConstantValue"/>. ECMA constants emit
+    /// as literal fields; decimal uses initialized static read-only storage.
     /// </summary>
     public bool IsConst { get; private set; }
 

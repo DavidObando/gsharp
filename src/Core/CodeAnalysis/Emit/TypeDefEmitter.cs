@@ -382,9 +382,9 @@ internal sealed class TypeDefEmitter
 
     private void EmitStructConstFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
     {
-        // Issue #948: emit const fields as CLR literal fields (Static | Literal
-        // | HasDefault) carrying a Constant row. Their reads are inlined by the
-        // method-body emitter, so no .cctor assignment is generated.
+        // Issue #948 / #3519: ECMA constants use literal fields + Constant
+        // rows. Decimal follows C#: static initonly storage,
+        // DecimalConstantAttribute, and a .cctor assignment. Source reads inline.
         if (!structSym.ConstFields.IsDefaultOrEmpty)
         {
             foreach (var constField in structSym.ConstFields)
@@ -392,7 +392,8 @@ internal sealed class TypeDefEmitter
                 var sigBlob = new BlobBuilder();
                 this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), constField.Type);
                 var attrs = AccessibilityMap.MapFieldAccessibility(constField.Accessibility)
-                    | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault;
+                    | FieldAttributes.Static
+                    | ConstantFieldMetadataEmitter.GetAttributes(constField.ConstantValue);
 
                 var handle = this.emitCtx.Metadata.AddFieldDefinition(
                     attributes: attrs,
@@ -403,7 +404,11 @@ internal sealed class TypeDefEmitter
                     firstField = handle;
                 }
 
-                this.emitCtx.Metadata.AddConstant(handle, constField.ConstantValue);
+                ConstantFieldMetadataEmitter.Emit(
+                    this.emitCtx,
+                    this.getTypeReference,
+                    handle,
+                    constField.ConstantValue);
                 this.cache.StructFieldDefs[constField] = handle;
                 this.emitUserAttributes(handle, constField, AttributeTargetKind.Field);
                 this.emitNullableAttributeOnField(handle, constField.Type);
@@ -922,12 +927,9 @@ internal sealed class TypeDefEmitter
         this.cache.InterfaceTypeDefs[ifaceSym] = handle;
         EmitGenericParamRows(this.emitCtx, handle, ifaceSym.TypeParameters);
 
-        // ADR-0089 / issue #1030: emit interface static *state* — `var`/`let`
-        // storage fields (Static) and `const` literal fields (Static | Literal
-        // | HasDefault + Constant row) — as FieldDef rows on the interface
-        // TypeDef. Handles are cached in StructFieldDefs (keyed by FieldSymbol),
-        // which the method-body emitter consults for ldsfld/stsfld; non-generic
-        // interface field access needs no per-construction TypeSpec ref.
+        // ADR-0089 / issues #1030/#3519: emit interface static state and const
+        // fields. ECMA constants use literal fields + Constant rows; decimal
+        // uses initialized static read-only storage + DecimalConstantAttribute.
         FieldDefinitionHandle firstInterfaceField = default;
         if (!ifaceSym.StaticFields.IsDefaultOrEmpty)
         {
@@ -962,7 +964,8 @@ internal sealed class TypeDefEmitter
                 var sigBlob = new BlobBuilder();
                 this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), constField.Type);
                 var attrs = AccessibilityMap.MapFieldAccessibility(constField.Accessibility)
-                    | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault;
+                    | FieldAttributes.Static
+                    | ConstantFieldMetadataEmitter.GetAttributes(constField.ConstantValue);
 
                 var fieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
                     attributes: attrs,
@@ -973,7 +976,11 @@ internal sealed class TypeDefEmitter
                     firstInterfaceField = fieldHandle;
                 }
 
-                this.emitCtx.Metadata.AddConstant(fieldHandle, constField.ConstantValue);
+                ConstantFieldMetadataEmitter.Emit(
+                    this.emitCtx,
+                    this.getTypeReference,
+                    fieldHandle,
+                    constField.ConstantValue);
                 this.cache.StructFieldDefs[constField] = fieldHandle;
                 this.emitUserAttributes(fieldHandle, constField, AttributeTargetKind.Field);
             }

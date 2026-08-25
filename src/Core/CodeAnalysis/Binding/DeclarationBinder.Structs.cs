@@ -485,6 +485,15 @@ internal sealed partial class DeclarationBinder
             // implicitly static and read-only and emitted as a literal field.
             if (fieldSyntax.IsConst)
             {
+                if (fieldType == TypeSymbol.NInt || fieldType == TypeSymbol.NUInt)
+                {
+                    Diagnostics.ReportConstNativeIntegerNotSupported(
+                        fieldSyntax.Identifier.Location,
+                        fieldName,
+                        fieldType.Name);
+                    continue;
+                }
+
                 var constFieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
                 Binder.AttachDocumentation(constFieldSymbol, fieldSyntax);
 
@@ -2224,6 +2233,15 @@ internal sealed partial class DeclarationBinder
                 // static, so `shared` is redundant but accepted).
                 if (fieldSyntax.IsConst)
                 {
+                    if (fieldType == TypeSymbol.NInt || fieldType == TypeSymbol.NUInt)
+                    {
+                        Diagnostics.ReportConstNativeIntegerNotSupported(
+                            fieldSyntax.Identifier.Location,
+                            fieldName,
+                            fieldType.Name);
+                        continue;
+                    }
+
                     var sharedConstField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
                     Binder.AttachDocumentation(sharedConstField, fieldSyntax);
 
@@ -3527,7 +3545,7 @@ internal sealed partial class DeclarationBinder
             var stillPending = new List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)>();
             foreach (var item in pendingConstFolds)
             {
-                if (TryFoldConstantFieldValue(item.Bound, item.Field.Type, out var constantValue))
+                if (TryFoldConstantValue(item.Bound, item.Field.Type, out var constantValue))
                 {
                     item.Field.SetConstantValue(constantValue);
                     progress = true;

@@ -1588,15 +1588,25 @@ internal sealed partial class StatementBinder
             variable.SetAttributes(boundAttrs);
         }
 
-        // Issue #216: a `const` declaration whose converted initializer is a
-        // literal expression carries a compile-time ConstantValue. The emitter
-        // uses this to skip IL slot allocation and emit a LocalConstant PDB row.
+        var declaredVariable = Invariant.Required(variable, "a variable declaration produces a variable symbol");
+
+        // Issue #216 / #3519: a foldable `const` initializer carries its
+        // target-typed compile-time value. Package constants also retain that
+        // value on their symbol so every separately emitted body can inline it.
         object? constValue = null;
         if (syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
-            && convertedInitializer is BoundLiteralExpression litExpr)
+            && convertedInitializer is not null)
         {
-            constValue = litExpr.Value;
-            if (variable is GlobalVariableSymbol global)
+            if (declaredVariable is GlobalVariableSymbol
+                && (declaredVariable.Type == TypeSymbol.NInt || declaredVariable.Type == TypeSymbol.NUInt))
+            {
+                Diagnostics.ReportConstNativeIntegerNotSupported(
+                    syntax.Identifier.Location,
+                    syntax.Identifier.Text,
+                    declaredVariable.Type.Name);
+            }
+            else if (DeclarationBinder.TryFoldConstantValue(convertedInitializer, declaredVariable.Type, out constValue)
+                && declaredVariable is GlobalVariableSymbol global)
             {
                 global.SetConstantValue(constValue);
             }
@@ -1604,7 +1614,7 @@ internal sealed partial class StatementBinder
 
         return new BoundVariableDeclaration(
             syntax,
-            Invariant.Required(variable, "a variable declaration produces a variable symbol"),
+            declaredVariable,
             convertedInitializer,
             constValue);
     }

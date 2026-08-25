@@ -2287,18 +2287,18 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// Issue #948: attempts to fold a bound const-field initializer to a
-    /// compile-time constant value coerced to the field's CLR primitive type.
+    /// Issues #948 and #3519: attempts to fold a bound const initializer to a
+    /// compile-time constant value coerced to the declaration's target type.
     /// Handles literal expressions (optionally wrapped in numeric/identity
     /// conversions) and unary negation of a numeric literal. Returns
     /// <c>false</c> for non-constant expressions so the caller can report a
     /// diagnostic.
     /// </summary>
     /// <param name="bound">The bound (already type-converted) initializer expression.</param>
-    /// <param name="fieldType">The declared const field type.</param>
+    /// <param name="targetType">The declared constant type.</param>
     /// <param name="value">The folded constant value on success.</param>
     /// <returns>True when a compile-time constant was produced.</returns>
-    private static bool TryFoldConstantFieldValue(BoundExpression bound, TypeSymbol fieldType, out object? value)
+    internal static bool TryFoldConstantValue(BoundExpression bound, TypeSymbol targetType, out object? value)
     {
         value = null;
         if (!TryEvaluateConstant(bound, out var raw))
@@ -2308,13 +2308,12 @@ internal sealed partial class DeclarationBinder
 
         if (raw == null)
         {
-            // A null literal is only valid for reference-typed const fields
-            // (e.g. `const s string = nil`); the Constant row stores a null.
+            // A null literal is only valid for a reference-typed constant.
             value = null;
-            return !fieldType.ClrType?.IsValueType ?? true;
+            return !targetType.ClrType?.IsValueType ?? true;
         }
 
-        var targetClr = fieldType.ClrType;
+        var targetClr = targetType.ClrType;
         if (targetClr == null)
         {
             return false;
@@ -2378,6 +2377,10 @@ internal sealed partial class DeclarationBinder
                 // const-binding pass), so a referenced const's value is present
                 // by the time this initializer is evaluated.
                 value = fieldAccess.Field.ConstantValue;
+                return true;
+
+            case BoundVariableExpression { Variable: GlobalVariableSymbol { IsConst: true } global }:
+                value = global.ConstantValue;
                 return true;
 
             case BoundUnaryExpression unary
