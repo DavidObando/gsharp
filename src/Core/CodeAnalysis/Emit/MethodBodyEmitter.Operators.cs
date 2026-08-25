@@ -1517,13 +1517,34 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Brfalse, bothEmptyLabel);
 
         // Both present: load values and compare.
+        // Issue #3518: ceq rejects arbitrary value types. Structural structs
+        // use the same boxed Object.Equals semantics as non-lifted equality.
+        var structural = underlying is StructSymbol candidate && (candidate.IsData || candidate.IsInline)
+            ? candidate
+            : null;
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueLhs);
+        if (structural != null)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(structural));
+        }
+
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueRhs);
-        this.EmitUnderlyingEqualityCeq(underlying);
+        if (structural != null)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(structural));
+            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+        }
+        else
+        {
+            this.EmitUnderlyingEqualityCeq(underlying);
+        }
+
         this.il.Branch(ILOpCode.Br, end);
 
         this.il.MarkLabel(bothEmptyLabel);
