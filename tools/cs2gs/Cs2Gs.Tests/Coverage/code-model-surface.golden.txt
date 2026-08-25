@@ -136,7 +136,7 @@ TypeParameter
 AccessorKind = Get, Set, Init
 BindingKind = Let, Var, Const
 CollectionInitializerElementKind = Expression, Keyed, Indexed, Assignment
-LiteralKind = Int, Float, String, Bool, Char, Null
+LiteralKind = Int, Float, String, RawString, Bool, Char, Null
 TypeDeclarationKind = Class, Struct, DataClass, DataStruct, InlineStruct, Interface
 Variance = None, Out, In
 Visibility = Default, Public, Internal, Private, Protected

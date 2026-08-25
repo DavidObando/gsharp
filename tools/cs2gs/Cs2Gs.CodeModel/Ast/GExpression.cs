@@ -69,6 +69,11 @@ public sealed class LiteralExpression : GExpression
     /// <returns>The literal.</returns>
     public static LiteralExpression String(string value) => new LiteralExpression(LiteralKind.String, value);
 
+    /// <summary>Creates a Go-style backtick raw string literal (issue #3501); the value must contain no backtick or CR.</summary>
+    /// <param name="value">The verbatim string value.</param>
+    /// <returns>The literal.</returns>
+    public static LiteralExpression Raw(string value) => new LiteralExpression(LiteralKind.RawString, value);
+
     /// <summary>Creates a character literal from its unescaped inner text.</summary>
     /// <param name="value">The unescaped inner text.</param>
     /// <returns>The literal.</returns>

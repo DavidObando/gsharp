@@ -18,6 +18,13 @@ public enum LiteralKind
     /// <summary>A string literal; rendered double-quoted with <c>$</c> escaped to <c>$$</c>.</summary>
     String,
 
+    /// <summary>
+    /// A Go-style backtick raw string literal (issue #3501): rendered verbatim
+    /// between backticks — no escape processing, real newlines. The value must
+    /// not contain a backtick or a carriage return.
+    /// </summary>
+    RawString,
+
     /// <summary>A boolean literal (<c>true</c>/<c>false</c>).</summary>
     Bool,
 

@@ -3612,7 +3612,86 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            // Issue #3501: a MULTILINE interpolated string (a C# interpolated
+            // raw fixture) cannot become a backtick raw — G# backtick strings
+            // are fully literal, holes only interpolate inside quoted strings.
+            // Lower it to a concatenation of backtick raw segments and hole
+            // values instead, preserving the author's line structure. Bail to
+            // the classic escaped interpolated form when a hole carries an
+            // alignment/format clause (interpolation-only semantics) or a text
+            // chunk holds a character a backtick raw cannot represent.
+            if (this.TryLowerMultilineInterpolationToConcat(interpolated, parts, out GExpression concat))
+            {
+                return concat;
+            }
+
             return new InterpolatedStringExpression(parts);
+        }
+
+        private bool TryLowerMultilineInterpolationToConcat(
+            InterpolatedStringExpressionSyntax interpolated,
+            IReadOnlyList<InterpolationPart> parts,
+            out GExpression concat)
+        {
+            concat = null;
+            int newlines = 0;
+            foreach (InterpolationPart part in parts)
+            {
+                if (!part.IsHole)
+                {
+                    if (part.Text.IndexOf('`') >= 0 || part.Text.IndexOf('\r') >= 0)
+                    {
+                        return false;
+                    }
+
+                    newlines += part.Text.Count(c => c == '\n');
+                }
+                else if (part.Alignment != null || part.Format != null)
+                {
+                    return false;
+                }
+            }
+
+            if (newlines < 2)
+            {
+                return false;
+            }
+
+            var holeSyntaxes = interpolated.Contents.OfType<InterpolationSyntax>().ToList();
+            var holeIndex = 0;
+            GExpression result = null;
+            foreach (InterpolationPart part in parts)
+            {
+                GExpression segment;
+                if (part.IsHole)
+                {
+                    InterpolationSyntax holeSyntax = holeSyntaxes[holeIndex++];
+                    segment = part.Expression;
+                    ITypeSymbol holeType = this.context.GetTypeInfo(holeSyntax.Expression).Type;
+                    if (holeType?.SpecialType != SpecialType.System_String)
+                    {
+                        segment = new InvocationExpression(
+                            new MemberAccessExpression(segment, "ToString"),
+                            Array.Empty<GExpression>());
+                    }
+                }
+                else
+                {
+                    if (part.Text.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    segment = part.Text.IndexOf('\n') >= 0
+                        ? LiteralExpression.Raw(part.Text)
+                        : LiteralExpression.String(part.Text);
+                }
+
+                result = result == null ? segment : new BinaryExpression(result, "+", segment);
+            }
+
+            concat = result ?? LiteralExpression.Raw(string.Empty);
+            return true;
         }
     }
 }
