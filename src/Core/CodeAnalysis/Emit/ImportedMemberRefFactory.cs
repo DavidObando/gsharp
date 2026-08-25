@@ -262,7 +262,10 @@ internal sealed class ImportedMemberRefFactory
 
         if (element.ClrType != null)
         {
-            if (element.ClrType.IsConstructedGenericType)
+            // Issue #3501 (ilverify): element-bearing CLR shapes (arrays from
+            // e.g. an imported `ParameterInfo[]` pattern binding) also route
+            // through the TypeSpec path — see GetTypeHandleForMember.
+            if (element.ClrType.IsConstructedGenericType || element.ClrType.HasElementType)
             {
                 return this.GetTypeHandleForMember(element.ClrType);
             }
@@ -567,7 +570,11 @@ internal sealed class ImportedMemberRefFactory
     /// </summary>
     internal EntityHandle GetTypeHandleForMember(Type type)
     {
-        if (type.IsConstructedGenericType)
+        // Issue #3501 (ilverify): an array (or any element-bearing shape —
+        // byref, pointer) has no TypeRef row; a name-based reference emits a
+        // bogus TypeRef literally called "ParameterInfo[]" that fails to
+        // load. Route through a TypeSpec like constructed generics.
+        if (type.IsConstructedGenericType || type.HasElementType)
         {
             if (this.cache.TypeSpecs.TryGetValue(type, out var existingSpec))
             {
@@ -1209,6 +1216,23 @@ internal sealed class ImportedMemberRefFactory
                 openDefinition = typeof(System.Nullable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>((TypeParameterSymbol)nul.UnderlyingType);
                 return true;
+            case NullableTypeSymbol nullableReference
+                when !NullableLifting.IsAnyValueTypeNullable(nullableReference):
+                // Issue #3501 (ilverify): a nullable REFERENCE receiver — e.g.
+                // an iterator-hoisted `IEnumerable[Item]?` local narrowed
+                // non-null before the loop — shares its underlying type's
+                // runtime container; without the unwrap the member ref falls
+                // back to the erased closed shape while sibling state-machine
+                // fields reify, and the two disagree at verification.
+                return TryNormalizeToSymbolicContainer(
+                    nullableReference.UnderlyingType,
+                    out openDefinition,
+                    out typeArguments);
+            case NullabilityAnnotatedTypeSymbol annotated:
+                return TryNormalizeToSymbolicContainer(
+                    annotated.BaseType,
+                    out openDefinition,
+                    out typeArguments);
             case MapTypeSymbol map when map.ClrType == null:
                 // Issue #3311: a `map[K, V]` receiver over type-parameter (or
                 // other not-yet-loadable) arguments has no closed CLR

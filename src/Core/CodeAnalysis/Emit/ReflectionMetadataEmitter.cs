@@ -5328,6 +5328,18 @@ internal sealed class ReflectionMetadataEmitter
             return tuple.ElementTypes.Any(ArgIsSymbolicUserDefined);
         }
 
+        // Issue #3501 (ilverify): a function-typed argument
+        // (`List[(BoundNode) -> object?]`) reifies to `Func<…>` over its
+        // parameter/return symbols in signatures, so a user type anywhere in
+        // its shape makes the whole argument symbolic. Without this the
+        // ctor/member refs stay erased (`List<object>`) while the local slot
+        // reifies (`List<Func<BoundNode, object>>`) — a stack mismatch.
+        if (arg is FunctionTypeSymbol fnArg)
+        {
+            return fnArg.ParameterTypes.Any(ArgIsSymbolicUserDefined)
+                || ArgIsSymbolicUserDefined(fnArg.ReturnType);
+        }
+
         return false;
     }
 
