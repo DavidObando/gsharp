@@ -228,6 +228,39 @@ public sealed class Issue3519PackageConstEmitTests
     }
 
     [Fact]
+    public void ImportedEnumPackageConst_FromAnotherSourceFile_UsesUnderlyingMetadataPayload()
+    {
+        using var program = Compile(
+            ("Reader.gs", """
+                package FindingImportedEnumPackageConst
+
+                func CheckImportedEnum() int32 {
+                    return D == System.DayOfWeek.Monday ? 0 : 1
+                }
+                """),
+            ("Values.gs", """
+                package FindingImportedEnumPackageConst
+
+                const D System.DayOfWeek = System.DayOfWeek.Monday
+                """));
+
+        var assembly = program.Load();
+        var container = assembly.GetTypes().Single(type => type.Name == "<Program>");
+        var check = container.GetMethod("CheckImportedEnum", BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(check);
+        Assert.Equal(0, check!.Invoke(null, null));
+        Assert.DoesNotContain(
+            IlInstructionReader.Read(check.GetMethodBody()!.GetILAsByteArray()!),
+            instruction => instruction.OpCode == OpCodes.Ldsfld);
+
+        var field = GetLiteral(container, "D");
+        Assert.Equal(typeof(DayOfWeek), field.FieldType);
+        var raw = field.GetRawConstantValue();
+        Assert.IsType<int>(raw);
+        Assert.Equal((int)DayOfWeek.Monday, raw);
+    }
+
+    [Fact]
     public void DecimalPackageConst_FromAnotherSourceFile_UsesInitializedReadOnlyStorage()
     {
         using var program = Compile(

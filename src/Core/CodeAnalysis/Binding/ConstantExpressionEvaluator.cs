@@ -37,7 +37,8 @@ internal static class ConstantExpressionEvaluator
         {
             return TryBuild(expression, out var built)
                 && TryConvert(built, targetType, isChecked: false, out var converted)
-                && TryInvoke(converted, out value);
+                && TryNormalizeFinalPayload(converted, targetType, out var payload)
+                && TryInvoke(payload, out value);
         }
         catch (Exception ex) when (IsFoldFailure(ex))
         {
@@ -421,6 +422,21 @@ internal static class ConstantExpressionEvaluator
 
         return TryGetRuntimeType(targetType, out var runtimeType)
             && TryConvert(source, runtimeType, isChecked, out converted);
+    }
+
+    private static bool TryNormalizeFinalPayload(
+        Expression source,
+        TypeSymbol targetType,
+        [NotNullWhen(true)] out Expression? normalized)
+    {
+        var storageType = GetConstantStorageType(targetType);
+        if (storageType == targetType)
+        {
+            normalized = source;
+            return true;
+        }
+
+        return TryConvert(source, storageType, isChecked: false, out normalized);
     }
 
     private static bool TryConvert(
