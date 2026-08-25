@@ -388,7 +388,63 @@ public sealed partial class CSharpToGSharpTranslator
                 target = new NonNullAssertionExpression(target);
             }
 
+            // Issue #3501 (GS0155): C# inferred a generic overload whose type
+            // arguments include a same-compilation user type (e.g.
+            // `builder.AddRange(fields)` selecting `AddRange<TDerived>` with
+            // `TDerived = FieldSymbol`). gsc's erased inference collapses the
+            // user type to `object`, letting an invariant same-name sibling win
+            // and fail conversion — spell the type arguments explicitly so the
+            // C#-chosen overload binds.
+            if ((typeArguments == null || typeArguments.Count == 0)
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { IsGenericMethod: true, MethodKind: MethodKind.Ordinary or MethodKind.ReducedExtension } inferredGeneric
+                && !inferredGeneric.TypeArguments.IsDefaultOrEmpty
+                && inferredGeneric.TypeArguments.All(t => t.TypeKind != TypeKind.Error)
+                && inferredGeneric.TypeArguments.Any(t =>
+                    !t.DeclaringSyntaxReferences.IsDefaultOrEmpty && t.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Interface)
+                && HasErasureCollidingNonGenericSibling(inferredGeneric))
+            {
+                typeArguments = inferredGeneric.TypeArguments
+                    .Select(t => this.typeMapper.Map(t, this.context, invocation.GetLocation()))
+                    .ToList();
+            }
+
             return new InvocationExpression(target, arguments, typeArguments);
+        }
+
+        // Issue #3501 (GS0155): true when the containing type declares a
+        // NON-generic same-name sibling of equal arity whose corresponding
+        // parameter shares a generic original definition with the chosen
+        // method's — the exact shape where gsc's erased inference lets the
+        // invariant sibling win (AddRange(ImmutableArray<T>) vs
+        // AddRange<TDerived>(ImmutableArray<TDerived>)). Anything looser
+        // sprays explicit type arguments over ordinary LINQ shapes.
+        private static bool HasErasureCollidingNonGenericSibling(IMethodSymbol chosen)
+        {
+            IMethodSymbol definition = chosen.OriginalDefinition;
+            foreach (ISymbol member in chosen.ContainingType?.GetMembers(chosen.Name)
+                ?? ImmutableArray<ISymbol>.Empty)
+            {
+                if (member is not IMethodSymbol sibling
+                    || sibling.IsGenericMethod
+                    || SymbolEqualityComparer.Default.Equals(sibling, definition)
+                    || sibling.Parameters.Length != definition.Parameters.Length)
+                {
+                    continue;
+                }
+
+                for (var i = 0; i < sibling.Parameters.Length; i++)
+                {
+                    if (sibling.Parameters[i].Type is INamedTypeSymbol { IsGenericType: true } siblingParam
+                        && definition.Parameters[i].Type is INamedTypeSymbol { IsGenericType: true } chosenParam
+                        && SymbolEqualityComparer.Default.Equals(
+                            siblingParam.OriginalDefinition, chosenParam.OriginalDefinition))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static bool RequiresQualifiedImportedContextualCall(
@@ -1409,6 +1465,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
             }
 
+            // ADR-0060: G# requires the `in` modifier at call sites of
+            // source-declared functions (GS0242, an error — the binder never
+            // silently spills), so an explicit C# `in x` argument keeps its
+            // keyword and an implicit one targeting a source-declared `in`
+            // parameter gains it. Imported CLR targets keep the plain value —
+            // that path spills to a temp itself. Non-identifier lvalues use
+            // the universal `&expr` back-compat form the binder accepts at
+            // any ref-kind parameter.
+            if (refKind == SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(argument))
+            {
+                GExpression translatedIn = this.TranslateExpression(argument.Expression);
+                return translatedIn is IdentifierExpression inIdentifier
+                    ? new OutArgumentExpression("in", inIdentifier.Name)
+                    : new UnaryExpression("&", translatedIn);
+            }
+
             // A declared-nullable reference argument that C# flow analysis has
             // narrowed to non-null (e.g. a `string?` field read inside an
             // `if (field == null) … else …` guard) is passed by value, but G#
@@ -1478,6 +1550,15 @@ public sealed partial class CSharpToGSharpTranslator
 
             return translated;
         }
+
+        // ADR-0060: whether this argument binds (implicitly, in C#) to an `in`
+        // parameter of a SOURCE-declared method — one that migrates to a G#
+        // func whose call sites must spell the `in` modifier (GS0242).
+        // Metadata-imported targets are excluded: the imported-call path
+        // accepts a plain value and spills it to a temp itself.
+        private bool TargetsSourceDeclaredInParameter(ArgumentSyntax argument) =>
+            this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { RefKind: RefKind.In } parameter }
+            && !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty;
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature
         // at a direct argument. Preserve it when the callable's natural signature

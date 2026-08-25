@@ -333,7 +333,7 @@ namespace Demo
     }
 
     [Fact]
-    public void CapturingLocalFunction_WithOutParameters_LiftsToMethod()
+    public void CapturingLocalFunction_WithOutParameters_StaysNativeLiteral()
     {
     string printed = TranslateUnit(@"
 using System;
@@ -360,9 +360,11 @@ namespace Demo
     }
 }");
 
-    Assert.DoesNotContain("let Read", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_Run_Read", printed, StringComparison.Ordinal);
-    Assert.Contains("out doubled int32", printed, StringComparison.Ordinal);
+    // Issue #3501: gsc `let`-bound literals declare and call through
+    // ref/out/in parameters natively, so an out-parameter local function no
+    // longer lifts to a `__local_` helper.
+    Assert.Contains("let Read = func (out doubled int32) int32", printed, StringComparison.Ordinal);
+    Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
     CompileAndRun(
         printed,
         "C().Run(3)\nConsole.WriteLine(\"ok\")",

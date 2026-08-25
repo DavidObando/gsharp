@@ -317,6 +317,40 @@ class MyParser : IParser {
         Assert.Empty(result.Diagnostics);
     }
 
+    [Fact]
+    public void InParameter_MissingCallSiteModifier_IsHardError()
+    {
+        // Issue #3501: GS0242 was a warning, and the single-candidate user
+        // function path produced no follow-up type error — the mis-bound
+        // argument reached the emitter as an internal GS9998. The diagnostic
+        // itself now carries error severity (ADR-0060: no silent spill).
+        var result = Evaluate(@"
+func Take(in f int32) int32 {
+    return f * 2
+}
+
+let x = 3
+Take(x)
+");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0242" && d.IsError);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+    }
+
+    [Fact]
+    public void InParameter_ExplicitModifier_Binds()
+    {
+        var result = Evaluate(@"
+func Take(in f int32) int32 {
+    return f * 2
+}
+
+let x = 3
+Take(in x)
+");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(6, result.Value);
+    }
+
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);

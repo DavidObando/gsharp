@@ -2787,6 +2787,22 @@ internal sealed partial class ExpressionBinder
         var memberName = member.IdentifierToken.Text;
         if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
         {
+            // Issue #3501: `base.M` used as a method GROUP (an argument, a
+            // `let` initializer, …) — the base declares a METHOD, not a
+            // property. Bind the group over `this` with non-virtual dispatch
+            // so the resulting delegate captures the BASE implementation,
+            // exactly like C#'s `base.M` delegate conversion.
+            var baseMethods = searchBase != null
+                ? TypeMemberModel.GetMethods(searchBase, memberName, MemberQuery.Instance(MemberKinds.Method))
+                : ImmutableArray<FunctionSymbol>.Empty;
+            if (!baseMethods.IsEmpty && GetEffectiveThisParameter() is { } baseGroupReceiver)
+            {
+                return BuildInstanceMethodGroup(
+                    new BoundVariableExpression(null, baseGroupReceiver),
+                    baseMethods,
+                    forceNonVirtualDispatch: true);
+            }
+
             // Issue #1260: no GSharp base declares the property — fall back to the
             // imported/BCL base type so `base.Prop` reads the inherited member
             // non-virtually (e.g. a virtual/overridable BCL property).

@@ -258,17 +258,23 @@ internal static class GSharpProjectTransformer
     }
 
     // ADR-0169: a consumer wiring an analyzer project via
-    // OutputItemType="Analyzer" (Roslyn's item) is rewritten to the G# SDK's
-    // GsharpCodeAnalyzer item, which BuildTask forwards to gsc /gsanalyzer:.
+    // OutputItemType="Analyzer" (Roslyn's item) DROPS the reference for now.
+    // The cs2gs analyzer-API translation (Roslyn syntax/symbol surface →
+    // GSharpDiagnosticAnalyzer) is designed but not built, so the migrated
+    // analyzer assembly carries no [GSharpDiagnosticAnalyzer] types and the
+    // SDK rejects it as an analyzer input (GS9301) — wiring it via
+    // GsharpCodeAnalyzer fails every consumer build. Restore the rewrite to
+    // the G# item once the analyzer translation lands.
     private static void RewriteAnalyzerConsumerReferences(XDocument document)
     {
-        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference"))
+        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference").ToList())
         {
             XAttribute outputItemType = AttributeNamed(projectReference, "OutputItemType");
             if (outputItemType is not null
-                && string.Equals(outputItemType.Value.Trim(), "Analyzer", StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(outputItemType.Value.Trim(), "Analyzer", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(outputItemType.Value.Trim(), "GsharpCodeAnalyzer", StringComparison.OrdinalIgnoreCase)))
             {
-                outputItemType.Value = "GsharpCodeAnalyzer";
+                projectReference.Remove();
             }
         }
     }

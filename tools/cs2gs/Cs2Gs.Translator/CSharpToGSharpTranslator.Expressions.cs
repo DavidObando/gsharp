@@ -1281,6 +1281,21 @@ public sealed partial class CSharpToGSharpTranslator
                 case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AsExpression):
                 case ConditionalAccessExpressionSyntax:
                     return false;
+
+                case ElementAccessExpressionSyntax arrayElement
+                    when this.context.GetSymbolInfo(arrayElement).Symbol is null
+                        && this.context.GetTypeInfo(arrayElement.Expression).Type is IArrayTypeSymbol arrayType:
+                    // Issue #3501: a C# array element read may be flow-proven
+                    // non-null at this site (`items[i] != null && …items[i]…`),
+                    // but G# never narrows an indexed read — only the DECLARED
+                    // element nullability counts, so a `!` over a
+                    // nullable-element read must keep its `!!`.
+                    if (arrayType.ElementType is { IsValueType: true } valueElement)
+                    {
+                        return valueElement.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T;
+                    }
+
+                    return arrayType.ElementNullableAnnotation == NullableAnnotation.NotAnnotated;
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;

@@ -63,8 +63,12 @@ namespace Cs2Gs.Tests
             // `yield break` — no synthesized iterator-exit label at all.
             Assert.Contains("yield break", printed, StringComparison.Ordinal);
             Assert.DoesNotContain("__iteratorExit", printed, StringComparison.Ordinal);
-            Assert.Contains("__local_Label_NewLabel", printed, StringComparison.Ordinal);
-            Assert.DoesNotMatch(new Regex(@"__local_Label_NewLabel_?\d"), printed);
+
+            // Issue #3501: a ref-parameter local function no longer lifts to a
+            // `__local_` helper — gsc `let`-bound literals declare and call
+            // through ref-kind parameters natively.
+            Assert.Contains("let NewLabel = func (prefix string, ref i int32) string", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
@@ -139,31 +143,27 @@ namespace Cs2Gs.Tests
         [Fact]
         public void LiftedLocalFunctions_SuffixOnlyOnCollision()
         {
+            // A mutual-recursion cycle through ANOTHER local function still
+            // lifts (a `let`-bound literal cannot forward-reference its
+            // partner), so overloads sharing a lifted helper name exercise
+            // the collision suffix.
             string printed = Translate("""
                 public class C
                 {
                     public string Run(int value)
                     {
-                        int i = 0;
-                        return Helper(ref i) + value;
+                        return Helper(value);
 
-                        static string Helper(ref int n)
-                        {
-                            n++;
-                            return "a" + n;
-                        }
+                        static string Helper(int n) => n <= 0 ? "a" : Other(n - 1);
+                        static string Other(int n) => Helper(n - 1);
                     }
 
                     public string Run(string value)
                     {
-                        int i = 0;
-                        return Helper(ref i) + value;
+                        return Helper(value.Length);
 
-                        static string Helper(ref int n)
-                        {
-                            n++;
-                            return "b" + n;
-                        }
+                        static string Helper(int n) => n <= 0 ? "b" : Other(n - 1);
+                        static string Other(int n) => Helper(n - 1);
                     }
                 }
                 """);

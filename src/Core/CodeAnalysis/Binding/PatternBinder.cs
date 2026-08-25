@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -1152,6 +1153,56 @@ internal sealed class PatternBinder
         // BCL `T[]`) is genuinely array-shaped too. Reuse the same
         // recognition ExpressionBinder uses for array/span slicing.
         var elementType = ExpressionBinder.GetArraySliceElementType(discriminantType) ?? TypeSymbol.Error;
+
+        // Issue #3501: an indexable non-array discriminant — anything with an
+        // int32 `Length`/`Count` getter and a `this[int]` indexer, e.g.
+        // `ImmutableArray[T]` — also supports the fixed-length list pattern.
+        // The rest subpattern must be a pure `..` discard (there is no cheap
+        // middle-slice materialization for an arbitrary indexable).
+        PropertyInfo? lengthProperty = null;
+        PropertyInfo? indexerProperty = null;
+        LocalVariableSymbol? inputVariable = null;
+
+        // The discriminant may reach here wrapped in a nullability
+        // annotation (NRT-annotated member reads); the indexable probe cares
+        // only about the underlying imported construction.
+        var indexableSource = discriminantType is NullabilityAnnotatedTypeSymbol annotatedIndexable
+            ? annotatedIndexable.BaseType
+            : discriminantType;
+        if (elementType == TypeSymbol.Error
+            && indexableSource is ImportedTypeSymbol importedIndexable
+            && importedIndexable.ClrType is Type indexableClr)
+        {
+            PropertyInfo? length =
+                FindIntGetter(indexableClr, "Length") ?? FindIntGetter(indexableClr, "Count");
+            PropertyInfo? indexer = indexableClr
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(p => p.GetIndexParameters() is { Length: 1 } indexParams
+                    && indexParams[0].ParameterType.IsSameAs(typeof(int))
+                    && p.GetGetMethod(nonPublic: false) != null);
+            if (length != null && indexer != null)
+            {
+                elementType = ExpressionBinder.MapErasedIndexerElementType(importedIndexable, indexer);
+                lengthProperty = length;
+                indexerProperty = indexer;
+                var inputName = "$list_input" + System.Threading.Interlocked
+                    .Increment(ref binderCtx.SyntheticLocalCounter)
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                inputVariable = new LocalVariableSymbol(inputName, isReadOnly: true, type: discriminantType);
+                Scope.TryDeclareVariable(inputVariable);
+
+                foreach (var elementSyntax in syntax.Elements)
+                {
+                    if (elementSyntax is SlicePatternSyntax sliceSyntax
+                        && (sliceSyntax.Pattern != null || sliceSyntax.CaptureIdentifier != null))
+                    {
+                        Diagnostics.ReportListPatternRequiresArrayOrSlice(
+                            sliceSyntax.DotDotToken.Location, discriminantType);
+                    }
+                }
+            }
+        }
+
         if (elementType == TypeSymbol.Error)
         {
             Diagnostics.ReportListPatternRequiresArrayOrSlice(syntax.OpenSquareBracketToken.Location, discriminantType);
@@ -1187,7 +1238,26 @@ internal sealed class PatternBinder
             }
         }
 
-        return new BoundListPattern(syntax, discriminantType, elements.ToImmutable(), elementType);
+        return new BoundListPattern(
+            syntax,
+            discriminantType,
+            elements.ToImmutable(),
+            elementType,
+            lengthProperty,
+            indexerProperty,
+            inputVariable);
+    }
+
+    private static PropertyInfo? FindIntGetter(Type type, string name)
+    {
+        // Metadata-context safe: never filter GetProperty by a runtime
+        // typeof — a MetadataLoadContext Int32 is a different Type instance.
+        PropertyInfo? property = type
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(p => p.Name == name
+                && p.GetIndexParameters().Length == 0
+                && p.PropertyType.IsSameAs(typeof(int)));
+        return property?.GetGetMethod(nonPublic: false) != null ? property : null;
     }
 
     // Issue #1505: bind a slice ("rest") subpattern. A named capture (`..rest`)

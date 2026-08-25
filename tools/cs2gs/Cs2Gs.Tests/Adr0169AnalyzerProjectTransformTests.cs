@@ -18,7 +18,7 @@ namespace Cs2Gs.Tests;
 /// Microsoft.CodeAnalysis packages and Roslyn-authoring properties, and gains
 /// a G# analyzer-API reference; a consumer's
 /// <c>OutputItemType="Analyzer"</c> wiring becomes
-/// <c>OutputItemType="GsharpCodeAnalyzer"</c>.
+/// dropped analyzer wiring (until the analyzer translation lands).
 /// </summary>
 public sealed class Adr0169AnalyzerProjectTransformTests : IDisposable
 {
@@ -67,8 +67,13 @@ public sealed class Adr0169AnalyzerProjectTransformTests : IDisposable
     }
 
     [Fact]
-    public void ConsumerAnalyzerWiring_BecomesGsharpCodeAnalyzerItem()
+    public void ConsumerAnalyzerWiring_DropsTheReferenceUntilTranslationLands()
     {
+        // Issue #3501: the cs2gs analyzer-API translation is designed but not
+        // built, so the migrated analyzer assembly carries no
+        // [GSharpDiagnosticAnalyzer] types and wiring it fails every consumer
+        // build (GS9301). Restore the GsharpCodeAnalyzer rewrite once the
+        // translation exists.
         string projectPath = Write("Consumer.csproj", @"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -84,10 +89,9 @@ public sealed class Adr0169AnalyzerProjectTransformTests : IDisposable
             "Gsharp.NET.Sdk",
             new Dictionary<string, string>());
 
-        XElement reference = transformed.Descendants()
-            .Single(element => element.Name.LocalName == "ProjectReference");
-        Assert.Equal("GsharpCodeAnalyzer", reference.Attributes().Single(a => a.Name.LocalName == "OutputItemType").Value);
-        Assert.Equal("false", reference.Attributes().Single(a => a.Name.LocalName == "ReferenceOutputAssembly").Value);
+        Assert.DoesNotContain(
+            transformed.Descendants(),
+            element => element.Name.LocalName == "ProjectReference");
     }
 
     [Fact]

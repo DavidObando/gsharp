@@ -2227,7 +2227,7 @@ internal sealed partial class ExpressionBinder
         return converted.MoveToImmutable();
     }
 
-    private static TypeSymbol MapErasedIndexerElementType(ImportedTypeSymbol target, PropertyInfo closedIndexer)
+    internal static TypeSymbol MapErasedIndexerElementType(ImportedTypeSymbol target, PropertyInfo closedIndexer)
     {
         // Issue #313 (HasTypeParameterArgument): substitute the open indexer's
         // generic-parameter result back through the target's symbolic type

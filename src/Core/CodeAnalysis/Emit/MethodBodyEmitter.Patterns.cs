@@ -746,6 +746,12 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitListPattern(BoundListPattern lp, Action loadValue, LabelHandle failLabel)
     {
+        if (lp.IndexerProperty != null)
+        {
+            this.EmitIndexableListPattern(lp, loadValue, failLabel);
+            return;
+        }
+
         // Issue #1505: a list pattern may contain a single slice ("rest")
         // subpattern. Without a slice, the length is strict-equal to the element
         // count and elements are indexed 0..N-1 from the start. With a slice at
@@ -864,6 +870,125 @@ internal sealed partial class MethodBodyEmitter
                 var sliceType = SliceTypeSymbol.Get(lp.ElementType);
                 this.EmitPattern(slice.Pattern, () => this.EmitLoadVariable(slice.Variable), sliceType, failLabel);
             }
+        }
+    }
+
+    // Issue #3501: fixed-length list pattern over an indexable non-array
+    // discriminant (e.g. `ImmutableArray[T]`): length via the bound
+    // `Length`/`Count` getter, elements via the `this[int]` indexer. The rest
+    // subpattern is always a pure `..` discard (the binder rejects captures),
+    // so no middle slice is ever materialized.
+    private void EmitIndexableListPattern(BoundListPattern lp, Action loadValue, LabelHandle failLabel)
+    {
+        var inputVariable = Invariant.Required(
+            lp.InputVariable,
+            "an indexable list pattern spills its discriminant to a synthesized local");
+        var inputSlot = this.locals[inputVariable];
+        loadValue();
+        this.il.StoreLocal(inputSlot);
+
+        var receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(lp.Type);
+        Action loadReceiver = receiverIsValueType
+            ? () => this.il.LoadLocalAddress(inputSlot)
+            : () => this.il.LoadLocal(inputSlot);
+
+        var lengthProperty = Invariant.Required(
+            lp.LengthProperty,
+            "an indexable list pattern resolves a Length/Count getter at bind time");
+        var lengthGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+            lengthProperty, wantSetter: false)
+            ?? throw new InvalidOperationException(
+                $"Indexable list pattern length property '{lengthProperty.Name}' has no public getter.");
+        var indexerProperty = Invariant.Required(
+            lp.IndexerProperty,
+            "the dispatcher enters the indexable path only when an indexer was resolved at bind time");
+        var itemGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+            indexerProperty, wantSetter: false)
+            ?? throw new InvalidOperationException(
+                "Indexable list pattern indexer has no public getter.");
+
+        void EmitLength()
+        {
+            loadReceiver();
+            this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(lengthGetter, lp.Type));
+        }
+
+        void EmitElementAt(Action loadIndex)
+        {
+            loadReceiver();
+            loadIndex();
+            this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+            this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(itemGetter, lp.Type));
+            if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(lp.Type, indexerProperty, out _))
+            {
+                this.EmitErasedObjectReturnWidening(
+                    TypeSymbol.FromClrType(itemGetter.ReturnType),
+                    lp.ElementType);
+            }
+        }
+
+        var sliceIndex = -1;
+        for (var i = 0; i < lp.Elements.Length; i++)
+        {
+            if (lp.Elements[i] is BoundSlicePattern)
+            {
+                sliceIndex = i;
+                break;
+            }
+        }
+
+        if (sliceIndex < 0)
+        {
+            EmitLength();
+            this.il.LoadConstantI4(lp.Elements.Length);
+            this.il.OpCode(ILOpCode.Ceq);
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+
+            for (var i = 0; i < lp.Elements.Length; i++)
+            {
+                var index = i;
+                this.EmitPattern(
+                    lp.Elements[index],
+                    () => EmitElementAt(() => this.il.LoadConstantI4(index)),
+                    lp.ElementType,
+                    failLabel);
+            }
+
+            return;
+        }
+
+        var prefix = sliceIndex;
+        var suffix = lp.Elements.Length - sliceIndex - 1;
+
+        EmitLength();
+        this.il.LoadConstantI4(prefix + suffix);
+        this.il.OpCode(ILOpCode.Clt);
+        this.il.Branch(ILOpCode.Brtrue, failLabel);
+
+        for (var i = 0; i < prefix; i++)
+        {
+            var index = i;
+            this.EmitPattern(
+                lp.Elements[index],
+                () => EmitElementAt(() => this.il.LoadConstantI4(index)),
+                lp.ElementType,
+                failLabel);
+        }
+
+        for (var k = 0; k < suffix; k++)
+        {
+            var fromEnd = suffix - k;
+            this.EmitPattern(
+                lp.Elements[sliceIndex + 1 + k],
+                () => EmitElementAt(() =>
+                {
+                    EmitLength();
+                    this.il.LoadConstantI4(fromEnd);
+                    this.il.OpCode(ILOpCode.Sub);
+                }),
+                lp.ElementType,
+                failLabel);
         }
     }
 

@@ -1266,6 +1266,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (!attachedMemberComments && translated != null)
                     {
                         AttachSourceComments(translated, member);
+                        this.SanitizeDocParamComments(translated, member);
                         attachedMemberComments = true;
                     }
 

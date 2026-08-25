@@ -53,7 +53,10 @@ internal sealed partial class ExpressionBinder
         return accessor;
     }
 
-    private BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression? receiver, ImmutableArray<FunctionSymbol> methods)
+    private BoundMethodGroupExpression BuildInstanceMethodGroup(
+        BoundExpression? receiver,
+        ImmutableArray<FunctionSymbol> methods,
+        bool forceNonVirtualDispatch = false)
     {
         if (methods.Length == 1 && !methods[0].IsGeneric)
         {
@@ -86,10 +89,16 @@ internal sealed partial class ExpressionBinder
             var returnType = this.MethodGroupObservableReturnType(only);
             returnType = owner?.SubstituteMemberType(returnType) ?? returnType;
             var fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), returnType);
-            return new BoundMethodGroupExpression(null, receiver, only, fnType);
+            return new BoundMethodGroupExpression(null, receiver, only, fnType)
+            {
+                ForceNonVirtualDispatch = forceNonVirtualDispatch,
+            };
         }
 
-        return new BoundMethodGroupExpression(null, receiver, methods);
+        return new BoundMethodGroupExpression(null, receiver, methods)
+        {
+            ForceNonVirtualDispatch = forceNonVirtualDispatch,
+        };
     }
 
     // Issue #1467: a method group's natural delegate return type must match the

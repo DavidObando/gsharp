@@ -1232,7 +1232,8 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            // For `in`: accept either &expr or plain value (emitter spills temp).
+            // For imported `in`: accept either &expr or plain value — the
+            // ADR-0039 emit path spills a value to a temp for CLR interop.
         }
     }
 

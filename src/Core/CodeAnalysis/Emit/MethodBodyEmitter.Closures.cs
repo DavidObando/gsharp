@@ -517,8 +517,9 @@ internal sealed partial class MethodBodyEmitter
             // per issue #1397, an interface-typed receiver — dispatch via
             // `ldvirtftn` so the delegate invokes the concrete implementation.
             // Non-virtual / sealed methods use `ldftn` directly.
-            if (function.IsOpen || function.IsOverride
-                || methodGroup.Receiver.Type is InterfaceSymbol)
+            if (!methodGroup.ForceNonVirtualDispatch
+                && (function.IsOpen || function.IsOverride
+                    || methodGroup.Receiver.Type is InterfaceSymbol))
             {
                 this.il.OpCode(ILOpCode.Dup);
                 this.il.OpCode(ILOpCode.Ldvirtftn);
