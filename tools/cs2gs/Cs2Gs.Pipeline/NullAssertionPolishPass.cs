@@ -50,10 +50,7 @@ public static class NullAssertionPolishPass
             return 0;
         }
 
-        Dictionary<string, string> ownedByFullPath = emittedGsFiles
-            .Where(File.Exists)
-            .GroupBy(p => Path.GetFullPath(p), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> ownedByFullPath = BuildOwnedIndex(emittedGsFiles);
 
         var stripped = 0;
         IEnumerable<IGrouping<string, GscDiagnostic>> byFile = diagnostics
@@ -118,10 +115,7 @@ public static class NullAssertionPolishPass
             return Array.Empty<string>();
         }
 
-        Dictionary<string, string> ownedByFullPath = emittedGsFiles
-            .Where(File.Exists)
-            .GroupBy(p => Path.GetFullPath(p), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> ownedByFullPath = BuildOwnedIndex(emittedGsFiles);
 
         return diagnostics
             .Where(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal))
@@ -129,6 +123,26 @@ public static class NullAssertionPolishPass
             .Where(f => f != null)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    // Indexes the app-owned emitted files by BOTH the raw full path and the
+    // symlink-canonical path, so a diagnostic echoing either spelling matches.
+    private static Dictionary<string, string> BuildOwnedIndex(IReadOnlyCollection<string> emittedGsFiles)
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string file in emittedGsFiles)
+        {
+            if (!File.Exists(file))
+            {
+                continue;
+            }
+
+            string full = Path.GetFullPath(file);
+            index.TryAdd(full, file);
+            index.TryAdd(CanonicalizePath(full), file);
+        }
+
+        return index;
     }
 
     private static string ResolveStrippableFile(
@@ -151,7 +165,13 @@ public static class NullAssertionPolishPass
             return null;
         }
 
-        if (ownedByFullPath.TryGetValue(normalized, out string owned))
+        // Issue #3501: gsc echoes SYMLINK-RESOLVED paths on macOS
+        // (`/private/tmp/…`) while the pipeline's owned/root paths keep the
+        // spelling it was invoked with (`/tmp/…`), so both comparisons below
+        // run over canonical real paths.
+        string canonical = CanonicalizePath(normalized);
+        if (ownedByFullPath.TryGetValue(normalized, out string owned)
+            || ownedByFullPath.TryGetValue(canonical, out owned))
         {
             return owned;
         }
@@ -165,7 +185,70 @@ public static class NullAssertionPolishPass
 
         string root = Path.GetFullPath(strippableRoot)
             .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return normalized.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? normalized : null;
+        string canonicalRoot = CanonicalizePath(root.TrimEnd(Path.DirectorySeparatorChar))
+            + Path.DirectorySeparatorChar;
+        return normalized.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            || canonical.StartsWith(canonicalRoot, StringComparison.OrdinalIgnoreCase)
+                ? normalized
+                : null;
+    }
+
+    // Resolves directory symlinks in the path's ancestry (macOS `/tmp` →
+    // `/private/tmp`) by round-tripping through the filesystem; falls back to
+    // the input when nothing exists to resolve against.
+    private static string CanonicalizePath(string path)
+    {
+        try
+        {
+            string directory = Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            {
+                return path;
+            }
+
+            var info = new DirectoryInfo(directory);
+            string resolvedDirectory = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName
+                ?? ResolveAncestrySymlinks(directory);
+            return Path.Combine(resolvedDirectory, Path.GetFileName(path));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return path;
+        }
+    }
+
+    private static string ResolveAncestrySymlinks(string directory)
+    {
+        // `ResolveLinkTarget` only resolves when the FINAL component is the
+        // link; `/tmp/foo/bar` needs `/tmp` itself resolved. Walk up until a
+        // component resolves, then reattach the remainder.
+        string current = directory;
+        var suffix = new List<string>();
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (Directory.Exists(current))
+            {
+                string resolved = new DirectoryInfo(current)
+                    .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                if (resolved != null)
+                {
+                    suffix.Reverse();
+                    return suffix.Aggregate(resolved, Path.Combine);
+                }
+            }
+
+            string name = Path.GetFileName(current);
+            string parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(parent) || parent == current)
+            {
+                break;
+            }
+
+            suffix.Add(name);
+            current = parent;
+        }
+
+        return directory;
     }
 
     private sealed class SpanComparer : IEqualityComparer<GscDiagnostic>
