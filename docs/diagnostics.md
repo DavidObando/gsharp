@@ -378,7 +378,7 @@ ADR-0060 introduces explicit `ref`, `out`, and `in` parameter passing modes at b
 | GS0239 | Error | The variable `{name}` must be definitely assigned before it can be passed by 'ref'. |
 | GS0240 | Error | Override of `{name}` must match the base ref-kind on parameter `{parameter}` (`{baseKind}` vs `{overrideKind}`). |
 | GS0241 | Error | A variadic parameter cannot carry a ref-kind modifier ('ref'/'out'/'in'). |
-| GS0242 | Error | Argument `{index}` (parameter `{name}`) is an 'in' parameter but the call does not use the 'in' modifier; pass 'in <lvalue>' or change the parameter to by-value. |
+| GS0242 | Error | Argument `{index}` (parameter `{name}`) is an 'in' parameter but the call does not use the 'in' modifier; pass `in <lvalue>` or change the parameter to by-value. |
 | GS0243 | Error | A pointer type '*T' is not a valid parameter type; use the appropriate ref-kind modifier instead (e.g. 'ref T', 'out T', 'in T'). |
 
 Cause/fix examples:
