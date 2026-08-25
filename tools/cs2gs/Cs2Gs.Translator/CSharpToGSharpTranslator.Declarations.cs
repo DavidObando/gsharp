@@ -1270,6 +1270,16 @@ public sealed partial class CSharpToGSharpTranslator
                         attachedMemberComments = true;
                     }
 
+                    // Issue #3501: a member translation may DROP its output (a
+                    // reported gap, e.g. the second colliding explicit-interface
+                    // property in a dual-dictionary fixture). A null must not
+                    // reach the member lists — the printer throws on it and the
+                    // whole document (and its app) fails translate.
+                    if (translated == null)
+                    {
+                        continue;
+                    }
+
                     // A C# operator overload translates to a receiver-clause
                     // `func (a T) operator <op>(...)`; like every receiver-clause
                     // func it only binds at top level, so it is lifted out as a
