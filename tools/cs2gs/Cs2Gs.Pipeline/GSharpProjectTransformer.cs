@@ -202,10 +202,12 @@ internal static class GSharpProjectTransformer
     // host supplies.
     private static void RewriteAnalyzerProject(XDocument document)
     {
-        bool isAnalyzerProject =
-            ElementsNamed(document, "PackageReference").Any(reference =>
-                AttributeNamed(reference, "Include")?.Value?.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase) == true)
-            || ElementsNamed(document, "EnforceExtendedAnalyzerRules").Any();
+        // Issue #3501: classification keys on the analyzer-AUTHORING marker
+        // only. Merely consuming Microsoft.CodeAnalysis as a library (e.g.
+        // Cs2Gs.Translator itself) must NOT strip the Roslyn packages — that
+        // erased the whole Roslyn surface from the migrated Translator and
+        // produced 3,093 unresolved-type errors in the nightly.
+        bool isAnalyzerProject = ElementsNamed(document, "EnforceExtendedAnalyzerRules").Any();
         if (!isAnalyzerProject)
         {
             return;

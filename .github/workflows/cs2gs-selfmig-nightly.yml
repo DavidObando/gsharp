@@ -57,3 +57,5 @@ jobs:
             /tmp/gsharp-cs2gs-selfmig/migrate.log
             /tmp/gsharp-cs2gs-selfmig/runs/**/run.json
             /tmp/gsharp-cs2gs-selfmig/runs/**/report.html
+            /tmp/gsharp-cs2gs-selfmig/runs/**/*.json
+            /tmp/gsharp-cs2gs-selfmig/runs/**/sdk.build.log
