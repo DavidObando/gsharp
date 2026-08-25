@@ -253,8 +253,8 @@ internal sealed class SlotPlanner
     public void CollectLiftedBinaryOperators(BoundStatement root, List<BoundExpression> sink)
         => new LiftedBinaryOperatorCollector(sink).Visit(root);
 
-    public void CollectNullableNumericWideningConversions(BoundStatement root, List<BoundConversionExpression> sink)
-        => new NullableNumericWideningConversionCollector(sink).Visit(root);
+    public void CollectNullableValueTypeConversions(BoundStatement root, List<BoundExpression> sink)
+        => new NullableValueTypeConversionCollector(sink).Visit(root);
 
     public void RunPatternSwitchAllocator(
         BoundNode node,
@@ -1870,34 +1870,55 @@ internal sealed class SlotPlanner
         }
     }
 
-    // Issue #1236: walks the bound tree collecting every BoundConversionExpression
-    // that is a lifted numeric widening between two distinct value-type
-    // Nullable<T> operands (e.g. `uint8? -> int32?`). Each such conversion needs
-    // two consecutive scratch slots so the emitter can spill the source
-    // Nullable<T1> (to call get_HasValue / GetValueOrDefault off its address) and
-    // initobj a default Nullable<T2> on the null branch.
-    private sealed class NullableNumericWideningConversionCollector : BoundTreeWalker
+    // Issues #1236/#3518: lifted numeric and CLR user-defined conversions
+    // between value-type Nullable<T> shapes share the same two-slot lowering.
+    private sealed class NullableValueTypeConversionCollector : BoundTreeWalker
     {
-        private readonly List<BoundConversionExpression> sink;
+        private readonly List<BoundExpression> sink;
 
-        public NullableNumericWideningConversionCollector(List<BoundConversionExpression> sink)
+        public NullableValueTypeConversionCollector(List<BoundExpression> sink)
         {
             this.sink = sink;
         }
 
         protected override void VisitConversionExpression(BoundConversionExpression node)
         {
-            if (node.Expression.Type is NullableTypeSymbol from
-                && node.Type is NullableTypeSymbol to
-                && from.UnderlyingType?.ClrType is { IsValueType: true }
-                && to.UnderlyingType?.ClrType is { IsValueType: true }
-                && from.UnderlyingType != to.UnderlyingType)
+            if (IsLiftedNullableConversion(node.Expression.Type, node.Type))
             {
                 this.sink.Add(node);
             }
 
             base.VisitConversionExpression(node);
         }
+
+        protected override void VisitClrConversionCallExpression(BoundClrConversionCallExpression node)
+        {
+            if (IsLiftedNullableConversion(
+                node.Source.Type,
+                node.Type,
+                allowSymbolic: node.Function != null))
+            {
+                this.sink.Add(node);
+            }
+
+            base.VisitClrConversionCallExpression(node);
+        }
+
+        private static bool IsLiftedNullableConversion(TypeSymbol source, TypeSymbol target)
+            => IsLiftedNullableConversion(source, target, allowSymbolic: false);
+
+        private static bool IsLiftedNullableConversion(
+            TypeSymbol source,
+            TypeSymbol target,
+            bool allowSymbolic)
+            => source is NullableTypeSymbol from
+                && target is NullableTypeSymbol to
+                && ((from.UnderlyingType?.ClrType is { IsValueType: true }
+                        && to.UnderlyingType?.ClrType is { IsValueType: true })
+                    || (allowSymbolic
+                        && NullableLifting.IsAnyValueTypeNullable(from)
+                        && NullableLifting.IsAnyValueTypeNullable(to)))
+                && from.UnderlyingType != to.UnderlyingType;
     }
 }
 

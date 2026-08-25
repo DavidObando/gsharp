@@ -154,7 +154,7 @@ public class Issue2866ImportedDataEqualityEmitTests
         Assert.Equal($"True,False{Environment.NewLine}", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
+    internal static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_2866_").FullName;
         try

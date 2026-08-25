@@ -490,7 +490,7 @@ public class Issue2388NullableCustomEqualityEmitTests
         }
     }
 
-    private static (int ExitCode, string Stdout, string Stderr) TryCompile(string source)
+    internal static (int ExitCode, string Stdout, string Stderr) TryCompile(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue2388_neg_").FullName;
         try

@@ -412,6 +412,7 @@ internal static class DiagnosticDescriptors
     // spelling reports this migration error (with recovery). GS0533/GS0534
     // are taken by the #3501-A3 fallthrough diagnostics.
     internal static readonly DiagnosticDescriptor RetiredDelegateDeclarationForm = new("GS0535", DiagnosticSeverity.Error, "The 'type {0} = delegate func(...)' spelling is retired. Declare the delegate as 'delegate {0}(parameters) ReturnType;' (trailing semicolon required; omit the return type for void).");
+    internal static readonly DiagnosticDescriptor GenericOperatorNotSupported = new("GS0537", DiagnosticSeverity.Error, "Operator '{0}' cannot declare method type parameters; put generic parameters on the containing type instead.");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

@@ -308,6 +308,10 @@ internal static class ExpressionTreeRestrictionValidator
                 ValidateExpression(clrUnary.Operand, diagnostics);
                 return;
 
+            case BoundClrConversionCallExpression conversion:
+                ValidateExpression(conversion.Source, diagnostics);
+                return;
+
             case BoundIsExpression isExpression:
                 if (!isExpression.IsSimpleTypeTest)
                 {

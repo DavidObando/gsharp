@@ -2002,7 +2002,10 @@ internal sealed partial class ExpressionBinder
     /// <param name="right">The bound right operand; replaced with its <c>Nullable&lt;T&gt;</c>-converted form when lifting applies.</param>
     /// <param name="leftLocation">The left operand's source location (for the wrapping conversion).</param>
     /// <param name="rightLocation">The right operand's source location (for the wrapping conversion).</param>
+    /// <param name="leftParameterType">The resolved operator's left parameter type.</param>
+    /// <param name="rightParameterType">The resolved operator's right parameter type.</param>
     /// <param name="naturalResultType">The operator's own (non-lifted) result type.</param>
+    /// <param name="hasByRefSignature">Whether any parameter or the return is passed by reference.</param>
     /// <param name="liftedResultType">The lifted result type: <c>bool</c> for comparisons, <c>Nullable&lt;naturalResultType&gt;</c> otherwise.</param>
     /// <returns><see langword="true"/> when lifting applies and <paramref name="left"/>/<paramref name="right"/>/<paramref name="liftedResultType"/> were updated.</returns>
     private bool TryLiftNullableClrOperatorOperands(
@@ -2011,7 +2014,10 @@ internal sealed partial class ExpressionBinder
         ref BoundExpression right,
         TextLocation leftLocation,
         TextLocation rightLocation,
+        TypeSymbol leftParameterType,
+        TypeSymbol rightParameterType,
         TypeSymbol naturalResultType,
+        bool hasByRefSignature,
         out TypeSymbol? liftedResultType)
     {
         liftedResultType = null;
@@ -2033,8 +2039,23 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var leftLiftedType = leftIsNullableValueType ? (NullableTypeSymbol)left.Type : NullableTypeSymbol.Get(left.Type);
-        var rightLiftedType = rightIsNullableValueType ? (NullableTypeSymbol)right.Type : NullableTypeSymbol.Get(right.Type);
+        // CLR lifting is defined only for by-value, non-nullable value-type
+        // parameters. Comparisons must return bool; other operators must
+        // return a by-value, non-nullable value type so their result can lift.
+        if (hasByRefSignature
+            || !IsNonNullableValueTypeOperatorSlot(leftParameterType)
+            || !IsNonNullableValueTypeOperatorSlot(rightParameterType)
+            || (IsClrOperatorLiftedToBool(opKind)
+                ? naturalResultType != TypeSymbol.Bool
+                : !IsNonNullableValueTypeOperatorSlot(naturalResultType)))
+        {
+            return false;
+        }
+
+        // Issue #3518: lift to the resolved signature, not each operand's
+        // original type; overload resolution may have selected numeric widening.
+        var leftLiftedType = NullableTypeSymbol.Get(leftParameterType);
+        var rightLiftedType = NullableTypeSymbol.Get(rightParameterType);
 
         left = conversions.BindConversion(leftLocation, left, leftLiftedType);
         right = conversions.BindConversion(rightLocation, right, rightLiftedType);
@@ -2206,10 +2227,22 @@ internal sealed partial class ExpressionBinder
                 var rightParameterType = userOpOwner?.SubstituteMemberType(userOp.Parameters[1].Type)
                     ?? userOp.Parameters[1].Type;
                 var resultType = userOpOwner?.SubstituteMemberType(userOp.Type) ?? userOp.Type;
+                var hasByRefSignature = userOp.Parameters.Any(p => p.RefKind != RefKind.None)
+                    || userOp.ReturnRefKind != RefKind.None;
 
                 if (CanApplyLiftedUserOperator(left.Type, leftParameterType)
                     && CanApplyLiftedUserOperator(right.Type, rightParameterType)
-                    && TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, resultType, out var liftedResultType))
+                    && TryLiftNullableClrOperatorOperands(
+                        opKind,
+                        ref left,
+                        ref right,
+                        leftLocation,
+                        rightLocation,
+                        leftParameterType,
+                        rightParameterType,
+                        resultType,
+                        hasByRefSignature,
+                        out var liftedResultType))
                 {
                     return new BoundClrBinaryOperatorExpression(
                         null,
@@ -2219,6 +2252,11 @@ internal sealed partial class ExpressionBinder
                         userOp,
                         userOpOwner,
                         Invariant.Required(liftedResultType, "a lifted operator has a result type"));
+                }
+
+                if (hasByRefSignature)
+                {
+                    return null;
                 }
 
                 var convertedLeft = conversions.BindConversion(leftLocation, left, leftParameterType);
@@ -2243,6 +2281,12 @@ internal sealed partial class ExpressionBinder
         if ((left.Type?.ClrType != null || right.Type?.ClrType != null)
             && ClrOperatorResolution.TryResolveBinary(opKind, left.Type, right.Type, out var clrMethod, out ambiguous))
         {
+            var clrParameters = clrMethod.GetParameters();
+            var leftParameterType = TypeSymbol.FromClrType(clrParameters[0].ParameterType);
+            var rightParameterType = TypeSymbol.FromClrType(clrParameters[1].ParameterType);
+            var hasByRefSignature = clrParameters.Any(p => p.ParameterType.IsByRef)
+                || clrMethod.ReturnType.IsByRef;
+
             // Issue #2388: `ClrOperatorResolution` matches on
             // `TypeSymbol.ClrType`, which for a `NullableTypeSymbol` wrapping
             // a value type is already the UNDERLYING CLR type (see
@@ -2259,7 +2303,17 @@ internal sealed partial class ExpressionBinder
             // spills, HasValue-branches, and unwraps before calling the
             // resolved method — mirroring exactly how the built-in operator
             // table already lifts `int32? + int32?` et al.
-            if (TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, TypeSymbol.FromClrType(clrMethod.ReturnType), out var liftedClrResultType))
+            if (TryLiftNullableClrOperatorOperands(
+                opKind,
+                ref left,
+                ref right,
+                leftLocation,
+                rightLocation,
+                leftParameterType,
+                rightParameterType,
+                TypeSymbol.FromClrType(clrMethod.ReturnType),
+                hasByRefSignature,
+                out var liftedClrResultType))
             {
                 return new BoundClrBinaryOperatorExpression(
                     null,
@@ -2270,19 +2324,25 @@ internal sealed partial class ExpressionBinder
                     Invariant.Required(liftedClrResultType, "a lifted CLR operator has a result type"));
             }
 
-            var clrParameters = clrMethod.GetParameters();
-            var leftParameterType = TypeSymbol.FromClrType(clrParameters[0].ParameterType);
-            if (ConversionClassifier.HasUserDefinedImplicitConversionForTypes(left.Type, leftParameterType))
+            if (hasByRefSignature)
             {
-                left = conversions.BindConversion(leftLocation, left, leftParameterType);
+                return null;
             }
 
-            var rightParameterType = TypeSymbol.FromClrType(clrParameters[1].ParameterType);
-            if (ConversionClassifier.HasUserDefinedImplicitConversionForTypes(right.Type, rightParameterType))
+            // Issue #3518: resolution considers every implicit conversion, so
+            // materialize each one before emitting the resolved method call.
+            // Keep CLR-compatible nil/reference-nullability shapes unchanged;
+            // their language conversions intentionally are not implicit.
+            var convertedLeft = left;
+            var convertedRight = right;
+            if (!TryApplyClrOperatorOperandConversion(left, leftParameterType, leftLocation, out convertedLeft)
+                || !TryApplyClrOperatorOperandConversion(right, rightParameterType, rightLocation, out convertedRight))
             {
-                right = conversions.BindConversion(rightLocation, right, rightParameterType);
+                return null;
             }
 
+            left = convertedLeft;
+            right = convertedRight;
             return new BoundClrBinaryOperatorExpression(
                 null,
                 opKind,
@@ -2295,15 +2355,64 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
+    private static bool IsNonNullableValueTypeOperatorSlot(TypeSymbol type)
+    {
+        return type is not NullableTypeSymbol
+            && type is not ByRefTypeSymbol
+            && type != TypeSymbol.Void
+            && !TypeSymbol.IsByRefLike(type)
+            && (type.IsValueType
+                || type is StructSymbol { IsClass: false }
+                || type is EnumSymbol
+                || type is TupleTypeSymbol
+                || type is TypeParameterSymbol { HasValueTypeConstraint: true });
+    }
+
+    private bool TryApplyClrOperatorOperandConversion(
+        BoundExpression operand,
+        TypeSymbol parameterType,
+        TextLocation location,
+        out BoundExpression converted)
+    {
+        converted = operand;
+        if (parameterType is ByRefTypeSymbol)
+        {
+            return false;
+        }
+
+        if (Conversion.Classify(operand.Type, parameterType).IsImplicit)
+        {
+            converted = conversions.BindConversion(location, operand, parameterType);
+            return converted is not BoundErrorExpression;
+        }
+
+        bool sourceIsValueNullable = operand.Type is NullableTypeSymbol sourceNullable
+            && NullableLifting.IsAnyValueTypeNullable(sourceNullable);
+        bool targetIsValueNullable = parameterType is NullableTypeSymbol targetNullable
+            && NullableLifting.IsAnyValueTypeNullable(targetNullable);
+        if ((!sourceIsValueNullable || targetIsValueNullable)
+            && ConversionClassifier.HasUserDefinedImplicitConversionForTypes(operand.Type, parameterType))
+        {
+            converted = conversions.BindConversion(location, operand, parameterType);
+            return converted is not BoundErrorExpression;
+        }
+
+        return (operand.Type == TypeSymbol.Null && Conversion.IsReferenceLikeTarget(parameterType))
+            || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(operand.Type, parameterType);
+    }
+
     private static bool CanApplyLiftedUserOperator(TypeSymbol? operandType, TypeSymbol parameterType)
     {
-        var underlyingOperand = operandType is NullableTypeSymbol nullable
-            ? nullable.UnderlyingType
-            : operandType;
-        var conversion = Conversion.Classify(
-            Invariant.Required(underlyingOperand, "an operator operand has a type"),
-            parameterType);
-        return conversion.Exists && conversion.IsImplicit;
+        var underlyingOperand = Invariant.Required(
+            operandType is NullableTypeSymbol nullable
+                ? nullable.UnderlyingType
+                : operandType,
+            "an operator operand has a type");
+        var conversion = Conversion.Classify(underlyingOperand, parameterType);
+        return (conversion.Exists && conversion.IsImplicit)
+            || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                underlyingOperand,
+                parameterType);
     }
 
     /// <summary>

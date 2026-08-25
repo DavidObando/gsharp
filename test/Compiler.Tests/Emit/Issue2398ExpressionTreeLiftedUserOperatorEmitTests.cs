@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.Loader;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
@@ -149,6 +150,147 @@ public class Issue2398ExpressionTreeLiftedUserOperatorEmitTests
             Assert.True(declaringType.IsConstructedGenericType);
             Assert.Equal(typeof(string), declaringType.GetGenericArguments().Single());
             Assert.All(method.GetParameters(), p => Assert.Equal(declaringType, p.ParameterType));
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void SameCompilationLiftedConversion_UsesResolvedConversionMethod()
+    {
+        var source = """
+            package Issue2398Conversion
+            import System
+            import System.Linq.Expressions
+
+            struct Source(Raw int32) { }
+            struct Target(Code string) { }
+
+            func operator implicit(value Source) Target -> Target(value.Raw.ToString())
+            func (left Target) operator ==(right Target) bool -> left.Code == right.Code
+
+            func Predicate() Expression[Func[Source?, Target?, bool]] {
+                return (left Source?, right Target?) -> left == right
+            }
+            """;
+
+        var (assembly, loadContext) = CompileToAssembly(
+            source,
+            nameof(SameCompilationLiftedConversion_UsesResolvedConversionMethod));
+        try
+        {
+            var lambda = GetLambda(assembly, "Predicate");
+            var binary = Assert.IsAssignableFrom<BinaryExpression>(lambda.Body);
+            var conversion = Assert.IsAssignableFrom<UnaryExpression>(binary.Left);
+            var sourceType = assembly.GetTypes().Single(t => t.Name == "Source");
+            var targetType = assembly.GetTypes().Single(t => t.Name == "Target");
+
+            Assert.Equal(ExpressionType.Convert, conversion.NodeType);
+            Assert.True(conversion.IsLifted);
+            Assert.True(conversion.IsLiftedToNull);
+            Assert.Equal("op_Implicit", conversion.Method?.Name);
+            Assert.Equal(sourceType, conversion.Method?.DeclaringType);
+
+            var compiled = lambda.Compile();
+            var sourceValue = Activator.CreateInstance(sourceType);
+            sourceType.GetField("Raw")!.SetValue(sourceValue, 7);
+            var equal = Activator.CreateInstance(targetType);
+            targetType.GetField("Code")!.SetValue(equal, "7");
+            var different = Activator.CreateInstance(targetType);
+            targetType.GetField("Code")!.SetValue(different, "8");
+            Assert.True((bool)compiled.DynamicInvoke(sourceValue, equal)!);
+            Assert.False((bool)compiled.DynamicInvoke(sourceValue, different)!);
+            Assert.False((bool)compiled.DynamicInvoke(null, equal)!);
+            Assert.True((bool)compiled.DynamicInvoke(null, null)!);
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void ImportedLiftedConversion_DirectLambdaBody_IsMaterialized()
+    {
+        var source = """
+            package Issue2398ImportedConversion
+            import System
+            import System.Linq.Expressions
+            import System.Numerics
+
+            func Conversion() Expression[Func[int32?, BigInteger?]] {
+                return (value int32?) -> value
+            }
+            """;
+
+        var (assembly, loadContext) = CompileToAssembly(
+            source,
+            nameof(ImportedLiftedConversion_DirectLambdaBody_IsMaterialized));
+        try
+        {
+            var lambda = GetLambda(assembly, "Conversion");
+            var conversion = Assert.IsAssignableFrom<UnaryExpression>(lambda.Body);
+
+            Assert.Equal(ExpressionType.Convert, conversion.NodeType);
+            Assert.True(conversion.IsLifted);
+            Assert.True(conversion.IsLiftedToNull);
+            Assert.Equal("op_Implicit", conversion.Method?.Name);
+            Assert.Equal(typeof(BigInteger), conversion.Method?.DeclaringType);
+
+            var compiled = lambda.Compile();
+            Assert.Equal(new BigInteger(7), compiled.DynamicInvoke(7));
+            Assert.Null(compiled.DynamicInvoke(new object[] { null! }));
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void ClosedGenericLiftedConversion_DirectLambdaBody_UsesClosedOwner()
+    {
+        var source = """
+            package Issue2398ClosedConversion
+            import System
+            import System.Linq.Expressions
+
+            struct Box[T] {
+                var Value T
+                var Rank int32
+            }
+
+            func operator implicit(value Box[T]) int32 -> value.Rank
+
+            func Conversion() Expression[Func[Box[string]?, int32?]] {
+                return (value Box[string]?) -> value
+            }
+            """;
+
+        var (assembly, loadContext) = CompileToAssembly(
+            source,
+            nameof(ClosedGenericLiftedConversion_DirectLambdaBody_UsesClosedOwner));
+        try
+        {
+            var lambda = GetLambda(assembly, "Conversion");
+            var conversion = Assert.IsAssignableFrom<UnaryExpression>(lambda.Body);
+            var method = Assert.IsAssignableFrom<MethodInfo>(conversion.Method);
+            var boxType = assembly.GetTypes().Single(t => t.Name.StartsWith("Box`", StringComparison.Ordinal))
+                .MakeGenericType(typeof(string));
+
+            Assert.True(conversion.IsLifted);
+            Assert.True(conversion.IsLiftedToNull);
+            Assert.Equal("op_Implicit", method.Name);
+            Assert.Equal(boxType, method.DeclaringType);
+            Assert.Equal(boxType, method.GetParameters().Single().ParameterType);
+
+            var value = Activator.CreateInstance(boxType);
+            boxType.GetField("Rank")!.SetValue(value, 7);
+            var compiled = lambda.Compile();
+            Assert.Equal(7, compiled.DynamicInvoke(value));
+            Assert.Null(compiled.DynamicInvoke(new object[] { null! }));
         }
         finally
         {

@@ -703,25 +703,32 @@ internal sealed class MethodBodyPlanner
             liftedBinarySlots[lifted] = new LiftedBinarySlots(lhsSlot, rhsSlot, resultSlot);
         }
 
-        // Issue #1236: each lifted Nullable<T1> -> Nullable<T2> numeric widening
+        // Issues #1236/#3518: each lifted Nullable<T1> -> Nullable<T2>
         // conversion needs two consecutive scratch slots — the source
         // Nullable<T1> (spilled so the emitter can take its address for
-        // get_HasValue / GetValueOrDefault) and a result Nullable<T2> (to
+        // get_HasValue / get_Value) and a result Nullable<T2> (to
         // initobj a default value on the null branch). The slot index of the
         // source is stored in receiverSpillSlots (already an aggregate of
         // distinct-by-node scratch-slot kinds); the emitter derives the result
         // slot as source + 1. Skip nodes already owned by another collector.
-        foreach (var widening in this.CollectNullableNumericWideningConversions(body))
+        foreach (var conversion in this.CollectNullableValueTypeConversions(body))
         {
-            if (receiverSpillSlots.ContainsKey(widening))
+            if (receiverSpillSlots.ContainsKey(conversion))
             {
                 continue;
             }
 
+            var source = conversion switch
+            {
+                BoundConversionExpression builtIn => builtIn.Expression,
+                BoundClrConversionCallExpression clr => clr.Source,
+                _ => throw new InvalidOperationException(
+                    $"Unexpected lifted nullable conversion node '{conversion.Kind}'."),
+            };
             var srcSlot = localTypes.Count;
-            localTypes.Add(widening.Expression.Type);
-            localTypes.Add(widening.Type);
-            receiverSpillSlots[widening] = srcSlot;
+            localTypes.Add(source.Type);
+            localTypes.Add(conversion.Type);
+            receiverSpillSlots[conversion] = srcSlot;
         }
     }
 
@@ -1381,10 +1388,10 @@ internal sealed class MethodBodyPlanner
         _ => throw new InvalidOperationException($"DecomposeLiftedBinary: unexpected lifted binary node kind '{lifted.Kind}'."),
     };
 
-    internal IEnumerable<BoundConversionExpression> CollectNullableNumericWideningConversions(BoundNode root)
+    internal IEnumerable<BoundExpression> CollectNullableValueTypeConversions(BoundNode root)
     {
-        var sink = new List<BoundConversionExpression>();
-        this.slotPlanner.CollectNullableNumericWideningConversions((BoundStatement)root, sink);
+        var sink = new List<BoundExpression>();
+        this.slotPlanner.CollectNullableValueTypeConversions((BoundStatement)root, sink);
         return sink;
     }
 

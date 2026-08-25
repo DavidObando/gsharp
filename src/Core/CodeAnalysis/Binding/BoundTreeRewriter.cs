@@ -1849,7 +1849,18 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundClrConversionCallExpression(null, source, node.Method, node.Type);
+        return node.Function != null
+            ? new BoundClrConversionCallExpression(
+                null,
+                source,
+                node.Function,
+                node.FunctionOwnerType,
+                node.Type)
+            : new BoundClrConversionCallExpression(
+                null,
+                source,
+                Invariant.Required(node.Method, "an imported conversion carries a CLR method"),
+                node.Type);
     }
 
     /// <summary>Rewrites a CLR indexer read.</summary>

@@ -423,6 +423,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return BuildClrBinaryOperatorExpression(clrBinary, parameterMap);
             case BoundClrUnaryOperatorExpression clrUnary:
                 return BuildClrUnaryOperatorExpression(clrUnary, parameterMap);
+            case BoundClrConversionCallExpression userConversion:
+                return BuildUserDefinedConversionExpression(userConversion, parameterMap);
             case BoundFunctionLiteralExpression nestedDelegateLiteral:
                 return BuildRuntimeConstant(nestedDelegateLiteral, nestedDelegateLiteral.Type);
             case BoundStructLiteralExpression structLiteral:
@@ -819,7 +821,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
         var methodInfo = conversion switch
         {
-            BoundConversionExpression { Expression: BoundClrConversionCallExpression clrConversion } => BuildMethodInfoConstant(clrConversion.Method),
+            BoundConversionExpression { Expression: BoundClrConversionCallExpression clrConversion }
+                when clrConversion.Method != null => BuildMethodInfoConstant(clrConversion.Method),
             _ => null,
         };
 
@@ -842,6 +845,36 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(conversion.Expression, parameterMap)),
                 CreateTypeOf(conversion.Type)));
+    }
+
+    private BoundExpression BuildUserDefinedConversionExpression(
+        BoundClrConversionCallExpression conversion,
+        Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
+    {
+        BoundExpression methodInfo;
+        if (conversion.Method != null)
+        {
+            methodInfo = BuildMethodInfoConstant(conversion.Method);
+        }
+        else
+        {
+            var function = conversion.Function
+                ?? throw new NotSupportedException(
+                    "A same-compilation expression-tree conversion requires a function symbol.");
+            methodInfo = BuildUserFunctionMethodInfoLookup(
+                conversion.Syntax,
+                function,
+                conversion.FunctionOwnerType);
+        }
+
+        return new BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionConvertWithMethodMethod,
+            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+            ImmutableArray.Create<BoundExpression>(
+                UpcastToExpression(this.TranslateExpression(conversion.Source, parameterMap)),
+                CreateTypeOf(conversion.Type),
+                methodInfo));
     }
 
     private BoundExpression BuildImportedInstanceCallExpression(
@@ -1214,8 +1247,19 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     {
         var function = expression.Function
             ?? throw new NotSupportedException("A same-compilation expression-tree operator requires a function symbol.");
-        var ownerType = expression.FunctionOwnerType ?? function.StaticOwnerType as StructSymbol
-            ?? throw new NotSupportedException($"Operator '{function.Name}' has no same-compilation declaring type.");
+        return BuildUserFunctionMethodInfoLookup(
+            expression.Syntax,
+            function,
+            expression.FunctionOwnerType);
+    }
+
+    private static BoundExpression BuildUserFunctionMethodInfoLookup(
+        SyntaxNode? syntax,
+        FunctionSymbol function,
+        StructSymbol? functionOwnerType)
+    {
+        var ownerType = functionOwnerType ?? function.StaticOwnerType as StructSymbol
+            ?? throw new NotSupportedException($"Function '{function.Name}' has no same-compilation declaring type.");
 
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(function.Parameters.Length);
         foreach (var parameter in function.Parameters)
@@ -1224,7 +1268,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         }
 
         return new BoundImportedInstanceCallExpression(
-            expression.Syntax,
+            syntax,
             CreateTypeOf(ownerType),
             TypeGetMethodByParameterTypesMethod,
             ReflectionMethodInfoTypeSymbol,

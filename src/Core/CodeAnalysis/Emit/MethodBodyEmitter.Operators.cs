@@ -688,6 +688,12 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        if ((b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            && this.TryEmitNullableUserStructEquality(b))
+        {
+            return;
+        }
+
         // Issue #1298: lifted equality / inequality over a nullable
         // user-defined enum (`E? == E?`, `E? == E`, `E? == nil`, …). A
         // user EnumSymbol has no static CLR type, so the value-type
@@ -1045,7 +1051,7 @@ internal sealed partial class MethodBodyEmitter
         // and compare the resulting reference against null.
         if (leftIsNullableEnum && right.Type == TypeSymbol.Null)
         {
-            this.EmitBoxedEnumOperand(left);
+            this.EmitBoxedNullableValueOperand(left);
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ceq);
             this.EmitEqualityNegationIfNeeded(b.Op.Kind);
@@ -1054,7 +1060,7 @@ internal sealed partial class MethodBodyEmitter
 
         if (rightIsNullableEnum && left.Type == TypeSymbol.Null)
         {
-            this.EmitBoxedEnumOperand(right);
+            this.EmitBoxedNullableValueOperand(right);
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ceq);
             this.EmitEqualityNegationIfNeeded(b.Op.Kind);
@@ -1069,8 +1075,8 @@ internal sealed partial class MethodBodyEmitter
         bool rightIsEnum = rightIsNullableEnum || right.Type is EnumSymbol;
         if ((leftIsNullableEnum || rightIsNullableEnum) && leftIsEnum && rightIsEnum)
         {
-            this.EmitBoxedEnumOperand(left);
-            this.EmitBoxedEnumOperand(right);
+            this.EmitBoxedNullableValueOperand(left);
+            this.EmitBoxedNullableValueOperand(right);
             this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
             this.EmitEqualityNegationIfNeeded(b.Op.Kind);
             return true;
@@ -1079,7 +1085,26 @@ internal sealed partial class MethodBodyEmitter
         return false;
     }
 
-    private void EmitBoxedEnumOperand(BoundExpression operand)
+    private bool TryEmitNullableUserStructEquality(BoundBinaryExpression b)
+    {
+        if (b.Left.Type is not NullableTypeSymbol leftNullable
+            || b.Right.Type is not NullableTypeSymbol rightNullable
+            || leftNullable.UnderlyingType is not StructSymbol structural
+            || structural.IsClass
+            || (!structural.IsData && !structural.IsInline)
+            || structural != rightNullable.UnderlyingType)
+        {
+            return false;
+        }
+
+        this.EmitBoxedNullableValueOperand(b.Left);
+        this.EmitBoxedNullableValueOperand(b.Right);
+        this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+        this.EmitEqualityNegationIfNeeded(b.Op.Kind);
+        return true;
+    }
+
+    private void EmitBoxedNullableValueOperand(BoundExpression operand)
     {
         this.EmitExpression(operand);
         this.il.OpCode(ILOpCode.Box);
@@ -1517,13 +1542,34 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Brfalse, bothEmptyLabel);
 
         // Both present: load values and compare.
+        // Issue #3518: ceq rejects arbitrary value types. Structural structs
+        // use the same boxed Object.Equals semantics as non-lifted equality.
+        var structural = underlying is StructSymbol candidate && (candidate.IsData || candidate.IsInline)
+            ? candidate
+            : null;
         this.il.LoadLocalAddress(lhsSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueLhs);
+        if (structural != null)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(structural));
+        }
+
         this.il.LoadLocalAddress(rhsSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueRhs);
-        this.EmitUnderlyingEqualityCeq(underlying);
+        if (structural != null)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(structural));
+            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+        }
+        else
+        {
+            this.EmitUnderlyingEqualityCeq(underlying);
+        }
+
         this.il.Branch(ILOpCode.Br, end);
 
         this.il.MarkLabel(bothEmptyLabel);
@@ -2059,33 +2105,7 @@ internal sealed partial class MethodBodyEmitter
     {
         if (op.Function != null)
         {
-            EntityHandle fnHandle;
-            if (op.FunctionOwnerType != null
-                && ReflectionMetadataEmitter.IsUserGenericTypeReference(op.FunctionOwnerType))
-            {
-                fnHandle = this.outer.userTokens.ResolveUserStaticMethodToken(op.FunctionOwnerType, op.Function);
-            }
-            else
-            {
-                if (!this.outer.cache.FunctionHandles.TryGetValue(op.Function, out var definitionHandle)
-                    && !this.outer.cache.MethodHandles.TryGetValue(op.Function, out definitionHandle))
-                {
-                    throw new InvalidOperationException(
-                        $"Lifted same-compilation operator '{op.Function.Name}' has no emitted MethodDef.");
-                }
-
-                fnHandle = definitionHandle;
-            }
-
-            if (op.Function.IsGeneric && !op.Function.TypeParameters.IsDefaultOrEmpty)
-            {
-                throw new NotSupportedException(
-                    $"Lifted same-compilation operator '{op.Function.Name}' is generic; MethodSpec construction for "
-                    + "a nullable-lifted generic operator call is not yet supported (deferred follow-up).");
-            }
-
-            this.il.OpCode(ILOpCode.Call);
-            this.il.Token(fnHandle);
+            this.EmitCallResolvedUserFunction(op.Function, op.FunctionOwnerType);
             return;
         }
 
@@ -2093,6 +2113,33 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetMethodReference(Invariant.Required(
             op.Method,
             "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above")));
+    }
+
+    private void EmitCallResolvedUserFunction(
+        FunctionSymbol function,
+        StructSymbol? functionOwnerType)
+    {
+        EntityHandle functionHandle;
+        if (functionOwnerType != null)
+        {
+            functionHandle = this.outer.userTokens.ResolveUserStaticMethodToken(
+                functionOwnerType,
+                function);
+        }
+        else
+        {
+            if (!this.outer.cache.FunctionHandles.TryGetValue(function, out var definitionHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(function, out definitionHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Same-compilation function '{function.Name}' has no emitted MethodDef.");
+            }
+
+            functionHandle = definitionHandle;
+        }
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(functionHandle);
     }
 
     private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)
