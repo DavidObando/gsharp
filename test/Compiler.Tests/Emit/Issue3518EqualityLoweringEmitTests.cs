@@ -302,4 +302,109 @@ public class Issue3518EqualityLoweringEmitTests
 
         Assert.Empty(Issue2866ImportedDataEqualityEmitTests.CompileAndRun(source));
     }
+
+    [Fact]
+    public void ImportedLiftedConversionExpressionTree_RunsAndVerifies()
+    {
+        const string library = """
+            package FindingImportedConversionTree
+
+            public struct Source(Raw int32) { }
+            public struct Target(Code string) { }
+
+            func operator implicit(value Source) Target -> Target(value.Raw.ToString())
+            func (left Target) operator ==(right Target) bool -> left.Code == right.Code
+            """;
+
+        const string source = """
+            package FindingImportedConversionTreeApp
+
+            import FindingImportedConversionTree
+            import System
+            import System.Linq.Expressions
+
+            func Predicate() Expression[Func[Source?, Target?, bool]] {
+                return (left Source?, right Target?) -> left == right
+            }
+
+            func Main() int32 {
+                let compare = Predicate().Compile()
+                let source Source? = Source(7)
+                let equal Target? = Target("7")
+                let different Target? = Target("8")
+                let missingSource Source? = nil
+                let missingTarget Target? = nil
+                return compare(source, equal)
+                    && !compare(source, different)
+                    && !compare(missingSource, equal)
+                    && compare(missingSource, missingTarget) ? 0 : 1
+            }
+            """;
+
+        Assert.Empty(Issue2866ImportedDataEqualityEmitTests.CompileAndRun(
+            source,
+            library,
+            "FindingImportedConversionTree"));
+    }
+
+    [Fact]
+    public void ClosedGenericNullableConversion_PreservesConstructedOwner()
+    {
+        const string source = """
+            package FindingClosedGenericNullableConversion
+
+            struct Box[T] {
+                var Value T
+                var Rank int32
+            }
+
+            func operator implicit(value Box[T]) int32 -> value.Rank
+
+            func Convert(value Box[string]?) int32? -> value
+
+            func Main() int32 {
+                let present Box[string]? = Box[string]{Value: "x", Rank: 7}
+                let converted = Convert(present)
+                let missing Box[string]? = nil
+                return converted!! == 7 && Convert(missing) == nil ? 0 : 1
+            }
+            """;
+
+        Assert.Empty(Issue2866ImportedDataEqualityEmitTests.CompileAndRun(source));
+    }
+
+    [Fact]
+    public void SameCompilationNullableStructuralEquality_RunsAndVerifies()
+    {
+        const string source = """
+            package FindingLocalNullableStructuralEquality
+
+            data struct DataId(Value string) { }
+            inline struct InlineId(value string)
+
+            func Main() int32 {
+                let data DataId? = DataId("same")
+                let sameData DataId? = DataId("same")
+                let otherData DataId? = DataId("other")
+                let missingData DataId? = nil
+
+                let inline InlineId? = InlineId("same")
+                let sameInline InlineId? = InlineId("same")
+                let otherInline InlineId? = InlineId("other")
+                let missingInline InlineId? = nil
+
+                let dataOk = data == sameData
+                    && data != otherData
+                    && data != missingData
+                    && missingData == missingData
+                let inlineOk = inline == sameInline
+                    && inline != otherInline
+                    && inline != missingInline
+                    && missingInline == missingInline
+                return dataOk && inlineOk ? 0 : 1
+            }
+            """;
+
+        Assert.Empty(Issue2866ImportedDataEqualityEmitTests.CompileAndRun(source));
+    }
 }

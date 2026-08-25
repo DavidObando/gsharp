@@ -688,6 +688,12 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        if ((b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
+            && this.TryEmitNullableUserStructEquality(b))
+        {
+            return;
+        }
+
         // Issue #1298: lifted equality / inequality over a nullable
         // user-defined enum (`E? == E?`, `E? == E`, `E? == nil`, …). A
         // user EnumSymbol has no static CLR type, so the value-type
@@ -1045,7 +1051,7 @@ internal sealed partial class MethodBodyEmitter
         // and compare the resulting reference against null.
         if (leftIsNullableEnum && right.Type == TypeSymbol.Null)
         {
-            this.EmitBoxedEnumOperand(left);
+            this.EmitBoxedNullableValueOperand(left);
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ceq);
             this.EmitEqualityNegationIfNeeded(b.Op.Kind);
@@ -1054,7 +1060,7 @@ internal sealed partial class MethodBodyEmitter
 
         if (rightIsNullableEnum && left.Type == TypeSymbol.Null)
         {
-            this.EmitBoxedEnumOperand(right);
+            this.EmitBoxedNullableValueOperand(right);
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.OpCode(ILOpCode.Ceq);
             this.EmitEqualityNegationIfNeeded(b.Op.Kind);
@@ -1069,8 +1075,8 @@ internal sealed partial class MethodBodyEmitter
         bool rightIsEnum = rightIsNullableEnum || right.Type is EnumSymbol;
         if ((leftIsNullableEnum || rightIsNullableEnum) && leftIsEnum && rightIsEnum)
         {
-            this.EmitBoxedEnumOperand(left);
-            this.EmitBoxedEnumOperand(right);
+            this.EmitBoxedNullableValueOperand(left);
+            this.EmitBoxedNullableValueOperand(right);
             this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
             this.EmitEqualityNegationIfNeeded(b.Op.Kind);
             return true;
@@ -1079,7 +1085,26 @@ internal sealed partial class MethodBodyEmitter
         return false;
     }
 
-    private void EmitBoxedEnumOperand(BoundExpression operand)
+    private bool TryEmitNullableUserStructEquality(BoundBinaryExpression b)
+    {
+        if (b.Left.Type is not NullableTypeSymbol leftNullable
+            || b.Right.Type is not NullableTypeSymbol rightNullable
+            || leftNullable.UnderlyingType is not StructSymbol structural
+            || structural.IsClass
+            || (!structural.IsData && !structural.IsInline)
+            || structural != rightNullable.UnderlyingType)
+        {
+            return false;
+        }
+
+        this.EmitBoxedNullableValueOperand(b.Left);
+        this.EmitBoxedNullableValueOperand(b.Right);
+        this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+        this.EmitEqualityNegationIfNeeded(b.Op.Kind);
+        return true;
+    }
+
+    private void EmitBoxedNullableValueOperand(BoundExpression operand)
     {
         this.EmitExpression(operand);
         this.il.OpCode(ILOpCode.Box);

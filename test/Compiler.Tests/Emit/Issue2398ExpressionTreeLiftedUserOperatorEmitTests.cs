@@ -156,6 +156,60 @@ public class Issue2398ExpressionTreeLiftedUserOperatorEmitTests
         }
     }
 
+    [Fact]
+    public void SameCompilationLiftedConversion_UsesResolvedConversionMethod()
+    {
+        var source = """
+            package Issue2398Conversion
+            import System
+            import System.Linq.Expressions
+
+            struct Source(Raw int32) { }
+            struct Target(Code string) { }
+
+            func operator implicit(value Source) Target -> Target(value.Raw.ToString())
+            func (left Target) operator ==(right Target) bool -> left.Code == right.Code
+
+            func Predicate() Expression[Func[Source?, Target?, bool]] {
+                return (left Source?, right Target?) -> left == right
+            }
+            """;
+
+        var (assembly, loadContext) = CompileToAssembly(
+            source,
+            nameof(SameCompilationLiftedConversion_UsesResolvedConversionMethod));
+        try
+        {
+            var lambda = GetLambda(assembly, "Predicate");
+            var binary = Assert.IsAssignableFrom<BinaryExpression>(lambda.Body);
+            var conversion = Assert.IsAssignableFrom<UnaryExpression>(binary.Left);
+            var sourceType = assembly.GetTypes().Single(t => t.Name == "Source");
+            var targetType = assembly.GetTypes().Single(t => t.Name == "Target");
+
+            Assert.Equal(ExpressionType.Convert, conversion.NodeType);
+            Assert.True(conversion.IsLifted);
+            Assert.True(conversion.IsLiftedToNull);
+            Assert.Equal("op_Implicit", conversion.Method?.Name);
+            Assert.Equal(sourceType, conversion.Method?.DeclaringType);
+
+            var compiled = lambda.Compile();
+            var sourceValue = Activator.CreateInstance(sourceType);
+            sourceType.GetField("Raw")!.SetValue(sourceValue, 7);
+            var equal = Activator.CreateInstance(targetType);
+            targetType.GetField("Code")!.SetValue(equal, "7");
+            var different = Activator.CreateInstance(targetType);
+            targetType.GetField("Code")!.SetValue(different, "8");
+            Assert.True((bool)compiled.DynamicInvoke(sourceValue, equal)!);
+            Assert.False((bool)compiled.DynamicInvoke(sourceValue, different)!);
+            Assert.False((bool)compiled.DynamicInvoke(null, equal)!);
+            Assert.True((bool)compiled.DynamicInvoke(null, null)!);
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
     private static LambdaExpression GetLambda(Assembly assembly, string methodName)
     {
         var programType = assembly.GetTypes().Single(t => t.Name == "<Program>");

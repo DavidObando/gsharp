@@ -195,6 +195,24 @@ public sealed record BoundBinaryOperator
             }
         }
 
+        // Issue #3518: same-compilation data/inline structs have no ClrType
+        // while binding, so their Nullable<T> equality cannot use the generic
+        // CLR-backed lift below. Bind the homogeneous symbolic wrapper here;
+        // emit boxes each nullable and delegates to Object.Equals.
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
+            && leftType is NullableTypeSymbol leftStructural
+            && rightType is NullableTypeSymbol rightStructural
+            && leftStructural.UnderlyingType is StructSymbol structural
+            && !structural.IsClass
+            && (structural.IsData || structural.IsInline)
+            && structural == rightStructural.UnderlyingType)
+        {
+            var kind = syntaxKind == SyntaxKind.EqualsEqualsToken
+                ? BoundBinaryOperatorKind.Equals
+                : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
+        }
+
         // Phase 3.C.2 / ADR-0001: == and != against nil for any nullable type.
         //
         // Issue #614 audit: intentionally a single arm — only 2 operators (== / !=)

@@ -641,22 +641,24 @@ internal sealed class ConversionClassifier
                 liftedSource.UnderlyingType,
                 liftedTarget.UnderlyingType,
                 allowExplicit,
-                out var liftedMethod)
-            && liftedMethod.StaticOwnerType is StructSymbol { ClrType: null }
+                out var liftedMethod,
+                out var liftedOwner)
+            && liftedOwner is { ClrType: null }
             && liftedMethod.Parameters.Length == 1
             && liftedMethod.Parameters[0].RefKind == RefKind.None
             && liftedMethod.ReturnRefKind == RefKind.None
             && Conversion.ClassifyNonStructural(
                 liftedSource.UnderlyingType,
-                liftedMethod.Parameters[0].Type).IsIdentity
+                liftedOwner.SubstituteMemberType(liftedMethod.Parameters[0].Type)).IsIdentity
             && Conversion.ClassifyNonStructural(
-                liftedMethod.Type,
+                liftedOwner.SubstituteMemberType(liftedMethod.Type),
                 liftedTarget.UnderlyingType).IsIdentity)
         {
             return new BoundClrConversionCallExpression(
                 null,
                 expression,
                 liftedMethod,
+                liftedOwner,
                 type);
         }
 
@@ -694,9 +696,20 @@ internal sealed class ConversionClassifier
             // same-package struct/class is modelled as a static op_Implicit /
             // op_Explicit FunctionSymbol — those types have no reflectible
             // ClrType during binding, so resolve them symbolically first.
-            if (TryResolveUserDefinedSymbolConversion(expression.Type, type, allowExplicit, out var userConvOp))
+            if (TryResolveUserDefinedSymbolConversion(
+                expression.Type,
+                type,
+                allowExplicit,
+                out var userConvOp,
+                out var userConvOwner))
             {
-                return BindUserDefinedSymbolConversion(diagnosticLocation, expression, type, userConvOp, allowExplicit);
+                return BindUserDefinedSymbolConversion(
+                    diagnosticLocation,
+                    expression,
+                    type,
+                    userConvOp,
+                    userConvOwner,
+                    allowExplicit);
             }
 
             // Stream E: fall back to a user-defined op_Implicit (and
@@ -785,9 +798,20 @@ internal sealed class ConversionClassifier
 
         if (conversion.IsStructuralProjection)
         {
-            if (TryResolveUserDefinedSymbolConversion(expression.Type, type, allowExplicit, out var projectionUserConvOp))
+            if (TryResolveUserDefinedSymbolConversion(
+                expression.Type,
+                type,
+                allowExplicit,
+                out var projectionUserConvOp,
+                out var projectionUserConvOwner))
             {
-                return BindUserDefinedSymbolConversion(diagnosticLocation, expression, type, projectionUserConvOp, allowExplicit);
+                return BindUserDefinedSymbolConversion(
+                    diagnosticLocation,
+                    expression,
+                    type,
+                    projectionUserConvOp,
+                    projectionUserConvOwner,
+                    allowExplicit);
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
@@ -1284,13 +1308,19 @@ internal sealed class ConversionClassifier
         if (argument.Type != null
             && expectedType != null
             && argument.Type != TypeSymbol.Error
-            && TryResolveUserDefinedSymbolConversion(argument.Type, expectedType, allowExplicit: false, out var userConvOp))
+            && TryResolveUserDefinedSymbolConversion(
+                argument.Type,
+                expectedType,
+                allowExplicit: false,
+                out var userConvOp,
+                out var userConvOwner))
         {
             converted = BindUserDefinedSymbolConversion(
                 argument.Syntax?.Location ?? default,
                 argument,
                 expectedType,
                 userConvOp,
+                userConvOwner,
                 allowExplicit: false);
             return true;
         }
@@ -2465,8 +2495,22 @@ internal sealed class ConversionClassifier
         TypeSymbol? targetType,
         bool allowExplicit,
         [NotNullWhen(true)] out FunctionSymbol? method)
+        => TryResolveUserDefinedSymbolConversion(
+            sourceType,
+            targetType,
+            allowExplicit,
+            out method,
+            out _);
+
+    private static bool TryResolveUserDefinedSymbolConversion(
+        TypeSymbol? sourceType,
+        TypeSymbol? targetType,
+        bool allowExplicit,
+        [NotNullWhen(true)] out FunctionSymbol? method,
+        [NotNullWhen(true)] out StructSymbol? methodOwner)
     {
         method = null;
+        methodOwner = null;
         if (sourceType == null || targetType == null
             || sourceType == TypeSymbol.Error || targetType == TypeSymbol.Error)
         {
@@ -2478,6 +2522,7 @@ internal sealed class ConversionClassifier
             targetType,
             "op_Implicit",
             out method,
+            out methodOwner,
             out var ambiguousImplicit);
         if (foundImplicit || ambiguousImplicit)
         {
@@ -2489,7 +2534,13 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        return TryFindUserConversion(sourceType, targetType, "op_Explicit", out method, out _);
+        return TryFindUserConversion(
+            sourceType,
+            targetType,
+            "op_Explicit",
+            out method,
+            out methodOwner,
+            out _);
     }
 
     private static bool TryFindUserConversion(
@@ -2497,11 +2548,13 @@ internal sealed class ConversionClassifier
         TypeSymbol target,
         string opName,
         [NotNullWhen(true)] out FunctionSymbol? method,
+        [NotNullWhen(true)] out StructSymbol? methodOwner,
         out bool ambiguous)
     {
         method = null;
+        methodOwner = null;
         ambiguous = false;
-        var candidates = new List<(FunctionSymbol Method, int SourceRank, int TargetRank)>();
+        var candidates = new List<(FunctionSymbol Method, StructSymbol Owner, int SourceRank, int TargetRank)>();
         CollectUserConversions(GetUserConversionOwner(source), opName, source, target, candidates);
         CollectUserConversions(GetUserConversionOwner(target), opName, source, target, candidates);
         if (candidates.Count == 0)
@@ -2509,7 +2562,7 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        var best = new List<FunctionSymbol>();
+        var best = new List<(FunctionSymbol Method, StructSymbol Owner)>();
         for (var i = 0; i < candidates.Count; i++)
         {
             var dominated = false;
@@ -2533,7 +2586,7 @@ internal sealed class ConversionClassifier
 
             if (!dominated)
             {
-                best.Add(candidates[i].Method);
+                best.Add((candidates[i].Method, candidates[i].Owner));
             }
         }
 
@@ -2543,7 +2596,7 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        method = best[0];
+        (method, methodOwner) = best[0];
         return true;
     }
 
@@ -2554,7 +2607,7 @@ internal sealed class ConversionClassifier
             type = nullable.UnderlyingType;
         }
 
-        return (type as StructSymbol)?.Definition ?? type as StructSymbol;
+        return type as StructSymbol;
     }
 
     private static void CollectUserConversions(
@@ -2562,7 +2615,7 @@ internal sealed class ConversionClassifier
         string opName,
         TypeSymbol source,
         TypeSymbol target,
-        List<(FunctionSymbol Method, int SourceRank, int TargetRank)> candidates)
+        List<(FunctionSymbol Method, StructSymbol Owner, int SourceRank, int TargetRank)> candidates)
     {
         if (owner == null || owner.StaticMethods.IsDefaultOrEmpty)
         {
@@ -2573,13 +2626,16 @@ internal sealed class ConversionClassifier
         {
             if (!string.Equals(candidate.Name, opName, StringComparison.Ordinal)
                 || candidate.Parameters.Length != 1
-                || candidates.Any(c => ReferenceEquals(c.Method, candidate)))
+                || candidates.Any(c => ReferenceEquals(c.Method, candidate)
+                    && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(c.Owner, owner)))
             {
                 continue;
             }
 
-            var sourceConversion = Conversion.ClassifyNonStructural(source, candidate.Parameters[0].Type);
-            var targetConversion = Conversion.ClassifyNonStructural(candidate.Type, target);
+            var parameterType = owner.SubstituteMemberType(candidate.Parameters[0].Type);
+            var resultType = owner.SubstituteMemberType(candidate.Type);
+            var sourceConversion = Conversion.ClassifyNonStructural(source, parameterType);
+            var targetConversion = Conversion.ClassifyNonStructural(resultType, target);
             if (!sourceConversion.Exists || !sourceConversion.IsImplicit
                 || !targetConversion.Exists || !targetConversion.IsImplicit)
             {
@@ -2588,6 +2644,7 @@ internal sealed class ConversionClassifier
 
             candidates.Add((
                 candidate,
+                owner,
                 sourceConversion.IsIdentity ? 0 : 1,
                 targetConversion.IsIdentity ? 0 : 1));
         }
@@ -2598,14 +2655,27 @@ internal sealed class ConversionClassifier
         BoundExpression expression,
         TypeSymbol targetType,
         FunctionSymbol method,
+        StructSymbol methodOwner,
         bool allowExplicit)
     {
+        var parameterType = methodOwner.SubstituteMemberType(method.Parameters[0].Type);
+        var resultType = methodOwner.SubstituteMemberType(method.Type);
         var operand = BindConversion(
             diagnosticLocation,
             expression,
-            method.Parameters[0].Type,
+            parameterType,
             allowExplicit: false);
-        var call = new BoundCallExpression(null, method, ImmutableArray.Create(operand));
+        var call = new BoundCallExpression(
+            null,
+            method,
+            ImmutableArray.Create(operand),
+            resultType)
+        {
+            StaticGenericOwnerType = !methodOwner.TypeArguments.IsDefaultOrEmpty
+                || !(methodOwner.Definition ?? methodOwner).TypeParameters.IsDefaultOrEmpty
+                ? methodOwner
+                : null,
+        };
         return BindConversion(diagnosticLocation, call, targetType, allowExplicit);
     }
 

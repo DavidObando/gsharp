@@ -1392,14 +1392,24 @@ internal sealed partial class MethodBodyEmitter
     {
         if (conversion.Function != null)
         {
-            return conversion.Function.Parameters.Length == 1
-                && conversion.Function.Parameters[0].RefKind == RefKind.None
-                && conversion.Function.ReturnRefKind == RefKind.None
-                && Conversion.ClassifyNonStructural(
+            if (conversion.Function.Parameters.Length != 1
+                || conversion.Function.Parameters[0].RefKind != RefKind.None
+                || conversion.Function.ReturnRefKind != RefKind.None)
+            {
+                return false;
+            }
+
+            var parameterType = conversion.FunctionOwnerType?.SubstituteMemberType(
+                conversion.Function.Parameters[0].Type)
+                ?? conversion.Function.Parameters[0].Type;
+            var resultType = conversion.FunctionOwnerType?.SubstituteMemberType(
+                conversion.Function.Type)
+                ?? conversion.Function.Type;
+            return Conversion.ClassifyNonStructural(
                     sourceNullable.UnderlyingType,
-                    conversion.Function.Parameters[0].Type).IsIdentity
+                    parameterType).IsIdentity
                 && Conversion.ClassifyNonStructural(
-                    conversion.Function.Type,
+                    resultType,
                     targetNullable.UnderlyingType).IsIdentity;
         }
 
