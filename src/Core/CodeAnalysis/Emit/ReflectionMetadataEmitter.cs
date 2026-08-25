@@ -4601,7 +4601,8 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv && this.cache.GlobalFieldDefs.ContainsKey(gv))
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
+            && this.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
         }

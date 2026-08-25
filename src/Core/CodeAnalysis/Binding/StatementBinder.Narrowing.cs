@@ -1596,6 +1596,10 @@ internal sealed partial class StatementBinder
             && convertedInitializer is BoundLiteralExpression litExpr)
         {
             constValue = litExpr.Value;
+            if (variable is GlobalVariableSymbol global)
+            {
+                global.SetConstantValue(constValue);
+            }
         }
 
         return new BoundVariableDeclaration(

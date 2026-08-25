@@ -46,6 +46,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #3519: package constants are visible from every emitted body,
+        // not only the entry-point body that contains their declarations.
+        if (variable is GlobalVariableSymbol { IsConst: true } globalConst)
+        {
+            this.EmitLiteral(new BoundLiteralExpression(null, globalConst.ConstantValue, globalConst.Type));
+            return;
+        }
+
         // Issue #2771: emitter-owned variable operations (notably `?.`
         // captures) bypass MoveNextBodyRewriter's bound-node substitution.
         if (this.asyncFieldMap != null
@@ -186,7 +194,7 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
             && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
@@ -235,7 +243,7 @@ internal sealed partial class MethodBodyEmitter
         // Issue #191: top-level globals store via stsfld into their backing
         // <Program> static field (initialized in declaration order from
         // the entry-point method body).
-        if (variable is GlobalVariableSymbol gv
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
             && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
         {
             this.il.OpCode(ILOpCode.Stsfld);
@@ -1895,7 +1903,8 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
+            && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
         }
@@ -2000,7 +2009,7 @@ internal sealed partial class MethodBodyEmitter
 
         // Issue #408 / #191: top-level globals are emitted as static fields
         // on <Program>; their address is taken with ldsflda.
-        if (variable is GlobalVariableSymbol gv
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
             && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
         {
             this.il.OpCode(ILOpCode.Ldsflda);
