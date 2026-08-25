@@ -60,8 +60,14 @@ total=$(jq '.apps | length' "$run_json")
 # strings (and docs quote constructs), so lines containing a string quote or
 # leading with a comment marker are excluded before counting.
 code_grep() {
-  grep -rhE "$1" "$migrated_dir" --include='*.gs' 2>/dev/null \
-    | grep -v '"' | grep -vE '^[[:space:]]*//' | grep -oE "$1" | wc -l | tr -d ' '
+  # A ZERO-match metric is success, not failure: without the || true, the
+  # no-match grep's exit 1 kills the script under `set -eo pipefail` before
+  # the ceilings are ever checked (exactly what happened once the synthetic
+  # label count reached 0).
+  local count
+  count=$(grep -rhE "$1" "$migrated_dir" --include='*.gs' 2>/dev/null \
+    | grep -v '"' | grep -vE '^[[:space:]]*//' | grep -oE "$1" | wc -l | tr -d ' ') || true
+  echo "${count:-0}"
 }
 labels=$(code_grep '__(switchExit|iteratorExit|gotoCase|gotoDefault|patternGuardEnd)')
 lifts=$(code_grep '__local_')
