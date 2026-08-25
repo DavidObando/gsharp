@@ -2008,7 +2008,12 @@ internal sealed class LambdaBinder
                 return TypeSymbol.Void;
             }
 
-            if (targetReturn != null && candidates.All(c => c == TypeSymbol.Error || Conversion.Classify(c, targetReturn).IsImplicit))
+            if (targetReturn != null
+                && candidates.All(c => c == TypeSymbol.Error
+                    || Conversion.Classify(c, targetReturn).IsImplicit
+                    || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                        c,
+                        targetReturn)))
             {
                 return targetReturn;
             }

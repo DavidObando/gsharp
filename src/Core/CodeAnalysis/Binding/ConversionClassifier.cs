@@ -345,6 +345,18 @@ internal sealed class ConversionClassifier
     /// <returns><see langword="true"/> when an implicit conversion operator applies.</returns>
     public static bool HasUserDefinedImplicitConversionForTypes(TypeSymbol sourceType, TypeSymbol targetType)
     {
+        if (sourceType is NullableTypeSymbol liftedSource
+            && targetType is NullableTypeSymbol liftedTarget
+            && TryResolveLiftedUserDefinedSymbolConversion(
+                liftedSource,
+                liftedTarget,
+                allowExplicit: false,
+                out _,
+                out _))
+        {
+            return true;
+        }
+
         if (TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit: false, out _))
         {
             return true;
@@ -481,10 +493,26 @@ internal sealed class ConversionClassifier
         if (expression is BoundFunctionLiteralExpression expressionTreeLiteral
             && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var expressionTreeDelegateType))
         {
-            if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(expressionTreeDelegateType, out _))
+            if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                    expressionTreeDelegateType,
+                    out var expressionTreeTargetFunction))
             {
                 Diagnostics.ReportExpressionTreeTargetMustBeDelegate(diagnosticLocation, type);
                 return new BoundErrorExpression(null);
+            }
+
+            // Issue #3518: expression-tree returns initially retain a lambda's
+            // natural body shape. Rebind only when its return needs a
+            // user-defined implicit conversion so LambdaBinder can choose the
+            // target return and EmitTrailingExpression can materialize it.
+            if (expressionTreeLiteral.Syntax is LambdaExpressionSyntax lambdaSyntax
+                && expressionTreeLiteral.FunctionType is FunctionTypeSymbol sourceFunction
+                && sourceFunction.ReturnType != expressionTreeTargetFunction.ReturnType
+                && HasUserDefinedImplicitConversionForTypes(
+                    sourceFunction.ReturnType,
+                    expressionTreeTargetFunction.ReturnType))
+            {
+                return bindExpressionWithTargetType(lambdaSyntax, type);
             }
 
             ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type, Diagnostics);
@@ -632,27 +660,13 @@ internal sealed class ConversionClassifier
         // S? -> T?. The emit-side conversion node owns the HasValue branch,
         // unwrap, call, and target re-wrap/default construction.
         if (expression.Type is NullableTypeSymbol liftedSource
-            && NullableLifting.IsAnyValueTypeNullable(liftedSource)
             && type is NullableTypeSymbol liftedTarget
-            && NullableLifting.IsAnyValueTypeNullable(liftedTarget)
-            && !TypeSymbol.IsByRefLike(liftedSource)
-            && !TypeSymbol.IsByRefLike(liftedTarget)
-            && TryResolveUserDefinedSymbolConversion(
-                liftedSource.UnderlyingType,
-                liftedTarget.UnderlyingType,
+            && TryResolveLiftedUserDefinedSymbolConversion(
+                liftedSource,
+                liftedTarget,
                 allowExplicit,
                 out var liftedMethod,
-                out var liftedOwner)
-            && liftedOwner is { ClrType: null }
-            && liftedMethod.Parameters.Length == 1
-            && liftedMethod.Parameters[0].RefKind == RefKind.None
-            && liftedMethod.ReturnRefKind == RefKind.None
-            && Conversion.ClassifyNonStructural(
-                liftedSource.UnderlyingType,
-                liftedOwner.SubstituteMemberType(liftedMethod.Parameters[0].Type)).IsIdentity
-            && Conversion.ClassifyNonStructural(
-                liftedOwner.SubstituteMemberType(liftedMethod.Type),
-                liftedTarget.UnderlyingType).IsIdentity)
+                out var liftedOwner))
         {
             return new BoundClrConversionCallExpression(
                 null,
@@ -2501,6 +2515,37 @@ internal sealed class ConversionClassifier
             allowExplicit,
             out method,
             out _);
+
+    private static bool TryResolveLiftedUserDefinedSymbolConversion(
+        NullableTypeSymbol source,
+        NullableTypeSymbol target,
+        bool allowExplicit,
+        [NotNullWhen(true)] out FunctionSymbol? method,
+        [NotNullWhen(true)] out StructSymbol? methodOwner)
+    {
+        method = null;
+        methodOwner = null;
+        return NullableLifting.IsAnyValueTypeNullable(source)
+            && NullableLifting.IsAnyValueTypeNullable(target)
+            && !TypeSymbol.IsByRefLike(source)
+            && !TypeSymbol.IsByRefLike(target)
+            && TryResolveUserDefinedSymbolConversion(
+                source.UnderlyingType,
+                target.UnderlyingType,
+                allowExplicit,
+                out method,
+                out methodOwner)
+            && methodOwner is { ClrType: null }
+            && method.Parameters.Length == 1
+            && method.Parameters[0].RefKind == RefKind.None
+            && method.ReturnRefKind == RefKind.None
+            && Conversion.ClassifyNonStructural(
+                source.UnderlyingType,
+                methodOwner.SubstituteMemberType(method.Parameters[0].Type)).IsIdentity
+            && Conversion.ClassifyNonStructural(
+                methodOwner.SubstituteMemberType(method.Type),
+                target.UnderlyingType).IsIdentity;
+    }
 
     private static bool TryResolveUserDefinedSymbolConversion(
         TypeSymbol? sourceType,
