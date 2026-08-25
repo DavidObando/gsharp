@@ -424,6 +424,73 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void MultilineStringLiterals_KeepTheirLineStructure()
+    {
+        // A C# raw/verbatim multiline literal previously collapsed into an
+        // escaped one-liner — the source of most >300-char emitted lines.
+        // It now renders as a Go-style backtick raw string with the original
+        // line breaks; values embedding a backtick keep the escaped form.
+        string printed = Translate("""""
+            public static class Fixtures
+            {
+                public const string Source = """
+                    import System
+
+                    func Marker() int32 { return 401 }
+
+                    Console.WriteLine(Marker())
+                    """;
+
+                public const string WithBacktick = "a`b\nc";
+            }
+            """"");
+
+        Assert.Contains("`import System", printed.Replace("\r", string.Empty), StringComparison.Ordinal);
+        Assert.Contains("func Marker() int32 { return 401 }", printed, StringComparison.Ordinal);
+        Assert.Contains("\"a`b\\nc\"", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void MultilineInterpolatedRawString_LowersToBacktickConcat()
+    {
+        // C# raw strings can carry interpolation holes; G# backtick raws are
+        // fully literal. A multiline interpolated raw lowers to a
+        // concatenation of backtick segments and hole values (non-string
+        // holes gain ToString), preserving the author's line structure.
+        string printed = Translate("""""
+            public static class Fixtures
+            {
+                public static string Build(string name, int count)
+                {
+                    return $"""
+                        header for {name}
+                        body line one
+                        count is {count}
+                        trailer
+                        """;
+                }
+
+                public static string Formatted(double ratio)
+                {
+                    return $"""
+                        first {ratio:0.00}
+                        second
+                        third
+                        """;
+                }
+            }
+            """"");
+
+        string normalized = printed.Replace("\r", string.Empty);
+        Assert.Contains("\"header for \" + name + `\nbody line one\ncount is ` + count.ToString() + `\ntrailer`", normalized, StringComparison.Ordinal);
+
+        // A hole with a format clause keeps the classic interpolated form.
+        Assert.Contains("${ratio", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

@@ -946,7 +946,25 @@ public static class GSharpPrinter
         switch (literal.Kind)
         {
             case LiteralKind.String:
+                // Issue #3501: a multiline C# literal (raw/verbatim test
+                // fixture) renders as a Go-style backtick raw string keeping
+                // its original line structure, instead of collapsing into an
+                // escaped one-liner — the source of most >300-char emitted
+                // lines. Backtick strings process no escapes and normalize
+                // CR at lexing, so values containing a backtick or CR keep
+                // the escaped form; trivially short values do too.
+                if (literal.Value.IndexOf('\n') >= 0
+                    && literal.Value.IndexOf('`') < 0
+                    && literal.Value.IndexOf('\r') < 0
+                    && (literal.Value.Length > 120
+                        || literal.Value.IndexOf('\n') != literal.Value.LastIndexOf('\n')))
+                {
+                    return $"`{literal.Value}`";
+                }
+
                 return $"\"{RenderStringLiteralBody(literal.Value)}\"";
+            case LiteralKind.RawString:
+                return $"`{literal.Value}`";
             case LiteralKind.Char:
                 return $"'{RenderCharLiteralBody(literal.Value)}'";
             default:
