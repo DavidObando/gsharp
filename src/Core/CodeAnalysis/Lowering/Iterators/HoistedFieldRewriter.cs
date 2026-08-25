@@ -42,7 +42,19 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
     }
 
     protected BoundExpression FieldRead(FieldSymbol field) =>
-        new BoundFieldAccessExpression(null, new BoundVariableExpression(null, this.thisParameter), this.smClass, field);
+        this.FieldRead(field, narrowedType: null);
+
+    // Issue #3501 (ilverify): a hoisted variable READ may carry an ADR-0069
+    // smart-cast narrowing; the replacement field access must keep it so the
+    // emitter's narrowing castclass still fires (the field itself stays at
+    // the declared type).
+    protected BoundExpression FieldRead(FieldSymbol field, TypeSymbol? narrowedType) =>
+        new BoundFieldAccessExpression(
+            null,
+            new BoundVariableExpression(null, this.thisParameter),
+            this.smClass,
+            field,
+            narrowedType);
 
     protected BoundExpression FieldWrite(FieldSymbol field, BoundExpression value) =>
         new BoundFieldAssignmentExpression(null, this.thisParameter, this.smClass, field, value);
@@ -51,7 +63,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
     {
         if (this.fieldMap.TryGetValue(node.Variable, out var field))
         {
-            return this.FieldRead(field);
+            return this.FieldRead(field, node.NarrowedType);
         }
 
         return node;

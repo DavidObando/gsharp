@@ -1931,7 +1931,16 @@ internal sealed partial class MethodBodyEmitter
         var effectiveType = bve.Type;
         if (bve.NarrowedType == null
             || ReflectionMetadataEmitter.IsValueTypeSymbol(declaredType)
-            || declaredType?.ClrType?.IsValueType == true)
+            || declaredType?.ClrType?.IsValueType == true
+
+            // Issue #3501 (ilverify): a reference-to-reference narrowing
+            // (`Type?` re-bound out var read as `Type`) involves no box — the
+            // slot holds the reference itself, so unboxing emits a spurious
+            // `unbox System.Type` (ValueTypeExpected + a readonly pointer
+            // where the call needs a writable one). Only a genuinely
+            // struct-narrowed read of a reference slot goes through unbox.
+            || !(ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType)
+                || effectiveType?.ClrType?.IsValueType == true))
         {
             // No boxing narrowing involved (or the variable's own slot is
             // already a value type) — safe to take the variable's own address.
