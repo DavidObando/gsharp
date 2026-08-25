@@ -1034,6 +1034,12 @@ public sealed partial class DiagnosticBag
     public void ReportDuplicateConversionOperator(TextLocation location, TypeSymbol sourceType, TypeSymbol targetType)
     => Report(location, DiagnosticDescriptors.DuplicateConversionOperator, sourceType, targetType);
 
+    /// <summary>Reports GS0537 when an operator declares method type parameters.</summary>
+    /// <param name="location">The generic parameter list location.</param>
+    /// <param name="operatorName">The CLR operator name.</param>
+    public void ReportGenericOperatorNotSupported(TextLocation location, string operatorName)
+    => Report(location, DiagnosticDescriptors.GenericOperatorNotSupported, operatorName);
+
     /// <summary>
     /// ADR-0149: GS0492 — an explicit-interface qualifier clause
     /// (<c>func (X) M(...)</c> / <c>prop (X) P T</c> / <c>event (X) E T</c>)

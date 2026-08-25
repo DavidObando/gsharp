@@ -185,6 +185,19 @@ internal sealed partial class DeclarationBinder
         var functionAttributes = BindFunctionAttributes(syntax, type);
         BindFunctionParameterAttributes(syntax, parameterSymbolBySyntax, type);
 
+        // G# follows C#: user-defined operators cannot be method-generic.
+        // Generic containing types remain supported: their open owner
+        // parameters come from GetGenericOperatorOwnerTypeParameters.
+        if (!typeParameters.IsDefaultOrEmpty
+            && (syntax.IsConversionOperator
+                || syntax.Identifier.Text.StartsWith("op_", StringComparison.Ordinal)))
+        {
+            Diagnostics.ReportGenericOperatorNotSupported(
+                syntax.TypeParameterList?.Location ?? syntax.Identifier.Location,
+                syntax.Identifier.Text);
+            return;
+        }
+
         FunctionSymbol function;
 
         // Issue #1017: a user-defined conversion operator

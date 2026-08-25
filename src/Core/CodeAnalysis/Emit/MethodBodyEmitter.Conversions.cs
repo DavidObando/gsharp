@@ -401,14 +401,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Issue #1236: lifted numeric widening between two distinct value-type
-        // `Nullable<T>` operands (e.g. `uint8? → int32?`, `int32? → int64?`).
+        // Issues #1236/#3518: lifted conversion between two distinct value-type
+        // `Nullable<T>` operands (numeric or underlying CLR user-defined).
         // The source struct is already on the stack; spill it, branch on
         // HasValue, and either re-wrap the converted underlying value as a fresh
         // `Nullable<T2>` (HasValue == true) or materialise default(Nullable<T2>)
         // (HasValue == false). Two consecutive scratch slots — the source
         // `Nullable<T1>` and the result `Nullable<T2>` — are pre-allocated by
-        // the planner (CollectNullableNumericWideningConversions) and keyed in
+        // the planner (CollectNullableValueTypeConversions) and keyed in
         // receiverSpillSlots by this conversion node (dest = source + 1).
         if (from is NullableTypeSymbol fromValueNullableLift
             && ReflectionMetadataEmitter.IsValueTypeNullable(fromValueNullableLift)
@@ -416,7 +416,7 @@ internal sealed partial class MethodBodyEmitter
             && ReflectionMetadataEmitter.IsValueTypeNullable(toValueNullableLift2)
             && fromValueNullableLift.UnderlyingType != toValueNullableLift2.UnderlyingType)
         {
-            this.EmitLiftedNullableNumericWidening(conv, fromValueNullableLift, toValueNullableLift2);
+            this.EmitLiftedNullableConversion(conv, fromValueNullableLift, toValueNullableLift2);
             return;
         }
 
@@ -773,11 +773,9 @@ internal sealed partial class MethodBodyEmitter
             && Conversion.ClassifyNonStructural(right, left).IsImplicit;
     }
 
-    // Issue #1236: emit a lifted numeric widening between two distinct value-type
-    // `Nullable<T>` operands. On entry the source `Nullable<T1>` value is already
-    // on the stack. Uses two consecutive planner scratch slots (source, result)
-    // keyed in receiverSpillSlots by the conversion node.
-    private void EmitLiftedNullableNumericWidening(
+    // Issues #1236/#3518: emit a lifted conversion between distinct value-type
+    // nullable operands. On entry the source value is already on the stack.
+    private void EmitLiftedNullableConversion(
         BoundConversionExpression conv,
         NullableTypeSymbol fromNullable,
         NullableTypeSymbol toNullable)
@@ -785,7 +783,7 @@ internal sealed partial class MethodBodyEmitter
         if (!this.receiverSpillSlots.TryGetValue(conv, out var srcSlot))
         {
             throw new InvalidOperationException(
-                "No scratch slot pre-allocated for lifted Nullable<T1> -> Nullable<T2> numeric widening — check CollectNullableNumericWideningConversions and the prepass in CollectLocalsAndLabels.");
+                "No scratch slots allocated for a lifted nullable conversion.");
         }
 
         var dstSlot = srcSlot + 1;
@@ -828,7 +826,23 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocalAddress(srcSlot);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(getValueOrDefault);
-        this.TryEmitNumericConversion(fromUnderlying, toUnderlying, conv.IsChecked);
+        if (!this.TryEmitNumericConversion(fromUnderlying, toUnderlying, conv.IsChecked))
+        {
+            if (!ClrOperatorResolution.TryResolveConversion(
+                    fromUnderlyingClr,
+                    toUnderlyingClr,
+                    allowExplicit: false,
+                    out var conversionMethod,
+                    out _))
+            {
+                throw new InvalidOperationException(
+                    $"Lifted Nullable<{fromUnderlying.Name}> to Nullable<{toUnderlying.Name}> conversion has no underlying conversion.");
+            }
+
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.memberRefs.GetMethodReference(conversionMethod));
+        }
+
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(toCtor));
         this.il.Branch(ILOpCode.Br, end);
@@ -911,6 +925,21 @@ internal sealed partial class MethodBodyEmitter
         if (to.IsSameAs(typeof(decimal)) || from.IsSameAs(typeof(decimal)))
         {
             return TryEmitDecimalConversion(from, to);
+        }
+
+        // ECMA-335 conv.r4/conv.r8 interpret integer inputs as signed.
+        // Unsigned inputs must first use conv.r.un; float32 then needs
+        // conv.r4 to truncate the intermediate floating-point value.
+        if (IsUnsignedClrType(from)
+            && (to.IsSameAs(typeof(float)) || to.IsSameAs(typeof(double))))
+        {
+            this.il.OpCode(ILOpCode.Conv_r_un);
+            if (to.IsSameAs(typeof(float)))
+            {
+                this.il.OpCode(ILOpCode.Conv_r4);
+            }
+
+            return true;
         }
 
         if (isChecked)
@@ -1309,6 +1338,16 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrConversionCall(BoundClrConversionCallExpression conv)
     {
+        if (conv.Source.Type is NullableTypeSymbol sourceNullable
+            && NullableLifting.IsAnyValueTypeNullable(sourceNullable)
+            && conv.Type is NullableTypeSymbol liftedTargetNullable
+            && NullableLifting.IsAnyValueTypeNullable(liftedTargetNullable)
+            && IsLiftedNullableClrConversionMethod(conv.Method, sourceNullable, liftedTargetNullable))
+        {
+            this.EmitLiftedNullableClrConversion(conv, sourceNullable, liftedTargetNullable);
+            return;
+        }
+
         // Stream E emit parity: user-defined op_Implicit / op_Explicit is a
         // public-static method taking one arg, returning the target type.
         this.EmitExpression(conv.Source);
@@ -1341,6 +1380,61 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
         }
+    }
+
+    private static bool IsLiftedNullableClrConversionMethod(
+        MethodInfo method,
+        NullableTypeSymbol sourceNullable,
+        NullableTypeSymbol targetNullable)
+    {
+        var parameters = method.GetParameters();
+        return parameters.Length == 1
+            && !parameters[0].ParameterType.IsByRef
+            && !method.ReturnType.IsByRef
+            && ClrTypeUtilities.AreSame(
+                parameters[0].ParameterType,
+                sourceNullable.UnderlyingType.ClrType)
+            && ClrTypeUtilities.AreSame(
+                method.ReturnType,
+                targetNullable.UnderlyingType.ClrType);
+    }
+
+    private void EmitLiftedNullableClrConversion(
+        BoundClrConversionCallExpression conv,
+        NullableTypeSymbol sourceNullable,
+        NullableTypeSymbol targetNullable)
+    {
+        if (!this.receiverSpillSlots.TryGetValue(conv, out var sourceSlot))
+        {
+            throw new InvalidOperationException(
+                "No scratch slots allocated for a lifted nullable CLR conversion.");
+        }
+
+        var resultSlot = sourceSlot + 1;
+        var nullBranch = this.il.DefineLabel();
+        var end = this.il.DefineLabel();
+
+        this.EmitExpression(conv.Source);
+        this.il.StoreLocal(sourceSlot);
+        this.il.LoadLocalAddress(sourceSlot);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.GetNullableHasValueRef(sourceNullable));
+        this.il.Branch(ILOpCode.Brfalse, nullBranch);
+
+        this.EmitUnwrappedNullableValue(sourceSlot, sourceNullable);
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.outer.memberRefs.GetMethodReference(conv.Method));
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.GetNullableResultConstructor(targetNullable));
+        this.il.Branch(ILOpCode.Br, end);
+
+        this.il.MarkLabel(nullBranch);
+        this.il.LoadLocalAddress(resultSlot);
+        this.il.OpCode(ILOpCode.Initobj);
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(targetNullable));
+        this.il.LoadLocal(resultSlot);
+
+        this.il.MarkLabel(end);
     }
 
     private static bool IsNullableValueType(Type t)

@@ -699,6 +699,16 @@ redundant assertions from translated output automatically.
 |---|---|---|---|
 | GS0536 | Warning | `Redundant '!!': the value is already non-null here.` | `if s != nil { return s!! }` |
 
+## Method-generic operator declarations (GS0537)
+
+G# user-defined operators cannot declare method type parameters. Put generic
+parameters on the containing type; operators on open generic containing types
+remain supported.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0537 | Error | `Operator '<name>' cannot declare method type parameters; put generic parameters on the containing type instead.` | `func (left Value) op_Addition[T](right Value) Value` |
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 [ADR-0166](adr/0166-is-pattern-variables.md): a designation in a boolean `is`

@@ -460,6 +460,52 @@ public class Issue2377OperatorMetadataShapeEmitTests
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0129");
     }
 
+    [Fact]
+    public void ImportedNonLiftableOperatorSignatures_ReportConversionErrorsNotEmitterFailures()
+    {
+        var libraryPath = EmitGSharpLibrary(
+            nameof(ImportedNonLiftableOperatorSignatures_ReportConversionErrorsNotEmitterFailures),
+            """
+            package Lib
+
+            struct ReferenceParameterValue(N int32) { }
+            func (left ReferenceParameterValue) operator +(right object) ReferenceParameterValue -> left
+
+            struct ReferenceResultValue(N int32) { }
+            func (left ReferenceResultValue) operator +(right ReferenceResultValue) object -> left
+            """);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+        var consumer = new GsCompilation(
+            resolver,
+            GsSyntaxTree.Parse(SourceText.From(
+                """
+                package App
+                import Lib
+
+                func BadParameter(left ReferenceParameterValue?, right object) ReferenceParameterValue? {
+                    return left + right
+                }
+
+                func BadResult(left ReferenceResultValue?, right ReferenceResultValue?) object? {
+                    return left + right
+                }
+                """)))
+        {
+            IsLibrary = true,
+        };
+
+        using var peStream = new MemoryStream();
+        var result = consumer.Emit(
+            peStream,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "Issue2377Emit.NonLiftableSignatures");
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0129");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+    }
+
     private static string EmitGSharpLibrary(string caseName, string gsharpSource)
     {
         var libraryDir = LibraryDirectory();

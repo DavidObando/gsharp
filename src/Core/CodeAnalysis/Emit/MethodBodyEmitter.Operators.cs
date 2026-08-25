@@ -2098,13 +2098,6 @@ internal sealed partial class MethodBodyEmitter
                 fnHandle = definitionHandle;
             }
 
-            if (op.Function.IsGeneric && !op.Function.TypeParameters.IsDefaultOrEmpty)
-            {
-                throw new NotSupportedException(
-                    $"Lifted same-compilation operator '{op.Function.Name}' is generic; MethodSpec construction for "
-                    + "a nullable-lifted generic operator call is not yet supported (deferred follow-up).");
-            }
-
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(fnHandle);
             return;
