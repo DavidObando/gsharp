@@ -1,13 +1,24 @@
 # cs2gs: translating Roslyn analyzer projects to G# analyzers
 
-Status: implemented through the map/idiom layer (2026-08-19). The real
-GSA0001, GSA0002, GSA0003, and GSA0004 sources translate mechanically —
-attribute swap, imports, kind/type/member maps, idiom rewrites — and bind
-against `GSharp.Core` with CS2GS-ANALYZER-SHAPE review warnings only
+Status: implemented through the map/idiom layer (2026-08-19); analyzer-API
+surface extended (2026-08-25, issue #3536). The real GSA0001, GSA0002,
+GSA0003, and GSA0004 sources translate mechanically — attribute swap,
+imports, kind/type/member maps, idiom rewrites — and bind against
+`GSharp.Core` with CS2GS-ANALYZER-SHAPE review warnings only
 (`Cs2Gs.Tests/Adr0169AnalyzerTranslationTests`). GSA0005 pattern-matches
-deeply C#-specific syntax shapes and is pinned by a ratchet asserting its
-translation stays LOUD (gap or binder failure, never silently wrong) until
-its reviewed adaptation lands.
+deeply C#-specific syntax shapes; its type-level surface that has a clean G#
+counterpart is now mapped (see the inventory below), but the constructs whose
+detection semantics must be re-derived for G#'s shape remain unmapped, so
+GSA0005 is still pinned by a ratchet asserting its translation stays LOUD
+(gap or binder failure, never silently wrong) until that reviewed adaptation
+lands. Because GSA0005 is not yet complete, `InternalAnalyzers` still cannot
+compile as a working G# analyzer assembly, so
+`GSharpProjectTransformer.RewriteAnalyzerConsumerReferences` still DROPS a
+consumer's `OutputItemType="Analyzer"` reference rather than rewriting it to
+`OutputItemType="GsharpCodeAnalyzer"` (see the carve-out comment on that
+method): wiring it today reproduces the verified GS9301 nightly
+self-migration failure that commit `3eee68e1` fixed by introducing the drop.
+Restore the rewrite in the same change that finishes the GSA0005 port.
 
 The two verification follow-ups are implemented (2026-08-19, second pass):
 - **Parity harness** (`Cs2Gs.Tests/Adr0169AnalyzerParityTests`): the real
@@ -27,18 +38,38 @@ The two verification follow-ups are implemented (2026-08-19, second pass):
 
 ### GSA0005 reviewed-adaptation inventory
 
-The ratchet keeps GSA0005 loud until a reviewed port lands. The remaining
-C#-specific surface (from the translation gap inventory):
-`BaseExpressionSyntax` (base-call detection → G# base-call node),
-`SwitchStatementSyntax`/`SwitchSectionSyntax`/`CasePatternSwitchLabelSyntax`
-(→ G# pattern-switch shape), `SubpatternSyntax`/`SingleVariableDesignationSyntax`
-(→ ADR-0166 pattern shapes), `PatternSyntax`, `ArgumentSyntax` (G# call
-arguments are bare expressions), and `MethodKind`. Beyond the API surface,
-the analyzer's semantics must be re-derived for G#: post-migration it
-inspects G#-shaped `BoundTreeRewriter` overrides, so the "rebuilds the node
-while reading fewer members" detection needs G# equivalents of its
-object-creation, base-delegation, and switch-section walks. This is exactly
-the plausible-but-wrong risk class the loud ratchet exists to prevent.
+The ratchet keeps GSA0005 loud until a reviewed port lands. Issue #3536
+mapped the type-level surface that has a clean G# counterpart —
+`PatternSyntax` (Exact), `SwitchStatementSyntax` (Adapted: no per-arm label
+list), `SubpatternSyntax` → `PropertyPatternFieldSyntax` (Adapted: the field
+name is an `Identifier` token, not an `ExpressionColon`-wrapped expression),
+`QualifiedNameSyntax` → `TypeClauseSyntax` (Adapted: no `Left`/`Right` split;
+qualifier segments live on `TypeClauseSyntax.QualifierIdentifierTokens`), and
+`SyntaxKind.IsPatternExpression` → `SyntaxKind.IsExpression` — so those
+constructs report their divergence as a normal `CS2GS-ANALYZER-SHAPE`
+warning (or a loud round-trip-binder failure at the exact member access)
+instead of the generic "no mapping" gap.
+
+What remains genuinely unmapped, and deliberately so: `BaseExpressionSyntax`
+(base calls parse as the dedicated `BaseClassCallExpressionSyntax` node, not
+as a member access with a `base` receiver — detecting them needs an idiom
+that changes the AST shape, not a rename), `SwitchSectionSyntax` /
+`CasePatternSwitchLabelSyntax` (G# switch arms have no per-arm label list —
+`SwitchCaseSyntax.Value` carries the single pattern directly), `MethodKind`
+(G# constructors are not `FunctionSymbol` members at all —
+`ConstructorSymbol` is a distinct type reached via
+`StructSymbol.ExplicitConstructors`, not `TypeSymbol.GetMembers()` — so there
+is no enum to rename onto), `SingleVariableDesignationSyntax` (G# pattern
+designations are bare `SyntaxToken`s hung directly off `TypePatternSyntax`,
+`PropertyPatternSyntax`, and `VarPatternSyntax` — there is no wrapping node a
+generic `DescendantNodesAndSelf().OfType&lt;...&gt;()` walk can find), and
+`ArgumentSyntax` (G# call arguments are bare expressions). Translating these
+requires rewriting *how* GSA0005 walks the tree, not just renaming the types
+it walks — re-deriving detection semantics for G#'s differently-shaped
+`BoundTreeRewriter` overrides (their object-creation, base-delegation, and
+switch-section walks). That is exactly the plausible-but-wrong risk class
+the loud ratchet exists to prevent, so it is intentionally left for a
+follow-up with compiler-verified iteration rather than guessed at here.
 Companion to [ADR-0169](adr/0169-gsharp-analyzer-framework.md), which defines
 the G#-side analyzer framework this document targets. First migration target:
 `src/Analyzers/InternalAnalyzers` (GSA0001–GSA0005) and its test project, which
@@ -160,6 +191,10 @@ initial implementation.
 | 20 | `ISymbol.DeclaringSyntaxReferences` → `GetSyntax()` | `Symbol.DeclaringSyntaxNodes` (REQ-13) | Exact — GSA0005 |
 | 21 | String literals naming analyzed-code identifiers (`"StructFieldDefs"`, namespace strings) | kept verbatim; literals flowing into name-comparison positions get an info-level shape note ("verify identifier survives migration unchanged") | Adapted |
 | 22 | `CSharpCompilation.Create` / `WithAnalyzers` / `GetAnalyzerDiagnosticsAsync` (tests) | G# `Compilation` + `GSharpAnalyzerDriver` / verifier surface (REQ-14) | Exact |
+| 23 | `PatternSyntax`, `SyntaxKind.IsPatternExpression` | `PatternSyntax`, `SyntaxKind.IsExpression` | Exact — GSA0005 |
+| 24 | `SwitchStatementSyntax` | `SwitchStatementSyntax` | Adapted: no per-arm label list — GSA0005 |
+| 25 | `SubpatternSyntax` | `PropertyPatternFieldSyntax` | Adapted: the field name is the `Identifier` token, not an `ExpressionColon`-wrapped expression — GSA0005 |
+| 26 | `QualifiedNameSyntax` | `TypeClauseSyntax` | Adapted: no `Left`/`Right` split; qualifier segments live on `TypeClauseSyntax.QualifierIdentifierTokens` — GSA0005 |
 
 REQ-16: the analyzer host TFM is net10 (in-proc in gsc), so translated analyzer
 projects retarget `netstandard2.0` → `net10.0`. REQ-17: the SDK defines the

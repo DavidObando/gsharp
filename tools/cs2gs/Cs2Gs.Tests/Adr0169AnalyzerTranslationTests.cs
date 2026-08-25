@@ -526,6 +526,80 @@ public sealed class UsesUnmappedApi : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void PatternSyntaxTypes_MapToGsPatternApi()
+    {
+        // GSA0005 reviewed-adaptation inventory (docs/cs2gs-analyzer-translation.md):
+        // PatternSyntax and the is-pattern-expression SyntaxKind now map onto
+        // G#'s own pattern-syntax base type.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class PatternAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IsPatternExpression);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var isExpression = (IsPatternExpressionSyntax)context.Node;
+        _ = Describe(isExpression.Pattern);
+    }
+
+    private static string Describe(PatternSyntax pattern) => pattern.ToString();
+}
+");
+
+        Assert.Contains("SyntaxKind.IsExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("PatternSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void QualifiedNameSyntax_MapsToTypeClauseSyntax()
+    {
+        // GSA0005 uses QualifiedNameSyntax (TypeNameOf's recursive case) to
+        // read the rightmost segment of a dotted type name; G# has no
+        // Left/Right split, so the type collapses onto TypeClauseSyntax
+        // alongside plain TypeSyntax/GenericNameSyntax.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class QualifiedNameAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool IsQualifiedName(TypeSyntax type) => type is QualifiedNameSyntax;
+}
+");
+
+        Assert.Contains("TypeClauseSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void NonAnalyzerProject_LeavesRoslynApisUntouched()
     {
         // Without analyzer mode, Microsoft.CodeAnalysis usage passes through

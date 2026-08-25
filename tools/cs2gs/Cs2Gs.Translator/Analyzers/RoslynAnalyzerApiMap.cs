@@ -104,6 +104,19 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Syntax",
             "FunctionDeclarationSyntax",
             "FunctionDeclaration covers C# methods and local functions; review kind checks that distinguished them."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "PatternSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "SwitchStatementSyntax",
+            "G# switch cases have no per-arm label list: SwitchCaseSyntax.Value carries the pattern directly, so Sections/Labels walks need review."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "PropertyPatternFieldSyntax",
+            "G# has no ExpressionColon; the field name is the Identifier token directly, so name-extraction idioms need review."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.QualifiedNameSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "TypeClauseSyntax",
+            "G# has no Left/Right split for dotted type names; qualifier segments live on TypeClauseSyntax.QualifierIdentifierTokens, so Left/Right walks need review."),
 
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
@@ -165,6 +178,7 @@ internal static class RoslynAnalyzerApiMap
             null,
             "FunctionDeclaration",
             "FunctionDeclaration also covers C# local functions; review if the analyzer distinguished them."),
+        [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "IsPatternExpression")] = new(null, "IsExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "BinaryOperator")] = new(null, "BinaryExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "Invocation")] = new(null, "CallExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "Conversion")] = new(null, "ConversionExpression"),
