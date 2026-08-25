@@ -787,7 +787,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             var statements = new List<GStatement>();
             Dictionary<ExpressionSyntax, GExpression> captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements);
-            this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: false, statements, captured);
+            this.LowerTuplePattern(
+                leftTuple,
+                this.TranslateExpression(right),
+                forceRealTemps: false,
+                statements,
+                captured,
+                this.context.GetTypeInfo(right).Type as INamedTypeSymbol);
             return statements;
         }
 
@@ -897,7 +903,13 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var statements = new List<GStatement>();
             Dictionary<ExpressionSyntax, GExpression> captured = this.CaptureDeconstructionStorageTargets(leftTuple, statements);
-            List<GExpression> values = this.LowerTuplePattern(leftTuple, this.TranslateExpression(right), forceRealTemps: true, statements, captured);
+            List<GExpression> values = this.LowerTuplePattern(
+                leftTuple,
+                this.TranslateExpression(right),
+                forceRealTemps: true,
+                statements,
+                captured,
+                this.context.GetTypeInfo(right).Type as INamedTypeSymbol);
             GExpression value = new TupleLiteralExpression(values);
             this.state.TupleAssignmentValues[leftTuple] = value;
             return (statements, value);
@@ -973,13 +985,39 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression rhsValue,
             bool forceRealTemps,
             List<GStatement> statements,
-            Dictionary<ExpressionSyntax, GExpression> captured)
+            Dictionary<ExpressionSyntax, GExpression> captured,
+            INamedTypeSymbol rhsTupleType = null)
         {
             int count = pattern.Arguments.Count;
             var temps = new List<string>(count);
+            var directNames = new bool[count];
             for (int i = 0; i < count; i++)
             {
                 ExpressionSyntax targetExpr = pattern.Arguments[i].Expression;
+
+                // Issue #3501 (__decon retirement): a single-variable
+                // declaration element (`(int probeExit, _) = …`) binds its
+                // REAL name directly in the native `let (…)` instead of a
+                // `__deconN` temp plus a re-declaration — provided the local
+                // is never reassigned (the tuple binding is `let`) and its
+                // declared type matches the RHS element (a `var` designation
+                // matches by construction; an explicit type must equal the
+                // deconstructed element so no implicit conversion is lost).
+                if (targetExpr is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax directSingle } directDecl
+                    && this.context.GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal
+                    && !this.IsLocalReassigned(directLocal)
+                    && (directDecl.Type.IsVar
+                        || (rhsTupleType is { IsTupleType: true }
+                            && i < rhsTupleType.TupleElements.Length
+                            && SymbolEqualityComparer.Default.Equals(
+                                directLocal.Type,
+                                rhsTupleType.TupleElements[i].Type))))
+                {
+                    this.ReportIfIndexOrRangeTypedDesignation(directSingle);
+                    temps.Add(this.EmittedName(directSingle, directSingle.Identifier));
+                    directNames[i] = true;
+                    continue;
+                }
 
                 // A nested tuple target needs its own real temp to recurse
                 // into — UNLESS every leaf underneath it is itself a true
@@ -1008,6 +1046,15 @@ public sealed partial class CSharpToGSharpTranslator
                 if (temps[i] == "_")
                 {
                     values.Add(null);
+                    continue;
+                }
+
+                if (directNames[i])
+                {
+                    // The element already bound its real name in the tuple
+                    // binding — nothing to re-declare; the value read is the
+                    // name itself.
+                    values.Add(new IdentifierExpression(temps[i]));
                     continue;
                 }
 

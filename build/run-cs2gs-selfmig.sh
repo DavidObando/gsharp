@@ -56,10 +56,17 @@ fi
 green=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
 
-labels=$(grep -rhoE '__(switchExit|iteratorExit|gotoCase|gotoDefault|patternGuardEnd)' "$migrated_dir" --include='*.gs' 2>/dev/null | wc -l | tr -d ' ')
-lifts=$(grep -rho '__local_' "$migrated_dir" --include='*.gs' 2>/dev/null | wc -l | tr -d ' ')
+# Metrics count CODE, not fixtures: migrated test sources embed expected-output
+# strings (and docs quote constructs), so lines containing a string quote or
+# leading with a comment marker are excluded before counting.
+code_grep() {
+  grep -rhE "$1" "$migrated_dir" --include='*.gs' 2>/dev/null \
+    | grep -v '"' | grep -vE '^[[:space:]]*//' | grep -oE "$1" | wc -l | tr -d ' '
+}
+labels=$(code_grep '__(switchExit|iteratorExit|gotoCase|gotoDefault|patternGuardEnd)')
+lifts=$(code_grep '__local_')
 long_lines=$(find "$migrated_dir" -name '*.gs' -exec awk 'length($0)>300' {} + 2>/dev/null | wc -l | tr -d ' ')
-bangs=$(grep -rho '!!' "$migrated_dir" --include='*.gs' 2>/dev/null | wc -l | tr -d ' ')
+bangs=$(code_grep '!!')
 
 green_floor=$(jq -r '.greenFloor' "$baseline")
 label_ceiling=$(jq -r '.syntheticLabelCeiling' "$baseline")
