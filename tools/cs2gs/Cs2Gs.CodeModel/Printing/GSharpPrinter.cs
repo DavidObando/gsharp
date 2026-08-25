@@ -569,6 +569,23 @@ public static class GSharpPrinter
                 + ")";
         }
 
+        // Issue #3501: a construction WITH an object initializer
+        // (`new T(...) { A = x, B = y }` → `T(…){A: …}`-style G#) escaped
+        // every wrap — the construction wraps through the invocation branch
+        // above, and each member initializer takes its own line.
+        if (expression is ObjectCreationInitializerExpression objectCreationWrap)
+        {
+            string construction =
+                RenderWrapped(objectCreationWrap.Construction, indent, prefixWidth)
+                ?? RenderExpression(objectCreationWrap.Construction, indent);
+            IEnumerable<string> memberTexts = objectCreationWrap.MemberInitializers.Select(f =>
+                $"{f.Name} = {RenderExpression(f.Value, indent + 1)}");
+            return construction
+                + "{\n" + continuation
+                + string.Join($",\n{continuation}", memberTexts)
+                + "}";
+        }
+
         return null;
     }
 
@@ -2146,7 +2163,32 @@ public static class GSharpPrinter
             sb.Append("convenience ");
         }
 
-        sb.Append($"init({RenderParameterList(constructor.Parameters)})");
+        sb.Append("init");
+
+        // Issue #3501: same budgeted parameter-list wrap the func-header
+        // renderer applies — `init`/`convenience init` headers were the
+        // dominant string-free >300-char lines in the migrated corpus.
+        string ctorParameterList = RenderParameterList(constructor.Parameters);
+        int ctorLineStart = sb.ToString().LastIndexOf('\n') + 1;
+        int ctorLineLength = sb.Length - ctorLineStart;
+        if (constructor.Parameters.Count > 1
+            && ctorLineLength + ctorParameterList.Length + 2 > MaxLineWidth)
+        {
+            string ctorParameterPad = Indent(indent + 1);
+            sb.Append("(\n");
+            sb.Append(ctorParameterPad);
+            sb.Append(string.Join(
+                ",\n" + ctorParameterPad,
+                constructor.Parameters.Select(RenderParameter)));
+            sb.Append(')');
+        }
+        else
+        {
+            sb.Append('(');
+            sb.Append(ctorParameterList);
+            sb.Append(')');
+        }
+
         if (constructor.BaseArguments != null)
         {
             var baseArgs = string.Join(", ", constructor.BaseArguments.Select(a => RenderExpression(a, indent)));
