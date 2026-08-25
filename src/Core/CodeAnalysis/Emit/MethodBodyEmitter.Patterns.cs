@@ -899,8 +899,11 @@ internal sealed partial class MethodBodyEmitter
             lengthProperty, wantSetter: false)
             ?? throw new InvalidOperationException(
                 $"Indexable list pattern length property '{lengthProperty.Name}' has no public getter.");
+        var indexerProperty = Invariant.Required(
+            lp.IndexerProperty,
+            "the dispatcher enters the indexable path only when an indexer was resolved at bind time");
         var itemGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
-            lp.IndexerProperty!, wantSetter: false)
+            indexerProperty, wantSetter: false)
             ?? throw new InvalidOperationException(
                 "Indexable list pattern indexer has no public getter.");
 
@@ -917,7 +920,7 @@ internal sealed partial class MethodBodyEmitter
             loadIndex();
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(itemGetter, lp.Type));
-            if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(lp.Type, lp.IndexerProperty!, out _))
+            if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(lp.Type, indexerProperty, out _))
             {
                 this.EmitErasedObjectReturnWidening(
                     TypeSymbol.FromClrType(itemGetter.ReturnType),
