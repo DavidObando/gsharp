@@ -21,6 +21,8 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        private HashSet<string> repositorySharedDocumentPaths;
+
         // Issue #1072: G# follows Kotlin-style nullability, so `nil`-safety is
         // enforced by the static type, not by a `!!`-on-`nil` escape hatch. A C#
         // symbol DECLARED non-nullable (`T`) but defensively compared against
@@ -690,8 +692,15 @@ public sealed partial class CSharpToGSharpTranslator
             // `null` for every existing single-compilation caller, so this
             // overload reduces to the exact prior single-compilation check —
             // a pure additive fix for the cross-project case.
+            // Issue #3501: a symbol declared in a SHARED document (a source
+            // file linked into several repo projects, e.g. test/Shared/*) must
+            // translate identically in every project — the repository mirror
+            // rejects divergent outputs. Its taint check therefore runs over
+            // the whole repository's compilations, and the per-project
+            // usage-driven fallback below is skipped for it.
+            bool sharedDocument = this.IsDeclaredInRepositorySharedDocument(symbol);
             IReadOnlyList<CSharpCompilation> taintCompilations =
-                IsStoredMemberNullabilitySymbol(symbol)
+                IsStoredMemberNullabilitySymbol(symbol) || sharedDocument
                     ? this.context.RepositoryCompilations ?? this.context.SiblingCompilations
                     : this.context.SiblingCompilations;
             if (declared.NullableAnnotation == NullableAnnotation.None
@@ -703,8 +712,51 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            return symbol is not IMethodSymbol
+            return !sharedDocument
+                && symbol is not IMethodSymbol
                 && this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
+        }
+
+        // Issue #3501: file paths that appear in MORE THAN ONE repository
+        // compilation — linked/shared sources whose translation must not
+        // depend on which project is being translated.
+        private bool IsDeclaredInRepositorySharedDocument(ISymbol symbol)
+        {
+            if (this.context.RepositoryCompilations is not { Count: > 1 } repository)
+            {
+                return false;
+            }
+
+            if (this.repositorySharedDocumentPaths == null)
+            {
+                var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (CSharpCompilation compilation in repository)
+                {
+                    foreach (SyntaxTree tree in compilation.SyntaxTrees)
+                    {
+                        if (!string.IsNullOrEmpty(tree.FilePath))
+                        {
+                            counts[tree.FilePath] = counts.TryGetValue(tree.FilePath, out int n) ? n + 1 : 1;
+                        }
+                    }
+                }
+
+                this.repositorySharedDocumentPaths = counts
+                    .Where(kv => kv.Value > 1)
+                    .Select(kv => kv.Key)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+
+            foreach (SyntaxReference reference in symbol.DeclaringSyntaxReferences)
+            {
+                string path = reference.SyntaxTree?.FilePath;
+                if (!string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths.Contains(path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool IsStoredMemberNullabilitySymbol(ISymbol symbol) =>

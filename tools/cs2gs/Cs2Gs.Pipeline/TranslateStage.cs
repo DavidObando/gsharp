@@ -887,8 +887,20 @@ public sealed class TranslateStage : IMigrationStage
         {
             if (!string.Equals(priorGenerated, generated, StringComparison.Ordinal))
             {
+                string[] priorLines = priorGenerated.Split('\n');
+                string[] currentLines = generated.Split('\n');
+                int line = 0;
+                while (line < priorLines.Length && line < currentLines.Length
+                    && string.Equals(priorLines[line], currentLines[line], StringComparison.Ordinal))
+                {
+                    line++;
+                }
+
+                string prior = line < priorLines.Length ? priorLines[line] : "<eof>";
+                string current = line < currentLines.Length ? currentLines[line] : "<eof>";
                 throw new InvalidOperationException(
-                    $"Linked source '{sourcePath}' translates differently in multiple projects.");
+                    $"Linked source '{sourcePath}' translates differently in multiple projects. "
+                    + $"First divergence at line {line + 1}: prior `{prior.Trim()}` vs current `{current.Trim()}`.");
             }
 
             return;
