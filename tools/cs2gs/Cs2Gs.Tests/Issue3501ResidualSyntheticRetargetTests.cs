@@ -491,6 +491,65 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void DualDictionaryFixture_DroppedMember_DoesNotCrashTheDocument()
+    {
+        // A dual IDictionary<int,int>/IReadOnlyDictionary<string,string>
+        // implementer drops the second colliding explicit-interface property
+        // (a reported gap); the null must not reach the member list — the
+        // printer throws on it and the whole document (and every app linking
+        // it) failed translate (the Core.Tests/Compiler.Tests/Interpreter.Tests
+        // self-migration blocker).
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", """
+                using System;
+                using System.Collections;
+                using System.Collections.Generic;
+
+                public sealed class DualMapFixture : IDictionary<int, int>, IReadOnlyDictionary<string, string>
+                {
+                    string IReadOnlyDictionary<string, string>.this[string key] => throw new NotImplementedException();
+
+                    int IDictionary<int, int>.this[int key]
+                    {
+                        get => throw new NotImplementedException();
+                        set => throw new NotImplementedException();
+                    }
+
+                    ICollection<int> IDictionary<int, int>.Keys => throw new NotImplementedException();
+                    ICollection<int> IDictionary<int, int>.Values => throw new NotImplementedException();
+                    IEnumerable<string> IReadOnlyDictionary<string, string>.Keys => throw new NotImplementedException();
+                    IEnumerable<string> IReadOnlyDictionary<string, string>.Values => throw new NotImplementedException();
+                    int ICollection<KeyValuePair<int, int>>.Count => throw new NotImplementedException();
+                    int IReadOnlyCollection<KeyValuePair<string, string>>.Count => throw new NotImplementedException();
+                    bool ICollection<KeyValuePair<int, int>>.IsReadOnly => throw new NotImplementedException();
+                    void IDictionary<int, int>.Add(int key, int value) => throw new NotImplementedException();
+                    void ICollection<KeyValuePair<int, int>>.Add(KeyValuePair<int, int> item) => throw new NotImplementedException();
+                    void ICollection<KeyValuePair<int, int>>.Clear() => throw new NotImplementedException();
+                    bool ICollection<KeyValuePair<int, int>>.Contains(KeyValuePair<int, int> item) => throw new NotImplementedException();
+                    bool IDictionary<int, int>.ContainsKey(int key) => throw new NotImplementedException();
+                    bool IReadOnlyDictionary<string, string>.ContainsKey(string key) => throw new NotImplementedException();
+                    void ICollection<KeyValuePair<int, int>>.CopyTo(KeyValuePair<int, int>[] array, int arrayIndex) => throw new NotImplementedException();
+                    bool IDictionary<int, int>.Remove(int key) => throw new NotImplementedException();
+                    bool ICollection<KeyValuePair<int, int>>.Remove(KeyValuePair<int, int> item) => throw new NotImplementedException();
+                    bool IDictionary<int, int>.TryGetValue(int key, out int value) => throw new NotImplementedException();
+                    bool IReadOnlyDictionary<string, string>.TryGetValue(string key, out string value) => throw new NotImplementedException();
+                    IEnumerator<KeyValuePair<int, int>> IEnumerable<KeyValuePair<int, int>>.GetEnumerator() => throw new NotImplementedException();
+                    IEnumerator<KeyValuePair<string, string>> IEnumerable<KeyValuePair<string, string>>.GetEnumerator() => throw new NotImplementedException();
+                    IEnumerator IEnumerable.GetEnumerator() => throw new NotImplementedException();
+                }
+                """) });
+        Assert.True(project.BoundWithoutErrors);
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+
+        // The drop itself is a reported gap; the assertion is only that the
+        // print completes instead of throwing on a null member.
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains("DualMapFixture", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
