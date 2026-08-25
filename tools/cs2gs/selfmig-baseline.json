@@ -1,8 +1,8 @@
 {
-  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps (translate+compile+ilverify+parity); the *Ceiling metrics cap readability regressions in the migrated output. Recalibrated 2026-08-23 after the #3503-#3507 merges plus the doc-line re-wrap fix (25 green; 29 synthetic labels (A3 switch retarget); 77 __local_ lifts (A2 self-recursion retarget); 3637 lines >300 chars). nullAssertionCeiling added 2026-08-24 with the GS0536 polish pass (measured 20885, down from 23265). Improve a metric, then tighten the corresponding number in the same PR.",
-  "greenFloor": 25,
+  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps (translate+compile+ilverify+parity); the *Ceiling metrics cap readability regressions in the migrated output. Recalibrated 2026-08-23 after the #3503-#3507 merges plus the doc-line re-wrap fix (25 green; 29 synthetic labels (A3 switch retarget); 77 __local_ lifts (A2 self-recursion retarget); 3637 lines >300 chars). nullAssertionCeiling added 2026-08-24 with the GS0536 polish pass (measured 20885, down from 23265). Ratcheted 2026-08-25 with the Core blocker burn-down (27 green, 70 lifts, 20444 bangs). Improve a metric, then tighten the corresponding number in the same PR.",
+  "greenFloor": 27,
   "syntheticLabelCeiling": 40,
-  "liftedLocalCeiling": 85,
+  "liftedLocalCeiling": 75,
   "longLineCeiling": 3700,
-  "nullAssertionCeiling": 21500
+  "nullAssertionCeiling": 21000
 }
