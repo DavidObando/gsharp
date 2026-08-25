@@ -1893,7 +1893,10 @@ internal sealed class SlotPlanner
 
         protected override void VisitClrConversionCallExpression(BoundClrConversionCallExpression node)
         {
-            if (IsLiftedNullableConversion(node.Source.Type, node.Type))
+            if (IsLiftedNullableConversion(
+                node.Source.Type,
+                node.Type,
+                allowSymbolic: node.Function != null))
             {
                 this.sink.Add(node);
             }
@@ -1902,10 +1905,19 @@ internal sealed class SlotPlanner
         }
 
         private static bool IsLiftedNullableConversion(TypeSymbol source, TypeSymbol target)
+            => IsLiftedNullableConversion(source, target, allowSymbolic: false);
+
+        private static bool IsLiftedNullableConversion(
+            TypeSymbol source,
+            TypeSymbol target,
+            bool allowSymbolic)
             => source is NullableTypeSymbol from
                 && target is NullableTypeSymbol to
-                && from.UnderlyingType?.ClrType is { IsValueType: true }
-                && to.UnderlyingType?.ClrType is { IsValueType: true }
+                && ((from.UnderlyingType?.ClrType is { IsValueType: true }
+                        && to.UnderlyingType?.ClrType is { IsValueType: true })
+                    || (allowSymbolic
+                        && NullableLifting.IsAnyValueTypeNullable(from)
+                        && NullableLifting.IsAnyValueTypeNullable(to)))
                 && from.UnderlyingType != to.UnderlyingType;
     }
 }

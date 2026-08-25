@@ -2080,26 +2080,7 @@ internal sealed partial class MethodBodyEmitter
     {
         if (op.Function != null)
         {
-            EntityHandle fnHandle;
-            if (op.FunctionOwnerType != null
-                && ReflectionMetadataEmitter.IsUserGenericTypeReference(op.FunctionOwnerType))
-            {
-                fnHandle = this.outer.userTokens.ResolveUserStaticMethodToken(op.FunctionOwnerType, op.Function);
-            }
-            else
-            {
-                if (!this.outer.cache.FunctionHandles.TryGetValue(op.Function, out var definitionHandle)
-                    && !this.outer.cache.MethodHandles.TryGetValue(op.Function, out definitionHandle))
-                {
-                    throw new InvalidOperationException(
-                        $"Lifted same-compilation operator '{op.Function.Name}' has no emitted MethodDef.");
-                }
-
-                fnHandle = definitionHandle;
-            }
-
-            this.il.OpCode(ILOpCode.Call);
-            this.il.Token(fnHandle);
+            this.EmitCallResolvedUserFunction(op.Function, op.FunctionOwnerType);
             return;
         }
 
@@ -2107,6 +2088,33 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetMethodReference(Invariant.Required(
             op.Method,
             "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above")));
+    }
+
+    private void EmitCallResolvedUserFunction(
+        FunctionSymbol function,
+        StructSymbol? functionOwnerType)
+    {
+        EntityHandle functionHandle;
+        if (functionOwnerType != null)
+        {
+            functionHandle = this.outer.userTokens.ResolveUserStaticMethodToken(
+                functionOwnerType,
+                function);
+        }
+        else
+        {
+            if (!this.outer.cache.FunctionHandles.TryGetValue(function, out var definitionHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(function, out definitionHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Same-compilation function '{function.Name}' has no emitted MethodDef.");
+            }
+
+            functionHandle = definitionHandle;
+        }
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(functionHandle);
     }
 
     private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)

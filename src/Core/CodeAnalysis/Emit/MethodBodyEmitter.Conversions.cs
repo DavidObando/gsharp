@@ -1342,7 +1342,7 @@ internal sealed partial class MethodBodyEmitter
             && NullableLifting.IsAnyValueTypeNullable(sourceNullable)
             && conv.Type is NullableTypeSymbol liftedTargetNullable
             && NullableLifting.IsAnyValueTypeNullable(liftedTargetNullable)
-            && IsLiftedNullableClrConversionMethod(conv.Method, sourceNullable, liftedTargetNullable))
+            && IsLiftedNullableConversionCall(conv, sourceNullable, liftedTargetNullable))
         {
             this.EmitLiftedNullableClrConversion(conv, sourceNullable, liftedTargetNullable);
             return;
@@ -1350,18 +1350,21 @@ internal sealed partial class MethodBodyEmitter
 
         // Stream E emit parity: user-defined op_Implicit / op_Explicit is a
         // public-static method taking one arg, returning the target type.
+        var method = Invariant.Required(
+            conv.Method,
+            "a non-lifted imported conversion carries a CLR method");
         this.EmitExpression(conv.Source);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(conv.Method));
-        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(conv.Method.ReturnType), conv.Type);
+        this.il.Token(this.outer.memberRefs.GetMethodReference(method));
+        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(method.ReturnType), conv.Type);
 
         // Issue #663: when the operator returns a non-nullable value type T but the
         // target type is Nullable<T> (e.g. op_Explicit(JsonNode) → int, target int32?),
         // lift the result into Nullable<T> via newobj.
         if (conv.Type is NullableTypeSymbol targetNullable
             && ReflectionMetadataEmitter.IsValueTypeNullable(targetNullable)
-            && conv.Method.ReturnType.IsValueType
-            && !IsNullableValueType(conv.Method.ReturnType))
+            && method.ReturnType.IsValueType
+            && !IsNullableValueType(method.ReturnType))
         {
             var innerClr = targetNullable.UnderlyingType.ClrType
                 ?? throw new InvalidOperationException(
@@ -1382,11 +1385,27 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
-    private static bool IsLiftedNullableClrConversionMethod(
-        MethodInfo method,
+    private static bool IsLiftedNullableConversionCall(
+        BoundClrConversionCallExpression conversion,
         NullableTypeSymbol sourceNullable,
         NullableTypeSymbol targetNullable)
     {
+        if (conversion.Function != null)
+        {
+            return conversion.Function.Parameters.Length == 1
+                && conversion.Function.Parameters[0].RefKind == RefKind.None
+                && conversion.Function.ReturnRefKind == RefKind.None
+                && Conversion.ClassifyNonStructural(
+                    sourceNullable.UnderlyingType,
+                    conversion.Function.Parameters[0].Type).IsIdentity
+                && Conversion.ClassifyNonStructural(
+                    conversion.Function.Type,
+                    targetNullable.UnderlyingType).IsIdentity;
+        }
+
+        var method = Invariant.Required(
+            conversion.Method,
+            "an imported lifted conversion carries a CLR method");
         var parameters = method.GetParameters();
         return parameters.Length == 1
             && !parameters[0].ParameterType.IsByRef
@@ -1422,8 +1441,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Brfalse, nullBranch);
 
         this.EmitUnwrappedNullableValue(sourceSlot, sourceNullable);
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(conv.Method));
+        this.EmitCallResolvedConversion(conv);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.GetNullableResultConstructor(targetNullable));
         this.il.Branch(ILOpCode.Br, end);
@@ -1435,6 +1453,22 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocal(resultSlot);
 
         this.il.MarkLabel(end);
+    }
+
+    private void EmitCallResolvedConversion(BoundClrConversionCallExpression conversion)
+    {
+        if (conversion.Function != null)
+        {
+            this.EmitCallResolvedUserFunction(
+                conversion.Function,
+                conversion.FunctionOwnerType);
+            return;
+        }
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(this.outer.memberRefs.GetMethodReference(Invariant.Required(
+            conversion.Method,
+            "an imported conversion carries a CLR method")));
     }
 
     private static bool IsNullableValueType(Type t)

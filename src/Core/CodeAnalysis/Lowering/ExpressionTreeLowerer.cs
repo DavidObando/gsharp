@@ -819,7 +819,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
         var methodInfo = conversion switch
         {
-            BoundConversionExpression { Expression: BoundClrConversionCallExpression clrConversion } => BuildMethodInfoConstant(clrConversion.Method),
+            BoundConversionExpression { Expression: BoundClrConversionCallExpression clrConversion }
+                when clrConversion.Method != null => BuildMethodInfoConstant(clrConversion.Method),
             _ => null,
         };
 

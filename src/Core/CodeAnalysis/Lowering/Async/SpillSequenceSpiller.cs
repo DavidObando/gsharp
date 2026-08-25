@@ -949,7 +949,18 @@ public static class SpillSequenceSpiller
                     return SpillOneOperand(
                         clrConv,
                         clrConv.Source,
-                        src => new BoundClrConversionCallExpression(null, src, clrConv.Method, clrConv.Type));
+                        src => clrConv.Function != null
+                            ? new BoundClrConversionCallExpression(
+                                null,
+                                src,
+                                clrConv.Function,
+                                clrConv.FunctionOwnerType,
+                                clrConv.Type)
+                            : new BoundClrConversionCallExpression(
+                                null,
+                                src,
+                                Invariant.Required(clrConv.Method, "an imported conversion carries a CLR method"),
+                                clrConv.Type));
                 case BoundClrEventSubscriptionExpression clrEventSub:
                     if (clrEventSub.Receiver == null)
                     {

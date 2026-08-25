@@ -242,4 +242,64 @@ public class Issue3518EqualityLoweringEmitTests
         Assert.Contains("GS0129", diagnostics);
         Assert.DoesNotContain("GS9998", diagnostics);
     }
+
+    [Fact]
+    public void LiftedOperatorReturningRefStruct_FailsWithoutInvalidMetadata()
+    {
+        const string source = """
+            package FindingRefStructLift
+
+            ref struct StackResult {
+                var Value int32
+            }
+
+            struct Number(Value int32) { }
+            func (left Number) operator +(right Number) StackResult {
+                return StackResult{Value: left.Value + right.Value}
+            }
+
+            func Bad(left Number?, right Number?) {
+                let result = left + right
+            }
+            """;
+
+        var (exitCode, stdout, stderr) =
+            Issue2388NullableCustomEqualityEmitTests.TryCompile(source);
+        var diagnostics = stdout + stderr;
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0155", diagnostics);
+        Assert.DoesNotContain("GS9998", diagnostics);
+    }
+
+    [Fact]
+    public void SameCompilationNullableImplicitConversionEquality_RunsAndVerifies()
+    {
+        const string source = """
+            package FindingSameCompilationNullableConversion
+
+            struct Source(Raw int32) { }
+            struct Target(Code string) { }
+
+            func operator implicit(value Source) Target -> Target(value.Raw.ToString())
+            func (left Target) operator ==(right Target) bool -> left.Code == right.Code
+
+            func Equal(left Source?, right Target?) bool -> left == right
+
+            func Main() int32 {
+                let source Source? = Source(7)
+                let equal Target? = Target("7")
+                let different Target? = Target("8")
+                let missingSource Source? = nil
+                let missingTarget Target? = nil
+
+                let present = Equal(source, equal)
+                let valueMismatch = !Equal(source, different)
+                let presenceMismatch = !Equal(missingSource, equal)
+                let absent = Equal(missingSource, missingTarget)
+                return present && valueMismatch && presenceMismatch && absent ? 0 : 1
+            }
+            """;
+
+        Assert.Empty(Issue2866ImportedDataEqualityEmitTests.CompileAndRun(source));
+    }
 }

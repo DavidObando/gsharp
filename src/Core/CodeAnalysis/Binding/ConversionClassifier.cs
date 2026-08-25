@@ -628,6 +628,38 @@ internal sealed class ConversionClassifier
             }
         }
 
+        // Issue #3518: lift a same-compilation user conversion S -> T to
+        // S? -> T?. The emit-side conversion node owns the HasValue branch,
+        // unwrap, call, and target re-wrap/default construction.
+        if (expression.Type is NullableTypeSymbol liftedSource
+            && NullableLifting.IsAnyValueTypeNullable(liftedSource)
+            && type is NullableTypeSymbol liftedTarget
+            && NullableLifting.IsAnyValueTypeNullable(liftedTarget)
+            && !TypeSymbol.IsByRefLike(liftedSource)
+            && !TypeSymbol.IsByRefLike(liftedTarget)
+            && TryResolveUserDefinedSymbolConversion(
+                liftedSource.UnderlyingType,
+                liftedTarget.UnderlyingType,
+                allowExplicit,
+                out var liftedMethod)
+            && liftedMethod.StaticOwnerType is StructSymbol { ClrType: null }
+            && liftedMethod.Parameters.Length == 1
+            && liftedMethod.Parameters[0].RefKind == RefKind.None
+            && liftedMethod.ReturnRefKind == RefKind.None
+            && Conversion.ClassifyNonStructural(
+                liftedSource.UnderlyingType,
+                liftedMethod.Parameters[0].Type).IsIdentity
+            && Conversion.ClassifyNonStructural(
+                liftedMethod.Type,
+                liftedTarget.UnderlyingType).IsIdentity)
+        {
+            return new BoundClrConversionCallExpression(
+                null,
+                expression,
+                liftedMethod,
+                type);
+        }
+
         var conversion = Conversion.Classify(expression.Type, type);
         if (!conversion.Exists
             && allowExplicit

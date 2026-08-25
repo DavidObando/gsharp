@@ -2360,6 +2360,7 @@ internal sealed partial class ExpressionBinder
         return type is not NullableTypeSymbol
             && type is not ByRefTypeSymbol
             && type != TypeSymbol.Void
+            && !TypeSymbol.IsByRefLike(type)
             && (type.IsValueType
                 || type is StructSymbol { IsClass: false }
                 || type is EnumSymbol
@@ -2402,13 +2403,16 @@ internal sealed partial class ExpressionBinder
 
     private static bool CanApplyLiftedUserOperator(TypeSymbol? operandType, TypeSymbol parameterType)
     {
-        var underlyingOperand = operandType is NullableTypeSymbol nullable
-            ? nullable.UnderlyingType
-            : operandType;
-        var conversion = Conversion.Classify(
-            Invariant.Required(underlyingOperand, "an operator operand has a type"),
-            parameterType);
-        return conversion.Exists && conversion.IsImplicit;
+        var underlyingOperand = Invariant.Required(
+            operandType is NullableTypeSymbol nullable
+                ? nullable.UnderlyingType
+                : operandType,
+            "an operator operand has a type");
+        var conversion = Conversion.Classify(underlyingOperand, parameterType);
+        return (conversion.Exists && conversion.IsImplicit)
+            || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                underlyingOperand,
+                parameterType);
     }
 
     /// <summary>
