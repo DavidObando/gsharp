@@ -342,6 +342,88 @@ public class Issue3501ResidualSyntheticRetargetTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void LongConstructorHeader_WrapsItsParameterList()
+    {
+        // Issue #3501: `init`/`convenience init` headers were the dominant
+        // string-free >300-char lines; over-budget headers wrap after `(`
+        // and each comma, the same continuation the func renderer emits.
+        string printed = Translate("""
+            public sealed class WideNode
+            {
+                public WideNode(
+                    string firstComponentIdentifier,
+                    string secondComponentIdentifier,
+                    string thirdComponentIdentifier,
+                    string fourthComponentIdentifier,
+                    string fifthComponentIdentifier,
+                    string sixthComponentIdentifier,
+                    string seventhComponentIdentifier)
+                {
+                    Summary = firstComponentIdentifier + secondComponentIdentifier + thirdComponentIdentifier
+                        + fourthComponentIdentifier + fifthComponentIdentifier + sixthComponentIdentifier
+                        + seventhComponentIdentifier;
+                }
+
+                public string Summary { get; }
+            }
+            """);
+
+        Assert.Contains("init(\n", printed.Replace("\r", string.Empty), StringComparison.Ordinal);
+        foreach (string line in printed.Split('\n'))
+        {
+            Assert.True(line.Length <= 300, "over-300 line: " + line);
+        }
+
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void LongObjectCreationWithInitializer_Wraps()
+    {
+        // A construction WITH an object initializer escaped every wrap rule
+        // (the SideEffectSpiller/ExpressionTreeLowerer BoundProgram returns —
+        // the last string-free >300-char statement family).
+        string printed = Translate("""
+            public sealed class ProgramInfo
+            {
+                public ProgramInfo(string entryPointPackage, string packages, string diagnostics, string functions, string entryPoint, string statement, string structs, string interfaces, string enums, string delegates) { }
+
+                public string EntryPointPackage { get; } = "";
+                public string Packages { get; } = "";
+                public string Diagnostics { get; } = "";
+                public string EntryPoint { get; } = "";
+                public string Statement { get; } = "";
+                public string Structs { get; } = "";
+                public string Interfaces { get; } = "";
+                public string Enums { get; } = "";
+                public string Delegates { get; } = "";
+                public string Imports { get; init; } = "";
+                public string FriendAssemblies { get; init; } = "";
+            }
+
+            public static class Rewriter
+            {
+                public static ProgramInfo Clone(ProgramInfo program, string functions)
+                {
+                    return new ProgramInfo(program.EntryPointPackage, program.Packages, program.Diagnostics, functions, program.EntryPoint, program.Statement, program.Structs, program.Interfaces, program.Enums, program.Delegates)
+                    {
+                        Imports = program.Imports,
+                        FriendAssemblies = program.FriendAssemblies,
+                    };
+                }
+            }
+            """);
+
+        foreach (string line in printed.Split('\n'))
+        {
+            Assert.True(line.Length <= 300, "over-300 line: " + line);
+        }
+
+        Assert.Contains("Imports = program.Imports,", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
