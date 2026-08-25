@@ -865,7 +865,14 @@ internal sealed partial class DeclarationBinder
                             var convertedConst = fieldSyntax.Initializer is BlockExpressionSyntax
                                 ? boundConst
                                 : conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
-                            if (TryFoldConstantValue(convertedConst, fieldType, out var constValue))
+                            if (ConstantExpressionEvaluator.TryFindNativeInteger(convertedConst, out var nativeType))
+                            {
+                                Diagnostics.ReportConstNativeIntegerNotSupported(
+                                    fieldSyntax.Identifier.Location,
+                                    fieldName,
+                                    Invariant.Required(nativeType, "a detected native integer has a type").Name);
+                            }
+                            else if (ConstantExpressionEvaluator.TryFold(convertedConst, fieldType, out var constValue))
                             {
                                 constField.SetConstantValue(constValue);
                             }

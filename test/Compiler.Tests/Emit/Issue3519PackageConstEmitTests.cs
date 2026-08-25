@@ -120,6 +120,114 @@ public sealed class Issue3519PackageConstEmitTests
     }
 
     [Fact]
+    public void PackageConstOperators_FromAnotherSourceFile_FoldWithBoundTypes()
+    {
+        using var program = Compile(
+            ("Reader.gs", """
+                package FindingPackageConstOperators
+
+                func CheckOperators() int32 {
+                    return NotFalse
+                        && U64Sum == 9ul
+                        && Compared
+                        && Equal
+                        && Logical
+                        && Cleared == 9u
+                        && Complement == 0xFFFFFFF0u
+                        && BitMix == 10u
+                        && Coalesced == "fallback"
+                        && Asserted == "ok"
+                        ? 0 : 1
+                }
+                """),
+            ("Values.gs", """
+                package FindingPackageConstOperators
+
+                const NotFalse = !false
+                const U64Sum = 5ul + 4ul
+                const Compared = 3 < 4 && 4 >= 4
+                const Equal = 7 == 7 && 8 != 9
+                const Logical = false || true
+                const Cleared = 15u &^ 6u
+                const Complement = ^15u
+                const BitMix = (12u & 10u) | (1u ^ 3u)
+                const Coalesced = nil ?? "fallback"
+                const Asserted = "ok"!!
+                """));
+
+        var assembly = program.Load();
+        var container = assembly.GetTypes().Single(type => type.Name == "<Program>");
+        var check = container.GetMethod("CheckOperators", BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(check);
+        Assert.Equal(0, check!.Invoke(null, null));
+        Assert.DoesNotContain(
+            IlInstructionReader.Read(check.GetMethodBody()!.GetILAsByteArray()!),
+            instruction => instruction.OpCode == OpCodes.Ldsfld);
+
+        Assert.Equal(true, GetLiteral(container, "NotFalse").GetRawConstantValue());
+        Assert.Equal(9UL, GetLiteral(container, "U64Sum").GetRawConstantValue());
+        Assert.Equal(true, GetLiteral(container, "Compared").GetRawConstantValue());
+        Assert.Equal(true, GetLiteral(container, "Equal").GetRawConstantValue());
+        Assert.Equal(true, GetLiteral(container, "Logical").GetRawConstantValue());
+        Assert.Equal(9U, GetLiteral(container, "Cleared").GetRawConstantValue());
+        Assert.Equal(0xFFFFFFF0U, GetLiteral(container, "Complement").GetRawConstantValue());
+        Assert.Equal(10U, GetLiteral(container, "BitMix").GetRawConstantValue());
+        Assert.Equal("fallback", GetLiteral(container, "Coalesced").GetRawConstantValue());
+        Assert.Equal("ok", GetLiteral(container, "Asserted").GetRawConstantValue());
+    }
+
+    [Fact]
+    public void PackageConstConversions_FromAnotherSourceFile_PreserveClrSemantics()
+    {
+        using var program = Compile(
+            ("Reader.gs", """
+                package FindingPackageConstConversions
+
+                func CheckConversions() int32 {
+                    return Truncated == 3
+                        && Rounded == 16777216.0
+                        && Narrowed == 1
+                        && WrappedThenWidened == -2147483648L
+                        && UncheckedNegatedMin == int32.MinValue
+                        && ZeroExtended == 4294967295L
+                        && UnsignedWrap == uint64.MaxValue
+                        && CheckedFloat == 4.0f
+                        ? 0 : 1
+                }
+                """),
+            ("Values.gs", """
+                package FindingPackageConstConversions
+
+                const Truncated int32 = int32(3.9)
+                const Rounded float64 = float64(float32(16777217) + 1.0f)
+                const Narrowed int8 = int8(257)
+                const WrappedThenWidened int64 = int32.MaxValue + 1
+                const UncheckedNegatedMin = -int32.MinValue
+                const ZeroExtended int64 = int64(uint32.MaxValue)
+                const UnsignedWrap uint64 = uint64(-1)
+                const CheckedFloat = checked(1.5f + 2.5f)
+                """));
+
+        var assembly = program.Load();
+        var container = assembly.GetTypes().Single(type => type.Name == "<Program>");
+        var check = container.GetMethod("CheckConversions", BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(check);
+        Assert.Equal(0, check!.Invoke(null, null));
+        Assert.DoesNotContain(
+            IlInstructionReader.Read(check.GetMethodBody()!.GetILAsByteArray()!),
+            instruction => instruction.OpCode == OpCodes.Ldsfld);
+
+        Assert.Equal(3, GetLiteral(container, "Truncated").GetRawConstantValue());
+        Assert.Equal(16777216.0, GetLiteral(container, "Rounded").GetRawConstantValue());
+        Assert.Equal((sbyte)1, GetLiteral(container, "Narrowed").GetRawConstantValue());
+        Assert.Equal(-2147483648L, GetLiteral(container, "WrappedThenWidened").GetRawConstantValue());
+        Assert.Equal(int.MinValue, GetLiteral(container, "UncheckedNegatedMin").GetRawConstantValue());
+        Assert.Equal(4294967295L, GetLiteral(container, "ZeroExtended").GetRawConstantValue());
+        Assert.Equal(ulong.MaxValue, GetLiteral(container, "UnsignedWrap").GetRawConstantValue());
+        Assert.Equal(4.0F, GetLiteral(container, "CheckedFloat").GetRawConstantValue());
+    }
+
+    [Fact]
     public void DecimalPackageConst_FromAnotherSourceFile_UsesInitializedReadOnlyStorage()
     {
         using var program = Compile(
@@ -197,19 +305,50 @@ public sealed class Issue3519PackageConstEmitTests
     [InlineData("nuint")]
     public void NativeWidthPackageConst_ReportsTargetedDiagnostic(string type)
     {
-        var tree = SyntaxTree.Parse(
-            SourceText.From(
-                $$"""
-                package FindingPackageNativeConst
+        var result = EmitForDiagnostics($$"""
+            package FindingPackageNativeConst
 
-                const Platform {{type}} = 42
-                """,
-                "Values.gs"));
-        using var peStream = new MemoryStream();
-        var result = new Compilation(tree).Emit(peStream);
+            const Platform {{type}} = 42
+            """);
 
         Assert.False(result.Success);
         Assert.Equal("GS0538", Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.IsError)).Id);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
+    }
+
+    [Fact]
+    public void NestedNativeWidthConversionInPackageConst_ReportsGs0538()
+    {
+        var result = EmitForDiagnostics("""
+            package FindingNestedNativeConst
+
+            const PlatformValue int64 = nint(4294967297L)
+            """);
+
+        Assert.False(result.Success);
+        Assert.Equal("GS0538", Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.IsError)).Id);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
+    }
+
+    [Theory]
+    [InlineData("const Bad = checked(int32.MaxValue + 1)")]
+    [InlineData("const Bad = checked(-int32.MinValue)")]
+    [InlineData("const Bad = checked(int8(257))")]
+    [InlineData("const Bad = 1 / 0")]
+    [InlineData("const Bad = 1m / 0m")]
+    [InlineData("const Bad = int64.MinValue / -1L")]
+    [InlineData("const Bad = 79228162514264337593543950335m + 1m")]
+    [InlineData("const Bad = System.DateTime.Now.Ticks")]
+    public void InvalidPackageConstExpression_ReportsGs0376WithoutCompilerException(string declaration)
+    {
+        var result = EmitForDiagnostics($$"""
+            package FindingInvalidPackageConst
+
+            {{declaration}}
+            """);
+
+        Assert.False(result.Success);
+        Assert.Equal("GS0376", Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.IsError)).Id);
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
     }
 
@@ -223,6 +362,7 @@ public sealed class Issue3519PackageConstEmitTests
 
                 class Constants {
                     const Direct nint = 1
+                    const Nested int64 = nint(4)
                     shared {
                         const Shared nuint = 2
                     }
@@ -240,7 +380,7 @@ public sealed class Issue3519PackageConstEmitTests
 
         Assert.False(result.Success);
         var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
-        Assert.Equal(3, errors.Length);
+        Assert.Equal(4, errors.Length);
         Assert.All(errors, diagnostic => Assert.Equal("GS0538", diagnostic.Id));
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
     }
@@ -262,6 +402,13 @@ public sealed class Issue3519PackageConstEmitTests
         Assert.False(field.IsLiteral);
         Assert.Equal(expected, field.GetCustomAttribute<DecimalConstantAttribute>()!.Value);
         Assert.Equal(expected, field.GetValue(null));
+    }
+
+    private static EmitResult EmitForDiagnostics(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source, "Values.gs"));
+        using var peStream = new MemoryStream();
+        return new Compilation(tree).Emit(peStream);
     }
 
     private static CompiledProgram Compile(params (string FileName, string Source)[] sources)

@@ -3269,6 +3269,16 @@ internal sealed partial class DeclarationBinder
         var bound = boundInit is BoundErrorExpression || convertedInit is BoundErrorExpression
             ? (BoundExpression)new BoundErrorExpression(initializer)
             : convertedInit;
+        if (bound is not BoundErrorExpression
+            && ConstantExpressionEvaluator.TryFindNativeInteger(bound, out var nativeType))
+        {
+            Diagnostics.ReportConstNativeIntegerNotSupported(
+                fieldSyntaxNode.Identifier.Location,
+                constField.Name,
+                Invariant.Required(nativeType, "a detected native integer has a type").Name);
+            bound = new BoundErrorExpression(initializer);
+        }
+
         return (constField, bound, initializer.Location);
     }
 
@@ -3545,7 +3555,7 @@ internal sealed partial class DeclarationBinder
             var stillPending = new List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)>();
             foreach (var item in pendingConstFolds)
             {
-                if (TryFoldConstantValue(item.Bound, item.Field.Type, out var constantValue))
+                if (ConstantExpressionEvaluator.TryFold(item.Bound, item.Field.Type, out var constantValue))
                 {
                     item.Field.SetConstantValue(constantValue);
                     progress = true;

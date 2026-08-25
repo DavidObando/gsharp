@@ -1598,17 +1598,26 @@ internal sealed partial class StatementBinder
             && convertedInitializer is not null)
         {
             if (declaredVariable is GlobalVariableSymbol
-                && (declaredVariable.Type == TypeSymbol.NInt || declaredVariable.Type == TypeSymbol.NUInt))
+                && ConstantExpressionEvaluator.TryFindNativeInteger(convertedInitializer, out var nativeType))
             {
                 Diagnostics.ReportConstNativeIntegerNotSupported(
                     syntax.Identifier.Location,
                     syntax.Identifier.Text,
-                    declaredVariable.Type.Name);
+                    Invariant.Required(nativeType, "a detected native integer has a type").Name);
             }
-            else if (DeclarationBinder.TryFoldConstantValue(convertedInitializer, declaredVariable.Type, out constValue)
-                && declaredVariable is GlobalVariableSymbol global)
+            else if (ConstantExpressionEvaluator.TryFold(convertedInitializer, declaredVariable.Type, out constValue))
             {
-                global.SetConstantValue(constValue);
+                if (declaredVariable is GlobalVariableSymbol global)
+                {
+                    global.SetConstantValue(constValue);
+                }
+            }
+            else if (declaredVariable is GlobalVariableSymbol
+                && convertedInitializer is not BoundErrorExpression)
+            {
+                Diagnostics.ReportConstFieldInitializerNotConstant(
+                    syntax.Initializer?.Location ?? syntax.Identifier.Location,
+                    syntax.Identifier.Text);
             }
         }
 
