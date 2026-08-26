@@ -1619,16 +1619,21 @@ public sealed class CSharpTypeMapper
             // metadata types in that case so gsc binds the reference to the
             // right type instead of whichever homonym happens to resolve first.
             //
-            // Constraint mapping also enables this scan for metadata/metadata
-            // collisions (issue #2509). Ordinary positions retain the
-            // source-authored gate so common framework types are not qualified
-            // spuriously.
+            // Issue #3554: the imported-namespace scan now runs for METADATA
+            // types in ordinary positions too (previously constraint-mapping
+            // only, #2509). The scan only fires when a DISTINCT same-named
+            // type actually sits in another of this file's imported
+            // namespaces, so common framework types still print bare; but a
+            // genuine metadata/metadata collision — G#'s own
+            // `GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts` referenced
+            // fully-qualified in a file that also imports
+            // `Microsoft.CodeAnalysis.CSharp` (Roslyn's `SyntaxFacts`) —
+            // previously shortened to a bare name gsc silently bound to the
+            // WRONG package (GS0159 "Cannot find function IsReservedIdentifier").
             bool isSourceType = named.Locations.Any(l => l.IsInSource);
-            bool scanImportedNamespaces = isSourceType
-                || this.qualifyMetadataImportCollisions;
             bool ambiguous = this.HasSourceHomonym(named, context)
                 || visibleNestedHomonym
-                || (scanImportedNamespaces && this.HasImportedNamespaceHomonym(named, context));
+                || this.HasImportedNamespaceHomonym(named, context);
             if (!ambiguous)
             {
                 return simpleName;
@@ -1664,11 +1669,13 @@ public sealed class CSharpTypeMapper
 
         this.TrackShortenedNamespace(outermost);
         string nestedName = string.Join(".", parts);
-        bool scanOutermostImports = outermost.Locations.Any(l => l.IsInSource)
-            || this.qualifyMetadataImportCollisions;
+
+        // Issue #3554: same unconditional imported-namespace scan as the
+        // top-level branch above — the containing type of a nested reference
+        // can collide across imported metadata namespaces just as easily.
         bool outermostAmbiguous = this.HasSourceHomonym(outermost, context)
             || this.HasVisibleSourceNestedHomonym(outermost, context, location)
-            || (scanOutermostImports && this.HasImportedNamespaceHomonym(outermost, context));
+            || this.HasImportedNamespaceHomonym(outermost, context);
         if (!outermostAmbiguous)
         {
             return nestedName;
