@@ -367,8 +367,9 @@ public static class ClrNullability
     /// <summary>
     /// Constructs a <see cref="TypeSymbol"/> for <paramref name="clrType"/> by
     /// reading the nullability byte at <paramref name="offset"/> within
-    /// <paramref name="flags"/>, and (for generic types with further inner bytes)
-    /// wrapping the result in a <see cref="NullabilityAnnotatedTypeSymbol"/>.
+    /// <paramref name="flags"/>, and (for generic or array types with further
+    /// inner bytes) wrapping the result in a
+    /// <see cref="NullabilityAnnotatedTypeSymbol"/>.
     /// </summary>
     /// <param name="clrType">The CLR type to map.</param>
     /// <param name="flags">The full nullable-flags byte array.</param>
@@ -384,16 +385,31 @@ public static class ClrNullability
             return baseSymbol;
         }
 
-        if (clrType.IsArray && clrType.GetArrayRank() > 1)
+        if (clrType.IsArray)
         {
-            var elementType = SymbolFromFlagsOffset(
-                Invariant.Required(clrType.GetElementType(), "an array type has an element type"),
-                flags,
-                offset + 1);
-            var rectangular = RectangularArrayTypeSymbol.Get(elementType, clrType.GetArrayRank());
+            if (clrType.GetArrayRank() > 1)
+            {
+                var elementType = SymbolFromFlagsOffset(
+                    Invariant.Required(clrType.GetElementType(), "an array type has an element type"),
+                    flags,
+                    offset + 1);
+                var rectangular = RectangularArrayTypeSymbol.Get(elementType, clrType.GetArrayRank());
+                return IsPositionNonNull(flags, offset)
+                    ? rectangular
+                    : NullableTypeSymbol.Get(rectangular);
+            }
+
+            TypeSymbol array = baseSymbol;
+            if (flags.Length > offset + 1)
+            {
+                array = new NullabilityAnnotatedTypeSymbol(
+                    baseSymbol,
+                    flags.Skip(offset).ToImmutableArray());
+            }
+
             return IsPositionNonNull(flags, offset)
-                ? rectangular
-                : NullableTypeSymbol.Get(rectangular);
+                ? array
+                : NullableTypeSymbol.Get(array);
         }
 
         if (clrType.IsValueType)
@@ -454,7 +470,7 @@ public static class ClrNullability
 
         var flags = ReadNullableFlags(declaration, enclosingMember);
 
-        if (clrType.IsArray && clrType.GetArrayRank() > 1)
+        if (clrType.IsArray)
         {
             return SymbolFromFlagsOffset(clrType, flags, 0);
         }
