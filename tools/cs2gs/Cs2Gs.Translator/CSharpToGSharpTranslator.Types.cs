@@ -667,7 +667,57 @@ public sealed partial class CSharpToGSharpTranslator
                     expression.GetLocation());
             }
 
+            // Issue #3553: C# also target-types REFERENCE arms — `value switch
+            // { ExpressionSyntax e => new[] { e }, BlockSyntax b =>
+            // b.DescendantNodes()…, _ => Enumerable.Empty<ExpressionSyntax>() }`
+            // converts every arm to the switch's IEnumerable<T> — while gsc
+            // requires every arm to produce the first arm's type (GS0179).
+            // When an arm's own reference type differs from its converted
+            // reference type by more than a nullable annotation, spell the
+            // upcast (`arm as T`). Annotation-only differences stay bare (the
+            // `!!`/promotion machinery owns those), as do identical types.
+            if (info.Type is { IsReferenceType: true } armType
+                && info.ConvertedType is { IsReferenceType: true } armTarget
+                && !SymbolEqualityComparer.Default.Equals(armType, armTarget)
+                && info.Type.TypeKind != TypeKind.Error
+                && info.ConvertedType.TypeKind != TypeKind.Error)
+            {
+                return this.CoerceReferenceValueTo(expression, translated, armTarget);
+            }
+
             return translated;
+        }
+
+        // Issue #3553: spells a reference upcast to the converted type. A
+        // provably non-null value uses the non-null spelling — the
+        // conversion-call `T(expr)` for class targets, the unambiguous
+        // checked-reference-cast `cast[T](expr)` for (generic) interface
+        // targets. A value that is nullable on the G# side (a C# `T?` arm, or
+        // an oblivious promoted-nullable read — the #2412 contract keeps such
+        // arms un-forgiven and widens the RESULT instead) uses the safe cast
+        // `expr as T`, whose `T?` result unifies at the widened nullable type.
+        private GExpression CoerceReferenceValueTo(
+            ExpressionSyntax expression,
+            GExpression translated,
+            ITypeSymbol targetType)
+        {
+            Location location = expression.GetLocation();
+            GTypeReference target = this.typeMapper.Map(targetType, this.context, location);
+            bool nullableValue =
+                translated is not NonNullAssertionExpression
+                && (this.context.GetTypeInfo(expression).Type?.NullableAnnotation == NullableAnnotation.Annotated
+                    || (this.IsObliviousCompilation() && this.IsNullablePromotedValue(expression)));
+            if (nullableValue)
+            {
+                return new ParenthesizedExpression(
+                    new BinaryExpression(translated, "as", new TypeExpression(target)));
+            }
+
+            // Always the unambiguous constructor-independent `cast[T](expr)`
+            // form: the conversion-call `T(expr)` doesn't bind for generic
+            // interface targets and parses as CONSTRUCTION for class targets
+            // (GS0386 on an abstract base — Oahu's DescriptorFactory).
+            return new ConversionExpression(target, translated, isCheckedReferenceCast: true);
         }
 
         private GExpression TranslateSwitchPatternGuard(

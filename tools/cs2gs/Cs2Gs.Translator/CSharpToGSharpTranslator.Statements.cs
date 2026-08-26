@@ -1194,6 +1194,35 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            // Issue #3553: C# also target-types REFERENCE arms to the
+            // conditional's common type (`cond ? new NonNullAssertionExpression(…)
+            // : new IdentifierExpression(…)` converts both to the shared base),
+            // while gsc requires a common result type outright (GS0263). When an
+            // arm's own reference type differs from the common reference type by
+            // more than a nullable annotation, spell the upcast (`arm as T`).
+            // Mirrors CoerceSwitchArmNumericValue's reference rule for switch
+            // arms; each arm is coerced independently.
+            if (resultType is { IsReferenceType: true, TypeKind: not TypeKind.Error })
+            {
+                if (trueType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
+                    && !SymbolEqualityComparer.Default.Equals(trueType, resultType))
+                {
+                    whenTrue = this.CoerceReferenceValueTo(
+                        conditional.WhenTrue,
+                        whenTrue,
+                        resultType);
+                }
+
+                if (falseType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
+                    && !SymbolEqualityComparer.Default.Equals(falseType, resultType))
+                {
+                    whenFalse = this.CoerceReferenceValueTo(
+                        conditional.WhenFalse,
+                        whenFalse,
+                        resultType);
+                }
+            }
+
             // A `null` arm (`cond ? value : null`) carries no type of its own, so
             // G# infers the conditional's type purely from the non-null arm — the
             // bare `nil` then fails to unify (GS0155 "cannot convert nil to T", and
