@@ -875,6 +875,27 @@ internal static class ObliviousNullabilityAnalyzer
                     edges.Add((Canonical(source), parameterSymbol));
                 }
             }
+
+            // Issue #3501: an `out`/`ref` argument flows the OPPOSITE way — the
+            // callee writes the parameter's value into the caller's variable, so
+            // a tainted out parameter (`bool TryGetTupleType(..., out
+            // INamedTypeSymbol tupleType)` assigning an `as`-cast) makes the
+            // receiving out-var local `T?` too. Without this edge the local's
+            // symbol stayed untainted while gsc independently inferred the
+            // out-var's type from the promoted parameter (`T?`), so downstream
+            // reads passed a `T?` where the translator believed a `T` flowed
+            // (GS0154) and never bridged with `!!`.
+            if (parameter.RefKind is RefKind.Out or RefKind.Ref)
+            {
+                ISymbol receiver =
+                    value is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax designation }
+                        ? model.GetDeclaredSymbol(designation)
+                        : ResolveAssignable(value, model);
+                if (receiver != null && IsValueDeclarationSymbol(receiver))
+                {
+                    edges.Add((Canonical(receiver), parameterSymbol));
+                }
+            }
         }
     }
 
