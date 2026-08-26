@@ -64,6 +64,49 @@ internal static class NullableFlagsBuilder
         return builder.ToImmutable();
     }
 
+    /// <summary>
+    /// Merges receiver-projected generic nullability with declaration-site
+    /// nullable metadata, then decodes the closed reflected type.
+    /// Declaration byte <c>2</c> widens a projected position; other declaration
+    /// bytes never erase nullable type arguments supplied by the receiver.
+    /// </summary>
+    /// <param name="projectedType">Type after receiver generic substitution.</param>
+    /// <param name="actualType">Closed reflected member type.</param>
+    /// <param name="layoutType">Open declaration type defining metadata positions.</param>
+    /// <param name="declarationFlags">Declaration nullable flags.</param>
+    /// <returns>Combined nullability-aware type.</returns>
+    internal static TypeSymbol MergeDeclarationNullability(
+        TypeSymbol projectedType,
+        Type actualType,
+        Type layoutType,
+        ImmutableArray<byte> declarationFlags)
+    {
+        if (declarationFlags.IsDefaultOrEmpty)
+        {
+            return projectedType;
+        }
+
+        var projectedFlags = ClrNullability.ExpandNullableFlags(
+            layoutType,
+            Build(projectedType));
+        var declaredFlags = ClrNullability.ExpandNullableFlags(
+            layoutType,
+            declarationFlags);
+        var merged = ImmutableArray.CreateBuilder<byte>(projectedFlags.Length);
+        for (var i = 0; i < projectedFlags.Length; i++)
+        {
+            merged.Add(
+                declaredFlags[i] == Annotated
+                    ? Annotated
+                    : projectedFlags[i]);
+        }
+
+        return ClrNullability.SymbolFromLayoutFlags(
+            actualType,
+            layoutType,
+            merged.MoveToImmutable());
+    }
+
     private static void Append(
         TypeSymbol type,
         ImmutableArray<byte>.Builder builder,

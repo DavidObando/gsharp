@@ -617,6 +617,25 @@ public static class ClrNullability
         return result;
     }
 
+    /// <summary>
+    /// Decodes nullable flags described by an open metadata signature onto its
+    /// reflected closed CLR type.
+    /// </summary>
+    /// <param name="actualType">Closed reflected type to decode.</param>
+    /// <param name="layoutType">Open metadata type that defines flag positions.</param>
+    /// <param name="flags">Nullable flags in <paramref name="layoutType"/> order.</param>
+    /// <returns>Decoded closed type symbol.</returns>
+    internal static TypeSymbol SymbolFromLayoutFlags(
+        Type actualType,
+        Type layoutType,
+        ImmutableArray<byte> flags)
+    {
+        var projectedFlags = ClrTypeUtilities.AreSame(actualType, layoutType)
+            ? flags
+            : ProjectNullableFlags(actualType, layoutType, flags);
+        return SymbolFromFlagsOffset(actualType, projectedFlags, 0);
+    }
+
     private static TupleTypeSymbol BuildTupleTypeSymbol(
         Type clrType,
         ImmutableArray<byte> flags,
@@ -659,12 +678,9 @@ public static class ClrNullability
         }
 
         var flags = ReadNullableFlags(declaration, enclosingMember);
-        if (layoutType != null && !ClrTypeUtilities.AreSame(clrType, layoutType))
-        {
-            flags = ProjectNullableFlags(clrType, layoutType, flags);
-        }
-
-        return SymbolFromFlagsOffset(clrType, flags, 0);
+        return layoutType == null
+            ? SymbolFromFlagsOffset(clrType, flags, 0)
+            : SymbolFromLayoutFlags(clrType, layoutType, flags);
     }
 
     private static ImmutableArray<byte> ProjectNullableFlags(

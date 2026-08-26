@@ -60,6 +60,36 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             {
             }
 
+            public class GenericNullableBase<T>
+            {
+                public T? Value = default;
+            }
+
+            public sealed class GenericNullableDerived<T>
+                : GenericNullableBase<T>
+            {
+            }
+
+            public class GenericNullableMiddle<T>
+                : GenericNullableBase<T>
+            {
+            }
+
+            public sealed class GenericNullableLeaf<T>
+                : GenericNullableMiddle<T>
+            {
+            }
+
+            public class GenericNestedBase<T>
+            {
+                public List<T?> Values = new();
+            }
+
+            public sealed class GenericNestedDerived<T>
+                : GenericNestedBase<T>
+            {
+            }
+
             public static class DirectFields
             {
                 public static string Required = "";
@@ -109,6 +139,12 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                     LeafSecondNonNull = new();
                 public static GenericLeaf<string, string?>
                     LeafSecondNullable = new();
+                public static GenericNullableDerived<string>
+                    NullableDeclared = new();
+                public static GenericNullableLeaf<string>
+                    NullableDeclaredLeaf = new();
+                public static GenericNestedDerived<string>
+                    NestedNullableDeclared = new();
             }
 
             public static class GenericMethods
@@ -239,6 +275,8 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.DirectFields", out var direct));
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.GenericMethods", out var genericMethods));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.GenericNullableBase`1", out var nullableBase));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.GenericNestedBase`1", out var nestedBase));
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.ContextFields", out var context));
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.ObliviousFields", out var oblivious));
 
@@ -258,6 +296,16 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         Assert.Equal(Tuple8Flags, GetNullableFlags(direct.GetField("Tuple8")!));
         Assert.Equal(Tuple15Flags, GetNullableFlags(direct.GetField("Tuple15")!));
         Assert.Empty(GetNullableFlags(direct.GetField("NonNullArray")!));
+        var nullableValueField = nullableBase.GetField("Value")!;
+        Assert.Empty(GetNullableFlags(nullableValueField));
+        Assert.Equal(
+            new byte[] { 2 },
+            ClrNullability.ReadNullableFlags(
+                nullableValueField,
+                nullableBase).ToArray());
+        Assert.Equal(
+            new byte[] { 1, 2 },
+            GetNullableFlags(nestedBase.GetField("Values")!));
 
         var pairMethod = genericMethods.GetMethod("MakeStructPair")!;
         Assert.Equal(
@@ -419,10 +467,21 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               DirectFields.LeafSecondNullable.Value = nil
               let leafNullable string? = DirectFields.LeafSecondNullable.Value
 
+              DirectFields.NullableDeclared.Value = nil
+              let declaredNullable string? = DirectFields.NullableDeclared.Value
+              DirectFields.NullableDeclaredLeaf.Value = nil
+              let leafDeclaredNullable string? = DirectFields.NullableDeclaredLeaf.Value
+
+              DirectFields.NestedNullableDeclared.Values.Add(nil)
+              let nestedNullable string? = DirectFields.NestedNullableDeclared.Values[0]
+
               return derived == "derived"
                 && derivedNullable == nil
                 && leaf == "leaf"
-                && leafNullable == nil ? 0 : 1
+                && leafNullable == nil
+                && declaredNullable == nil
+                && leafDeclaredNullable == nil
+                && nestedNullable == nil ? 0 : 1
             }
             """;
 
@@ -452,6 +511,11 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               let derived string = DirectFields.DerivedSecondNullable.Value
               DirectFields.LeafSecondNonNull.Value = nil
               let leaf string = DirectFields.LeafSecondNullable.Value
+
+              let declared string = DirectFields.NullableDeclared.Value
+              let leafDeclared string = DirectFields.NullableDeclaredLeaf.Value
+              DirectFields.NestedNullableDeclared.Values.Add(nil)
+              let nested string = DirectFields.NestedNullableDeclared.Values[0]
             }
             """;
 
@@ -464,7 +528,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(
-            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 4,
+            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 7,
             result.Diagnostics);
         Assert.DoesNotContain("GS9998", result.Diagnostics, StringComparison.Ordinal);
     }

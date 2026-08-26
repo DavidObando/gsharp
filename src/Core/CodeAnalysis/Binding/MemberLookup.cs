@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -3835,12 +3836,29 @@ internal sealed class MemberLookup
             && openDefinition != null)
         {
             var openField = openDefinition.GetField(closedField.Name, AllFields);
-            var openParameter = openField?.FieldType;
-            if (openParameter?.IsGenericParameter == true
-                && (uint)openParameter.GenericParameterPosition
-                    < (uint)declaringTypeArguments.Length)
+            if (openField != null)
             {
-                return declaringTypeArguments[openParameter.GenericParameterPosition];
+                var mapped = MapOpenClrTypeToSymbolic(
+                    openField.FieldType,
+                    openDefinition,
+                    declaringTypeArguments);
+                var declarationFlags = ClrNullability.ReadNullableFlags(
+                    openField,
+                    openDefinition);
+                if (TypeSymbol.RequiresSymbolicProjection(mapped))
+                {
+                    return openField.FieldType.IsGenericParameter
+                        && !declarationFlags.IsDefaultOrEmpty
+                        && declarationFlags[0] == NullableFlagsBuilder.Annotated
+                            ? NullableTypeSymbol.Get(mapped)
+                            : mapped;
+                }
+
+                return NullableFlagsBuilder.MergeDeclarationNullability(
+                    mapped,
+                    closedField.FieldType,
+                    openField.FieldType,
+                    declarationFlags);
             }
         }
 
