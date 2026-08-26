@@ -470,7 +470,11 @@ internal sealed partial class ExpressionBinder
                     // accessor and emits a verifiable `callvirt get_H`.
                     // Inherited base-interface members are surfaced because
                     // TypeMemberModel.TryGetProperty walks SelfAndAllBaseInterfaces.
-                    if (TypeMemberModel.TryGetProperty(ifaceSym, ne.IdentifierToken.Text, out var ifaceProp, out _))
+                    if (TypeMemberModel.TryGetPropertyWithOwner(
+                        ifaceSym,
+                        ne.IdentifierToken.Text,
+                        out var ifaceProp,
+                        out var ifacePropertyOwner))
                     {
                         if (!ifaceProp.HasGetter)
                         {
@@ -478,7 +482,32 @@ internal sealed partial class ExpressionBinder
                             return new BoundErrorExpression(null);
                         }
 
-                        return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
+                        if (!AccessibilityChecker.IsAccessible(
+                            ifaceProp.GetterAccessibility,
+                            ifacePropertyOwner,
+                            this.function))
+                        {
+                            Diagnostics.ReportMemberInaccessible(
+                                ne.IdentifierToken.Location,
+                                ifaceProp.Name,
+                                ifacePropertyOwner?.Name ?? ifaceSym.Name,
+                                ifaceProp.GetterAccessibility);
+                        }
+
+                        var propertyType = ifacePropertyOwner is InterfaceSymbol effectiveOwner
+                            ? effectiveOwner.SubstituteMemberType(ifaceProp.Type)
+                            : ifaceProp.Type;
+                        var substitutedPropertyType = ReferenceEquals(
+                            propertyType,
+                            ifaceProp.Type)
+                            ? null
+                            : propertyType;
+                        return new BoundPropertyAccessExpression(
+                            null,
+                            receiver,
+                            null,
+                            ifaceProp,
+                            substitutedPropertyType);
                     }
 
                     // Issue #1397: an instance method declared on the static

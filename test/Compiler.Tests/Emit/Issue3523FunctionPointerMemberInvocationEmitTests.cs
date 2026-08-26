@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using Xunit;
@@ -194,12 +195,103 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
         Assert.Equal($"41{Environment.NewLine}", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source)
+    [Fact]
+    public void GenericStructClassAndMethodPointerSignatures_RunClosed()
+    {
+        const string source = """
+            package Issue3523GenericOwners
+            import System
+
+            unsafe func identity(value int32) int32 -> value
+            unsafe func choose[T](pointer *func(T) T) *func(T) T -> pointer
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(T) T
+                prop Handler *func(T) T -> Apply
+                shared { var SharedApply *func(T) T }
+            }
+
+            unsafe class Holder[T] {
+                let Apply *func(T) T
+                init(apply *func(T) T) { Apply = apply }
+            }
+
+            unsafe func Main() {
+                let dispatch = Dispatch[int32]{Apply: &identity}
+                Dispatch[int32].SharedApply = &identity
+                let holder = Holder[int32](&identity)
+                let selected *func(int32) int32 = choose[int32](&identity)
+
+                Console.WriteLine(dispatch.Apply(41))
+                Console.WriteLine(dispatch.Handler(42))
+                Console.WriteLine(Dispatch[int32].SharedApply(43))
+                Console.WriteLine(holder.Apply(44))
+                Console.WriteLine(selected(45))
+            }
+            """;
+
+        var output = CompileAndRun(source, AssertCalliSignaturesClosedInt32);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "41",
+                "42",
+                "43",
+                "44",
+                "45",
+                string.Empty),
+            output);
+    }
+
+    [Fact]
+    public void GenericInterfaceInstanceAndStaticCalls_EmitClosedCalli()
+    {
+        const string source = """
+            package Issue3523GenericInterface
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (T) -> T { get }
+                shared { var SharedApply unmanaged[Cdecl] (T) -> T }
+            }
+
+            struct Dispatch[T] : IDispatch[T] {
+                var Pointer unmanaged[Cdecl] (T) -> T
+                prop Apply unmanaged[Cdecl] (T) -> T -> Pointer
+            }
+
+            func invoke(dispatch IDispatch[int32]) int32 {
+                let first int32 = dispatch.Apply(41)
+                let second int32 = IDispatch[int32].SharedApply(42)
+                return first + second
+            }
+
+            func Main() { }
+            """;
+
+        var outputDirectory = Compile(source, out var outputPath);
+        try
+        {
+            VerifyFunctionPointerAssembly(outputPath);
+            Assert.True(
+                CountCalli(outputPath) >= 2,
+                "expected closed generic interface instance/static calli sites");
+            AssertCalliSignaturesClosedInt32(outputPath);
+        }
+        finally
+        {
+            DeleteDirectory(outputDirectory);
+        }
+    }
+
+    private static string CompileAndRun(
+        string source,
+        Action<string> inspectAssembly = null)
     {
         var outputDirectory = Compile(source, out var outputPath);
         try
         {
             VerifyFunctionPointerAssembly(outputPath);
+            inspectAssembly?.Invoke(outputPath);
 
             var startInfo = new ProcessStartInfo("dotnet")
             {
@@ -285,7 +377,11 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
     }
 
     private static bool ContainsCalli(string outputPath)
+        => CountCalli(outputPath) != 0;
+
+    private static int CountCalli(string outputPath)
     {
+        var count = 0;
         using var peReader = new PEReader(File.OpenRead(outputPath));
         var metadata = peReader.GetMetadataReader();
         foreach (var methodHandle in metadata.MethodDefinitions)
@@ -298,13 +394,49 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
 
             var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
             var instructions = IlInstructionReader.Read(body.GetILBytes() ?? Array.Empty<byte>());
-            if (instructions.Any(instruction => instruction.OpCode == OpCodes.Calli))
+            count += instructions.Count(instruction => instruction.OpCode == OpCodes.Calli);
+        }
+
+        return count;
+    }
+
+    private static void AssertCalliSignaturesClosedInt32(string outputPath)
+    {
+        using var peReader = new PEReader(File.OpenRead(outputPath));
+        var metadata = peReader.GetMetadataReader();
+        var calliCount = 0;
+        foreach (var methodHandle in metadata.MethodDefinitions)
+        {
+            var method = metadata.GetMethodDefinition(methodHandle);
+            if (method.RelativeVirtualAddress == 0)
             {
-                return true;
+                continue;
+            }
+
+            var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
+            var il = body.GetILBytes() ?? Array.Empty<byte>();
+            foreach (var instruction in IlInstructionReader.Read(il))
+            {
+                if (instruction.OpCode != OpCodes.Calli)
+                {
+                    continue;
+                }
+
+                calliCount++;
+                var token = BitConverter.ToInt32(il, instruction.Offset + 1);
+                var signatureHandle = MetadataTokens.StandaloneSignatureHandle(
+                    token & 0x00FFFFFF);
+                var signature = metadata.GetStandaloneSignature(signatureHandle);
+                var blob = metadata.GetBlobBytes(signature.Signature);
+                Assert.DoesNotContain((byte)SignatureTypeCode.GenericTypeParameter, blob);
+                Assert.DoesNotContain((byte)SignatureTypeCode.GenericMethodParameter, blob);
+                Assert.True(
+                    blob.Count(value => value == (byte)SignatureTypeCode.Int32) >= 2,
+                    $"expected closed int32 parameter/return signature: {Convert.ToHexString(blob)}");
             }
         }
 
-        return false;
+        Assert.True(calliCount > 0, "expected at least one calli signature");
     }
 
     private static void DeleteDirectory(string path)

@@ -38,12 +38,26 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="field">The interface static field to read.</param>
     /// <param name="interfaceType">The owning interface (definition or constructed).</param>
     public BoundFieldAccessExpression(SyntaxNode? syntax, FieldSymbol field, InterfaceSymbol interfaceType)
+        : this(syntax, field, interfaceType, narrowedType: null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundFieldAccessExpression"/> class for an interface static-field read with a substituted type.</summary>
+    /// <param name="syntax">Originating syntax.</param>
+    /// <param name="field">Field declared on the interface definition.</param>
+    /// <param name="interfaceType">Effective interface construction.</param>
+    /// <param name="narrowedType">Substituted member type.</param>
+    public BoundFieldAccessExpression(
+        SyntaxNode? syntax,
+        FieldSymbol field,
+        InterfaceSymbol interfaceType,
+        TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = null;
         StructType = null;
         Field = field;
-        NarrowedType = null;
+        NarrowedType = narrowedType;
         InterfaceType = interfaceType;
     }
 

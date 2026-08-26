@@ -448,6 +448,8 @@ internal sealed partial class ExpressionBinder
         var receiverInterface = receiverType as InterfaceSymbol;
         FieldSymbol? matchedField = null;
         StructSymbol? declaringType = null;
+        TypeSymbol? declaringOwner = null;
+        InterfaceSymbol? effectiveInterfaceOwner = null;
         if (isStatic && receiverStruct != null)
         {
             TypeMemberModel.TryGetStaticFieldIncludingInherited(
@@ -455,11 +457,17 @@ internal sealed partial class ExpressionBinder
                 methodName,
                 out matchedField,
                 out declaringType);
+            declaringOwner = declaringType;
         }
         else if (isStatic && receiverInterface != null)
         {
             var fieldOwner = receiverInterface.Definition ?? receiverInterface;
             matchedField = fieldOwner.GetStaticField(methodName);
+            if (matchedField != null)
+            {
+                declaringOwner = fieldOwner;
+                effectiveInterfaceOwner = receiverInterface;
+            }
         }
         else if (receiverStruct != null)
         {
@@ -472,6 +480,7 @@ internal sealed partial class ExpressionBinder
                 {
                     matchedField = f;
                     declaringType = current;
+                    declaringOwner = current;
                     break;
                 }
 
@@ -483,7 +492,7 @@ internal sealed partial class ExpressionBinder
         if (matchedField == null)
         {
             PropertySymbol? property = null;
-            StructSymbol? propertyDeclaringType = null;
+            TypeSymbol? propertyDeclaringOwner = null;
             var foundProperty = false;
             if (isStatic)
             {
@@ -493,7 +502,8 @@ internal sealed partial class ExpressionBinder
                         receiverStruct,
                         methodName,
                         out property,
-                        out propertyDeclaringType);
+                        out var propertyDeclaringType);
+                    propertyDeclaringOwner = propertyDeclaringType;
                 }
                 else if (receiverInterface != null)
                 {
@@ -505,38 +515,43 @@ internal sealed partial class ExpressionBinder
                         && candidate.HasGetter
                         && candidate.GetterSymbol != null);
                     foundProperty = property != null;
+                    propertyDeclaringOwner = propertyOwner;
                 }
             }
             else
             {
-                foundProperty = TypeMemberModel.TryGetProperty(
+                foundProperty = TypeMemberModel.TryGetPropertyWithOwner(
                     receiverType,
                     methodName,
                     out property,
-                    out propertyDeclaringType);
+                    out propertyDeclaringOwner);
             }
 
             if (foundProperty && property is { HasGetter: true })
             {
                 matchedProperty = property;
-                declaringType = propertyDeclaringType;
+                declaringOwner = propertyDeclaringOwner;
+                declaringType = propertyDeclaringOwner as StructSymbol;
+                effectiveInterfaceOwner = isStatic && receiverInterface != null
+                    ? receiverInterface
+                    : propertyDeclaringOwner as InterfaceSymbol;
             }
         }
 
-        var memberType = matchedField != null && isStatic && declaringType != null
-            ? declaringType.SubstituteMemberType(matchedField.Type)
-            : matchedField?.Type ?? matchedProperty?.Type;
-
-        // declaringType is null for a property declared on an INTERFACE: the
-        // out-parameter is a StructSymbol and an interface is not one. Bailing
-        // out here (as a nullable-warning guard once did) silently unbinds
-        // `ifaceReceiver.DelegateProp(args)` and reports GS0159 -- issues #2925
-        // and #3016. BoundPropertyAccessExpression.StructType is nullable for
-        // exactly this form, so the null flows through correctly.
-        if (memberType == null)
+        var declaredMemberType = matchedField?.Type ?? matchedProperty?.Type;
+        if (declaredMemberType == null)
         {
             return false;
         }
+
+        var memberType = effectiveInterfaceOwner != null
+            ? effectiveInterfaceOwner.SubstituteMemberType(declaredMemberType)
+            : matchedField != null && isStatic && declaringType != null
+                ? declaringType.SubstituteMemberType(declaredMemberType)
+                : declaredMemberType;
+        var substitutedMemberType = ReferenceEquals(memberType, declaredMemberType)
+            ? null
+            : memberType;
 
         // Issue #2849: derive both argument conversions and Invoke shape from
         // the narrowed stable member read, not the nullable declaration.
@@ -544,10 +559,17 @@ internal sealed partial class ExpressionBinder
         if (matchedField != null)
         {
             memberLoad = isStatic && receiverInterface != null
-                ? new BoundFieldAccessExpression(null, matchedField, receiverInterface)
-                : isStatic
-                ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
-                : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField);
+                ? new BoundFieldAccessExpression(
+                    null,
+                    matchedField,
+                    receiverInterface,
+                    substitutedMemberType)
+                : new BoundFieldAccessExpression(
+                    null,
+                    receiver,
+                    declaringType,
+                    matchedField,
+                    substitutedMemberType);
         }
         else if (matchedProperty != null)
         {
@@ -559,7 +581,7 @@ internal sealed partial class ExpressionBinder
                         matchedProperty.GetterSymbol,
                         "a matched static interface property has a getter"),
                     ImmutableArray<BoundExpression>.Empty,
-                    matchedProperty.Type)
+                    memberType)
                 {
                     StaticGenericInterfaceOwnerType = receiverInterface.Definition != null
                         ? receiverInterface
@@ -572,7 +594,8 @@ internal sealed partial class ExpressionBinder
                     null,
                     receiver,
                     declaringType,
-                    matchedProperty);
+                    matchedProperty,
+                    substitutedMemberType);
             }
         }
         else
@@ -592,17 +615,21 @@ internal sealed partial class ExpressionBinder
             ? nullableMember.UnderlyingType
             : effectiveMemberType;
 
-        if (isStatic)
+        var memberAccessibility = matchedField != null
+            ? matchedField.Accessibility
+            : matchedProperty?.GetterAccessibility;
+        if (declaringOwner != null
+            && memberAccessibility is { } accessibility
+            && !AccessibilityChecker.IsAccessible(
+                accessibility,
+                declaringOwner,
+                function))
         {
-            var accessibility = matchedField != null
-                ? matchedField.Accessibility
-                : matchedProperty?.Accessibility;
-            if (declaringType != null
-                && accessibility is { } memberAccessibility
-                && !AccessibilityChecker.IsAccessible(memberAccessibility, declaringType, function))
-            {
-                Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringType.Name, memberAccessibility);
-            }
+            Diagnostics.ReportMemberInaccessible(
+                ce.Identifier.Location,
+                methodName,
+                declaringOwner.Name,
+                accessibility);
         }
 
         if (ce.NullableQuestionToken == null

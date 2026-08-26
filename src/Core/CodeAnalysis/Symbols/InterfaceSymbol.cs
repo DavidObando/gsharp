@@ -611,6 +611,18 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => ConstructedCache.Clear();
 
+    /// <summary>Substitutes a member type through this interface construction.</summary>
+    /// <param name="type">Member type declared on the generic definition.</param>
+    /// <returns>Type closed over this interface's type arguments.</returns>
+    internal TypeSymbol SubstituteMemberType(TypeSymbol type)
+    {
+        return Definition != null
+            && !ReferenceEquals(Definition, this)
+            && !TypeArguments.IsDefaultOrEmpty
+            ? SubstituteType(type, GetTypeSubstitution(), mapClrType)
+            : type;
+    }
+
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type>? mapClrType)
@@ -988,6 +1000,42 @@ public sealed class InterfaceSymbol : TypeSymbol
         {
             var sub = SubstituteType(n.UnderlyingType, subst, mapClrType);
             return sub == n.UnderlyingType ? n : NullableTypeSymbol.Get(sub);
+        }
+
+        if (type is ByRefTypeSymbol byRef)
+        {
+            var pointee = SubstituteType(byRef.PointeeType, subst, mapClrType);
+            return ReferenceEquals(pointee, byRef.PointeeType) ? type : ByRefTypeSymbol.Get(pointee);
+        }
+
+        if (type is PointerTypeSymbol pointer)
+        {
+            var pointee = SubstituteType(pointer.PointeeType, subst, mapClrType);
+            return ReferenceEquals(pointee, pointer.PointeeType) ? type : PointerTypeSymbol.Get(pointee);
+        }
+
+        if (type is FunctionTypeSymbol function)
+        {
+            var parameters = ImmutableArray.CreateBuilder<TypeSymbol>(function.ParameterTypes.Length);
+            var changed = false;
+            foreach (var parameterType in function.ParameterTypes)
+            {
+                var substituted = SubstituteType(parameterType, subst, mapClrType);
+                parameters.Add(substituted);
+                changed |= !ReferenceEquals(substituted, parameterType);
+            }
+
+            var returnType = SubstituteType(function.ReturnType, subst, mapClrType);
+            changed |= !ReferenceEquals(returnType, function.ReturnType);
+            return changed
+                ? FunctionTypeSymbol.Get(parameters.MoveToImmutable(), function.IsVariadic, returnType)
+                : type;
+        }
+
+        if (type is FunctionPointerTypeSymbol functionPointer)
+        {
+            return functionPointer.Substitute(
+                nested => SubstituteType(nested, subst, mapClrType));
         }
 
         return type;

@@ -2678,13 +2678,13 @@ public sealed class StructSymbol : TypeSymbol
                 : MapTypeSymbol.Get(substKey, substValue);
         }
 
-        if (eraseReferenceNullability && type is ByRefTypeSymbol byRef)
+        if (type is ByRefTypeSymbol byRef)
         {
             var pointee = SubstituteNested(byRef.PointeeType);
             return ReferenceEquals(pointee, byRef.PointeeType) ? type : ByRefTypeSymbol.Get(pointee);
         }
 
-        if (eraseReferenceNullability && type is PointerTypeSymbol pointer)
+        if (type is PointerTypeSymbol pointer)
         {
             var pointee = SubstituteNested(pointer.PointeeType);
             return ReferenceEquals(pointee, pointer.PointeeType) ? type : PointerTypeSymbol.Get(pointee);
@@ -2739,6 +2739,11 @@ public sealed class StructSymbol : TypeSymbol
             return fn.IsVariadic.IsDefaultOrEmpty
                 ? FunctionTypeSymbol.Get(substitutedParams.MoveToImmutable(), substitutedReturn)
                 : FunctionTypeSymbol.Get(substitutedParams.MoveToImmutable(), fn.IsVariadic, substitutedReturn);
+        }
+
+        if (type is FunctionPointerTypeSymbol functionPointer)
+        {
+            return functionPointer.Substitute(SubstituteNested);
         }
 
         return type;

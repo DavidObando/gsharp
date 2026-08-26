@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Runtime.InteropServices;
 using GSharp.Core.CodeAnalysis;
@@ -245,6 +246,302 @@ public class Issue3523FunctionPointerMemberInvocationTests
 
         var error = Assert.Single(GetErrors(source));
         Assert.Equal("GS0503", error.Id);
+    }
+
+    [Fact]
+    public void ManagedPointerCallsOutsideUnsafe_ReportAtEveryCallee()
+    {
+        const string source = """
+            package Issue3523UnsafeCalls
+
+            unsafe struct Dispatch {
+                var Apply *func(int32) int32
+                prop Handler *func(int32) int32 -> Apply
+                var Pointers []*func(int32) int32
+                shared { var SharedApply *func(int32) int32 }
+            }
+
+            open unsafe class Base {
+                protected var Apply *func(int32) int32
+            }
+
+            class Derived : Base {
+                func Invoke() { Apply(1) }
+            }
+
+            func Main() {
+                let dispatch = Dispatch{}
+                dispatch.Apply(1)
+                dispatch.Handler(2)
+                (dispatch.Apply)(3)
+                dispatch.Pointers[0](4)
+                Dispatch.SharedApply(5)
+            }
+            """;
+
+        var errors = GetErrors(source);
+        Assert.Equal(6, errors.Length);
+        Assert.All(errors, diagnostic => Assert.Equal("GS0404", diagnostic.Id));
+        Assert.Equal(
+            new[]
+            {
+                "Apply",
+                "Apply",
+                "Handler",
+                "(dispatch.Apply)",
+                "dispatch.Pointers[0]",
+                "SharedApply",
+            },
+            errors.Select(diagnostic => diagnostic.Location.Text.ToString(diagnostic.Location.Span)));
+    }
+
+    [Fact]
+    public void UnmanagedPointerCalls_DoNotRequireUnsafeContext()
+    {
+        const string source = """
+            package Issue3523UnmanagedCalls
+
+            struct Dispatch {
+                var Apply unmanaged[Cdecl] (int32) -> int32
+                prop Handler unmanaged[Cdecl] (int32) -> int32 -> Apply
+                shared { var SharedApply unmanaged[Cdecl] (int32) -> int32 }
+            }
+
+            func Main() {
+                let dispatch = Dispatch{}
+                dispatch.Apply(1)
+                dispatch.Handler(2)
+                (dispatch.Apply)(3)
+                Dispatch.SharedApply(4)
+            }
+            """;
+
+        _ = BindWithoutErrors(source);
+    }
+
+    [Fact]
+    public void GenericStructClassAndMethodPointerSignatures_Close()
+    {
+        const string source = """
+            package Issue3523GenericOwners
+
+            unsafe func identity(value int32) int32 -> value
+            unsafe func choose[T](pointer *func(T) T) *func(T) T -> pointer
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(T) T
+                prop Handler *func(T) T -> Apply
+                shared { var SharedApply *func(T) T }
+            }
+
+            unsafe class Holder[T] {
+                let Apply *func(T) T
+                init(apply *func(T) T) { Apply = apply }
+            }
+
+            unsafe func Main() {
+                let dispatch = Dispatch[int32]{Apply: &identity}
+                Dispatch[int32].SharedApply = &identity
+                let holder = Holder[int32](&identity)
+                let selected *func(int32) int32 = choose[int32](&identity)
+                let a int32 = dispatch.Apply(41)
+                let b int32 = dispatch.Handler(42)
+                let c int32 = Dispatch[int32].SharedApply(43)
+                let d int32 = holder.Apply(44)
+                let e int32 = selected(45)
+            }
+            """;
+
+        var invocations = CollectInvocations(BindWithoutErrors(source));
+        Assert.Equal(5, invocations.Count);
+        Assert.All(
+            invocations,
+            invocation =>
+            {
+                Assert.True(invocation.FunctionPointerType.IsManaged);
+                Assert.Same(TypeSymbol.Int32, Assert.Single(invocation.FunctionPointerType.ParameterTypes));
+                Assert.Same(TypeSymbol.Int32, invocation.FunctionPointerType.ReturnType);
+            });
+    }
+
+    [Fact]
+    public void GenericInterfaceInstanceAndStaticPointerSignatures_Close()
+    {
+        const string source = """
+            package Issue3523GenericInterface
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (T) -> T { get }
+                shared { var SharedApply unmanaged[Cdecl] (T) -> T }
+            }
+
+            struct Dispatch[T] : IDispatch[T] {
+                var Pointer unmanaged[Cdecl] (T) -> T
+                prop Apply unmanaged[Cdecl] (T) -> T -> Pointer
+            }
+
+            func invoke(dispatch IDispatch[int32]) int32 {
+                let first int32 = dispatch.Apply(41)
+                let second int32 = IDispatch[int32].SharedApply(42)
+                return first + second
+            }
+            """;
+
+        var invocations = CollectInvocations(BindWithoutErrors(source));
+        Assert.Equal(2, invocations.Count);
+        Assert.All(
+            invocations,
+            invocation =>
+            {
+                Assert.False(invocation.FunctionPointerType.IsManaged);
+                Assert.Equal(CallingConvention.Cdecl, invocation.FunctionPointerType.CallingConvention);
+                Assert.Same(TypeSymbol.Int32, Assert.Single(invocation.FunctionPointerType.ParameterTypes));
+                Assert.Same(TypeSymbol.Int32, invocation.FunctionPointerType.ReturnType);
+            });
+    }
+
+    [Fact]
+    public void ClosedGenericPointerMembers_RejectWrongArgumentTypes()
+    {
+        const string source = """
+            package Issue3523GenericDiagnostics
+
+            unsafe func identity(value int32) int32 -> value
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(T) T
+                prop Handler *func(T) T -> Apply
+                shared { var SharedApply *func(T) T }
+            }
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (T) -> T { get }
+                shared { var SharedApply unmanaged[Cdecl] (T) -> T }
+            }
+
+            unsafe func bad(dispatch Dispatch[int32], iface IDispatch[int32]) {
+                dispatch.Apply("bad")
+                dispatch.Handler("bad")
+                Dispatch[int32].SharedApply("bad")
+                iface.Apply("bad")
+                IDispatch[int32].SharedApply("bad")
+            }
+            """;
+
+        var errors = GetErrors(source);
+        Assert.Equal(5, errors.Length);
+        Assert.All(
+            errors,
+            diagnostic =>
+            {
+                Assert.Equal("GS0155", diagnostic.Id);
+                Assert.Contains("string", diagnostic.Message);
+                Assert.Contains("int32", diagnostic.Message);
+            });
+    }
+
+    [Fact]
+    public void PointerSubstitution_PreservesAbiAndByRefShapes()
+    {
+        var parameter = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>
+        {
+            [parameter] = TypeSymbol.Int32,
+        };
+        var parameterTypes = ImmutableArray.Create<TypeSymbol>(
+            ByRefTypeSymbol.Get(parameter));
+
+        var managed = FunctionPointerTypeSymbol.GetManaged(
+            parameterTypes,
+            PointerTypeSymbol.Get(parameter));
+        var unmanaged = FunctionPointerTypeSymbol.Get(
+            CallingConvention.StdCall,
+            parameterTypes,
+            PointerTypeSymbol.Get(parameter));
+
+        var closedManaged = Assert.IsType<FunctionPointerTypeSymbol>(
+            Binder.SubstituteType(managed, substitution));
+        var closedUnmanaged = Assert.IsType<FunctionPointerTypeSymbol>(
+            Binder.SubstituteType(unmanaged, substitution));
+
+        Assert.True(closedManaged.IsManaged);
+        Assert.False(closedUnmanaged.IsManaged);
+        Assert.Equal(CallingConvention.StdCall, closedUnmanaged.CallingConvention);
+        foreach (var pointer in new[] { closedManaged, closedUnmanaged })
+        {
+            var byRef = Assert.IsType<ByRefTypeSymbol>(Assert.Single(pointer.ParameterTypes));
+            Assert.Same(TypeSymbol.Int32, byRef.PointeeType);
+            var returnPointer = Assert.IsType<PointerTypeSymbol>(pointer.ReturnType);
+            Assert.Same(TypeSymbol.Int32, returnPointer.PointeeType);
+        }
+    }
+
+    [Fact]
+    public void CallableMembers_ApplyFieldAndGetterAccessibility()
+    {
+        const string source = """
+            package Issue3523Accessibility
+
+            open class Owner {
+                private var PrivateField unmanaged[Cdecl] (int32) -> int32
+                protected var ProtectedField unmanaged[Cdecl] (int32) -> int32
+                internal var InternalField unmanaged[Cdecl] (int32) -> int32
+                private var PrivateDelegate (int32) -> int32
+
+                prop Restricted unmanaged[Cdecl] (int32) -> int32 {
+                    private get -> PrivateField
+                }
+
+                func Allowed() {
+                    PrivateField(1)
+                    Restricted(2)
+                    PrivateDelegate(3)
+                }
+            }
+
+            class Derived : Owner {
+                func AllowedDerived(owner Owner) {
+                    owner.ProtectedField(1)
+                    owner.InternalField(2)
+                }
+            }
+
+            class Unrelated {
+                func Denied(owner Owner) {
+                    owner.PrivateField(1)
+                    owner.ProtectedField(2)
+                    owner.Restricted(3)
+                    owner.PrivateDelegate(4)
+                    owner.InternalField(5)
+                }
+            }
+
+            interface IStatic {
+                shared {
+                    private var Hidden unmanaged[Cdecl] (int32) -> int32
+                    internal var Internal unmanaged[Cdecl] (int32) -> int32
+                    private func Allowed() { IStatic.Hidden(1) }
+                }
+            }
+
+            func DeniedStatic() {
+                IStatic.Hidden(1)
+                (IStatic.Hidden)(2)
+                IStatic.Internal(3)
+            }
+            """;
+
+        var errors = GetErrors(source);
+        Assert.Equal(
+            new[] { "GS0472", "GS0379", "GS0472", "GS0472", "GS0472", "GS0472" },
+            errors.Select(diagnostic => diagnostic.Id));
+        Assert.Contains(errors, diagnostic => diagnostic.Message.Contains("Owner.Restricted"));
+        Assert.Contains(errors, diagnostic => diagnostic.Message.Contains("Owner.PrivateDelegate"));
+        Assert.Equal(2, errors.Count(diagnostic => diagnostic.Message.Contains("IStatic.Hidden")));
     }
 
     private static BoundProgram BindWithoutErrors(string source)
