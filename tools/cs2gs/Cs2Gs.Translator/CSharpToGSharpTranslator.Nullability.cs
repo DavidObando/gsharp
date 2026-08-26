@@ -703,10 +703,18 @@ public sealed partial class CSharpToGSharpTranslator
                 IsStoredMemberNullabilitySymbol(symbol) || sharedDocument
                     ? this.context.RepositoryCompilations ?? this.context.SiblingCompilations
                     : this.context.SiblingCompilations;
+
+            // Issue #3501: a positional record's synthesized property and its
+            // primary-constructor parameter are ONE declaration site (the same
+            // ParameterSyntax) but TWO Roslyn symbols. The taint fixpoint keys
+            // argument edges on the parameter (`new Entry(null, …)`), while a
+            // member read (`entry.GsNamespace`) binds the property — query the
+            // parameter's taint for such a property so the value bridge and the
+            // promoted declaration agree.
             if (declared.NullableAnnotation == NullableAnnotation.None
                 && ObliviousNullabilityAnalyzer.IsTainted(
                     this.context.Compilation,
-                    symbol,
+                    NormalizePositionalRecordProperty(symbol),
                     taintCompilations))
             {
                 return true;
@@ -715,6 +723,35 @@ public sealed partial class CSharpToGSharpTranslator
             return !sharedDocument
                 && symbol is not IMethodSymbol
                 && this.IsUsedAsNullable(symbol, this.GetNullabilityScope(symbol));
+        }
+
+        /// <summary>
+        /// Issue #3501: maps a positional record's synthesized property back to
+        /// the primary-constructor parameter it was generated from (both
+        /// symbols share the SAME <see cref="ParameterSyntax"/> declaration).
+        /// Any other symbol is returned unchanged.
+        /// </summary>
+        private static ISymbol NormalizePositionalRecordProperty(ISymbol symbol)
+        {
+            if (symbol is IPropertySymbol { ContainingType: { IsRecord: true } owner } property
+                && property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is ParameterSyntax declaringParameter)
+            {
+                foreach (IMethodSymbol constructor in owner.InstanceConstructors)
+                {
+                    foreach (IParameterSymbol parameter in constructor.Parameters)
+                    {
+                        if (parameter.Name == property.Name
+                            && parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                                == declaringParameter)
+                        {
+                            return parameter;
+                        }
+                    }
+                }
+            }
+
+            return symbol;
         }
 
         // Issue #3501: file paths that appear in MORE THAN ONE repository
