@@ -882,7 +882,7 @@ internal static class ObliviousNullabilityAnalyzer
                 }
             }
 
-            // Issue #3501: an `out`/`ref` argument flows the OPPOSITE way — the
+            // Issue #3501: an `out` argument flows the OPPOSITE way — the
             // callee writes the parameter's value into the caller's variable, so
             // a tainted out parameter (`bool TryGetTupleType(..., out
             // INamedTypeSymbol tupleType)` assigning an `as`-cast) makes the
@@ -891,7 +891,17 @@ internal static class ObliviousNullabilityAnalyzer
             // out-var's type from the promoted parameter (`T?`), so downstream
             // reads passed a `T?` where the translator believed a `T` flowed
             // (GS0154) and never bridged with `!!`.
-            if (parameter.RefKind is RefKind.Out or RefKind.Ref)
+            //
+            // `Deconstruct` is excluded: its out parameters feed positional
+            // deconstruction locals (`for (item, comp) in pairs`) whose G#
+            // types come from the tuple element rendering, not the parameter,
+            // and whose oblivious dereferences are not receiver-bridged —
+            // tainting them regressed the Oahu gate (member reads on a
+            // now-`T?` deconstructed local). `ref` stays excluded too: the
+            // caller's variable was initialized before the call, so its own
+            // initializer/assignment edges already model its nullability.
+            if (parameter.RefKind is RefKind.Out
+                && parameter.ContainingSymbol is not IMethodSymbol { Name: "Deconstruct" })
             {
                 ISymbol receiver =
                     value is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax designation }
