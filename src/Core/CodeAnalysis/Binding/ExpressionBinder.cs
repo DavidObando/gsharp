@@ -1261,7 +1261,9 @@ internal sealed partial class ExpressionBinder
                 return writable;
             case FieldInfo f:
                 targetType = f.FieldType;
-                targetTypeSymbol = ClrNullability.GetFieldTypeSymbol(f);
+                targetTypeSymbol = receiverType == null
+                    ? ClrNullability.GetFieldTypeSymbol(f)
+                    : MemberLookup.GetClrFieldTypeSymbol(receiverType, f);
                 writable = !f.IsInitOnly && !f.IsLiteral;
                 return writable;
             default:

@@ -388,7 +388,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
 
             var fieldSymbol = new FieldSymbol(
                 field.Name,
-                TypeSymbol.FromClrType(field.FieldType),
+                ClrNullability.GetFieldTypeSymbol(field),
                 MapAccessibility(field),
                 isReadOnly: field.IsInitOnly);
             fieldBuilder.Add(fieldSymbol);

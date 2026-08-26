@@ -512,6 +512,11 @@ public sealed record BoundBinaryOperator
             return false;
         }
 
+        while (nullableOrUnderlying is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            nullableOrUnderlying = annotated.BaseType;
+        }
+
         if (nullableOrUnderlying == TypeSymbol.Null || nullableOrUnderlying is NullableTypeSymbol)
         {
             return true;

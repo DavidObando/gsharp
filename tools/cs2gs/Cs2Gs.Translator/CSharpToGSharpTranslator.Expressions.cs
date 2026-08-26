@@ -751,14 +751,18 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression translated = this.TranslateExpression(recv);
             bool iteratorForeachReceiverRequiresAssertion =
                 this.IteratorForeachReceiverRequiresAssertion(recv);
+            bool importedGenericTupleElementRequiresAssertion =
+                this.ImportedGenericTupleElementRequiresAssertion(recv);
 
             if (!iteratorForeachReceiverRequiresAssertion
+                && !importedGenericTupleElementRequiresAssertion
                 && this.GSharpExpressionIsStaticallyNonNull(recv, translated))
             {
                 return ParenthesizeIfBareNumericLiteral(translated);
             }
 
             if (iteratorForeachReceiverRequiresAssertion
+                || importedGenericTupleElementRequiresAssertion
                 || (!this.IsActivePatternBinding(recv)
                 && !this.IsWithinExpressionTreeLambda(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
@@ -786,6 +790,33 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return ParenthesizeIfBareNumericLiteral(translated);
+        }
+
+        private bool ImportedGenericTupleElementRequiresAssertion(ExpressionSyntax receiver)
+        {
+            if (receiver is not MemberAccessExpressionSyntax memberAccess
+                || this.context.GetSymbolInfo(receiver).Symbol is not IFieldSymbol tupleField
+                || !tupleField.ContainingType.IsTupleType
+                || this.context.GetSymbolInfo(memberAccess.Expression).Symbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is VariableDeclaratorSyntax declarator
+                    && declarator.Initializer?.Value is InvocationExpressionSyntax invocation
+                    && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method
+                    && method.OriginalDefinition.ReturnType is ITypeParameterSymbol
+                    && !SymbolEqualityComparer.Default.Equals(
+                        method.ContainingAssembly,
+                        this.context.Compilation.Assembly))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool IteratorForeachReceiverRequiresAssertion(ExpressionSyntax recv)
@@ -1688,6 +1719,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Imported oblivious collection metadata applies to nested element
+            // positions too. gsc now preserves that position for indexers and
+            // foreach variables, so mirror the existing outer-member bridge at
+            // the element dereference instead of losing the producer's
+            // nullable-by-default contract.
+            if (this.IsImportedObliviousCollectionElement(value, valueSymbol))
+            {
+                return true;
+            }
+
             bool nullableByShape = value switch
             {
                 ParenthesizedExpressionSyntax parenthesized =>
@@ -1710,6 +1751,35 @@ public sealed partial class CSharpToGSharpTranslator
             return nullableByShape
                 || type.NullableAnnotation == NullableAnnotation.Annotated
                 || typeInfo.Nullability.Annotation == NullableAnnotation.Annotated;
+        }
+
+        private bool IsImportedObliviousCollectionElement(
+            ExpressionSyntax value,
+            ISymbol valueSymbol)
+        {
+            if (value is ElementAccessExpressionSyntax elementAccess
+                && this.IsImportedObliviousNullableMember(
+                    this.context.GetSymbolInfo(elementAccess.Expression).Symbol))
+            {
+                return true;
+            }
+
+            if (valueSymbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is ForEachStatementSyntax forEach
+                    && this.IsImportedObliviousNullableMember(
+                        this.context.GetSymbolInfo(forEach.Expression).Symbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)

@@ -8,18 +8,19 @@ using System.Collections.Immutable;
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
-/// A <see cref="TypeSymbol"/> that wraps an imported CLR generic type and carries
-/// the full <c>[NullableAttribute]</c> byte array so that inner-position
-/// generic-argument nullability (issue #209) can be recovered when the type is
+/// A <see cref="TypeSymbol"/> that wraps an imported CLR generic or array type
+/// and carries the full <c>[NullableAttribute]</c> byte array so that
+/// inner-position nullability (issue #209) can be recovered when the type is
 /// later used as a collection element, dictionary value, etc.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The <see cref="NullableFlags"/> array follows the C# compiler's DFS pre-order
-/// layout: byte 0 belongs to the outer type itself (always a reference type when
-/// this wrapper is created), and subsequent bytes belong to each generic type
-/// argument in order — recursively, for nested generics — skipping value-type
-/// positions (which carry no reference-nullability byte).
+/// layout: byte 0 belongs to the outer reference/array position or is the
+/// leading zero placeholder for a closed generic value type. Subsequent bytes
+/// belong to array elements and generic arguments in DFS order; non-generic
+/// value types contribute no position, and <c>Nullable&lt;T&gt;</c> is
+/// transparent.
 /// </para>
 /// <para>
 /// Example — <c>Dictionary&lt;string, string?&gt;</c>:<br/>
@@ -79,9 +80,9 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Searches the outer type's generic arguments for one whose resolved CLR type
-    /// matches <paramref name="targetClrType"/> and returns a properly-nullified
-    /// <see cref="TypeSymbol"/> for it. Falls back to a plain
+    /// Searches the outer type's generic arguments or array element for one whose
+    /// resolved CLR type matches <paramref name="targetClrType"/> and returns a
+    /// properly-nullified <see cref="TypeSymbol"/> for it. Falls back to a plain
     /// <see cref="TypeSymbol.FromClrType"/> result when no matching argument is found.
     /// </summary>
     /// <param name="targetClrType">The CLR element type to locate.</param>
@@ -94,12 +95,28 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         }
 
         var clr = ClrType;
+        if (clr?.IsArray == true)
+        {
+            var elementType = clr.GetElementType();
+            return elementType != null
+                && (elementType == targetClrType
+                    || (!elementType.IsGenericParameter && elementType.FullName == targetClrType.FullName))
+                    ? ClrNullability.SymbolFromFlagsOffset(elementType, NullableFlags, 1)
+                    : TypeSymbol.FromClrType(targetClrType);
+        }
+
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {
             return TypeSymbol.FromClrType(targetClrType);
         }
 
         var args = clr.GetGenericArguments();
+        if (targetClrType.IsGenericParameter
+            && (uint)targetClrType.GenericParameterPosition < (uint)args.Length)
+        {
+            return GetTypeArgumentSymbol(targetClrType.GenericParameterPosition);
+        }
+
         int offset = 1; // byte 0 = outer type
 
         for (int i = 0; i < args.Length; i++)

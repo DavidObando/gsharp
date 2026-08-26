@@ -52,8 +52,9 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("Required = model.Name!!", emitted, StringComparison.Ordinal);
         Assert.Contains("Consume(model.Name!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("Holder(model.Name!!)", emitted, StringComparison.Ordinal);
-        Assert.Contains("model.Children!![0]", emitted, StringComparison.Ordinal);
+        Assert.Contains("model.Children!![0]!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains("for child in model.Children!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("child!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains("ImageSink.Image = image!!", emitted, StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
@@ -97,7 +98,7 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("Factory.GetItem()!!.Label()", emitted, StringComparison.Ordinal);
         Assert.Contains("Consume(Factory.GetItem()!!)", emitted, StringComparison.Ordinal);
         Assert.Contains("Required = Factory.GetItem()!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("Factory.GetMap()!![Factory.GetKey()!!]", emitted, StringComparison.Ordinal);
+        Assert.Contains("Factory.GetMap()!![Factory.GetKey()!!]!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains("for item in Factory.GetItems()!!", emitted, StringComparison.Ordinal);
         Assert.Contains("yield line!!", emitted, StringComparison.Ordinal);
         Assert.Contains("return value!!", emitted, StringComparison.Ordinal);
