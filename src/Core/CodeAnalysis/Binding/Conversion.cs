@@ -2203,9 +2203,7 @@ public sealed class Conversion
         ImportedTypeSymbol from,
         ImportedTypeSymbol to)
     {
-        if (from?.OpenDefinition == null
-            || from.TypeArguments.IsDefaultOrEmpty
-            || from.OpenDefinition.IsValueType
+        if (from == null
             || !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments)
             || targetOpen == null
             || targetOpen.IsValueType)
@@ -2214,15 +2212,31 @@ public sealed class Conversion
         }
 
         ImmutableArray<TypeSymbol> sourceArguments;
-        if (ClrTypeUtilities.AreSame(from.OpenDefinition, targetOpen))
+        if (from.OpenDefinition != null
+            && !from.TypeArguments.IsDefaultOrEmpty
+            && !from.OpenDefinition.IsValueType)
         {
-            sourceArguments = from.TypeArguments;
+            if (ClrTypeUtilities.AreSame(from.OpenDefinition, targetOpen))
+            {
+                sourceArguments = from.TypeArguments;
+            }
+            else if (!MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                         from,
+                         targetOpen,
+                         out sourceArguments))
+            {
+                return false;
+            }
         }
-        else if (!MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
-                     from,
-                     targetOpen,
-                     out sourceArguments))
+        else if (!TryProjectClrInterfaceArguments(from, targetOpen, out sourceArguments))
         {
+            // Issue #3501: a NON-generic imported class (e.g. Roslyn's
+            // `SymbolEqualityComparer : IEqualityComparer<ISymbol?>`) has no
+            // symbolic type arguments to map, but its CLR interface closure
+            // still names the target's open definition; project that closed
+            // interface's CLR arguments so the variance loop below can accept
+            // `SymbolEqualityComparer -> IEqualityComparer[IMethodSymbol]`
+            // exactly as C# does.
             return false;
         }
 
@@ -2246,17 +2260,26 @@ public sealed class Conversion
                 continue;
             }
 
+            // Variance eligibility is about CLR reference-ness, NOT the
+            // `where T : class` constraint: a nullable-annotated reference
+            // argument (`ISymbol?` in `IEqualityComparer[ISymbol?]`) is
+            // reference-shaped and variance-convertible (the annotation has no
+            // runtime representation), while `Binder.IsReferenceTypeForConstraint`
+            // deliberately rejects `T?`. Use the same `IsReferenceTypeArgument`
+            // gate as the source-interface variance path (#1927) so
+            // `IEqualityComparer[ISymbol?] -> IEqualityComparer[IMethodSymbol]`
+            // classifies, matching C# (issue #3501 Translator burn-down).
             var variance = genericParameters[i].GenericParameterAttributes
                 & System.Reflection.GenericParameterAttributes.VarianceMask;
             var compatible = variance switch
             {
                 System.Reflection.GenericParameterAttributes.Covariant =>
-                    Binder.IsReferenceTypeForConstraint(sourceArgument)
-                    && Binder.IsReferenceTypeForConstraint(targetArgument)
+                    IsReferenceTypeArgument(sourceArgument)
+                    && IsReferenceTypeArgument(targetArgument)
                     && Classify(sourceArgument, targetArgument) is { Exists: true, IsImplicit: true },
                 System.Reflection.GenericParameterAttributes.Contravariant =>
-                    Binder.IsReferenceTypeForConstraint(sourceArgument)
-                    && Binder.IsReferenceTypeForConstraint(targetArgument)
+                    IsReferenceTypeArgument(sourceArgument)
+                    && IsReferenceTypeArgument(targetArgument)
                     && Classify(targetArgument, sourceArgument) is { Exists: true, IsImplicit: true },
                 _ => false,
             };
@@ -2267,6 +2290,74 @@ public sealed class Conversion
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #3501: projects the CLR generic arguments a (possibly non-generic)
+    /// imported reference type supplies for <paramref name="targetOpenDefinition"/>
+    /// by walking its CLR interface closure. This is the CLR-level counterpart
+    /// to <see cref="MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy"/>
+    /// for sources with no symbolic type-argument vector (e.g. Roslyn's
+    /// non-generic <c>SymbolEqualityComparer : IEqualityComparer&lt;ISymbol?&gt;</c>).
+    /// Nullable annotations are erased at this level, which only widens the
+    /// source side — exactly the C#/CLR variance behaviour.
+    /// </summary>
+    private static bool TryProjectClrInterfaceArguments(
+        ImportedTypeSymbol from,
+        Type targetOpenDefinition,
+        out ImmutableArray<TypeSymbol> sourceArguments)
+    {
+        sourceArguments = default;
+        var clr = from.ClrType;
+        if (clr == null || clr.IsValueType || clr.IsArray)
+        {
+            return false;
+        }
+
+        foreach (var candidate in EnumerateSelfAndClrInterfaces(clr))
+        {
+            Type candidateDefinition;
+            Type[] candidateArguments;
+            try
+            {
+                if (!candidate.IsGenericType || candidate.IsGenericTypeDefinition)
+                {
+                    continue;
+                }
+
+                candidateDefinition = candidate.GetGenericTypeDefinition();
+                candidateArguments = candidate.GetGenericArguments();
+            }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
+
+            if (!ClrTypeUtilities.AreSame(candidateDefinition, targetOpenDefinition))
+            {
+                continue;
+            }
+
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
+            foreach (var argument in candidateArguments)
+            {
+                builder.Add(TypeSymbol.FromClrType(argument));
+            }
+
+            sourceArguments = builder.MoveToImmutable();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Type> EnumerateSelfAndClrInterfaces(Type clr)
+    {
+        yield return clr;
+        foreach (var implemented in ClrTypeUtilities.SafeGetInterfaces(clr))
+        {
+            yield return implemented;
+        }
     }
 
     private static List<StructSymbol> GetStructHierarchy(StructSymbol type)
