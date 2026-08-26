@@ -14,16 +14,17 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (DFS pre-order) for a GSharp <see cref="TypeSymbol"/>. The bytes use the
 /// well-known encoding:
 /// <list type="bullet">
-/// <item><c>0</c> — oblivious (no nullability information), including the
-/// required leading placeholder for a closed generic value type.</item>
+/// <item><c>0</c> — oblivious (no nullability information), including a
+/// non-Nullable closed generic value type's required leading placeholder.</item>
 /// <item><c>1</c> — not-annotated (non-nullable reference / open type parameter).</item>
 /// <item><c>2</c> — annotated (nullable reference / nullable open type parameter).</item>
 /// </list>
 /// <para>
 /// Layout mirrors the C# compiler: byte 0 belongs to the outer type when that
 /// type occupies a reference-type position. Closed generic value types
-/// contribute a leading oblivious placeholder byte before their arguments;
-/// non-generic value types contribute none (matches
+/// contribute a leading oblivious placeholder byte before their arguments,
+/// except metadata-transparent <c>Nullable&lt;T&gt;</c>, which contributes
+/// only T's subtree. Non-generic value types contribute none (matches
 /// <see cref="ClrNullability.CountNullabilityBytes(System.Type)"/>).
 /// </para>
 /// <para>
@@ -57,11 +58,14 @@ internal static class NullableFlagsBuilder
     internal static ImmutableArray<byte> Build(TypeSymbol type)
     {
         var builder = ImmutableArray.CreateBuilder<byte>();
-        Append(type, builder);
+        Append(type, builder, isRoot: true);
         return builder.ToImmutable();
     }
 
-    private static void Append(TypeSymbol type, ImmutableArray<byte>.Builder builder)
+    private static void Append(
+        TypeSymbol type,
+        ImmutableArray<byte>.Builder builder,
+        bool isRoot = false)
     {
         if (type == null)
         {
@@ -74,7 +78,7 @@ internal static class NullableFlagsBuilder
         // nullable-by-default semantics before re-emission.
         if (type is NullabilityAnnotatedTypeSymbol annotated)
         {
-            if (!annotated.NullableFlags.IsDefaultOrEmpty)
+            if (isRoot && !annotated.NullableFlags.IsDefaultOrEmpty)
             {
                 builder.AddRange(annotated.NullableFlags);
             }
@@ -92,11 +96,11 @@ internal static class NullableFlagsBuilder
             var inner = nullable.UnderlyingType;
 
             // `T?` over a struct-constrained type parameter lowers to
-            // `Nullable<T>` at the signature level — that's a value type, so
-            // the outer position contributes no byte and the inner type
-            // parameter contributes none either. Result: empty.
+            // `Nullable<T>` at the signature level. Nullable<T> is transparent
+            // in nullable metadata: recurse into T at the same position.
             if (IsValueTypeNullableLowering(inner))
             {
+                Append(inner, builder, isRoot);
                 return;
             }
 
@@ -104,7 +108,10 @@ internal static class NullableFlagsBuilder
             builder.Add(Annotated);
             if (inner is NullabilityAnnotatedTypeSymbol annotatedInner)
             {
-                AppendAnnotatedTail(annotatedInner, builder);
+                AppendAnnotatedTail(
+                    annotatedInner,
+                    builder,
+                    allowScalarCompression: isRoot);
             }
             else
             {
@@ -158,11 +165,20 @@ internal static class NullableFlagsBuilder
 
         if (type is TupleTypeSymbol tup)
         {
-            // Closed generic value types carry a leading oblivious placeholder.
-            builder.Add(Oblivious);
-            foreach (var elem in tup.ElementTypes)
+            var index = 0;
+            while (tup.ElementTypes.Length - index > 7)
             {
-                Append(elem, builder);
+                builder.Add(Oblivious);
+                for (var i = 0; i < 7; i++)
+                {
+                    Append(tup.ElementTypes[index++], builder);
+                }
+            }
+
+            builder.Add(Oblivious);
+            while (index < tup.ElementTypes.Length)
+            {
+                Append(tup.ElementTypes[index++], builder);
             }
 
             return;
@@ -277,7 +293,8 @@ internal static class NullableFlagsBuilder
 
     private static void AppendAnnotatedTail(
         NullabilityAnnotatedTypeSymbol annotated,
-        ImmutableArray<byte>.Builder builder)
+        ImmutableArray<byte>.Builder builder,
+        bool allowScalarCompression)
     {
         if (annotated.ClrType == null)
         {
@@ -288,6 +305,12 @@ internal static class NullableFlagsBuilder
             annotated.ClrType,
             annotated.NullableFlags);
         var tail = expanded.AsSpan().Slice(1);
+        if (!allowScalarCompression)
+        {
+            builder.AddRange(tail.ToArray());
+            return;
+        }
+
         foreach (var flag in tail)
         {
             if (flag != Annotated)
@@ -407,6 +430,12 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        if (NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is { } nullableUnderlying)
+        {
+            AppendClrType(nullableUnderlying, builder);
+            return;
+        }
+
         if (clrType.IsByRef)
         {
             AppendClrType(clrType.GetElementType(), builder);
@@ -452,6 +481,11 @@ internal static class NullableFlagsBuilder
         }
 
         if (inner is StructSymbol s && !s.IsClass)
+        {
+            return true;
+        }
+
+        if (inner is TupleTypeSymbol)
         {
             return true;
         }

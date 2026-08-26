@@ -7,6 +7,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
@@ -203,6 +205,43 @@ public class ClrNullabilityTests
             4,
             ClrNullability.CountNullabilityBytes(
                 typeof(Dictionary<ValueTuple<string>, object>)));
+    }
+
+    [Fact]
+    public void NullableValueTuple_IsMetadataTransparentAndKeepsInnerAnnotations()
+    {
+        var clrType = typeof(Nullable<ValueTuple<object, string>>);
+        var flags = ImmutableArray.Create<byte>(0, 1, 2);
+
+        Assert.Equal(3, ClrNullability.CountNullabilityBytes(clrType));
+        var nullable = Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(clrType, flags, 0));
+        var tuple = Assert.IsType<TupleTypeSymbol>(nullable.UnderlyingType);
+        Assert.Same(TypeSymbol.Object, tuple.ElementTypes[0]);
+        var nullableText = Assert.IsType<NullableTypeSymbol>(tuple.ElementTypes[1]);
+        Assert.Same(TypeSymbol.String, nullableText.UnderlyingType);
+        Assert.Equal(flags.ToArray(), NullableFlagsBuilder.Build(nullable).ToArray());
+    }
+
+    [Fact]
+    public void NullableGenericValueArgument_DoesNotShiftFollowingSibling()
+    {
+        var clrType = typeof(PairContainer<KeyValuePair<string, object>?, string>);
+        var flags = ImmutableArray.Create<byte>(1, 0, 2, 1, 1);
+
+        Assert.Equal(5, ClrNullability.CountNullabilityBytes(clrType));
+        var container = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(clrType, flags, 0));
+        var nullablePair = Assert.IsType<NullableTypeSymbol>(
+            container.GetTypeArgumentSymbol(0));
+        var pair = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            nullablePair.UnderlyingType);
+        var nullableKey = Assert.IsType<NullableTypeSymbol>(
+            pair.GetTypeArgumentSymbol(0));
+        Assert.Same(TypeSymbol.String, nullableKey.UnderlyingType);
+        Assert.Same(TypeSymbol.Object, pair.GetTypeArgumentSymbol(1));
+        Assert.Same(TypeSymbol.String, container.GetTypeArgumentSymbol(1));
+        Assert.Equal(flags.ToArray(), NullableFlagsBuilder.Build(container).ToArray());
     }
 
     [Fact]
@@ -430,6 +469,73 @@ public class ClrNullabilityTests
     }
 
     [Fact]
+    public void NestedScalarAnnotatedGeneric_ExpandsBeforeFollowingTupleElement()
+    {
+        var annotatedList = new NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof(List<string>)),
+            ImmutableArray.Create<byte>(2));
+        var tuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(
+            NullableTypeSymbol.Get(annotatedList),
+            TypeSymbol.String));
+        var expected = new byte[] { 0, 2, 2, 1 };
+
+        Assert.Equal(expected, NullableFlagsBuilder.Build(tuple).ToArray());
+        var decoded = Assert.IsType<TupleTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(
+            typeof(ValueTuple<List<string>, string>),
+            expected.ToImmutableArray(),
+            0));
+        var nullableList = Assert.IsType<NullableTypeSymbol>(decoded.ElementTypes[0]);
+        var decodedList = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            nullableList.UnderlyingType);
+        var nullableItem = Assert.IsType<NullableTypeSymbol>(
+            decodedList.GetTypeArgumentSymbol(0));
+        Assert.Same(TypeSymbol.String, nullableItem.UnderlyingType);
+        Assert.Same(TypeSymbol.String, decoded.ElementTypes[1]);
+    }
+
+    [Fact]
+    public void FlattenedLongTuples_EmitEveryPhysicalRestPlaceholder()
+    {
+        AssertTuple(
+            8,
+            new byte[] { 0, 2, 1, 1, 1, 1, 1, 1, 0, 2 });
+        AssertTuple(
+            15,
+            new byte[] { 0, 2, 1, 1, 1, 1, 1, 1, 0, 2, 1, 1, 1, 1, 1, 1, 0, 2 });
+
+        static void AssertTuple(int arity, byte[] expected)
+        {
+            var elements = Enumerable.Range(0, arity)
+                .Select(index => index is 0 or 7 || index == arity - 1
+                    ? (TypeSymbol)NullableTypeSymbol.Get(TypeSymbol.String)
+                    : TypeSymbol.String)
+                .ToImmutableArray();
+            var tuple = TupleTypeSymbol.Get(elements);
+            var clrType = Assert.IsAssignableFrom<Type>(
+                TupleTypeSymbol.BuildClrType(
+                    Enumerable.Repeat(typeof(string), arity).ToArray()));
+
+            Assert.Equal(expected.Length, ClrNullability.CountNullabilityBytes(clrType));
+            Assert.Equal(expected, NullableFlagsBuilder.Build(tuple).ToArray());
+
+            var decoded = Assert.IsType<TupleTypeSymbol>(
+                ClrNullability.SymbolFromFlagsOffset(
+                    clrType,
+                    expected.ToImmutableArray(),
+                    0));
+            Assert.IsType<NullableTypeSymbol>(decoded.ElementTypes[0]);
+            Assert.IsType<NullableTypeSymbol>(decoded.ElementTypes[7]);
+            Assert.IsType<NullableTypeSymbol>(decoded.ElementTypes[^1]);
+            Assert.Same(TypeSymbol.String, decoded.ElementTypes[1]);
+            Assert.Same(TypeSymbol.String, decoded.ElementTypes[^2]);
+            Assert.False(Conversion.Classify(TypeSymbol.Null, decoded.ElementTypes[1]).Exists);
+            Assert.False(Conversion.Classify(TypeSymbol.Null, decoded.ElementTypes[^2]).Exists);
+        }
+    }
+
+    [Fact]
     public void GetPropertyElementTypeSymbol_AnnotatedNullableProperty_IsNullable()
     {
         // Issue #1701 crack 1: a ref-returning indexer element must keep the
@@ -447,6 +553,10 @@ public class ClrNullabilityTests
         var prop = typeof(Sample).GetProperty(nameof(Sample.NonNullProperty));
         var sym = ClrNullability.GetPropertyElementTypeSymbol(prop!, typeof(string));
         Assert.Same(TypeSymbol.String, sym);
+    }
+
+    public sealed class PairContainer<TFirst, TSecond>
+    {
     }
 
     /// <summary>

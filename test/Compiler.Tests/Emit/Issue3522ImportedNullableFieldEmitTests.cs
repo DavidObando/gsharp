@@ -18,6 +18,9 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue3522ImportedNullableFieldEmitTests
 {
+    private static readonly byte[] Tuple8Flags = { 0, 2, 1, 1, 1, 1, 1, 1, 0, 2 };
+    private static readonly byte[] Tuple15Flags = { 0, 2, 1, 1, 1, 1, 1, 1, 0, 2, 1, 1, 1, 1, 1, 1, 0, 2 };
+
     private const string MetadataSource = """
         #nullable enable
         using System;
@@ -25,14 +28,52 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
         namespace Issue3522.Metadata
         {
+            public sealed class PairContainer<TFirst, TSecond>
+            {
+                public TFirst First = default!;
+                public TSecond Second = default!;
+            }
+
             public static class DirectFields
             {
                 public static string Required = "";
                 public static string?[]? ScalarNullableArray;
-                public static List<string?>? ScalarNullableGeneric;
+                public static List<string?>? ScalarNullableGeneric = new();
                 public static string[]? NullableOuterArray;
                 public static List<string>? NullableOuterGeneric;
                 public static Dictionary<ValueTuple<string?>, object> ValueTupleKey = new();
+                public static (object Value, string? Text)? NullableTuple;
+                public static PairContainer<KeyValuePair<string?, object>?, string>
+                    NullablePairContainer = new();
+                public static (List<string?>? Values, string Required) NestedScalarTuple =
+                    (new(), "");
+                public static (
+                    string? E1,
+                    string E2,
+                    string E3,
+                    string E4,
+                    string E5,
+                    string E6,
+                    string E7,
+                    string? E8) Tuple8 =
+                    (null, "", "", "", "", "", "", null);
+                public static (
+                    string? E1,
+                    string E2,
+                    string E3,
+                    string E4,
+                    string E5,
+                    string E6,
+                    string E7,
+                    string? E8,
+                    string E9,
+                    string E10,
+                    string E11,
+                    string E12,
+                    string E13,
+                    string E14,
+                    string? E15) Tuple15 =
+                    (null, "", "", "", "", "", "", null, "", "", "", "", "", "", null);
                 public static string[] NonNullArray = Array.Empty<string>();
             }
 
@@ -160,6 +201,15 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(direct.GetField("NullableOuterArray")!));
         Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(direct.GetField("NullableOuterGeneric")!));
         Assert.Equal(new byte[] { 1, 0, 2, 1 }, GetNullableFlags(direct.GetField("ValueTupleKey")!));
+        Assert.Equal(new byte[] { 0, 1, 2 }, GetNullableFlags(direct.GetField("NullableTuple")!));
+        Assert.Equal(
+            new byte[] { 1, 0, 2, 1, 1 },
+            GetNullableFlags(direct.GetField("NullablePairContainer")!));
+        Assert.Equal(
+            new byte[] { 0, 2, 2, 1 },
+            GetNullableFlags(direct.GetField("NestedScalarTuple")!));
+        Assert.Equal(Tuple8Flags, GetNullableFlags(direct.GetField("Tuple8")!));
+        Assert.Equal(Tuple15Flags, GetNullableFlags(direct.GetField("Tuple15")!));
         Assert.Empty(GetNullableFlags(direct.GetField("NonNullArray")!));
 
         Assert.Equal((byte)2, GetNullableContext(context));
@@ -202,6 +252,33 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         var nullableTupleItem = Assert.IsType<NullableTypeSymbol>(tuple.GetTypeArgumentSymbol(0));
         Assert.Same(TypeSymbol.String, nullableTupleItem.UnderlyingType);
         Assert.Same(TypeSymbol.Object, dictionary.GetTypeArgumentSymbol(1));
+
+        var nullableTuple = Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.GetFieldTypeSymbol(direct.GetField("NullableTuple")!));
+        var tupleValue = Assert.IsType<TupleTypeSymbol>(nullableTuple.UnderlyingType);
+        Assert.Same(TypeSymbol.Object, tupleValue.ElementTypes[0]);
+        Assert.IsType<NullableTypeSymbol>(tupleValue.ElementTypes[1]);
+
+        var pairContainer = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetFieldTypeSymbol(direct.GetField("NullablePairContainer")!));
+        var nullablePair = Assert.IsType<NullableTypeSymbol>(
+            pairContainer.GetTypeArgumentSymbol(0));
+        var pair = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            nullablePair.UnderlyingType);
+        Assert.IsType<NullableTypeSymbol>(pair.GetTypeArgumentSymbol(0));
+        Assert.Same(TypeSymbol.Object, pair.GetTypeArgumentSymbol(1));
+        Assert.Same(TypeSymbol.String, pairContainer.GetTypeArgumentSymbol(1));
+
+        var nestedScalarTuple = AssertTupleField(
+            direct.GetField("NestedScalarTuple")!,
+            2,
+            0);
+        var nestedList = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            Assert.IsType<NullableTypeSymbol>(
+                nestedScalarTuple.ElementTypes[0]).UnderlyingType);
+        Assert.IsType<NullableTypeSymbol>(nestedList.GetTypeArgumentSymbol(0));
+        AssertTupleField(direct.GetField("Tuple8")!, 8, 0, 7);
+        AssertTupleField(direct.GetField("Tuple15")!, 15, 0, 7, 14);
     }
 
     [Fact]
@@ -247,7 +324,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
     }
 
     [Fact]
-    public void MetadataNonNullableArray_RejectsNilOuterAndElement()
+    public void MetadataNonNullablePositions_RejectNil()
     {
         using var artifacts = new TestArtifacts();
         const string source = """
@@ -258,6 +335,9 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             func Break() {
               DirectFields.NonNullArray = nil
               DirectFields.NonNullArray[0] = nil
+
+              DirectFields.NullablePairContainer.First = nil
+              DirectFields.NullablePairContainer.Second = nil
             }
             """;
 
@@ -269,7 +349,9 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             artifacts.MetadataPath);
 
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Equal(2, Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count);
+        Assert.True(
+            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 3,
+            result.Diagnostics);
         Assert.Contains("Cannot convert type 'nil' to 'string[]'.", result.Diagnostics, StringComparison.Ordinal);
         Assert.Contains("Cannot convert type 'nil' to 'string'.", result.Diagnostics, StringComparison.Ordinal);
     }
@@ -287,6 +369,13 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             public var OuterGeneric = DirectFields.NullableOuterGeneric
             public var ScalarArray = DirectFields.ScalarNullableArray
             public var ScalarGeneric = DirectFields.ScalarNullableGeneric
+            public var NullableTuple = DirectFields.NullableTuple
+            public var NullablePairContainer = DirectFields.NullablePairContainer
+            public var NestedScalarTuple = (DirectFields.ScalarNullableGeneric, "")
+            public var Tuple8 = DirectFields.Tuple8
+            public var Tuple15 = DirectFields.Tuple15
+
+            NestedScalarTuple.Item1!!.Add(nil)
             """;
 
         var result = Compile(
@@ -311,7 +400,18 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(program.GetField("OuterGeneric")!));
             Assert.Equal(new byte[] { 2 }, GetNullableFlags(program.GetField("ScalarArray")!));
             Assert.Equal(new byte[] { 2 }, GetNullableFlags(program.GetField("ScalarGeneric")!));
+            Assert.Equal(new byte[] { 0, 1, 2 }, GetNullableFlags(program.GetField("NullableTuple")!));
+            Assert.Equal(
+                new byte[] { 1, 0, 2, 1, 1 },
+                GetNullableFlags(program.GetField("NullablePairContainer")!));
+            Assert.Equal(
+                new byte[] { 0, 2, 2, 1 },
+                GetNullableFlags(program.GetField("NestedScalarTuple")!));
+            Assert.Equal(Tuple8Flags, GetNullableFlags(program.GetField("Tuple8")!));
+            Assert.Equal(Tuple15Flags, GetNullableFlags(program.GetField("Tuple15")!));
         }
+
+        Assert.Equal(0, Run(result.OutputPath));
     }
 
     [Fact]
@@ -456,6 +556,29 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         {
             Assert.Same(TypeSymbol.String, element);
         }
+    }
+
+    private static TupleTypeSymbol AssertTupleField(
+        FieldInfo field,
+        int arity,
+        params int[] nullableIndices)
+    {
+        var tuple = Assert.IsType<TupleTypeSymbol>(
+            ClrNullability.GetFieldTypeSymbol(field));
+        Assert.Equal(arity, tuple.Arity);
+        for (var i = 0; i < tuple.Arity; i++)
+        {
+            if (nullableIndices.Contains(i))
+            {
+                Assert.IsType<NullableTypeSymbol>(tuple.ElementTypes[i]);
+            }
+            else
+            {
+                Assert.IsNotType<NullableTypeSymbol>(tuple.ElementTypes[i]);
+            }
+        }
+
+        return tuple;
     }
 
     private sealed class TestArtifacts : IDisposable

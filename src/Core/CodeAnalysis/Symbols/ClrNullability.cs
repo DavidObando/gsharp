@@ -297,8 +297,9 @@ public static class ClrNullability
     /// Counts the number of bytes the C# compiler emits for <paramref name="type"/>
     /// in a <c>[NullableAttribute]</c> byte array. The count follows the CLR
     /// DFS pre-order layout: reference and array positions contribute one byte,
-    /// as does a closed generic value type's leading oblivious placeholder;
-    /// non-generic value types contribute none.
+    /// as does a closed generic value type's leading oblivious placeholder.
+    /// <c>Nullable&lt;T&gt;</c> is transparent and contributes only T's
+    /// subtree; non-generic value types contribute none.
     /// </summary>
     /// <param name="type">The CLR type to measure.</param>
     /// <returns>The number of nullability bytes this type occupies.</returns>
@@ -307,6 +308,11 @@ public static class ClrNullability
         if (type == null)
         {
             return 0;
+        }
+
+        if (NullableLifting.GetValueTypeNullableUnderlyingClr(type) is { } nullableUnderlying)
+        {
+            return CountNullabilityBytes(nullableUnderlying);
         }
 
         if (type.IsArray)
@@ -357,9 +363,10 @@ public static class ClrNullability
     /// <summary>
     /// Expands scalar, context-only, or absent nullable metadata to the CLR
     /// per-position layout for <paramref name="type"/>. Generic value-type
-    /// placeholders are always emitted as oblivious byte <c>0</c>. Empty and
-    /// missing positions use the importer's existing nullable-by-default
-    /// semantics and expand to byte <c>2</c>.
+    /// placeholders are emitted as oblivious byte <c>0</c>, while
+    /// metadata-transparent <c>Nullable&lt;T&gt;</c> recurses directly into T.
+    /// Empty and missing positions use the importer's existing
+    /// nullable-by-default semantics and expand to byte <c>2</c>.
     /// </summary>
     /// <param name="type">CLR type tree to expand.</param>
     /// <param name="flags">Physical nullable flags, possibly scalar or empty.</param>
@@ -373,6 +380,12 @@ public static class ClrNullability
 
         void Append(Type current)
         {
+            if (NullableLifting.GetValueTypeNullableUnderlyingClr(current) is { } nullableUnderlying)
+            {
+                Append(nullableUnderlying);
+                return;
+            }
+
             if (current.IsArray)
             {
                 builder.Add(GetFlag(index++));
@@ -466,6 +479,12 @@ public static class ClrNullability
     /// <returns>The appropriately-nullified <see cref="TypeSymbol"/>.</returns>
     internal static TypeSymbol SymbolFromFlagsOffset(Type clrType, ImmutableArray<byte> flags, int offset)
     {
+        if (NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is { } nullableUnderlying)
+        {
+            return NullableTypeSymbol.Get(
+                SymbolFromFlagsOffset(nullableUnderlying, flags, offset));
+        }
+
         var baseSymbol = TypeSymbol.FromClrType(clrType);
 
         // Issue #2176: pointers are not reference types — never nullable-wrap on import.
@@ -574,12 +593,6 @@ public static class ClrNullability
 
     private static TypeSymbol ApplyReferenceNullabilityFull(TypeSymbol baseSymbol, Type? clrType, ICustomAttributeProvider declaration, MemberInfo? enclosingMember)
     {
-        if (baseSymbol is NullableTypeSymbol)
-        {
-            // Already a value-type Nullable<T> — no further annotation needed.
-            return baseSymbol;
-        }
-
         if (clrType == null)
         {
             return baseSymbol;

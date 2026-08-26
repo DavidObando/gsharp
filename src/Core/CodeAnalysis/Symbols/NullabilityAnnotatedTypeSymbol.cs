@@ -19,7 +19,8 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// layout: byte 0 belongs to the outer reference/array position or is the
 /// leading zero placeholder for a closed generic value type. Subsequent bytes
 /// belong to array elements and generic arguments in DFS order; non-generic
-/// value types contribute no position.
+/// value types contribute no position, and <c>Nullable&lt;T&gt;</c> is
+/// transparent.
 /// </para>
 /// <para>
 /// Example — <c>Dictionary&lt;string, string?&gt;</c>:<br/>
