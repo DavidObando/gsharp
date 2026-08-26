@@ -104,6 +104,20 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Syntax",
             "FunctionDeclarationSyntax",
             "FunctionDeclaration covers C# methods and local functions; review kind checks that distinguished them."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "PatternSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "SwitchStatementSyntax",
+            "G# switch cases carry one pattern each (SwitchCaseSyntax.Value): there is no section/label nesting, so a "
+            + "Sections.SelectMany(s => s.Labels) walk needs to become a walk over Cases directly — not yet an automated idiom (#3536)."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "SwitchCaseSyntax",
+            "G# has no per-label node: a case's pattern is SwitchCaseSyntax.Value directly."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "PropertyPatternFieldSyntax",
+            "G# property-pattern fields carry the field name as Identifier directly; there is no ExpressionColon wrapper."),
 
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
@@ -213,6 +227,11 @@ internal static class RoslynAnalyzerApiMap
             null,
             null,
             "G# index/member writes parse as Index/MemberIndexAssignmentExpression, never as a read node on an assignment's left; the C# assignment-LHS check has no G# counterpart, so comparisons against it lower to 'false'."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax", "Pattern")] = new(null, "Value"),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax", "ExpressionColon")] = new(
+            null,
+            null,
+            "SubpatternSyntax.ExpressionColon.Expression names the field; G#'s PropertyPatternFieldSyntax.Identifier names it directly and has no ExpressionColon wrapper (#3536)."),
     };
 
     /// <summary>

@@ -39,6 +39,33 @@ inspects G#-shaped `BoundTreeRewriter` overrides, so the "rebuilds the node
 while reading fewer members" detection needs G# equivalents of its
 object-creation, base-delegation, and switch-section walks. This is exactly
 the plausible-but-wrong risk class the loud ratchet exists to prevent.
+
+**Issue #3536 progress.** The mechanical slice of this inventory that has a
+direct, unambiguous G# counterpart is now mapped/idiom-rewritten (see
+`RoslynAnalyzerApiMap` and `CSharpToGSharpTranslator.Analyzers.cs`):
+`PatternSyntax` (exact, name and namespace both carry over), `SwitchStatementSyntax`
+and `CasePatternSwitchLabelSyntax` → `SwitchCaseSyntax` (type-level only —
+G# switch cases carry one pattern each via `SwitchCaseSyntax.Value`, so a
+`Sections.SelectMany(s => s.Labels)` walk still needs its own idiom rewrite
+to `Cases` — not yet built), `SubpatternSyntax` → `PropertyPatternFieldSyntax`
+(type-level only — the `ExpressionColon.Expression` idiom that reads the field
+name still needs rewriting to the direct `Identifier` token), `.ArgumentList`/
+`.ParameterList` drop to their direct `.Arguments`/`.Parameters` members, a
+bare `ArgumentSyntax.Expression` drop to the argument itself, and
+`Modifiers.Any(SyntaxKind.OverrideKeyword)` → `.IsOverride`.
+
+Still open, and still the reason the ratchet stays red: `BaseExpressionSyntax`
+base-call detection has no G# counterpart at all (G# represents `base.M(...)`
+as a distinct `BaseClassCallExpressionSyntax` node wrapping an ordinary
+`CallExpressionSyntax`, not as a member access on a `base` receiver, so the
+guard clauses that key off it need restructuring, not just a renamed type),
+and `MethodKind`/constructor-vs-static-factory detection has no G# analogue
+either — G# constructors are a separate `ConstructorSymbol` type (via
+`StructSymbol.ExplicitConstructors`), not a `FunctionSymbol` flavor, so
+`FormDependentMembers` needs re-deriving against that shape. Both were
+investigated in depth for #3536 but intentionally left as loud gaps rather
+than a low-confidence, compiler-unverified port — see the issue for the
+reasoning.
 Companion to [ADR-0169](adr/0169-gsharp-analyzer-framework.md), which defines
 the G#-side analyzer framework this document targets. First migration target:
 `src/Analyzers/InternalAnalyzers` (GSA0001–GSA0005) and its test project, which

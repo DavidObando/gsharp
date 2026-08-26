@@ -104,6 +104,38 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (member.Name.Identifier.Text == "ArgumentList"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ArgumentList" } argumentListProperty
+                && RoslynAnalyzerApiMap.IsRoslynNamespace(argumentListProperty.ContainingType?.ContainingNamespace?.ToDisplayString()))
+            {
+                // InvocationExpressionSyntax.ArgumentList drops: G#'s
+                // CallExpressionSyntax exposes Arguments directly, with no
+                // ArgumentListSyntax wrapper.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
+            if (member.Name.Identifier.Text == "ParameterList"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ParameterList" } parameterListProperty
+                && RoslynAnalyzerApiMap.IsRoslynNamespace(parameterListProperty.ContainingType?.ContainingNamespace?.ToDisplayString()))
+            {
+                // BaseMethodDeclarationSyntax.ParameterList drops: G#'s
+                // FunctionDeclarationSyntax exposes Parameters directly, with
+                // no ParameterListSyntax wrapper.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
+            if (member.Name.Identifier.Text == "Expression"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "Expression" } argumentExpressionProperty
+                && RoslynTypeMetadataName(argumentExpressionProperty.ContainingType) == "Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax")
+            {
+                // ArgumentSyntax.Expression drops: G# call arguments are the
+                // bound expressions directly, with no ArgumentSyntax wrapper.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
             if (member.Name.Identifier.Text != "Identifier")
             {
                 return false;
@@ -155,6 +187,32 @@ public sealed partial class CSharpToGSharpTranslator
                 // SyntaxReference.GetSyntax() drops: DeclaringSyntaxNodes
                 // already holds the syntax nodes.
                 result = this.TranslateExpression(syntaxReferenceReceiver.Expression);
+                return true;
+            }
+
+            if (method.Name == "Any"
+                && invocation.ArgumentList.Arguments.Count == 1
+                && invocation.Expression is MemberAccessExpressionSyntax anyReceiver
+                && anyReceiver.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Modifiers" } modifiersReceiver
+                && this.context.GetSymbolInfo(modifiersReceiver).Symbol is IPropertySymbol { Name: "Modifiers" } modifiersProperty
+                && RoslynAnalyzerApiMap.IsRoslynNamespace(modifiersProperty.ContainingType?.ContainingNamespace?.ToDisplayString())
+                && invocation.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "OverrideKeyword" })
+            {
+                // declaration.Modifiers.Any(SyntaxKind.OverrideKeyword) -> G#'s
+                // FunctionDeclarationSyntax.IsOverride: there is no modifier
+                // token list, only discrete typed modifier properties.
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    "'Modifiers.Any(SyntaxKind.OverrideKeyword)' translated as 'IsOverride': G# has no modifier token list, only discrete typed modifier properties.",
+                    invocation.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
+                result = new MemberAccessExpression(
+                    this.TranslateExpression(modifiersReceiver.Expression),
+                    "IsOverride",
+                    isArrow: false);
                 return true;
             }
 

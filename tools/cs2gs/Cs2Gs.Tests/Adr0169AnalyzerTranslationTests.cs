@@ -322,6 +322,138 @@ public sealed class OverrideAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void ModifiersOverrideCheck_TranslatesToIsOverride()
+    {
+        // Issue #3536 (GSA0005 groundwork): G# has no Roslyn-style modifier
+        // token list, only discrete typed modifier properties.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OverrideCheckAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        if (!declaration.Modifiers.Any(SyntaxKind.OverrideKeyword))
+        {
+            return;
+        }
+    }
+}
+");
+
+        Assert.Contains("declaration.IsOverride", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Modifiers", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE");
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void ArgumentListAndParameterList_DropToDirectMembers()
+    {
+        // Issue #3536 (GSA0005 groundwork): G#'s CallExpressionSyntax and
+        // FunctionDeclarationSyntax expose Arguments/Parameters directly —
+        // there is no ArgumentListSyntax/ParameterListSyntax wrapper, and call
+        // arguments are bare expressions with no ArgumentSyntax wrapper.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        if (declaration.ParameterList.Parameters.Count != 1)
+        {
+            return;
+        }
+
+        string parameterName = declaration.ParameterList.Parameters[0].Identifier.ValueText;
+        foreach (var invocation in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            bool passesParameter = invocation.ArgumentList.Arguments.Any(argument =>
+                argument.Expression is IdentifierNameSyntax identifier && identifier.Identifier.ValueText == parameterName);
+            _ = passesParameter;
+        }
+    }
+}
+");
+
+        Assert.Contains("declaration.Parameters", printed, StringComparison.Ordinal);
+        Assert.Contains("invocation.Arguments", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ParameterList", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ArgumentList", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void PatternSyntaxParameter_TranslatesExactly()
+    {
+        // Issue #3536 (GSA0005 groundwork): Roslyn's PatternSyntax and G#'s
+        // PatternSyntax share both name and namespace-only-rewrite shape.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class PatternWalkAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static void Describe(PatternSyntax pattern, HashSet<string> reads)
+    {
+        reads.Add(pattern.ToString());
+    }
+}
+");
+
+        Assert.Contains("PatternSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void RealGsa0001Source_TranslatesWithReviewWarningsOnly()
     {
         // The real GSA0001 file end-to-end: everything maps or lowers, the
