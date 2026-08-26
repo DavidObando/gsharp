@@ -1919,6 +1919,30 @@ internal static class ObliviousNullabilityAnalyzer
                     transitive: true);
             }
         }
+
+        // Issue #3501: an ITERATOR'S yields are its returns for element-taint
+        // purposes — `yield return null` (or yielding a promoted-nullable
+        // value) makes the iterator's ELEMENT nullable, which the translator
+        // renders as `sequence[T?]`. Without this, the signature stayed
+        // `sequence[T]` while the yield-seam bridge stood down (the method
+        // looked promoted), leaving a bare `T? -> T` at every guarded yield.
+        foreach (SyntaxNode descendant in body?.DescendantNodes(
+            n => n is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
+            ?? System.Linq.Enumerable.Empty<SyntaxNode>())
+        {
+            if (descendant is YieldStatementSyntax { Expression: { } yielded }
+                && descendant.IsKind(SyntaxKind.YieldReturnStatement))
+            {
+                ApplyReturnValue(
+                    canonicalReturn,
+                    yielded,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    transitive: true);
+            }
+        }
     }
 
     private static void SeedPropertyLikeReturnTaint(
