@@ -667,7 +667,49 @@ public sealed partial class CSharpToGSharpTranslator
                     expression.GetLocation());
             }
 
+            // Issue #3553: C# also target-types REFERENCE arms — `value switch
+            // { ExpressionSyntax e => new[] { e }, BlockSyntax b =>
+            // b.DescendantNodes()…, _ => Enumerable.Empty<ExpressionSyntax>() }`
+            // converts every arm to the switch's IEnumerable<T> — while gsc
+            // requires every arm to produce the first arm's type (GS0179).
+            // When an arm's own reference type differs from its converted
+            // reference type by more than a nullable annotation, spell the
+            // upcast (`arm as T`). Annotation-only differences stay bare (the
+            // `!!`/promotion machinery owns those), as do identical types.
+            if (info.Type is { IsReferenceType: true } armType
+                && info.ConvertedType is { IsReferenceType: true } armTarget
+                && !SymbolEqualityComparer.Default.Equals(armType, armTarget)
+                && info.Type.TypeKind != TypeKind.Error
+                && info.ConvertedType.TypeKind != TypeKind.Error)
+            {
+                return this.CoerceReferenceValueTo(translated, armTarget, expression.GetLocation());
+            }
+
             return translated;
+        }
+
+        // Issue #3553: spells a guaranteed reference upcast. G#'s `as` is the
+        // nullable-producing SAFE cast, so a converted-type arm coerced with
+        // `as T` would widen to `T?` and fail the enclosing non-null slot;
+        // the conversion-call form `T(expr)` keeps the non-null shape (a
+        // no-op/checked reference cast at the IL level).
+        private GExpression CoerceReferenceValueTo(
+            GExpression translated,
+            ITypeSymbol targetType,
+            Location location)
+        {
+            GTypeReference target = this.typeMapper.Map(targetType, this.context, location);
+
+            // The conversion-call spelling `T(expr)` binds for class targets
+            // but not for (generic) interface targets; those use the
+            // unambiguous checked-reference-cast form `cast[T](expr)`, which
+            // keeps the non-null shape (`as` alone would widen to `T?`).
+            if (targetType.TypeKind == TypeKind.Interface)
+            {
+                return new ConversionExpression(target, translated, isCheckedReferenceCast: true);
+            }
+
+            return new ConversionExpression(target, translated);
         }
 
         private GExpression TranslateSwitchPatternGuard(
