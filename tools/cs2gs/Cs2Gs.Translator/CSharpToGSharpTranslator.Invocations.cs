@@ -3463,6 +3463,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return new ConversionExpression(objectTargetType, operand);
             }
 
+            // Issue #3501: a C# reference cast PRESERVES null (`(SyntaxNode)
+            // node.Body ?? node.ExpressionBody`), but `cast[T](expr)` requires
+            // a non-null operand. When the operand is nullable on the G# side
+            // (a promoted read the flow-narrow assertion above did not cover,
+            // or a C#-annotated `T?`), emit the null-preserving safe cast
+            // `expr as T` instead — its `T?` result is exactly the C# cast's
+            // nullability. GSharpExpressionIsStaticallyNonNull consults the
+            // same predicate so a dereference of such a cast still gets its
+            // receiver `!!` (`((Item)Find()).Name` → `(Find() as Item)!!.Name`).
+            if (operand is not NonNullAssertionExpression
+                && this.CastLowersToNullPreservingSafeCast(cast))
+            {
+                return new ParenthesizedExpression(
+                    new BinaryExpression(operand, "as", new TypeExpression(targetType)));
+            }
+
             GTypeReference conversionTargetType = cast.Type is NullableTypeSyntax
                 && !targetType.IsNullable
                     ? MakeNullable(targetType)
@@ -3471,6 +3487,20 @@ public sealed partial class CSharpToGSharpTranslator
                 conversionTargetType,
                 operand,
                 this.CastUsesCheckedReferenceConversion(cast));
+        }
+
+        // Issue #3501: whether TranslateCast renders this reference cast as the
+        // null-preserving `expr as T` (nullable result) instead of the
+        // non-null `cast[T](expr)` form — true when the operand is nullable on
+        // the G# side and no flow narrowing asserted it.
+        private bool CastLowersToNullPreservingSafeCast(CastExpressionSyntax cast)
+        {
+            ITypeSymbol sourceSymbol = this.context.GetTypeInfo(cast.Expression).Type;
+            return cast.Type is not NullableTypeSyntax
+                && this.CastUsesCheckedReferenceConversion(cast)
+                && !this.IsFlowNarrowedAnnotatedReference(cast.Expression)
+                && (sourceSymbol?.NullableAnnotation == NullableAnnotation.Annotated
+                    || (this.IsObliviousCompilation() && this.IsNullablePromotedValue(cast.Expression)));
         }
 
         private bool CastUsesCheckedReferenceConversion(CastExpressionSyntax cast)

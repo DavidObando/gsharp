@@ -1171,6 +1171,17 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     GTypeReference element = this.typeMapper.Map(
                         enumerable.TypeArguments[0], this.context, node.ReturnType.GetLocation());
+
+                    // Issue #3501: the iterator ELEMENT is the method's return
+                    // sink for T exactly like the async `Task<T>` unwrap below
+                    // (#2421) — a tainted iterator (yielding promoted-nullable
+                    // values) must render `sequence[T?]`, or the signature
+                    // disagrees with its own yields (GS0155 `string?` →
+                    // `string`) while the yield-seam bridge correctly stands
+                    // down because the return IS promoted.
+                    ITypeSymbol elementType = enumerable.TypeArguments[0];
+                    element = this.PromoteTupleDeclarationIfTainted(element, elementType, symbol);
+                    element = this.PromoteAwaitedReturnIfTainted(element, elementType, symbol);
                     return new NamedTypeReference("sequence", new[] { element });
                 }
 
