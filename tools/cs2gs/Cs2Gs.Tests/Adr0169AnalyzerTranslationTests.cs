@@ -364,6 +364,54 @@ public sealed class OverrideCheckAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void ModifiersOverrideCheck_DoesNotMatchLookalikeMember()
+    {
+        // Copilot review of #3556: the 'OverrideKeyword' idiom must resolve
+        // the argument to the real Microsoft.CodeAnalysis.CSharp.SyntaxKind
+        // enum field, not just match on spelling — otherwise a user-defined
+        // 'OverrideKeyword' member of type SyntaxKind but a different value
+        // would be silently rewritten to '.IsOverride' too.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+public static class Helpers
+{
+    public const SyntaxKind OverrideKeyword = SyntaxKind.PartialKeyword;
+}
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class LookalikeOverrideCheckAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        if (!declaration.Modifiers.Any(Helpers.OverrideKeyword))
+        {
+            return;
+        }
+    }
+}
+");
+
+        Assert.DoesNotContain("IsOverride", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+            && d.Message.Contains("IsOverride", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ArgumentListAndParameterList_DropToDirectMembers()
     {
         // Issue #3536 (GSA0005 groundwork): G#'s CallExpressionSyntax and
@@ -420,6 +468,70 @@ public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
         Assert.DoesNotContain("ArgumentList", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void ArgumentListAndParameterList_OtherAccesses_StayLoud()
+    {
+        // Copilot review of #3556: only the '.ArgumentList.Arguments' and
+        // '.ParameterList.Parameters' chains have a faithful G# counterpart.
+        // Any other wrapper access (e.g. '.Span') must NOT be collapsed to
+        // the receiver — that would silently observe a different node
+        // ('invocation.Span' instead of 'invocation.ArgumentList.Span') — so
+        // it stays untranslated and fails loudly at bind time instead.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ArgumentListSpanAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeMethod, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        var span = invocation.ArgumentList.Span;
+        _ = span;
+    }
+
+    private static void AnalyzeMethod(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        var span = declaration.ParameterList.Span;
+        _ = span;
+    }
+}
+");
+
+        Assert.Contains(".ArgumentList", printed, StringComparison.Ordinal);
+        Assert.Contains(".ParameterList", printed, StringComparison.Ordinal);
+
+        var trees = new[]
+        {
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+                GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "argparamspan.gs")),
+        };
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
+            new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees) { IsLibrary = true };
+        bool translationIsLoud = diagnostics.Any(d => d.Severity == TranslationSeverity.Unsupported)
+            || trees.Any(t => !t.Diagnostics.IsEmpty)
+            || compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).Any(d => d.IsError);
+        Assert.True(
+            translationIsLoud,
+            "ArgumentList/ParameterList access other than .Arguments/.Parameters should fail loudly, not silently observe a different node:\n" + printed);
     }
 
     [Fact]

@@ -105,23 +105,31 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (member.Name.Identifier.Text == "ArgumentList"
+                && member.Parent is MemberAccessExpressionSyntax { Name.Identifier.Text: "Arguments" }
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ArgumentList" } argumentListProperty
                 && RoslynAnalyzerApiMap.IsRoslynNamespace(argumentListProperty.ContainingType?.ContainingNamespace?.ToDisplayString()))
             {
-                // InvocationExpressionSyntax.ArgumentList drops: G#'s
-                // CallExpressionSyntax exposes Arguments directly, with no
-                // ArgumentListSyntax wrapper.
+                // InvocationExpressionSyntax.ArgumentList.Arguments drops the
+                // wrapper: G#'s CallExpressionSyntax exposes Arguments
+                // directly, with no ArgumentListSyntax wrapper. Restricted to
+                // the .Arguments chain so other ArgumentList reads (e.g.
+                // `.ArgumentList.Span`) stay a loud gap instead of silently
+                // observing a different node.
                 result = this.TranslateExpression(member.Expression);
                 return true;
             }
 
             if (member.Name.Identifier.Text == "ParameterList"
+                && member.Parent is MemberAccessExpressionSyntax { Name.Identifier.Text: "Parameters" }
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ParameterList" } parameterListProperty
                 && RoslynAnalyzerApiMap.IsRoslynNamespace(parameterListProperty.ContainingType?.ContainingNamespace?.ToDisplayString()))
             {
-                // BaseMethodDeclarationSyntax.ParameterList drops: G#'s
-                // FunctionDeclarationSyntax exposes Parameters directly, with
-                // no ParameterListSyntax wrapper.
+                // BaseMethodDeclarationSyntax.ParameterList.Parameters drops
+                // the wrapper: G#'s FunctionDeclarationSyntax exposes
+                // Parameters directly, with no ParameterListSyntax wrapper.
+                // Restricted to the .Parameters chain so other ParameterList
+                // reads (e.g. `.ParameterList.Span`) stay a loud gap instead
+                // of silently observing a different node.
                 result = this.TranslateExpression(member.Expression);
                 return true;
             }
@@ -312,7 +320,9 @@ public sealed partial class CSharpToGSharpTranslator
                 && anyReceiver.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Modifiers" } modifiersReceiver
                 && this.context.GetSymbolInfo(modifiersReceiver).Symbol is IPropertySymbol { Name: "Modifiers" } modifiersProperty
                 && RoslynAnalyzerApiMap.IsRoslynNamespace(modifiersProperty.ContainingType?.ContainingNamespace?.ToDisplayString())
-                && invocation.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "OverrideKeyword" })
+                && invocation.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax overrideKeywordArgument
+                && this.context.GetSymbolInfo(overrideKeywordArgument).Symbol is IFieldSymbol { Name: "OverrideKeyword" } overrideKeywordField
+                && RoslynTypeMetadataName(overrideKeywordField.ContainingType) == "Microsoft.CodeAnalysis.CSharp.SyntaxKind")
             {
                 // declaration.Modifiers.Any(SyntaxKind.OverrideKeyword) -> G#'s
                 // FunctionDeclarationSyntax.IsOverride: there is no modifier
