@@ -2211,10 +2211,17 @@ public sealed class Conversion
             return false;
         }
 
+        // Issue #3501 (Track A6 keystone): a VALUE-TYPE source converting to a
+        // variant INTERFACE target is C#'s boxing conversion composed with
+        // interface variance (`ImmutableArray[IMethodSymbol]` →
+        // `IEnumerable[ISymbol]`); the emitter's struct→interface arm already
+        // boxes, and the boxed reference is runtime-assignment-compatible with
+        // the variant interface, so only classification was missing. Non-
+        // interface targets keep the value-type exclusion.
         ImmutableArray<TypeSymbol> sourceArguments;
         if (from.OpenDefinition != null
             && !from.TypeArguments.IsDefaultOrEmpty
-            && !from.OpenDefinition.IsValueType)
+            && (!from.OpenDefinition.IsValueType || targetOpen.IsInterface))
         {
             if (ClrTypeUtilities.AreSame(from.OpenDefinition, targetOpen))
             {
@@ -2309,7 +2316,7 @@ public sealed class Conversion
     {
         sourceArguments = default;
         var clr = from.ClrType;
-        if (clr == null || clr.IsValueType || clr.IsArray)
+        if (clr == null || clr.IsArray)
         {
             return false;
         }
