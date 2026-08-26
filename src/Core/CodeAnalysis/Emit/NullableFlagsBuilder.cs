@@ -14,17 +14,16 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (DFS pre-order) for a GSharp <see cref="TypeSymbol"/>. The bytes use the
 /// well-known encoding:
 /// <list type="bullet">
-/// <item><c>0</c> — oblivious (no nullability information; we never emit this byte
-/// ourselves but pass it through when present on an imported
-/// <see cref="NullabilityAnnotatedTypeSymbol"/>).</item>
+/// <item><c>0</c> — oblivious (no nullability information), including the
+/// required leading placeholder for a closed generic value type.</item>
 /// <item><c>1</c> — not-annotated (non-nullable reference / open type parameter).</item>
 /// <item><c>2</c> — annotated (nullable reference / nullable open type parameter).</item>
 /// </list>
 /// <para>
 /// Layout mirrors the C# compiler: byte 0 belongs to the outer type when that
-/// type occupies a reference-type position; value-type positions contribute no
-/// byte, but the walker still recurses into their generic-type arguments so
-/// inner reference-type positions are surfaced (matches
+/// type occupies a reference-type position. Closed generic value types
+/// contribute a leading oblivious placeholder byte before their arguments;
+/// non-generic value types contribute none (matches
 /// <see cref="ClrNullability.CountNullabilityBytes(System.Type)"/>).
 /// </para>
 /// <para>
@@ -37,6 +36,9 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal static class NullableFlagsBuilder
 {
+    /// <summary>The byte used for oblivious positions and generic value-type placeholders.</summary>
+    internal const byte Oblivious = 0;
+
     /// <summary>The byte the C# compiler uses for non-nullable reference positions.</summary>
     internal const byte NotAnnotated = 1;
 
@@ -46,8 +48,8 @@ internal static class NullableFlagsBuilder
     /// <summary>
     /// Computes the DFS pre-order nullable byte array for the supplied
     /// <see cref="TypeSymbol"/>. Returns an empty array when the type
-    /// contributes no reference-type positions (e.g. a pure value type with no
-    /// reference-typed generic arguments) — in which case no
+    /// contributes no nullable-metadata positions (e.g. a non-generic value
+    /// type) — in which case no
     /// <c>NullableAttribute</c> need be emitted.
     /// </summary>
     /// <param name="type">The parameter / return / field / property type to inspect.</param>
@@ -67,11 +69,21 @@ internal static class NullableFlagsBuilder
         }
 
         // Imported wrapper that already carries the C# DFS byte array — pass
-        // it through verbatim. This is the shape C# emits for generic types
-        // with inner-position nullability (e.g. `IEnumerable<string?>`).
-        if (type is NullabilityAnnotatedTypeSymbol annotated && !annotated.NullableFlags.IsDefaultOrEmpty)
+        // physical flags through verbatim. An empty wrapper represents
+        // absent/oblivious metadata; expand it using the importer's existing
+        // nullable-by-default semantics before re-emission.
+        if (type is NullabilityAnnotatedTypeSymbol annotated)
         {
-            builder.AddRange(annotated.NullableFlags);
+            if (!annotated.NullableFlags.IsDefaultOrEmpty)
+            {
+                builder.AddRange(annotated.NullableFlags);
+            }
+            else if (annotated.ClrType != null)
+            {
+                builder.AddRange(
+                    ClrNullability.ExpandNullableFlags(annotated.ClrType, annotated.NullableFlags));
+            }
+
             return;
         }
 
@@ -90,7 +102,15 @@ internal static class NullableFlagsBuilder
 
             // Reference-position annotated as nullable.
             builder.Add(Annotated);
-            AppendGenericArguments(inner, builder);
+            if (inner is NullabilityAnnotatedTypeSymbol annotatedInner)
+            {
+                AppendAnnotatedTail(annotatedInner, builder);
+            }
+            else
+            {
+                AppendGenericArguments(inner, builder);
+            }
+
             return;
         }
 
@@ -138,8 +158,8 @@ internal static class NullableFlagsBuilder
 
         if (type is TupleTypeSymbol tup)
         {
-            // ValueTuple<...> is a value type — outer position contributes
-            // no byte, but element positions are visited in declaration order.
+            // Closed generic value types carry a leading oblivious placeholder.
+            builder.Add(Oblivious);
             foreach (var elem in tup.ElementTypes)
             {
                 Append(elem, builder);
@@ -156,9 +176,15 @@ internal static class NullableFlagsBuilder
 
         if (type is StructSymbol structSym)
         {
+            var isGeneric = !structSym.TypeArguments.IsDefaultOrEmpty
+                || !structSym.TypeParameters.IsDefaultOrEmpty;
             if (structSym.IsClass)
             {
                 builder.Add(NotAnnotated);
+            }
+            else if (isGeneric)
+            {
+                builder.Add(Oblivious);
             }
 
             if (!structSym.TypeArguments.IsDefaultOrEmpty)
@@ -210,6 +236,11 @@ internal static class NullableFlagsBuilder
             {
                 builder.Add(NotAnnotated);
             }
+            else if ((!imported.TypeArguments.IsDefaultOrEmpty)
+                || (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition))
+            {
+                builder.Add(Oblivious);
+            }
 
             // Prefer the symbolic TypeArguments — they preserve in-scope
             // type-parameter identity so nullability for `IEnumerable[T]`
@@ -242,6 +273,32 @@ internal static class NullableFlagsBuilder
 
         // Last-resort: a symbolic reference type with no other information.
         builder.Add(NotAnnotated);
+    }
+
+    private static void AppendAnnotatedTail(
+        NullabilityAnnotatedTypeSymbol annotated,
+        ImmutableArray<byte>.Builder builder)
+    {
+        if (annotated.ClrType == null)
+        {
+            return;
+        }
+
+        var expanded = ClrNullability.ExpandNullableFlags(
+            annotated.ClrType,
+            annotated.NullableFlags);
+        var tail = expanded.AsSpan().Slice(1);
+        foreach (var flag in tail)
+        {
+            if (flag != Annotated)
+            {
+                builder.AddRange(tail.ToArray());
+                return;
+            }
+        }
+
+        // Every nested position is also nullable. Keep the single outer `2`;
+        // NullableAttribute(byte) applies that scalar to the whole type tree.
     }
 
     private static void AppendGenericArguments(TypeSymbol type, ImmutableArray<byte>.Builder builder)
@@ -363,13 +420,17 @@ internal static class NullableFlagsBuilder
             return;
         }
 
-        var isValueType = clrType.IsValueType;
-        if (!isValueType)
+        var isClosedGeneric = clrType.IsGenericType && !clrType.IsGenericTypeDefinition;
+        if (!clrType.IsValueType)
         {
             builder.Add(NotAnnotated);
         }
+        else if (isClosedGeneric)
+        {
+            builder.Add(Oblivious);
+        }
 
-        if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
+        if (isClosedGeneric)
         {
             foreach (var arg in clrType.GetGenericArguments())
             {

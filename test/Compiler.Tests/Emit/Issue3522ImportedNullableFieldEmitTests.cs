@@ -10,12 +10,49 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using GSharp.Core.CodeAnalysis.Symbols;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
 
 public sealed class Issue3522ImportedNullableFieldEmitTests
 {
+    private const string MetadataSource = """
+        #nullable enable
+        using System;
+        using System.Collections.Generic;
+
+        namespace Issue3522.Metadata
+        {
+            public static class DirectFields
+            {
+                public static string Required = "";
+                public static string?[]? ScalarNullableArray;
+                public static List<string?>? ScalarNullableGeneric;
+                public static string[]? NullableOuterArray;
+                public static List<string>? NullableOuterGeneric;
+                public static Dictionary<ValueTuple<string?>, object> ValueTupleKey = new();
+                public static string[] NonNullArray = Array.Empty<string>();
+            }
+
+            public static class ContextFields
+            {
+                public static string?[]? Values;
+                public static string? Marker;
+            }
+        }
+
+        #nullable disable
+        namespace Issue3522.Metadata
+        {
+            public static class ObliviousFields
+            {
+                public static string[] Values;
+            }
+        }
+        """;
+
     private const string LibrarySource = """
         package Issue3522.Library
         import System.Collections.Generic
@@ -108,6 +145,176 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
     }
 
     [Fact]
+    public void MetadataFixture_CoversScalarContextObliviousValueTupleAndOuterNullableShapes()
+    {
+        using var artifacts = new TestArtifacts();
+        using var resolver = ReferenceResolver.WithReferences(new[] { artifacts.MetadataPath });
+
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.DirectFields", out var direct));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.ContextFields", out var context));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.ObliviousFields", out var oblivious));
+
+        Assert.Equal((byte)1, GetNullableContext(direct));
+        Assert.Equal(new byte[] { 2 }, GetNullableFlags(direct.GetField("ScalarNullableArray")!));
+        Assert.Equal(new byte[] { 2 }, GetNullableFlags(direct.GetField("ScalarNullableGeneric")!));
+        Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(direct.GetField("NullableOuterArray")!));
+        Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(direct.GetField("NullableOuterGeneric")!));
+        Assert.Equal(new byte[] { 1, 0, 2, 1 }, GetNullableFlags(direct.GetField("ValueTupleKey")!));
+        Assert.Empty(GetNullableFlags(direct.GetField("NonNullArray")!));
+
+        Assert.Equal((byte)2, GetNullableContext(context));
+        Assert.Empty(GetNullableFlags(context.GetField("Values")!));
+
+        Assert.Null(TryGetNullableContext(oblivious));
+        Assert.Empty(GetNullableFlags(oblivious.GetField("Values")!));
+    }
+
+    [Fact]
+    public void MetadataFields_DecodeScalarContextObliviousAndValueTuplePositions()
+    {
+        using var artifacts = new TestArtifacts();
+        using var resolver = ReferenceResolver.WithReferences(new[] { artifacts.MetadataPath });
+
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.DirectFields", out var direct));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.ContextFields", out var context));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.ObliviousFields", out var oblivious));
+
+        AssertArray(
+            direct.GetField("ScalarNullableArray")!,
+            outerNullable: true,
+            elementNullable: true);
+        AssertArray(
+            context.GetField("Values")!,
+            outerNullable: true,
+            elementNullable: true);
+        AssertArray(
+            oblivious.GetField("Values")!,
+            outerNullable: true,
+            elementNullable: true);
+        AssertArray(
+            direct.GetField("NonNullArray")!,
+            outerNullable: false,
+            elementNullable: false);
+
+        var dictionary = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetFieldTypeSymbol(direct.GetField("ValueTupleKey")!));
+        var tuple = Assert.IsType<NullabilityAnnotatedTypeSymbol>(dictionary.GetTypeArgumentSymbol(0));
+        var nullableTupleItem = Assert.IsType<NullableTypeSymbol>(tuple.GetTypeArgumentSymbol(0));
+        Assert.Same(TypeSymbol.String, nullableTupleItem.UnderlyingType);
+        Assert.Same(TypeSymbol.Object, dictionary.GetTypeArgumentSymbol(1));
+    }
+
+    [Fact]
+    public void MetadataArrayFields_AcceptNilAtNullableOuterAndElementPositions()
+    {
+        using var artifacts = new TestArtifacts();
+        const string source = """
+            package Issue3522.MetadataConsumer
+
+            import Issue3522.Metadata
+
+            func Main() int32 {
+              let values = []string?{nil}
+
+              DirectFields.ScalarNullableArray = nil
+              DirectFields.ScalarNullableArray = values
+              DirectFields.ScalarNullableArray!![0] = nil
+
+              ContextFields.Values = nil
+              ContextFields.Values = values
+              ContextFields.Values!![0] = nil
+
+              ObliviousFields.Values = nil
+              ObliviousFields.Values = values
+              ObliviousFields.Values!![0] = nil
+
+              return DirectFields.ScalarNullableArray!![0] == nil
+                && ContextFields.Values!![0] == nil
+                && ObliviousFields.Values!![0] == nil ? 0 : 1
+            }
+            """;
+
+        var result = Compile(
+            artifacts.Directory,
+            "Issue3522.MetadataConsumer",
+            source,
+            target: "exe",
+            artifacts.MetadataPath);
+
+        Assert.True(result.ExitCode == 0, result.Diagnostics);
+        IlVerifier.Verify(result.OutputPath, new[] { artifacts.MetadataPath });
+        Assert.Equal(0, Run(result.OutputPath));
+    }
+
+    [Fact]
+    public void MetadataNonNullableArray_RejectsNilOuterAndElement()
+    {
+        using var artifacts = new TestArtifacts();
+        const string source = """
+            package Issue3522.MetadataNegative
+
+            import Issue3522.Metadata
+
+            func Break() {
+              DirectFields.NonNullArray = nil
+              DirectFields.NonNullArray[0] = nil
+            }
+            """;
+
+        var result = Compile(
+            artifacts.Directory,
+            "Issue3522.MetadataNegative",
+            source,
+            target: "library",
+            artifacts.MetadataPath);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(2, Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count);
+        Assert.Contains("Cannot convert type 'nil' to 'string[]'.", result.Diagnostics, StringComparison.Ordinal);
+        Assert.Contains("Cannot convert type 'nil' to 'string'.", result.Diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedNullableOuterArrayAndGeneric_ReemitExactInnerFlags()
+    {
+        using var artifacts = new TestArtifacts();
+        const string source = """
+            package Issue3522.Reemit
+
+            import Issue3522.Metadata
+
+            public var OuterArray = DirectFields.NullableOuterArray
+            public var OuterGeneric = DirectFields.NullableOuterGeneric
+            public var ScalarArray = DirectFields.ScalarNullableArray
+            public var ScalarGeneric = DirectFields.ScalarNullableGeneric
+            """;
+
+        var result = Compile(
+            artifacts.Directory,
+            "Issue3522.Reemit",
+            source,
+            target: "exe",
+            artifacts.MetadataPath);
+
+        Assert.True(result.ExitCode == 0, result.Diagnostics);
+        IlVerifier.Verify(result.OutputPath, new[] { artifacts.MetadataPath });
+
+        var runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+        var metadataResolver = new PathAssemblyResolver(
+            Directory.GetFiles(runtimeDirectory, "*.dll")
+                .Concat(new[] { artifacts.MetadataPath, result.OutputPath }));
+        using (var metadataContext = new MetadataLoadContext(metadataResolver, "System.Private.CoreLib"))
+        {
+            var assembly = metadataContext.LoadFromAssemblyPath(result.OutputPath);
+            var program = assembly.GetTypes().Single(type => type.Name == "<Program>");
+            Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(program.GetField("OuterArray")!));
+            Assert.Equal(new byte[] { 2, 1 }, GetNullableFlags(program.GetField("OuterGeneric")!));
+            Assert.Equal(new byte[] { 2 }, GetNullableFlags(program.GetField("ScalarArray")!));
+            Assert.Equal(new byte[] { 2 }, GetNullableFlags(program.GetField("ScalarGeneric")!));
+        }
+    }
+
+    [Fact]
     public void NonNullableReferenceField_StillRejectsNilInLiteralAndWith()
     {
         using var artifacts = new TestArtifacts();
@@ -140,7 +347,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         string assemblyName,
         string source,
         string target,
-        string reference = null)
+        params string[] references)
     {
         var sourcePath = Path.Combine(directory, assemblyName + ".gs");
         var outputPath = Path.Combine(directory, assemblyName + ".dll");
@@ -153,7 +360,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             "/targetframework:net10.0",
             "/nowarn:GS9100",
         };
-        if (reference != null)
+        foreach (var reference in references)
         {
             args.Add("/reference:" + reference);
         }
@@ -221,10 +428,34 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
     }
 
     private static byte GetNullableContext(MemberInfo member)
+        => Assert.IsType<byte>(TryGetNullableContext(member));
+
+    private static byte? TryGetNullableContext(MemberInfo member)
     {
-        var attribute = member.GetCustomAttributesData().Single(
+        var attribute = member.GetCustomAttributesData().SingleOrDefault(
             data => data.AttributeType.FullName == "System.Runtime.CompilerServices.NullableContextAttribute");
-        return (byte)attribute.ConstructorArguments.Single().Value!;
+        return attribute == null
+            ? null
+            : (byte)attribute.ConstructorArguments.Single().Value!;
+    }
+
+    private static void AssertArray(FieldInfo field, bool outerNullable, bool elementNullable)
+    {
+        var fieldType = ClrNullability.GetFieldTypeSymbol(field);
+        var array = outerNullable
+            ? Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+                Assert.IsType<NullableTypeSymbol>(fieldType).UnderlyingType)
+            : Assert.IsType<NullabilityAnnotatedTypeSymbol>(fieldType);
+        var element = array.GetTypeArgumentSymbolForClrType(array.ClrType!.GetElementType());
+        if (elementNullable)
+        {
+            var nullable = Assert.IsType<NullableTypeSymbol>(element);
+            Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
+        }
+        else
+        {
+            Assert.Same(TypeSymbol.String, element);
+        }
     }
 
     private sealed class TestArtifacts : IDisposable
@@ -240,11 +471,27 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             Assert.True(result.ExitCode == 0, result.Diagnostics);
             LibraryPath = result.OutputPath;
             IlVerifier.Verify(LibraryPath);
+
+            MetadataPath = Path.Combine(Directory, "Issue3522.Metadata.dll");
+            var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+                .Split(Path.PathSeparator)
+                .Select(path => MetadataReference.CreateFromFile(path));
+            var compilation = CSharpCompilation.Create(
+                "Issue3522.Metadata",
+                new[] { CSharpSyntaxTree.ParseText(MetadataSource, new CSharpParseOptions(LanguageVersion.Latest)) },
+                references,
+                new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    nullableContextOptions: NullableContextOptions.Enable));
+            var metadataResult = compilation.Emit(MetadataPath);
+            Assert.True(metadataResult.Success, string.Join(Environment.NewLine, metadataResult.Diagnostics));
         }
 
         public string Directory { get; }
 
         public string LibraryPath { get; }
+
+        public string MetadataPath { get; }
 
         public void Dispose()
         {

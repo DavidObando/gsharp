@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
@@ -181,6 +182,16 @@ public class ClrNullabilityTests
     }
 
     [Fact]
+    public void CountNullabilityBytes_GenericValueType_IncludesLeadingPlaceholder()
+    {
+        Assert.Equal(2, ClrNullability.CountNullabilityBytes(typeof(ValueTuple<string>)));
+        Assert.Equal(
+            4,
+            ClrNullability.CountNullabilityBytes(
+                typeof(Dictionary<ValueTuple<string>, object>)));
+    }
+
+    [Fact]
     public void RectangularArray_NullableElementAndOuterAnnotations_RoundTrip()
     {
         var nonNullMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableElementGrid));
@@ -336,6 +347,72 @@ public class ClrNullabilityTests
         var sym = ClrNullability.SymbolFromFlagsOffset(typeof(string), ImmutableArray<byte>.Empty, 0);
         var nullable = Assert.IsType<NullableTypeSymbol>(sym);
         Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData((byte)2)]
+    public void SzArray_NullableScalarOrAbsentFlags_PropagateToElement(byte? scalar)
+    {
+        var flags = scalar.HasValue
+            ? ImmutableArray.Create(scalar.Value)
+            : ImmutableArray<byte>.Empty;
+        var symbol = Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(typeof(string[]), flags, 0));
+        var array = Assert.IsType<NullabilityAnnotatedTypeSymbol>(symbol.UnderlyingType);
+        var element = Assert.IsType<NullableTypeSymbol>(
+            array.GetTypeArgumentSymbolForClrType(typeof(string)));
+        Assert.Same(TypeSymbol.String, element.UnderlyingType);
+    }
+
+    [Fact]
+    public void GenericValueTypePlaceholder_KeepsFollowingSiblingNonNull()
+    {
+        var flags = ImmutableArray.Create<byte>(1, 0, 2, 1);
+        var dictionary = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(
+                typeof(Dictionary<ValueTuple<string>, object>),
+                flags,
+                0));
+        var tuple = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            dictionary.GetTypeArgumentSymbol(0));
+        var nullableItem = Assert.IsType<NullableTypeSymbol>(tuple.GetTypeArgumentSymbol(0));
+
+        Assert.Same(TypeSymbol.String, nullableItem.UnderlyingType);
+        Assert.Same(TypeSymbol.Object, dictionary.GetTypeArgumentSymbol(1));
+        Assert.Equal(flags.ToArray(), NullableFlagsBuilder.Build(dictionary).ToArray());
+    }
+
+    [Fact]
+    public void NullableOuterAnnotatedArrayAndGeneric_ReemitInnerFlags()
+    {
+        Assert.Equal(
+            new byte[] { 2, 1 },
+            ReemitNullableOuter(typeof(string[]), ImmutableArray.Create<byte>(1, 1)).ToArray());
+        Assert.Equal(
+            new byte[] { 2, 1 },
+            ReemitNullableOuter(typeof(List<string>), ImmutableArray.Create<byte>(1, 1)).ToArray());
+        Assert.Equal(
+            new byte[] { 2 },
+            ReemitNullableOuter(typeof(string[]), ImmutableArray.Create<byte>(2)).ToArray());
+        Assert.Equal(
+            new byte[] { 2 },
+            ReemitNullableOuter(typeof(List<string>), ImmutableArray<byte>.Empty).ToArray());
+        Assert.Equal(
+            new byte[] { 2, 0, 2, 2 },
+            ReemitNullableOuter(
+                typeof(Dictionary<ValueTuple<string>, object>),
+                ImmutableArray.Create<byte>(2)).ToArray());
+
+        static ImmutableArray<byte> ReemitNullableOuter(
+            Type clrType,
+            ImmutableArray<byte> flags)
+        {
+            var annotated = new NullabilityAnnotatedTypeSymbol(
+                TypeSymbol.FromClrType(clrType),
+                flags);
+            return NullableFlagsBuilder.Build(NullableTypeSymbol.Get(annotated));
+        }
     }
 
     [Fact]

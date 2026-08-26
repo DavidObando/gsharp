@@ -14,10 +14,11 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// metadata (<c>[NullableAttribute]</c> / <c>[NullableContextAttribute]</c>)
 /// from members loaded through a <see cref="MetadataLoadContext"/>.
 ///
-/// Both top-level and inner-position (generic type argument) nullability are
-/// surfaced. Inner positions are carried via <see cref="NullabilityAnnotatedTypeSymbol"/>
-/// so that code paths such as <c>for range</c> iteration and CLR indexer access
-/// can recover the element-type nullability at bind time.
+/// Both top-level and inner-position (generic argument or array element)
+/// nullability are surfaced. Inner positions are carried via
+/// <see cref="NullabilityAnnotatedTypeSymbol"/> so that code paths such as
+/// <c>for range</c> iteration and CLR indexer access can recover element
+/// nullability at bind time.
 /// </summary>
 public static class ClrNullability
 {
@@ -294,10 +295,10 @@ public static class ClrNullability
 
     /// <summary>
     /// Counts the number of bytes the C# compiler emits for <paramref name="type"/>
-    /// in a <c>[NullableAttribute]</c> byte array. The count equals the number of
-    /// reference-type positions in a DFS pre-order traversal of the type tree.
-    /// Value types themselves contribute 0 bytes; their reference-type generic
-    /// arguments still contribute.
+    /// in a <c>[NullableAttribute]</c> byte array. The count follows the CLR
+    /// DFS pre-order layout: reference and array positions contribute one byte,
+    /// as does a closed generic value type's leading oblivious placeholder;
+    /// non-generic value types contribute none.
     /// </summary>
     /// <param name="type">The CLR type to measure.</param>
     /// <returns>The number of nullability bytes this type occupies.</returns>
@@ -314,9 +315,10 @@ public static class ClrNullability
                 Invariant.Required(type.GetElementType(), "an array type has an element type"));
         }
 
-        int count = type.IsValueType ? 0 : 1;
+        var isClosedGeneric = type.IsGenericType && !type.IsGenericTypeDefinition;
+        int count = !type.IsValueType || isClosedGeneric ? 1 : 0;
 
-        if (type.IsGenericType && !type.IsGenericTypeDefinition)
+        if (isClosedGeneric)
         {
             foreach (var arg in type.GetGenericArguments())
             {
@@ -325,6 +327,93 @@ public static class ClrNullability
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// Returns nullability flags rooted at a nested type. Scalar and empty
+    /// forms are kept intact because they apply semantically to every position;
+    /// physical per-position arrays are sliced to the exact subtree width.
+    /// </summary>
+    /// <param name="type">Nested CLR type.</param>
+    /// <param name="flags">Flags for the containing type tree.</param>
+    /// <param name="offset">Nested type's DFS offset.</param>
+    /// <returns>Flags rooted at <paramref name="type"/>.</returns>
+    internal static ImmutableArray<byte> GetNullableFlagsForSubtree(
+        Type type,
+        ImmutableArray<byte> flags,
+        int offset)
+    {
+        if (flags.Length <= 1)
+        {
+            return flags;
+        }
+
+        return flags
+            .Skip(offset)
+            .Take(CountNullabilityBytes(type))
+            .ToImmutableArray();
+    }
+
+    /// <summary>
+    /// Expands scalar, context-only, or absent nullable metadata to the CLR
+    /// per-position layout for <paramref name="type"/>. Generic value-type
+    /// placeholders are always emitted as oblivious byte <c>0</c>. Empty and
+    /// missing positions use the importer's existing nullable-by-default
+    /// semantics and expand to byte <c>2</c>.
+    /// </summary>
+    /// <param name="type">CLR type tree to expand.</param>
+    /// <param name="flags">Physical nullable flags, possibly scalar or empty.</param>
+    /// <returns>One byte per CLR nullable-metadata position.</returns>
+    internal static ImmutableArray<byte> ExpandNullableFlags(Type type, ImmutableArray<byte> flags)
+    {
+        var builder = ImmutableArray.CreateBuilder<byte>(CountNullabilityBytes(type));
+        var index = 0;
+        Append(type);
+        return builder.MoveToImmutable();
+
+        void Append(Type current)
+        {
+            if (current.IsArray)
+            {
+                builder.Add(GetFlag(index++));
+                Append(Invariant.Required(current.GetElementType(), "an array type has an element type"));
+                return;
+            }
+
+            var isClosedGeneric = current.IsGenericType && !current.IsGenericTypeDefinition;
+            if (isClosedGeneric && current.IsValueType)
+            {
+                builder.Add(0);
+                index++;
+            }
+            else if (!current.IsValueType)
+            {
+                builder.Add(GetFlag(index++));
+            }
+
+            if (isClosedGeneric)
+            {
+                foreach (var argument in current.GetGenericArguments())
+                {
+                    Append(argument);
+                }
+            }
+        }
+
+        byte GetFlag(int position)
+        {
+            if (flags.IsDefaultOrEmpty)
+            {
+                return 2;
+            }
+
+            if (flags.Length == 1)
+            {
+                return flags[0];
+            }
+
+            return position < flags.Length ? flags[position] : (byte)2;
+        }
     }
 
     /// <summary>
@@ -400,11 +489,11 @@ public static class ClrNullability
             }
 
             TypeSymbol array = baseSymbol;
-            if (flags.Length > offset + 1)
+            if (CountNullabilityBytes(clrType) > 1)
             {
                 array = new NullabilityAnnotatedTypeSymbol(
                     baseSymbol,
-                    flags.Skip(offset).ToImmutableArray());
+                    GetNullableFlagsForSubtree(clrType, flags, offset));
             }
 
             return IsPositionNonNull(flags, offset)
@@ -414,12 +503,15 @@ public static class ClrNullability
 
         if (clrType.IsValueType)
         {
-            // Value types carry no reference-nullability byte for themselves.
-            // But a generic value type (e.g., ValueTuple<string, …>) may still
-            // have inner reference-type arguments.
-            if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition && flags.Length > offset)
+            // A closed generic value type carries a leading zero placeholder.
+            // Keep its annotation wrapper when arguments add further positions.
+            if (clrType.IsGenericType
+                && !clrType.IsGenericTypeDefinition
+                && CountNullabilityBytes(clrType) > 1)
             {
-                return new NullabilityAnnotatedTypeSymbol(baseSymbol, flags.Skip(offset).ToImmutableArray());
+                return new NullabilityAnnotatedTypeSymbol(
+                    baseSymbol,
+                    GetNullableFlagsForSubtree(clrType, flags, offset));
             }
 
             return baseSymbol;
@@ -431,11 +523,13 @@ public static class ClrNullability
         TypeSymbol result = isNullable ? NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
 
         // Propagate inner flags when the type is a closed generic.
-        if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition && flags.Length > offset + 1)
+        if (clrType.IsGenericType
+            && !clrType.IsGenericTypeDefinition
+            && CountNullabilityBytes(clrType) > 1)
         {
             // Slice from `offset` so that NullabilityAnnotatedTypeSymbol.NullableFlags[0]
             // is the byte for this type itself, matching the layout convention.
-            var slicedFlags = flags.Skip(offset).ToImmutableArray();
+            var slicedFlags = GetNullableFlagsForSubtree(clrType, flags, offset);
             var annotated = new NullabilityAnnotatedTypeSymbol(baseSymbol, slicedFlags);
             result = isNullable ? (TypeSymbol)NullableTypeSymbol.Get(annotated) : annotated;
         }
@@ -451,44 +545,13 @@ public static class ClrNullability
             return baseSymbol;
         }
 
-        if (clrType == null || clrType.IsValueType)
-        {
-            return baseSymbol;
-        }
-
-        // Issue #2176 (Refs #914, ADR-0122): unmanaged pointers (`T*` / `void*`,
-        // ELEMENT_TYPE_PTR) are NOT reference types and must never be wrapped in a
-        // nullable reference annotation on import. The oblivious-nullable promotion
-        // applies only to genuine reference types — mirror the source-side
-        // `IsPromotedToNullableReference` gate (`declared is { IsReferenceType: true }`)
-        // which structurally excludes pointers. This covers every imported member
-        // position (return, parameter, field, property, indexer) that flows through here.
-        if (clrType.IsPointer || baseSymbol is PointerTypeSymbol or FunctionPointerTypeSymbol)
+        if (clrType == null)
         {
             return baseSymbol;
         }
 
         var flags = ReadNullableFlags(declaration, enclosingMember);
-
-        if (clrType.IsArray)
-        {
-            return SymbolFromFlagsOffset(clrType, flags, 0);
-        }
-
-        // Issue #1354: the top-level reference position is non-null only when the
-        // flags array explicitly marks it `1`; empty/oblivious/annotated → nullable.
-        bool topNonNull = IsPositionNonNull(flags, 0);
-        TypeSymbol result = topNonNull ? baseSymbol : (TypeSymbol)NullableTypeSymbol.Get(baseSymbol);
-
-        // If there are inner-position bytes, wrap with NullabilityAnnotatedTypeSymbol so
-        // that callers (for-range, CLR indexers …) can recover element-type nullability.
-        if (flags.Length > 1 && clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
-        {
-            var annotated = new NullabilityAnnotatedTypeSymbol(baseSymbol, flags);
-            result = topNonNull ? (TypeSymbol)annotated : NullableTypeSymbol.Get(annotated);
-        }
-
-        return result;
+        return SymbolFromFlagsOffset(clrType, flags, 0);
     }
 
     private static bool TryGetBoolAttributeValue(ParameterInfo parameter, string attributeFullName, out bool value)

@@ -16,10 +16,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <remarks>
 /// <para>
 /// The <see cref="NullableFlags"/> array follows the C# compiler's DFS pre-order
-/// layout: byte 0 belongs to the outer type itself (always a reference type when
-/// this wrapper is created), and subsequent bytes belong to each generic type
-/// argument in order — recursively, for nested generics — skipping value-type
-/// positions (which carry no reference-nullability byte).
+/// layout: byte 0 belongs to the outer reference/array position or is the
+/// leading zero placeholder for a closed generic value type. Subsequent bytes
+/// belong to array elements and generic arguments in DFS order; non-generic
+/// value types contribute no position.
 /// </para>
 /// <para>
 /// Example — <c>Dictionary&lt;string, string?&gt;</c>:<br/>
