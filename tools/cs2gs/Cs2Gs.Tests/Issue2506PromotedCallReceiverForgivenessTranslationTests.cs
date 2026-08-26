@@ -103,8 +103,13 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
         Assert.Contains("FindGeneric[Item]()!!.Name", printed, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(printed, "FindFactory()!!().Name"));
         Assert.Contains("(Find())!!.Name", printed, StringComparison.Ordinal);
-        Assert.Contains("cast[Item](Find())", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain(" as Item", printed, StringComparison.Ordinal);
+        // Issue #3501: a C# reference cast preserves null, so a cast of a
+        // promoted-nullable operand now lowers to the null-preserving safe
+        // cast — the dereference carries the assertion instead of the cast
+        // (`((Item)Find()).Name` NREs at the DEREFERENCE in C#, and `!!`
+        // raises at exactly the same point).
+        Assert.Contains("((Find() as Item))!!.Name", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cast[Item](", printed, StringComparison.Ordinal);
         Assert.Contains(
             "(if condition { Find() } else { Always() })!!.Name",
             printed,

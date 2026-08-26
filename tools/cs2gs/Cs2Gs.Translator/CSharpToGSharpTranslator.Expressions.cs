@@ -1216,7 +1216,11 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case CastExpressionSyntax cast
                     when cast.Type is not NullableTypeSyntax
-                        && this.CastUsesCheckedReferenceConversion(cast):
+                        && this.CastUsesCheckedReferenceConversion(cast)
+                        && !this.CastLowersToNullPreservingSafeCast(cast):
+                    // Issue #3501: a cast that lowers to the null-preserving
+                    // `expr as T` is NOT statically non-null — its dereference
+                    // needs the ordinary receiver forgiveness.
                     return true;
 
                 case ConditionalExpressionSyntax conditional:
@@ -2124,11 +2128,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.ReceiverValueIsPromotedNullable(parenthesized.Expression);
 
                 case CastExpressionSyntax cast:
-                    ITypeSymbol castTarget = this.context.GetTypeInfo(cast.Type).Type;
-                    ITypeSymbol castSource = this.context.GetTypeInfo(cast.Expression).Type;
-                    return castTarget != null
-                        && castSource != null
-                        && this.context.Compilation.ClassifyConversion(castSource, castTarget).IsReference
+                    // Issue #3501: align with CastUsesCheckedReferenceConversion
+                    // (identity reference casts included) so a null-preserving
+                    // `expr as T` lowering still surfaces its operand's
+                    // promotion to the receiver-forgiveness pass.
+                    return this.CastUsesCheckedReferenceConversion(cast)
                         && this.ReceiverValueIsPromotedNullable(cast.Expression);
 
                 case AwaitExpressionSyntax awaited:
