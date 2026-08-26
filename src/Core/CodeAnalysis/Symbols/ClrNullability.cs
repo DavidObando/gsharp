@@ -503,6 +503,12 @@ public static class ClrNullability
 
         if (clrType.IsValueType)
         {
+            if (baseSymbol is TupleTypeSymbol
+                && CountNullabilityBytes(clrType) > 1)
+            {
+                return BuildTupleTypeSymbol(clrType, flags, offset);
+            }
+
             // A closed generic value type carries a leading zero placeholder.
             // Keep its annotation wrapper when arguments add further positions.
             if (clrType.IsGenericType
@@ -535,6 +541,35 @@ public static class ClrNullability
         }
 
         return result;
+    }
+
+    private static TupleTypeSymbol BuildTupleTypeSymbol(
+        Type clrType,
+        ImmutableArray<byte> flags,
+        int offset)
+    {
+        var elements = ImmutableArray.CreateBuilder<TypeSymbol>();
+        var position = offset;
+        AppendElements(clrType);
+        return TupleTypeSymbol.Get(elements.ToImmutable());
+
+        void AppendElements(Type tupleType)
+        {
+            position++; // Generic value-type placeholder.
+            var arguments = tupleType.GetGenericArguments();
+            var directCount = arguments.Length == 8 ? 7 : arguments.Length;
+            for (var i = 0; i < directCount; i++)
+            {
+                var argument = arguments[i];
+                elements.Add(SymbolFromFlagsOffset(argument, flags, position));
+                position += CountNullabilityBytes(argument);
+            }
+
+            if (arguments.Length == 8)
+            {
+                AppendElements(arguments[7]);
+            }
+        }
     }
 
     private static TypeSymbol ApplyReferenceNullabilityFull(TypeSymbol baseSymbol, Type? clrType, ICustomAttributeProvider declaration, MemberInfo? enclosingMember)

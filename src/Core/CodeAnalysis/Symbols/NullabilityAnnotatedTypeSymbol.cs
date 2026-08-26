@@ -110,6 +110,12 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         }
 
         var args = clr.GetGenericArguments();
+        if (targetClrType.IsGenericParameter
+            && (uint)targetClrType.GenericParameterPosition < (uint)args.Length)
+        {
+            return GetTypeArgumentSymbol(targetClrType.GenericParameterPosition);
+        }
+
         int offset = 1; // byte 0 = outer type
 
         for (int i = 0; i < args.Length; i++)

@@ -135,6 +135,20 @@ public class ClrNullabilityTests
     }
 
     [Fact]
+    public void List_ElementAnnotatedNullable_OpenIndexerParameterMapsByPosition()
+    {
+        var method = typeof(Sample).GetMethod(nameof(Sample.GetList));
+        var sym = ClrNullability.GetReturnTypeSymbol(method!);
+        var annotated = Assert.IsType<NullabilityAnnotatedTypeSymbol>(sym);
+        var openElement = typeof(List<>).GetGenericArguments()[0];
+
+        var elemType = annotated.GetTypeArgumentSymbolForClrType(openElement);
+
+        var nullableElem = Assert.IsType<NullableTypeSymbol>(elemType);
+        Assert.Same(TypeSymbol.String, nullableElem.UnderlyingType);
+    }
+
+    [Fact]
     public void FuncParameter_WithNullableFirstArg_SurfacesInnerNullability()
     {
         // Sample.AcceptFunc takes a Func<string?, int> parameter.
