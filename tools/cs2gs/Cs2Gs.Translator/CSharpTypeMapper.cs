@@ -886,6 +886,14 @@ public sealed class CSharpTypeMapper
         INamedTypeSymbol named,
         TranslationContext context,
         Location location)
+        => this.GetOrCreateImportedTypeAlias(named, context, location, reuseOnly: false, precomputedTarget: null);
+
+    internal string GetOrCreateImportedTypeAlias(
+        INamedTypeSymbol named,
+        TranslationContext context,
+        Location location,
+        bool reuseOnly,
+        string precomputedTarget)
     {
         static bool HasVisibleSourceTypeName(
             string name,
@@ -941,9 +949,9 @@ public sealed class CSharpTypeMapper
         string namespaceName = named.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? this.Names(context).GetNamespaceName(ns)
             : null;
-        string target = namespaceName != null
+        string target = precomputedTarget ?? (namespaceName != null
             ? $"{namespaceName}.{simpleName}"
-            : simpleName;
+            : simpleName);
         foreach (var reservedAlias in this.reservedTypeAliases)
         {
             if (reservedAlias.Value.Count == 1
@@ -967,6 +975,11 @@ public sealed class CSharpTypeMapper
             {
                 return existing.Key;
             }
+        }
+
+        if (reuseOnly)
+        {
+            return null;
         }
 
         this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(
@@ -1567,6 +1580,22 @@ public sealed class CSharpTypeMapper
 
         if (named.ContainingType == null)
         {
+            // Issue #3501: when the source file declares a `using Alias = …;`
+            // for this exact type, render the ALIAS instead of shortening to
+            // the bare name. The bare rendering forced a synthesized
+            // whole-namespace import that could collide with another imported
+            // namespace's simple names (EmittedNameAllocator's
+            // `import GSharp.Core.CodeAnalysis.Syntax` made Roslyn's
+            // `AssignmentExpressionSyntax`/`SyntaxKind` ambiguous, and gsc
+            // silently bound the wrong one — surfacing as GS0532 on the
+            // now-impossible patterns). The alias import is already emitted by
+            // the ordinary using-directive translation, so the alias name
+            // resolves without any synthesized namespace import.
+            if (this.TryReuseSourceUsingAlias(named, context, location, out string sourceAlias))
+            {
+                return sourceAlias;
+            }
+
             this.TrackShortenedNamespace(named);
             string simpleName = this.Names(context).GetName(named);
             bool visibleNestedHomonym = this.HasVisibleSourceNestedHomonym(
@@ -2205,6 +2234,56 @@ public sealed class CSharpTypeMapper
             && returnType.NullableAnnotation != NullableAnnotation.Annotated
                 ? WithNullable(mapped, true)
                 : mapped;
+    }
+
+    /// <summary>
+    /// Issue #3501: when the source file declares a `using Alias = Type;` for
+    /// the exact NON-GENERIC top-level type being rendered, reuse that alias
+    /// instead of shortening to the bare name — the bare rendering forces a
+    /// synthesized whole-namespace import that can make OTHER simple names
+    /// ambiguous across imports (EmittedNameAllocator's synthesized
+    /// `import GSharp.Core.CodeAnalysis.Syntax` made Roslyn's
+    /// `AssignmentExpressionSyntax`/`SyntaxKind` resolve to the wrong package,
+    /// surfacing as GS0532 on the now-impossible patterns). Reuses the same
+    /// uniqueness and shadowing gates as <see cref="GetOrCreateImportedTypeAlias(INamedTypeSymbol, TranslationContext, Location)"/>
+    /// (#3466), and generic targets are excluded so constructed spellings keep
+    /// their explicit type arguments (#2500).
+    /// </summary>
+    /// <param name="named">The referenced top-level type.</param>
+    /// <param name="context">The active translation context.</param>
+    /// <param name="location">The reference location (shadowing probes).</param>
+    /// <param name="aliasName">The reusable alias identifier, when one applies.</param>
+    /// <returns><see langword="true"/> when a source alias can be reused.</returns>
+    private bool TryReuseSourceUsingAlias(
+        INamedTypeSymbol named,
+        TranslationContext context,
+        Location location,
+        out string aliasName)
+    {
+        aliasName = null;
+
+        // Constraint mapping (issue #2509, WithMetadataImportCollisionQualification)
+        // demands the EXACT qualified semantic identity — a homonym-safe
+        // `A.IContract` — never an alias spelling, so alias reuse is skipped
+        // there.
+        if (named.Arity != 0 || this.reservedTypeAliases.Count == 0 || this.qualifyMetadataImportCollisions)
+        {
+            return false;
+        }
+
+        string simpleName = this.Names(context).GetName(named);
+        string namespaceName = named.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? this.Names(context).GetNamespaceName(ns)
+            : null;
+        string target = namespaceName != null ? $"{namespaceName}.{simpleName}" : simpleName;
+        string candidate = this.GetOrCreateImportedTypeAlias(named, context, location, reuseOnly: true, target);
+        if (candidate is null)
+        {
+            return false;
+        }
+
+        aliasName = candidate;
+        return true;
     }
 }
 
