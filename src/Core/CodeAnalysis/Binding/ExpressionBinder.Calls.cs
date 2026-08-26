@@ -97,8 +97,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
                 }
 
-                var fieldValueExpr = BindExpression(initSyntax.Value);
-                fieldValueExpr = conversions.BindConversion(initSyntax.Value.Location, fieldValueExpr, field.Type);
+                var fieldValueExpr = BindExpression(initSyntax.Value, field.Type);
                 explicitValues[memberName] = (field, null, fieldValueExpr);
                 continue;
             }
@@ -117,8 +116,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, property.Name, propertyDeclaringType.Name, property.SetterAccessibility);
                 }
 
-                var propertyValueExpr = BindExpression(initSyntax.Value);
-                propertyValueExpr = conversions.BindConversion(initSyntax.Value.Location, propertyValueExpr, property.Type);
+                var propertyValueExpr = BindExpression(initSyntax.Value, property.Type);
                 explicitValues[memberName] = (null, property, propertyValueExpr);
                 continue;
             }
