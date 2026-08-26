@@ -2258,6 +2258,30 @@ internal sealed partial class ExpressionBinder
                             return openElement.IsByRef ? ByRefTypeSymbol.Get(arg) : arg;
                         }
                     }
+
+                    // Issue #3501: an indexer whose result merely MENTIONS the
+                    // receiver's type parameter inside a constructed generic —
+                    // `ILookup[TKey, TElement].this[TKey]` returning
+                    // `IEnumerable[TElement]` — fell through the bare-slot case
+                    // above and used the erased closed shape, so a lookup over
+                    // a same-compilation element type surfaced
+                    // `IEnumerable[object]` and every member read on the
+                    // iterated element failed GS0158. Recover the substituted
+                    // shape via the same recursive projection the method-
+                    // parameter path uses (#2365).
+                    if (openCore.ContainsGenericParameters)
+                    {
+                        var projected = MemberLookup.MapOpenClrTypeToSymbolic(
+                            openCore,
+                            openDefinition,
+                            target.TypeArguments);
+                        if (projected != null
+                            && projected != TypeSymbol.Error
+                            && TypeSymbol.RequiresSymbolicProjection(projected))
+                        {
+                            return openElement.IsByRef ? ByRefTypeSymbol.Get(projected) : projected;
+                        }
+                    }
                 }
             }
             catch (System.Reflection.AmbiguousMatchException)
