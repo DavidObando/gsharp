@@ -696,6 +696,21 @@ internal sealed partial class MethodBodyEmitter
 
     private static bool IsReferenceCompatible(TypeSymbol? a, TypeSymbol? b)
     {
+        // Issue #3501: inner generic nullability metadata does not change the
+        // CLR reference shape — mirror ClassifyCore's unwrap so an annotated
+        // imported target (e.g. the `IEqualityComparer<T>?` constructor
+        // parameter surfaced through the MetadataLoadContext) matches the
+        // same arms its bare shape would.
+        while (a is NullabilityAnnotatedTypeSymbol aAnnotated)
+        {
+            a = aAnnotated.BaseType;
+        }
+
+        while (b is NullabilityAnnotatedTypeSymbol bAnnotated)
+        {
+            b = bAnnotated.BaseType;
+        }
+
         if (a == b)
         {
             return true;
@@ -972,9 +987,16 @@ internal sealed partial class MethodBodyEmitter
         // therefore requires no instruction. Reuse the binder classification
         // instead of repeating nullable substitution, variance, and
         // cross-context identity logic here.
+        // Issue #3501: also admit a NON-generic imported reference source
+        // (no symbolic TypeArguments, e.g. Roslyn's `SymbolEqualityComparer`)
+        // converting to a variant constructed interface
+        // (`IEqualityComparer[IMethodSymbol]`): the binder now classifies it
+        // through the CLR interface-closure projection, and the emitted form
+        // is the same no-op reference upcast.
         if (a is ImportedTypeSymbol importedReference
-            && importedReference.OpenDefinition?.IsValueType == false
-            && !importedReference.TypeArguments.IsDefaultOrEmpty
+            && (importedReference.OpenDefinition?.IsValueType == false
+                || (importedReference.OpenDefinition == null
+                    && importedReference.ClrType is { IsValueType: false, IsArray: false }))
             && b is ImportedTypeSymbol
             && Conversion.ClassifyNonStructural(a, b) is
             {

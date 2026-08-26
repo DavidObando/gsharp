@@ -489,6 +489,20 @@ internal static class ClrOverloadResolution
             return ImplicitConversionKind.Reference;
         }
 
+        // Issue #3501: declaration-site generic-interface variance for a
+        // non-array reference source. `ImplementsInterfaceByName` above
+        // requires the closed generic arguments to match exactly, so a
+        // variance-compatible instantiation (e.g. Roslyn's
+        // `SymbolEqualityComparer : IEqualityComparer<ISymbol>` passed to a
+        // `HashSet<IMethodSymbol>` constructor's contravariant
+        // `IEqualityComparer<IMethodSymbol>` slot) fell through and failed
+        // GS0267 even though C#/the CLR accept it. Mirrors
+        // `IsSafeArrayInterfaceVariance` for the general interface case.
+        if (target.IsInterface && IsVariantGenericInterfaceConversion(target, source))
+        {
+            return ImplicitConversionKind.Reference;
+        }
+
         // Cross-context base-class walk (#610): covers inheritance across
         // reflection contexts (e.g. an MLC-loaded subclass passed to a
         // parameter typed as its live-runtime base class or vice versa).
@@ -1610,6 +1624,152 @@ internal static class ClrOverloadResolution
             Exists: true,
             IsImplicit: true,
         };
+    }
+
+    /// <summary>
+    /// Issue #3501: declaration-site variance for a general (non-array)
+    /// reference source against a constructed generic interface target.
+    /// Succeeds when the source (or one of its implemented interfaces) closes
+    /// the target's open definition with per-slot variance-compatible
+    /// arguments: identity for invariant slots, an implicit reference
+    /// conversion source→target for `out` slots, and target→source for `in`
+    /// slots — the ECMA-335 II.9.7 rule `ImplementsInterfaceByName` cannot
+    /// express because it requires exact closed-argument identity.
+    /// </summary>
+    private static bool IsVariantGenericInterfaceConversion(Type target, Type source)
+    {
+        if (source.IsValueType || source.IsArray || source.IsGenericParameter
+            || !target.IsGenericType || target.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        Type definition;
+        Type[] targetArguments;
+        Type[] parameters;
+        try
+        {
+            definition = target.GetGenericTypeDefinition();
+            targetArguments = target.GetGenericArguments();
+            parameters = definition.GetGenericArguments();
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+
+        if (parameters.Length != targetArguments.Length)
+        {
+            return false;
+        }
+
+        var hasVariantSlot = false;
+        foreach (var parameter in parameters)
+        {
+            if ((parameter.GenericParameterAttributes & GenericParameterAttributes.VarianceMask)
+                != GenericParameterAttributes.None)
+            {
+                hasVariantSlot = true;
+                break;
+            }
+        }
+
+        if (!hasVariantSlot)
+        {
+            return false;
+        }
+
+        foreach (var candidate in EnumerateSelfAndInterfaces(source))
+        {
+            Type candidateDefinition;
+            Type[] candidateArguments;
+            try
+            {
+                if (!candidate.IsGenericType || candidate.IsGenericTypeDefinition)
+                {
+                    continue;
+                }
+
+                candidateDefinition = candidate.GetGenericTypeDefinition();
+                candidateArguments = candidate.GetGenericArguments();
+            }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
+
+            if (!ClrTypeUtilities.AreSame(candidateDefinition, definition)
+                || candidateArguments.Length != targetArguments.Length)
+            {
+                continue;
+            }
+
+            if (AreVarianceCompatibleArguments(parameters, candidateArguments, targetArguments))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Type> EnumerateSelfAndInterfaces(Type source)
+    {
+        if (source.IsInterface)
+        {
+            yield return source;
+        }
+
+        foreach (var implemented in ClrTypeUtilities.SafeGetInterfaces(source))
+        {
+            yield return implemented;
+        }
+    }
+
+    private static bool AreVarianceCompatibleArguments(
+        Type[] parameters,
+        Type[] sourceArguments,
+        Type[] targetArguments)
+    {
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var sourceArgument = sourceArguments[i];
+            var targetArgument = targetArguments[i];
+            if (ClrTypeUtilities.AreSame(sourceArgument, targetArgument))
+            {
+                continue;
+            }
+
+            var variance = parameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask;
+            bool compatible;
+            switch (variance)
+            {
+                case GenericParameterAttributes.Covariant:
+                    compatible = IsClrVarianceReferenceType(sourceArgument)
+                        && IsClrVarianceReferenceType(targetArgument)
+                        && Conversion.ClassifyNonStructural(
+                            TypeSymbol.FromClrType(sourceArgument),
+                            TypeSymbol.FromClrType(targetArgument)) is { Exists: true, IsImplicit: true };
+                    break;
+                case GenericParameterAttributes.Contravariant:
+                    compatible = IsClrVarianceReferenceType(sourceArgument)
+                        && IsClrVarianceReferenceType(targetArgument)
+                        && Conversion.ClassifyNonStructural(
+                            TypeSymbol.FromClrType(targetArgument),
+                            TypeSymbol.FromClrType(sourceArgument)) is { Exists: true, IsImplicit: true };
+                    break;
+                default:
+                    compatible = false;
+                    break;
+            }
+
+            if (!compatible)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsClrVarianceReferenceType(Type? type)
