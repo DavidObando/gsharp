@@ -662,9 +662,17 @@ public sealed partial class CSharpToGSharpTranslator
             // pattern local and gsc cannot smart-cast the original scrutinee.
             // An implicit property/field can translate to a bare identifier, but
             // only bare locals and parameters are smart-castable (ADR-0069).
+            // Issue #3555: a property subpattern whose VALUE is itself a
+            // type-matching pattern with further subpatterns (`ContainingSymbol:
+            // IMethodSymbol { MethodKind: … }`) cannot be guard-lowered even
+            // over a smart-castable scrutinee — gsc narrows only the scrutinee
+            // local, never member CHAINS, so the lowered
+            // `x.Prop is T && x.Prop.M == …` fails GS0158 on the unnarrowed
+            // second read. Such shapes must take the native pattern form.
             if (!PatternIntroducesBinding(isPattern.Pattern)
-                && !PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
-                && !this.IsSmartCastableScrutinee(isPattern.Expression))
+                && ((!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
+                        && !this.IsSmartCastableScrutinee(isPattern.Expression))
+                    || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)))
             {
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var guards = new List<GExpression>();
@@ -718,6 +726,58 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverType,
                 isPattern.Expression);
             return this.MaterializeFallbackPatternBindings(isPattern, receiver, test);
+        }
+
+        // Issue #3555: true when a property subpattern's value is itself a
+        // type-matching pattern that tests MEMBERS of the narrowed value — the
+        // shape guard-lowering cannot express (see TranslateIsPattern).
+        private static bool PatternRequiresNestedTypeNarrowing(PatternSyntax pattern)
+        {
+            switch (pattern)
+            {
+                case RecursivePatternSyntax recursive:
+                    foreach (SubpatternSyntax subpattern in
+                        recursive.PropertyPatternClause?.Subpatterns
+                        ?? default(SeparatedSyntaxList<SubpatternSyntax>))
+                    {
+                        if (subpattern.Pattern is RecursivePatternSyntax { Type: not null } nestedTyped
+                            && (nestedTyped.PropertyPatternClause is { Subpatterns.Count: > 0 }
+                                || nestedTyped.PositionalPatternClause is { Subpatterns.Count: > 0 }))
+                        {
+                            return true;
+                        }
+
+                        if (PatternRequiresNestedTypeNarrowing(subpattern.Pattern))
+                        {
+                            return true;
+                        }
+                    }
+
+                    foreach (SubpatternSyntax subpattern in
+                        recursive.PositionalPatternClause?.Subpatterns
+                        ?? default(SeparatedSyntaxList<SubpatternSyntax>))
+                    {
+                        if (PatternRequiresNestedTypeNarrowing(subpattern.Pattern))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case UnaryPatternSyntax unary:
+                    return PatternRequiresNestedTypeNarrowing(unary.Pattern);
+
+                case BinaryPatternSyntax binary:
+                    return PatternRequiresNestedTypeNarrowing(binary.Left)
+                        || PatternRequiresNestedTypeNarrowing(binary.Right);
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    return PatternRequiresNestedTypeNarrowing(parenthesized.Pattern);
+
+                default:
+                    return false;
+            }
         }
 
         private GExpression MaterializeFallbackPatternBindings(
