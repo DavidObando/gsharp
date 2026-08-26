@@ -761,8 +761,14 @@ internal static class ObliviousNullabilityAnalyzer
         // the delegating call demands a non-null value (GS0154). Roslyn models a
         // constructor initializer as an `IInvocationOperation`, so it flows
         // through the same argument→parameter edge collection.
+        // Issue #3501: BaseObjectCreationExpressionSyntax covers BOTH explicit
+        // `new Entry(null, …)` and target-typed `new(null, …)` creations — the
+        // implicit form (C# 9) is a sibling syntax type, not an
+        // ObjectCreationExpressionSyntax, so the RoslynAnalyzerApiMap-style
+        // `[key] = new(null, "…")` initializer never flowed its null argument
+        // into the record's positional parameter (GS0155 nil → string).
         if (node is InvocationExpressionSyntax
-            or ObjectCreationExpressionSyntax
+            or BaseObjectCreationExpressionSyntax
             or ConstructorInitializerSyntax
             or ElementAccessExpressionSyntax
             or ElementBindingExpressionSyntax)
