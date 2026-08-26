@@ -1234,6 +1234,46 @@ public sealed partial class CSharpToGSharpTranslator
                 value = EnsureNonNullAssertion(value);
             }
 
+            // Issue #3501: a yield is a VALUE seam against the iterator's
+            // element type (the yield expression's C# converted type), exactly
+            // like an argument against its parameter — a promoted-nullable
+            // value (`yield Canonical(called)` where `Canonical` returns
+            // `ISymbol?`) flowing into a non-null element needs the same `!!`
+            // bridge the argument path inserts. Tuple literals bridge
+            // per-element (`yield (generatedRegexField, true)` where the
+            // Try-out-var is `FieldDeclaration?` but the element is
+            // `(GMember, bool)`).
+            IMethodSymbol enclosingIterator =
+                this.context.SemanticModel.GetEnclosingSymbol(node.SpanStart) as IMethodSymbol;
+            if (node.Expression is TupleExpressionSyntax tupleValue
+                && typeInfo.ConvertedType is INamedTypeSymbol { IsTupleType: true } tupleTarget
+                && value is TupleLiteralExpression tupleLiteral
+                && tupleValue.Arguments.Count == tupleTarget.TupleElements.Length
+                && tupleLiteral.Elements.Count == tupleValue.Arguments.Count)
+            {
+                var bridged = new List<GExpression>(tupleLiteral.Elements.Count);
+                for (int i = 0; i < tupleLiteral.Elements.Count; i++)
+                {
+                    bridged.Add(this.ForgiveNullableReferenceValue(
+                        tupleValue.Arguments[i].Expression,
+                        tupleLiteral.Elements[i],
+                        tupleTarget.TupleElements[i].Type,
+                        enclosingIterator,
+                        includePromotedValue: true));
+                }
+
+                value = new TupleLiteralExpression(bridged);
+            }
+            else if (typeInfo.ConvertedType is { } elementType)
+            {
+                value = this.ForgiveNullableReferenceValue(
+                    node.Expression,
+                    value,
+                    elementType,
+                    enclosingIterator,
+                    includePromotedValue: true);
+            }
+
             return new[] { (GStatement)new YieldStatement(value) };
         }
 
