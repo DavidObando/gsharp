@@ -1893,6 +1893,17 @@ public sealed class CSharpTypeMapper
                     continue;
                 }
 
+                // Issue #3554 follow-up: an arity-differing pair
+                // (System.Collections.IEnumerator vs
+                // System.Collections.Generic.IEnumerator<T>) is not a G#
+                // ambiguity — gsc disambiguates a bare name by its type-argument
+                // count, exactly like the same-namespace
+                // IComparable/IComparable<T> case filtered below.
+                if (candidate.Arity != named.Arity)
+                {
+                    continue;
+                }
+
                 // Types in the same namespace/package are not an import
                 // collision. This also filters facade/implementation symbols
                 // for the same forwarded metadata type, and same-namespace
