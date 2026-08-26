@@ -26,10 +26,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// a class instance by-reference across the P/Invoke boundary.
 /// </para>
 /// <para>
-/// Imported CLR struct types use runtime marshalling classification for
-/// blittability. Unmanaged classification instead walks every instance field
-/// recursively because <see cref="System.Runtime.InteropServices.Marshal.SizeOf(System.Type)"/>
-/// can succeed for structs that contain managed references.
+/// Imported CLR struct types are classified from their metadata layout and
+/// instance fields. This works for both runtime types and types loaded through a
+/// <see cref="System.Reflection.MetadataLoadContext"/>, and avoids treating
+/// marshalable structs containing managed references as blittable.
 /// </para>
 /// </remarks>
 internal sealed class BlittableDetector
@@ -129,12 +129,15 @@ internal sealed class BlittableDetector
             return true;
         }
 
-        // Explicitly reject the known non-blittable language primitives
-        // before falling back to the Marshal.SizeOf heuristic — the runtime
-        // happily reports `Marshal.SizeOf(typeof(bool)) == 4`, which would
-        // otherwise cause the fallback to misclassify `bool` and `char` as
-        // blittable.
+        // Explicitly reject the known non-blittable language primitives before
+        // imported metadata classification. In particular, bool and char have
+        // unmanaged representations that require marshalling conversions.
         if (IsKnownNonBlittablePrimitive(type))
+        {
+            return false;
+        }
+
+        if (TypeSymbol.IsByRefLike(type))
         {
             return false;
         }
@@ -166,12 +169,14 @@ internal sealed class BlittableDetector
                 return false;
             }
 
+            if (structSym.ClrType is { } importedClr)
+            {
+                return IsImportedValueType(importedClr, new HashSet<Type>(), unmanaged);
+            }
+
             return IsBlittableStruct(structSym, visiting, unmanaged);
         }
 
-        // Imported CLR types: unmanaged classification must inspect fields;
-        // Marshal.SizeOf can accept structs that still contain GC references.
-        // Blittability keeps the existing runtime marshalling classification.
         var clr = type.ClrType;
         if (clr?.IsGenericParameter == true || clr?.ContainsGenericParameters == true)
         {
@@ -180,72 +185,62 @@ internal sealed class BlittableDetector
 
         if (clr != null && clr.IsValueType)
         {
-            if (clr.IsEnum)
-            {
-                return true;
-            }
-
-            if (unmanaged)
-            {
-                if (clr.IsGenericType
-                    && clr.GetGenericTypeDefinition().FullName == "System.Nullable`1")
-                {
-                    return false;
-                }
-
-                return IsImportedUnmanagedType(clr, new HashSet<Type>());
-            }
-
-            try
-            {
-                System.Runtime.InteropServices.Marshal.SizeOf(clr);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return IsImportedValueType(clr, new HashSet<Type>(), unmanaged);
         }
 
         return false;
     }
 
-    private static bool IsImportedUnmanagedType(Type? type, HashSet<Type> visiting)
+    private static bool IsImportedValueType(Type? type, HashSet<Type> visiting, bool unmanaged)
     {
-        if (type == null
-            || type.IsByRef
-            || type.IsByRefLike
-            || type.IsGenericParameter
-            || type.ContainsGenericParameters)
-        {
-            return false;
-        }
-
-        if (type.IsPointer || type.IsFunctionPointer || type.IsEnum || type.IsPrimitive)
-        {
-            return true;
-        }
-
-        if (!type.IsValueType)
-        {
-            return false;
-        }
-
-        // C# excludes Nullable<T> from the unmanaged-type set. That applies
-        // recursively too: a struct containing an int? field is not unmanaged.
-        if (type.IsGenericType
-            && type.GetGenericTypeDefinition().FullName == "System.Nullable`1")
-        {
-            return false;
-        }
-
-        if (!visiting.Add(type))
-        {
-            return true;
-        }
-
+        var added = false;
         try
         {
+            if (type == null
+                || type.IsByRef
+                || ClrTypeUtilities.IsByRefLike(type)
+                || type.IsGenericParameter
+                || type.ContainsGenericParameters)
+            {
+                return false;
+            }
+
+            if (type.IsPointer || type.IsFunctionPointer || type.IsEnum)
+            {
+                return true;
+            }
+
+            var symbol = TypeSymbol.FromClrType(type);
+            if (IsBlittablePrimitive(symbol)
+                || (unmanaged && IsUnmanagedOnlyPrimitive(symbol)))
+            {
+                return true;
+            }
+
+            if (IsKnownNonBlittablePrimitive(symbol) || !type.IsValueType)
+            {
+                return false;
+            }
+
+            // C# excludes Nullable<T> from the unmanaged-type set. It is also
+            // non-blittable because its layout contains a bool discriminator.
+            if (type.IsGenericType
+                && type.GetGenericTypeDefinition().FullName == "System.Nullable`1")
+            {
+                return false;
+            }
+
+            if (!unmanaged && !type.IsLayoutSequential && !type.IsExplicitLayout)
+            {
+                return false;
+            }
+
+            added = visiting.Add(type);
+            if (!added)
+            {
+                return false;
+            }
+
             var fields = type.GetFields(
                 System.Reflection.BindingFlags.Instance
                     | System.Reflection.BindingFlags.Public
@@ -253,7 +248,7 @@ internal sealed class BlittableDetector
 
             foreach (var field in fields)
             {
-                if (!IsImportedUnmanagedType(field.FieldType, visiting))
+                if (!IsImportedValueType(field.FieldType, visiting, unmanaged))
                 {
                     return false;
                 }
@@ -267,7 +262,10 @@ internal sealed class BlittableDetector
         }
         finally
         {
-            visiting.Remove(type);
+            if (added && type != null)
+            {
+                visiting.Remove(type);
+            }
         }
     }
 
@@ -314,12 +312,11 @@ internal sealed class BlittableDetector
             }
         }
 
-        // Cycle guard: recursive struct definitions are already rejected
-        // elsewhere, but defensively treat a visited node as blittable to
-        // avoid unbounded recursion in pathological cases.
+        // Recursive value layouts are invalid. Pointer recursion never reaches
+        // this guard because pointers classify as address-sized leaves above.
         if (!visiting.Add(structSym))
         {
-            return true;
+            return false;
         }
 
         try

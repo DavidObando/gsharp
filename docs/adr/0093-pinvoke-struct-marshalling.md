@@ -75,7 +75,7 @@ A G# struct `S` is **blittable** iff **every** instance field of `S` has a type 
 3. a native-int primitive (`nint` / `nuint`),
 4. an unmanaged pointer `*T` for any `T` (the pointer is blittable regardless of its pointee),
 5. another **blittable** G# struct (the relation is recursively defined; user types form a directed acyclic graph because `struct` cannot self-reference without indirection),
-6. an imported CLR struct whose runtime `Type` reports `Marshal.SizeOf` without throwing (i.e. the BCL already classifies it as blittable — `Int32`, `Double`, `IntPtr`, `Guid`, etc.).
+6. an imported sequential- or explicit-layout CLR value struct whose instance fields recursively satisfy these rules (read directly from reflection metadata, including project-reference types loaded through `MetadataLoadContext`).
 
 Anything else makes the struct **non-blittable**. In particular, the following make `S` non-blittable in v1:
 
@@ -85,7 +85,7 @@ Anything else makes the struct **non-blittable**. In particular, the following m
 - A slice (`[]T`) field, a sequence, an array, a map, a tuple, a channel, a delegate, a class reference (regardless of layout), an interface reference, or any other managed reference type.
 - A field whose type itself is non-blittable.
 
-The recursion is performed by `BlittableDetector.IsBlittable(StructSymbol)` (cached per symbol). Cycles cannot occur for value types (the bound-tree builder already rejects recursive struct field types as a separate constraint).
+The recursion is performed by `BlittableDetector.IsBlittable` (cached per symbol). Cyclic value layouts are rejected; recursion through pointer fields is valid because pointers are classified as address-sized leaves.
 
 This is a deliberately **conservative** definition: it matches the subset of C#'s blittability rules that does not require synthesizing per-field `MarshalAs` data. Once `@MarshalAs` is supported (issue #762), the definition will be extended to cover fields with explicit `MarshalAs` directives.
 
