@@ -160,6 +160,13 @@ public sealed partial class DiagnosticBag
     public void ReportConstFieldInitializerNotConstant(TextLocation location, string name)
     => Report(location, DiagnosticDescriptors.ConstFieldInitializerNotConstant, name);
 
+    /// <summary>Reports a field-emitted constant whose native-width type has no CLR constant representation.</summary>
+    /// <param name="location">The declared identifier location.</param>
+    /// <param name="name">The constant name.</param>
+    /// <param name="typeName">The native-width type name.</param>
+    public void ReportConstNativeIntegerNotSupported(TextLocation location, string name, string typeName)
+    => Report(location, DiagnosticDescriptors.ConstNativeIntegerNotSupported, name, typeName);
+
     /// <summary>
     /// Issue #3310 / ADR-0159: a bare <c>chan T</c> local, global, or field
     /// declared without an initializer has no usable default value (the

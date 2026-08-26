@@ -553,10 +553,9 @@ public sealed class Lowerer : BoundTreeRewriter
 
     /// <inheritdoc/>
     /// <summary>
-    /// Issue #948: a <c>const</c> field read has no runtime storage — inline it
-    /// as the compile-time constant literal so all downstream paths (value
-    /// loads, value-type method-call receivers needing an address, etc.) treat
-    /// it uniformly. Matches C# const-read semantics.
+    /// Issue #948: inline a <c>const</c> field read as its compile-time value so
+    /// downstream value loads and value-type method-call receivers treat it
+    /// uniformly. Matches C# const-read semantics.
     /// </summary>
     /// <param name="node">The field-access node.</param>
     /// <returns>A literal for const fields; otherwise the base rewrite.</returns>

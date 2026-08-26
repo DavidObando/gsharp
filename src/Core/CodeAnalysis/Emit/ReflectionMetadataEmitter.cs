@@ -1928,7 +1928,8 @@ internal sealed class ReflectionMetadataEmitter
             // declares static-field initializers. It is the LAST method in the
             // interface's MethodList run (emitted after property/event accessors
             // in EmitInterfaceMethodBodies), so reserve it here last.
-            if (!i.StaticFieldInitializers.IsEmpty)
+            if (!i.StaticFieldInitializers.IsEmpty
+                || ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(i.ConstFields))
             {
                 interfaceCctorRows[i] = methodRow++;
             }
@@ -2130,7 +2131,9 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #262: plan .cctor row for classes with static field initializers.
             // ADR-0140 / issue #2131: also plan it when the class declares a
             // `shared { init { … } }` static-initializer block.
-            if (!c.StaticFieldInitializers.IsEmpty || c.HasStaticInitializerBlock)
+            if (!c.StaticFieldInitializers.IsEmpty
+                || ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(c.ConstFields)
+                || c.HasStaticInitializerBlock)
             {
                 this.cache.CctorHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
@@ -2160,7 +2163,7 @@ internal sealed class ReflectionMetadataEmitter
             // inline-struct first-row offsets pre-registered later in this
             // pass stay valid).
             var needsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s);
-            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock && !needsSynthesizedDefaultCtor)
+            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) && !s.HasStaticInitializerBlock && !needsSynthesizedDefaultCtor)
             {
                 return;
             }
@@ -2284,7 +2287,9 @@ internal sealed class ReflectionMetadataEmitter
             // Issue #262: plan .cctor row for structs with static field initializers.
             // ADR-0140 / issue #2131: also plan it when the struct declares a
             // `shared { init { … } }` static-initializer block.
-            if (!s.StaticFieldInitializers.IsEmpty || s.HasStaticInitializerBlock)
+            if (!s.StaticFieldInitializers.IsEmpty
+                || ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields)
+                || s.HasStaticInitializerBlock)
             {
                 this.cache.CctorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
@@ -2883,7 +2888,9 @@ internal sealed class ReflectionMetadataEmitter
         // 3. Group functions by their declaring package. One <Program> type
         //    is emitted per package, in BoundProgram.Packages declaration
         //    order; method-row layout for each package is:
-        //        package.ctor  → [package's non-entry user fns]  → [package's entry point if any]
+        //        package initializer → [non-entry user fns] → [entry point if any]
+        //    The initializer row is normally .ctor; a package with a decimal
+        //    constant uses it for the required .cctor instead.
         //    The entry-point function (if any) is placed last in its package
         //    so the EntryPoint token resolves cleanly.
         var packages = this.emitCtx.Program.Packages.IsDefaultOrEmpty
@@ -3050,7 +3057,7 @@ internal sealed class ReflectionMetadataEmitter
             packages = reorderedPackages.MoveToImmutable();
         }
 
-        // Plan method rows for packages (per-package ctor + functions + entry).
+        // Plan method rows for packages (initializer + functions + entry).
         var packageCtorRows = new Dictionary<PackageSymbol, int>();
         var nextRow = firstPackageCtorRow;
         foreach (var pkg in packages)
@@ -3370,7 +3377,8 @@ internal sealed class ReflectionMetadataEmitter
         // ADR-0089 / issue #1030: emit the interface .cctor running static
         // field initializers. Emitted LAST (after property/event accessors)
         // to match the row reserved in PlanInterfaceMethods.
-        if (!i.StaticFieldInitializers.IsEmpty)
+        if (!i.StaticFieldInitializers.IsEmpty
+            || ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(i.ConstFields))
         {
             this.ctorBodies.EmitInterfaceStaticConstructor(i);
         }
@@ -3632,7 +3640,7 @@ internal sealed class ReflectionMetadataEmitter
             // so the early-out below must not skip a struct whose only row is
             // that ctor.
             var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s);
-            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
+            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) && !s.HasStaticInitializerBlock)
             {
                 if (emitsSynthesizedDefaultCtor)
                 {
@@ -3774,10 +3782,23 @@ internal sealed class ReflectionMetadataEmitter
         // lookup dictionaries, walk the bound program for constructed
         // StructSymbols (Box[int], Pair[string, int], ...) and alias them
         // to their definitions' rows.
-        this.methodBodyPlanner.RegisterConstructedTypeAliases();        // B4. Per-package methods (ctor + user functions + entry).
+        this.methodBodyPlanner.RegisterConstructedTypeAliases();
+
+        // B4. Per-package methods (initializer + user functions + entry).
+        var runtimePackageConstants = this.emitCtx.Program.Globals
+            .Where(global => global.IsConst
+                && ConstantFieldMetadataEmitter.RequiresRuntimeInitialization(global.ConstantValue))
+            .ToImmutableArray();
         foreach (var pkg in packages)
         {
-            this.typeDefEmitter.EmitDefaultConstructor();
+            if (pkg == entryPointPackage && !runtimePackageConstants.IsDefaultOrEmpty)
+            {
+                this.ctorBodies.EmitProgramStaticConstructor(pkg, runtimePackageConstants);
+            }
+            else
+            {
+                this.typeDefEmitter.EmitDefaultConstructor();
+            }
 
             foreach (var fn in functionsByPackage[pkg])
             {
@@ -4601,7 +4622,8 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv && this.cache.GlobalFieldDefs.ContainsKey(gv))
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
+            && this.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
         }

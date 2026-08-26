@@ -1588,19 +1588,42 @@ internal sealed partial class StatementBinder
             variable.SetAttributes(boundAttrs);
         }
 
-        // Issue #216: a `const` declaration whose converted initializer is a
-        // literal expression carries a compile-time ConstantValue. The emitter
-        // uses this to skip IL slot allocation and emit a LocalConstant PDB row.
+        var declaredVariable = Invariant.Required(variable, "a variable declaration produces a variable symbol");
+
+        // Issue #216 / #3519: a foldable `const` initializer carries its
+        // target-typed compile-time value. Package constants also retain that
+        // value on their symbol so every separately emitted body can inline it.
         object? constValue = null;
         if (syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
-            && convertedInitializer is BoundLiteralExpression litExpr)
+            && convertedInitializer is not null)
         {
-            constValue = litExpr.Value;
+            if (declaredVariable is GlobalVariableSymbol
+                && ConstantExpressionEvaluator.TryFindNativeInteger(convertedInitializer, out var nativeType))
+            {
+                Diagnostics.ReportConstNativeIntegerNotSupported(
+                    syntax.Identifier.Location,
+                    syntax.Identifier.Text,
+                    Invariant.Required(nativeType, "a detected native integer has a type").Name);
+            }
+            else if (ConstantExpressionEvaluator.TryFold(convertedInitializer, declaredVariable.Type, out constValue))
+            {
+                if (declaredVariable is GlobalVariableSymbol global)
+                {
+                    global.SetConstantValue(constValue);
+                }
+            }
+            else if (declaredVariable is GlobalVariableSymbol
+                && convertedInitializer is not BoundErrorExpression)
+            {
+                Diagnostics.ReportConstFieldInitializerNotConstant(
+                    syntax.Initializer?.Location ?? syntax.Identifier.Location,
+                    syntax.Identifier.Text);
+            }
         }
 
         return new BoundVariableDeclaration(
             syntax,
-            Invariant.Required(variable, "a variable declaration produces a variable symbol"),
+            declaredVariable,
             convertedInitializer,
             constValue);
     }

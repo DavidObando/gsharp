@@ -15,15 +15,13 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <c>var</c> / <c>let</c> / <c>const</c> and asserts that the resulting PE
 /// contains a CLR <c>FieldDef</c> on the entry-point package's
 /// <c>&lt;Program&gt;</c> TypeDef carrying the correct accessibility, that
-/// load/store sites round-trip through <c>ldsfld</c>/<c>stsfld</c>, and that
-/// annotations on globals survive as <c>CustomAttribute</c> rows.
+/// mutable load/store sites round-trip through <c>ldsfld</c>/<c>stsfld</c>,
+/// constants carry CLR literal metadata, and annotations on globals survive as
+/// <c>CustomAttribute</c> rows.
 ///
-/// NOTE: this PR intentionally leaves <c>let</c>/<c>const</c> globals as
-/// regular static fields (not <c>initonly</c>). Marking them initonly requires
-/// hoisting initialization into a <c>.cctor</c> which would change observable
-/// ordering for programs whose top-level <c>let</c> initializers depend on
-/// prior side effects (e.g. <c>let v = &lt;-ch</c> after <c>ch &lt;- 1</c>).
-/// That is tracked as a #191 follow-up.
+/// Non-constant <c>let</c> globals remain regular static fields (not
+/// <c>initonly</c>): enforcing init-only storage would require hoisting their
+/// initialization into a <c>.cctor</c>, changing observable top-level ordering.
 /// </summary>
 public class GlobalVariableEmitTests
 {
@@ -45,7 +43,7 @@ public class GlobalVariableEmitTests
         Assert.Equal(typeof(int), field.FieldType);
         Assert.True(field.IsStatic);
         Assert.True(field.IsPublic);
-        Assert.False(field.IsInitOnly, "let/const are intentionally not initonly for this PR.");
+        Assert.False(field.IsInitOnly);
     }
 
     [Fact]
@@ -85,7 +83,7 @@ public class GlobalVariableEmitTests
     }
 
     [Fact]
-    public void TopLevel_Let_And_Const_Emit_As_Static_Fields()
+    public void TopLevel_Let_EmitsAsStaticField_AndConstEmitsAsLiteral()
     {
         var source = """
             package P
@@ -101,10 +99,13 @@ public class GlobalVariableEmitTests
         var greeting = program.GetField("greeting", BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(greeting);
         Assert.Equal(typeof(string), greeting.FieldType);
+        Assert.False(greeting.IsLiteral);
 
         var answer = program.GetField("answer", BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(answer);
         Assert.Equal(typeof(int), answer.FieldType);
+        Assert.True(answer.IsLiteral);
+        Assert.Equal(42, answer.GetRawConstantValue());
     }
 
     [Fact]

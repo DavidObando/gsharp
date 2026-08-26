@@ -46,6 +46,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #3519: package constants are visible from every emitted body,
+        // not only the entry-point body that contains their declarations.
+        if (variable is GlobalVariableSymbol { IsConst: true } globalConst)
+        {
+            this.EmitLiteral(new BoundLiteralExpression(null, globalConst.ConstantValue, globalConst.Type));
+            return;
+        }
+
         // Issue #2771: emitter-owned variable operations (notably `?.`
         // captures) bypass MoveNextBodyRewriter's bound-node substitution.
         if (this.asyncFieldMap != null
@@ -186,7 +194,7 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
             && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
@@ -236,6 +244,7 @@ internal sealed partial class MethodBodyEmitter
         // <Program> static field (initialized in declaration order from
         // the entry-point method body).
         if (variable is GlobalVariableSymbol gv
+            && (!gv.IsConst || this.outer.emitCtx.CurrentStaticConstructorOwner is PackageSymbol)
             && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
         {
             this.il.OpCode(ILOpCode.Stsfld);
@@ -466,9 +475,9 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitFieldAccess(BoundFieldAccessExpression fa)
     {
-        // Issue #948: a const field has no runtime storage — its read is
-        // inlined as the compile-time constant value (matching C# semantics
-        // and the literal field's lack of an ldsfld-able location).
+        // Issue #948: inline const-field reads from their compile-time value.
+        // Decimal retains C#-style runtime metadata storage for interop, but
+        // source reads still inline and never depend on initialization order.
         if (fa.Field.IsConst)
         {
             this.EmitLiteral(new BoundLiteralExpression(null, fa.Field.ConstantValue, fa.Field.Type));
@@ -1895,7 +1904,8 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        if (variable is GlobalVariableSymbol gv && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
+            && this.outer.cache.GlobalFieldDefs.ContainsKey(gv))
         {
             return true;
         }
@@ -2000,7 +2010,7 @@ internal sealed partial class MethodBodyEmitter
 
         // Issue #408 / #191: top-level globals are emitted as static fields
         // on <Program>; their address is taken with ldsflda.
-        if (variable is GlobalVariableSymbol gv
+        if (variable is GlobalVariableSymbol { IsConst: false } gv
             && this.outer.cache.GlobalFieldDefs.TryGetValue(gv, out var fieldHandle))
         {
             this.il.OpCode(ILOpCode.Ldsflda);

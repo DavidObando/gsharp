@@ -895,7 +895,7 @@ internal sealed partial class DeclarationBinder
             case UnaryExpressionSyntax unarySyntax:
                 if (bindExpression(unarySyntax) is { } boundUnary
                     && boundUnary.Type is { } unaryType
-                    && TryEvaluateConstant(boundUnary, out var foldedValue)
+                    && ConstantExpressionEvaluator.TryEvaluate(boundUnary, out var foldedValue)
                     && foldedValue is not null
                     && IsSerialisableAttributeConstant(unaryType))
                 {

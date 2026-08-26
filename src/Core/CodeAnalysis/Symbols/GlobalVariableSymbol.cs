@@ -36,4 +36,26 @@ public sealed class GlobalVariableSymbol : VariableSymbol
     /// Gets the CLR visibility level for this global variable.
     /// </summary>
     public Accessibility Accessibility { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this global is a compile-time constant.
+    /// Reads are inlined from <see cref="ConstantValue"/>. ECMA constants emit
+    /// as literal fields; decimal uses initialized static read-only storage.
+    /// </summary>
+    public bool IsConst { get; private set; }
+
+    /// <summary>
+    /// Gets the compile-time value for an <see cref="IsConst"/> global.
+    /// </summary>
+    public object? ConstantValue { get; private set; }
+
+    /// <summary>
+    /// Marks this global as a compile-time constant and records its value.
+    /// </summary>
+    /// <param name="value">The compile-time constant value.</param>
+    public void SetConstantValue(object? value)
+    {
+        IsConst = true;
+        ConstantValue = value;
+    }
 }

@@ -48,9 +48,9 @@ public sealed class FieldSymbol : Symbol
     /// <summary>
     /// Gets a value indicating whether this field is a compile-time constant
     /// declared with <c>const</c> (Issue #948). A const field is implicitly
-    /// static and read-only, is emitted as a CLR <c>literal</c> field carrying
-    /// a <c>Constant</c> row, and its reads are inlined as the literal
-    /// <see cref="ConstantValue"/> rather than a field load.
+    /// static and read-only, and its reads inline <see cref="ConstantValue"/>.
+    /// ECMA constants emit as literal fields; decimal uses initialized static
+    /// read-only storage with <c>DecimalConstantAttribute</c>.
     /// </summary>
     public bool IsConst { get; }
 

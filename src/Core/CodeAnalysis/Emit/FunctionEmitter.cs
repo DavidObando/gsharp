@@ -83,16 +83,18 @@ internal sealed class FunctionEmitter
     /// <summary>
     /// Issue #191: emits one static <c>FieldDef</c> per user-declared top-level
     /// <c>var</c>/<c>let</c>/<c>const</c> on the entry-point package's
-    /// <c>&lt;Program&gt;</c> TypeDef. Initialization stays in the entry-point
-    /// method body and runs via <c>stsfld</c> as each declaration is reached,
-    /// preserving existing side-effect ordering (e.g. a top-level
-    /// <c>let ch = make(chan int)</c> followed by sends/receives).
+    /// <c>&lt;Program&gt;</c> TypeDef. Runtime initialization of
+    /// <c>var</c>/<c>let</c> stays in the entry-point method body and runs via
+    /// <c>stsfld</c> as each declaration is reached, preserving existing
+    /// side-effect ordering. ECMA constants emit as literal fields carrying
+    /// Constant rows; decimal uses initialized static read-only storage. All
+    /// package-constant reads are inlined.
     /// </summary>
     /// <remarks>
-    /// The <c>InitOnly</c> flag is intentionally omitted for <c>let</c>/<c>const</c>
-    /// globals: enforcing it would require moving initialization into a
-    /// <c>.cctor</c>, which would reorder execution relative to interleaved
-    /// top-level statements. Tracking InitOnly is left as a #191 follow-up.
+    /// The <c>InitOnly</c> flag remains intentionally omitted for
+    /// non-constant <c>let</c> globals: enforcing it would require moving
+    /// initialization into a <c>.cctor</c>, which would reorder execution
+    /// relative to interleaved top-level statements.
     /// </remarks>
     internal void EmitGlobalFieldDefs(ImmutableArray<GlobalVariableSymbol> globals)
     {
@@ -102,11 +104,24 @@ internal sealed class FunctionEmitter
             this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), g.Type);
 
             var attrs = AccessibilityMap.MapFieldAccessibility(g.Accessibility) | FieldAttributes.Static;
+            if (g.IsConst)
+            {
+                attrs |= ConstantFieldMetadataEmitter.GetAttributes(g.ConstantValue);
+            }
 
             var handle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: attrs,
                 name: this.emitCtx.Metadata.GetOrAddString(g.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+
+            if (g.IsConst)
+            {
+                ConstantFieldMetadataEmitter.Emit(
+                    this.emitCtx,
+                    this.memberRefs.GetTypeReference,
+                    handle,
+                    g.ConstantValue);
+            }
 
             this.cache.GlobalFieldDefs[g] = handle;
 

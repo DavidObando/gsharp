@@ -388,7 +388,8 @@ internal sealed partial class MethodBodyEmitter
 
                 break;
             case BoundVariableDeclaration decl:
-                if (decl.ConstantValue != null)
+                if (decl.ConstantValue != null
+                    || decl.Variable is GlobalVariableSymbol { IsConst: true })
                 {
                     break; // value inlined at read sites; initializer is a side-effect-free literal
                 }
