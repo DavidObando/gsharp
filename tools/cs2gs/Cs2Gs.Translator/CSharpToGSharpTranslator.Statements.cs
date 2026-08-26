@@ -1208,18 +1208,18 @@ public sealed partial class CSharpToGSharpTranslator
                     && !SymbolEqualityComparer.Default.Equals(trueType, resultType))
                 {
                     whenTrue = this.CoerceReferenceValueTo(
+                        conditional.WhenTrue,
                         whenTrue,
-                        resultType,
-                        conditional.WhenTrue.GetLocation());
+                        resultType);
                 }
 
                 if (falseType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
                     && !SymbolEqualityComparer.Default.Equals(falseType, resultType))
                 {
                     whenFalse = this.CoerceReferenceValueTo(
+                        conditional.WhenFalse,
                         whenFalse,
-                        resultType,
-                        conditional.WhenFalse.GetLocation());
+                        resultType);
                 }
             }
 
