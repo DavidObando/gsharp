@@ -713,12 +713,11 @@ public sealed partial class CSharpToGSharpTranslator
                     new BinaryExpression(translated, "as", new TypeExpression(target)));
             }
 
-            if (targetType.TypeKind == TypeKind.Interface)
-            {
-                return new ConversionExpression(target, translated, isCheckedReferenceCast: true);
-            }
-
-            return new ConversionExpression(target, translated);
+            // Always the unambiguous constructor-independent `cast[T](expr)`
+            // form: the conversion-call `T(expr)` doesn't bind for generic
+            // interface targets and parses as CONSTRUCTION for class targets
+            // (GS0386 on an abstract base — Oahu's DescriptorFactory).
+            return new ConversionExpression(target, translated, isCheckedReferenceCast: true);
         }
 
         private GExpression TranslateSwitchPatternGuard(

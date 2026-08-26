@@ -75,7 +75,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Animal(", printed);
+        Assert.Contains("cast[Animal](", printed);
     }
 
     [Fact]
