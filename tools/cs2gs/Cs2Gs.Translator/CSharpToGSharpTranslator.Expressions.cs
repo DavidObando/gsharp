@@ -1848,6 +1848,20 @@ public sealed partial class CSharpToGSharpTranslator
                 translated = new ParenthesizedExpression(translated);
             }
 
+            // Issue #3564: a TUPLE-typed key whose G#-side elements are
+            // promoted-nullable while the indexer's key tuple elements are not
+            // (`store[key]` where `key` is `(ISymbol?, SyntaxNode)` against a
+            // `Dictionary[(ISymbol, SyntaxNode), bool]` field) cannot be
+            // bridged with a whole-value `!!` — G# has no implicit
+            // `(T?, U) -> (T, U)`. Rebuild the key per element, asserting only
+            // the promoted slots: `store[(key.Item1!!, key.Item2)]`. A
+            // genuinely null element follows the established `!!` bridge
+            // policy and fails at runtime before the index operation.
+            if (this.TryRebuildPromotedTupleIndexKey(argument, translated, out GExpression rebuiltKey))
+            {
+                return rebuiltKey;
+            }
+
             if (!this.IndexArgumentTargetsNonNullableReference(argument)
                 || !this.IndexArgumentValueNeedsNullForgiveness(argument.Expression))
             {
@@ -1860,6 +1874,65 @@ public sealed partial class CSharpToGSharpTranslator
                     ? new ParenthesizedExpression(translated)
                     : translated;
             return EnsureNonNullAssertion(assertionOperand);
+        }
+
+        private bool TryRebuildPromotedTupleIndexKey(
+            ArgumentSyntax argument,
+            GExpression translated,
+            out GExpression rebuilt)
+        {
+            rebuilt = null;
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            if (this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation
+                {
+                    Parameter.Type: INamedTypeSymbol { IsTupleType: true } keyTuple,
+                })
+            {
+                return false;
+            }
+
+            ISymbol valueSymbol = this.context.GetSymbolInfo(argument.Expression).Symbol;
+            if (valueSymbol is not (ILocalSymbol or IParameterSymbol or IFieldSymbol or IPropertySymbol)
+                || this.context.GetTypeInfo(argument.Expression).Type
+                    is not INamedTypeSymbol { IsTupleType: true } valueTuple
+                || valueTuple.TupleElements.Length != keyTuple.TupleElements.Length)
+            {
+                return false;
+            }
+
+            var elements = new List<GExpression>(keyTuple.TupleElements.Length);
+            bool anyAsserted = false;
+            for (int i = 0; i < keyTuple.TupleElements.Length; i++)
+            {
+                GExpression element = new MemberAccessExpression(translated, $"Item{i + 1}", isArrow: false);
+                IFieldSymbol keyElement = keyTuple.TupleElements[i];
+                bool keyElementStaysNonNull = keyElement.Type is { IsReferenceType: true }
+                    && keyElement.Type.NullableAnnotation != NullableAnnotation.Annotated;
+                if (keyElementStaysNonNull
+                    && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                        this.context.Compilation,
+                        valueSymbol,
+                        new List<int> { i },
+                        this.context.SiblingCompilations))
+                {
+                    element = new NonNullAssertionExpression(element);
+                    anyAsserted = true;
+                }
+
+                elements.Add(element);
+            }
+
+            if (!anyAsserted)
+            {
+                return false;
+            }
+
+            rebuilt = new TupleLiteralExpression(elements);
+            return true;
         }
 
         private bool IndexArgumentValueNeedsNullForgiveness(ExpressionSyntax value)
