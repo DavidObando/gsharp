@@ -330,12 +330,12 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #527 (G#-defined struct/class arm): when a member-style call
+    /// Issues #527 and #3523 (G#-defined struct/class arm): when a member-style call
     /// <c>receiver.Member(args)</c> does not match a method on the user
-    /// struct/class, fall back to a field whose type is a function value or
-    /// named delegate. Lowers to a load of the field followed by a
-    /// <see cref="BoundIndirectCallExpression"/> through the function shape.
-    /// Returns <see langword="true"/> when a callable field matched (the
+    /// struct/class, fall back to a callable field or property. Delegate values
+    /// lower to <see cref="BoundIndirectCallExpression"/>; raw function pointers
+    /// lower to <see cref="BoundFunctionPointerInvocationExpression"/>.
+    /// Returns <see langword="true"/> when a callable member matched (the
     /// resulting expression may be a <see cref="BoundErrorExpression"/> if
     /// arity is wrong).
     /// </summary>
@@ -433,7 +433,7 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    private bool TryBindUserDelegateMemberInvocation(
+    private bool TryBindUserCallableMemberInvocation(
         BoundExpression? receiver,
         TypeSymbol receiverType,
         string methodName,
@@ -445,6 +445,7 @@ internal sealed partial class ExpressionBinder
         result = null;
 
         var receiverStruct = receiverType as StructSymbol;
+        var receiverInterface = receiverType as InterfaceSymbol;
         FieldSymbol? matchedField = null;
         StructSymbol? declaringType = null;
         if (isStatic && receiverStruct != null)
@@ -455,9 +456,14 @@ internal sealed partial class ExpressionBinder
                 out matchedField,
                 out declaringType);
         }
+        else if (isStatic && receiverInterface != null)
+        {
+            var fieldOwner = receiverInterface.Definition ?? receiverInterface;
+            matchedField = fieldOwner.GetStaticField(methodName);
+        }
         else if (receiverStruct != null)
         {
-            // Walk the base chain so an inherited delegate field on a base class
+            // Walk the base chain so an inherited callable field on a base class
             // is invokable on a derived instance.
             StructSymbol? current = receiverStruct;
             while (current != null)
@@ -488,6 +494,17 @@ internal sealed partial class ExpressionBinder
                         methodName,
                         out property,
                         out propertyDeclaringType);
+                }
+                else if (receiverInterface != null)
+                {
+                    var propertyOwner = receiverInterface.Definition ?? receiverInterface;
+                    property = propertyOwner.Properties.FirstOrDefault(candidate =>
+                        candidate.IsStatic
+                        && !candidate.IsIndexer
+                        && candidate.Name == methodName
+                        && candidate.HasGetter
+                        && candidate.GetterSymbol != null);
+                    foundProperty = property != null;
                 }
             }
             else
@@ -526,13 +543,37 @@ internal sealed partial class ExpressionBinder
         BoundExpression memberLoad;
         if (matchedField != null)
         {
-            memberLoad = isStatic
+            memberLoad = isStatic && receiverInterface != null
+                ? new BoundFieldAccessExpression(null, matchedField, receiverInterface)
+                : isStatic
                 ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
                 : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField);
         }
         else if (matchedProperty != null)
         {
-            memberLoad = new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
+            if (isStatic && receiverInterface != null)
+            {
+                memberLoad = new BoundCallExpression(
+                    null,
+                    Invariant.Required(
+                        matchedProperty.GetterSymbol,
+                        "a matched static interface property has a getter"),
+                    ImmutableArray<BoundExpression>.Empty,
+                    matchedProperty.Type)
+                {
+                    StaticGenericInterfaceOwnerType = receiverInterface.Definition != null
+                        ? receiverInterface
+                        : null,
+                };
+            }
+            else
+            {
+                memberLoad = new BoundPropertyAccessExpression(
+                    null,
+                    receiver,
+                    declaringType,
+                    matchedProperty);
+            }
         }
         else
         {
@@ -562,6 +603,30 @@ internal sealed partial class ExpressionBinder
             {
                 Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringType.Name, memberAccessibility);
             }
+        }
+
+        if (ce.NullableQuestionToken == null
+            && ce.TypeArgumentList == null
+            && effectiveMemberType is FunctionPointerTypeSymbol functionPointerType)
+        {
+            if (!overloads.TryAnalyzeCallArgumentLayout(
+                    ce.Arguments,
+                    out _,
+                    out var argumentNames))
+            {
+                result = new BoundErrorExpression(null);
+                return true;
+            }
+
+            result = overloads.BindFunctionPointerInvocation(
+                ce,
+                memberLoad,
+                functionPointerType,
+                methodName,
+                ce.Identifier.Location,
+                arguments,
+                argumentNames);
+            return true;
         }
 
         if (ce.NullableQuestionToken == null

@@ -3983,10 +3983,10 @@ internal sealed partial class ExpressionBinder
             return MakeStaticGenericCall(null);
         }
 
-        if (structSym != null
-            && TryBindUserDelegateMemberInvocation(
+        if (ownerType is StructSymbol or InterfaceSymbol
+            && TryBindUserCallableMemberInvocation(
                 receiver: null,
-                structSym,
+                ownerType,
                 methodName,
                 arguments,
                 ce,
