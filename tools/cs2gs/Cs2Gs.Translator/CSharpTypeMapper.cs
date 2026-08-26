@@ -2261,7 +2261,12 @@ public sealed class CSharpTypeMapper
         out string aliasName)
     {
         aliasName = null;
-        if (named.Arity != 0 || this.reservedTypeAliases.Count == 0)
+
+        // Constraint mapping (issue #2509, WithMetadataImportCollisionQualification)
+        // demands the EXACT qualified semantic identity — a homonym-safe
+        // `A.IContract` — never an alias spelling, so alias reuse is skipped
+        // there.
+        if (named.Arity != 0 || this.reservedTypeAliases.Count == 0 || this.qualifyMetadataImportCollisions)
         {
             return false;
         }
