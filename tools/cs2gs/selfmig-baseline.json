@@ -1,8 +1,8 @@
 {
-  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps; the *Ceiling metrics cap readability regressions in the migrated output, counted over CODE lines only (string fixtures and comments excluded \u2014 re-baselined 2026-08-25: labels 0, lifts 29, bangs 14408). Improve a metric, then tighten the corresponding number in the same PR.",
-  "greenFloor": 28,
-  "syntheticLabelCeiling": 2,
-  "liftedLocalCeiling": 35,
-  "longLineCeiling": 3700,
-  "nullAssertionCeiling": 15000
+  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps; the *Ceiling metrics cap readability regressions in the migrated output, counted over CODE lines only (string fixtures and comments excluded — re-baselined 2026-08-26 after the #3542-#3550 burn-down: 29/55 green, labels 0, lifts 29, lines>300 467, bangs 13990). Improve a metric, then tighten the corresponding number in the same PR.",
+  "greenFloor": 29,
+  "syntheticLabelCeiling": 0,
+  "liftedLocalCeiling": 32,
+  "longLineCeiling": 600,
+  "nullAssertionCeiling": 14200
 }
