@@ -861,13 +861,35 @@ internal static class ObliviousNullabilityAnalyzer
             }
 
             ISymbol parameterSymbol = Canonical(parameter);
-            CollectScalarValueFlow(
-                parameterSymbol,
-                value,
-                model,
-                tainted,
-                edges,
-                scalarTupleEdges);
+
+            // Issue #3501: a local/parameter read that a syntactic null-check
+            // guard proves non-null at a CONSTRUCTOR argument does not carry
+            // its declaration's taint into the parameter. The canonical shape
+            // is Oahu's `if (prod is null) { continue; } pairs.Add(new(prod,
+            // comp))` — `prod` is declared nullable (its producer can return
+            // null) but is provably non-null at the creation, and tainting the
+            // record's positional parameter widened the DATA SHAPE (`Product`
+            // → `Product?` on the positional property) for every consumer,
+            // including deconstruction locals whose dereferences are not
+            // receiver-bridged. gsc's own smart-cast narrows the same guarded
+            // read on the G# side, so the suppressed edge never reintroduces a
+            // `T? -> T` mismatch. Ordinary METHOD arguments keep the
+            // promotion-consolidation behavior (a tainted value symmetrically
+            // widens every sink it touches — see PromotionConsolidationTests):
+            // a method parameter is a local contract the forgiveness passes
+            // already manage, not a data shape.
+            bool guardedCreationArgument = call is BaseObjectCreationExpressionSyntax
+                && IsNullGuardDominatedRead(value, model);
+            if (!guardedCreationArgument)
+            {
+                CollectScalarValueFlow(
+                    parameterSymbol,
+                    value,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges);
+            }
 
             // A parameter forwarded unchanged into another parameter inherits
             // that downstream nullable contract. This lets a null-check at the
@@ -2817,6 +2839,139 @@ internal static class ObliviousNullabilityAnalyzer
     // Resolves the field/property/parameter/local a reference expression binds
     // to (canonicalized), or null when the expression is not a simple binding to
     // one of those (e.g. an element access, a method group, a `this`).
+    // Issue #3501: true when <paramref name="value"/> is a bare local/parameter
+    // read that an enclosing syntactic null-check guard proves non-null at this
+    // exact use — either a surrounding `if (x != null) { …use… }` /
+    // `if (x == null) {…} else { …use… }` branch (and the ternary forms), or a
+    // PRECEDING early-exit guard in an enclosing block
+    // (`if (x is null) { continue/return/break/throw; } …use…`). Mirrors the
+    // translator-side `IsDominatedByNullCheckGuard` walk, extended with the
+    // early-exit form, so a guarded read doesn't propagate its declaration's
+    // taint through argument edges (gsc's own smart-cast narrows the same
+    // guarded read on the G# side).
+    private static bool IsNullGuardDominatedRead(ExpressionSyntax value, SemanticModel model)
+    {
+        ExpressionSyntax stripped = value;
+        while (stripped is ParenthesizedExpressionSyntax paren)
+        {
+            stripped = paren.Expression;
+        }
+
+        if (stripped is not IdentifierNameSyntax identifier)
+        {
+            return false;
+        }
+
+        ISymbol symbol = model.GetSymbolInfo(identifier).Symbol;
+        if (symbol is not ILocalSymbol && symbol is not IParameterSymbol)
+        {
+            return false;
+        }
+
+        for (SyntaxNode node = identifier; node != null; node = node.Parent)
+        {
+            switch (node.Parent)
+            {
+                case ElseClauseSyntax elseClause
+                    when elseClause.Parent is IfStatementSyntax elseIf
+                        && node == elseClause.Statement
+                        && IsNullTestOf(elseIf.Condition, symbol, whenTrueIsNull: true):
+                    return true;
+
+                case IfStatementSyntax ifStatement
+                    when node == ifStatement.Statement
+                        && IsNullTestOf(ifStatement.Condition, symbol, whenTrueIsNull: false):
+                    return true;
+
+                case ConditionalExpressionSyntax ternary
+                    when (node == ternary.WhenFalse && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: true))
+                        || (node == ternary.WhenTrue && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: false)):
+                    return true;
+            }
+
+            // A preceding sibling `if (x == null) <always-exits>` in an
+            // enclosing block proves non-null for everything after it.
+            if (node is StatementSyntax statement && node.Parent is BlockSyntax block)
+            {
+                int index = block.Statements.IndexOf(statement);
+                for (int i = 0; i < index; i++)
+                {
+                    if (block.Statements[i] is IfStatementSyntax guard
+                        && guard.Else is null
+                        && IsNullTestOf(guard.Condition, symbol, whenTrueIsNull: true)
+                        && AlwaysExits(guard.Statement))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (node is AccessorDeclarationSyntax
+                or BaseMethodDeclarationSyntax
+                or LocalFunctionStatementSyntax
+                or AnonymousFunctionExpressionSyntax
+                or ArrowExpressionClauseSyntax)
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool AlwaysExits(StatementSyntax statement) => statement switch
+    {
+        ReturnStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax or ThrowStatementSyntax => true,
+        BlockSyntax block => block.Statements.Count > 0 && AlwaysExits(block.Statements[^1]),
+        _ => false,
+    };
+
+    // Matches `x == null` / `x is null` (whenTrueIsNull: true) and
+    // `x != null` / `x is not null` (whenTrueIsNull: false) against
+    // <paramref name="symbol"/> by identifier name.
+    private static bool IsNullTestOf(ExpressionSyntax condition, ISymbol symbol, bool whenTrueIsNull)
+    {
+        while (condition is ParenthesizedExpressionSyntax paren)
+        {
+            condition = paren.Expression;
+        }
+
+        static bool IsSymbolIdentifier(ExpressionSyntax expression, ISymbol symbol)
+        {
+            while (expression is ParenthesizedExpressionSyntax inner)
+            {
+                expression = inner.Expression;
+            }
+
+            return expression is IdentifierNameSyntax id
+                && string.Equals(id.Identifier.ValueText, symbol.Name, StringComparison.Ordinal);
+        }
+
+        static bool IsNullLiteral(ExpressionSyntax expression) =>
+            expression is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.NullLiteralExpression);
+
+        switch (condition)
+        {
+            case BinaryExpressionSyntax binary
+                when binary.IsKind(whenTrueIsNull ? SyntaxKind.EqualsExpression : SyntaxKind.NotEqualsExpression):
+                return (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right))
+                    || (IsSymbolIdentifier(binary.Right, symbol) && IsNullLiteral(binary.Left));
+
+            case IsPatternExpressionSyntax isPattern when IsSymbolIdentifier(isPattern.Expression, symbol):
+                if (whenTrueIsNull)
+                {
+                    return isPattern.Pattern is ConstantPatternSyntax { Expression: LiteralExpressionSyntax nullPattern }
+                        && nullPattern.IsKind(SyntaxKind.NullLiteralExpression);
+                }
+
+                return isPattern.Pattern is UnaryPatternSyntax { Pattern: ConstantPatternSyntax { Expression: LiteralExpressionSyntax notNullPattern } }
+                    && notNullPattern.IsKind(SyntaxKind.NullLiteralExpression);
+
+            default:
+                return false;
+        }
+    }
+
     private static ISymbol ResolveAssignable(ExpressionSyntax expression, SemanticModel model)
     {
         switch (expression)
