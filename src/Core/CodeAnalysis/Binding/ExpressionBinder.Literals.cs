@@ -1319,6 +1319,13 @@ internal sealed partial class ExpressionBinder
                         continue;
                     }
 
+                    // Concrete members cannot constrain this construction's
+                    // type arguments; bind them once in the final closed pass.
+                    if (!TypeSymbol.ContainsTypeParameter(memberType))
+                    {
+                        continue;
+                    }
+
                     var valueExpr = BindExpression(initSyntax.Value);
                     Binder.InferTypeArguments(memberType, valueExpr.Type, substitution);
                 }

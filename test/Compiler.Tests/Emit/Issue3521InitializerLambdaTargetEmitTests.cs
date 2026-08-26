@@ -157,6 +157,65 @@ public sealed class Issue3521InitializerLambdaTargetEmitTests
     }
 
     [Fact]
+    public void InferredGenericComposites_DeferConcreteLambdaMembers_RunAndVerify()
+    {
+        const string source = """
+            package Issue3521Generic
+
+            class GenericClass3521[T] {
+                var Value T
+                var Callback (int32) -> void
+            }
+
+            data struct GenericDataStruct3521[T] {
+                var Value T
+                var Callback (int32) -> void
+            }
+
+            class GenericCallback3521[T] {
+                var Callback (T) -> void
+            }
+
+            func Main() int32 {
+                var seen int32 = 0
+
+                let classBox = GenericClass3521{
+                    Value: 40,
+                    Callback: (value) -> { seen = seen + value }
+                }
+                seen = seen + classBox.Value
+                classBox.Callback(1)
+
+                let dataBox = GenericDataStruct3521{
+                    Callback: (value) -> { seen = seen + value },
+                    Value: "ok"
+                }
+                dataBox.Callback(dataBox.Value.Length)
+
+                let callbackBox = GenericCallback3521{
+                    Callback: (value int32) -> { seen = seen + value }
+                }
+                callbackBox.Callback(1)
+
+                return seen == 44 ? 0 : 1
+            }
+            """;
+
+        var directory = NewDirectory("generic");
+        try
+        {
+            var outputPath = Path.Combine(directory, "Issue3521Generic.dll");
+            Emit(source, outputPath);
+            IlVerifier.Verify(outputPath);
+            Assert.Equal(0, Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void WrongLambdaArity_ReportsArgumentCountDiagnostic()
     {
         var diagnostics = CompileErrors("""
@@ -180,12 +239,16 @@ public sealed class Issue3521InitializerLambdaTargetEmitTests
         var diagnostics = CompileErrors("""
             package Issue3521WrongType
 
-            class Holder3521WrongType {
+            class Holder3521WrongType[T] {
+                var Value T
                 var Callback (int32) -> void
             }
 
-            func Build() Holder3521WrongType ->
-                Holder3521WrongType{ Callback: (value string) -> {} }
+            func Build() Holder3521WrongType[int32] ->
+                Holder3521WrongType{
+                    Value: 1,
+                    Callback: (value string) -> {}
+                }
             """);
 
         Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0155");
