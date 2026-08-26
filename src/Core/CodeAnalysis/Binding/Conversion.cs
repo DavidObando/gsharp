@@ -3261,14 +3261,20 @@ public sealed class Conversion
             return false;
         }
 
+        // Issue #3552: the two closed `ValueTuple<…>` shapes can live in
+        // DIFFERENT reflection contexts (a live-runtime `MakeGenericType`
+        // product on the TupleTypeSymbol vs a MetadataLoadContext signature
+        // type recovered from an indexer/method parameter), so reference
+        // equality spuriously failed and a tuple-keyed `Dictionary` rejected
+        // its own key. Compare via the cross-context-safe identity helper.
         if (a is TupleTypeSymbol ta && b is not TupleTypeSymbol)
         {
-            return ta.ClrType != null && b.ClrType != null && ta.ClrType == b.ClrType;
+            return ta.ClrType != null && b.ClrType != null && ClrTypeUtilities.IsSameAs(ta.ClrType, b.ClrType);
         }
 
         if (b is TupleTypeSymbol tb && a is not TupleTypeSymbol)
         {
-            return tb.ClrType != null && a.ClrType != null && tb.ClrType == a.ClrType;
+            return tb.ClrType != null && a.ClrType != null && ClrTypeUtilities.IsSameAs(tb.ClrType, a.ClrType);
         }
 
         return false;
