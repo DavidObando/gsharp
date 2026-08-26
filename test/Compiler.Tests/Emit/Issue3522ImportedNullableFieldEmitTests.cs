@@ -40,6 +40,26 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                 public T Value;
             }
 
+            public class GenericBase<T>
+            {
+                public T Value = default!;
+            }
+
+            public sealed class GenericDerived<TFirst, TSecond>
+                : GenericBase<TSecond>
+            {
+            }
+
+            public class GenericMiddle<TLeft, TRight>
+                : GenericBase<TLeft>
+            {
+            }
+
+            public sealed class GenericLeaf<TFirst, TSecond>
+                : GenericMiddle<TSecond, TFirst>
+            {
+            }
+
             public static class DirectFields
             {
                 public static string Required = "";
@@ -81,6 +101,14 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                     string? E15) Tuple15 =
                     (null, "", "", "", "", "", "", null, "", "", "", "", "", "", null);
                 public static string[] NonNullArray = Array.Empty<string>();
+                public static GenericDerived<string?, string>
+                    DerivedSecondNonNull = new();
+                public static GenericDerived<string, string?>
+                    DerivedSecondNullable = new();
+                public static GenericLeaf<string?, string>
+                    LeafSecondNonNull = new();
+                public static GenericLeaf<string, string?>
+                    LeafSecondNullable = new();
             }
 
             public static class GenericMethods
@@ -369,6 +397,76 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         Assert.True(result.ExitCode == 0, result.Diagnostics);
         IlVerifier.Verify(result.OutputPath, new[] { artifacts.MetadataPath });
         Assert.Equal(0, Run(result.OutputPath));
+    }
+
+    [Fact]
+    public void InheritedGenericFields_ProjectDeclaringTypeArguments()
+    {
+        using var artifacts = new TestArtifacts();
+        const string source = """
+            package Issue3522.InheritedFields
+
+            import Issue3522.Metadata
+
+            func Main() int32 {
+              DirectFields.DerivedSecondNonNull.Value = "derived"
+              let derived string = DirectFields.DerivedSecondNonNull.Value
+              DirectFields.DerivedSecondNullable.Value = nil
+              let derivedNullable string? = DirectFields.DerivedSecondNullable.Value
+
+              DirectFields.LeafSecondNonNull.Value = "leaf"
+              let leaf string = DirectFields.LeafSecondNonNull.Value
+              DirectFields.LeafSecondNullable.Value = nil
+              let leafNullable string? = DirectFields.LeafSecondNullable.Value
+
+              return derived == "derived"
+                && derivedNullable == nil
+                && leaf == "leaf"
+                && leafNullable == nil ? 0 : 1
+            }
+            """;
+
+        var result = Compile(
+            artifacts.Directory,
+            "Issue3522.InheritedFields",
+            source,
+            target: "exe",
+            artifacts.MetadataPath);
+
+        Assert.True(result.ExitCode == 0, result.Diagnostics);
+        IlVerifier.Verify(result.OutputPath, new[] { artifacts.MetadataPath });
+        Assert.Equal(0, Run(result.OutputPath));
+    }
+
+    [Fact]
+    public void InheritedGenericFields_RejectNilInProjectedNonNullableSlots()
+    {
+        using var artifacts = new TestArtifacts();
+        const string source = """
+            package Issue3522.InheritedFieldsNegative
+
+            import Issue3522.Metadata
+
+            func Break() {
+              DirectFields.DerivedSecondNonNull.Value = nil
+              let derived string = DirectFields.DerivedSecondNullable.Value
+              DirectFields.LeafSecondNonNull.Value = nil
+              let leaf string = DirectFields.LeafSecondNullable.Value
+            }
+            """;
+
+        var result = Compile(
+            artifacts.Directory,
+            "Issue3522.InheritedFieldsNegative",
+            source,
+            target: "library",
+            artifacts.MetadataPath);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(
+            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 4,
+            result.Diagnostics);
+        Assert.DoesNotContain("GS9998", result.Diagnostics, StringComparison.Ordinal);
     }
 
     [Fact]

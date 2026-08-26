@@ -3810,19 +3810,37 @@ internal sealed class MemberLookup
     {
         const BindingFlags AllFields = BindingFlags.Public | BindingFlags.NonPublic
             | BindingFlags.Instance | BindingFlags.Static;
+        var imported = GetImportedTypeSymbol(targetType);
+        var receiverClr = imported?.ClrType;
         if (targetType is NullabilityAnnotatedTypeSymbol annotated
-            && closedField.DeclaringType is Type declaringType
-            && declaringType.IsGenericType
-            && !declaringType.IsGenericTypeDefinition)
+            && receiverClr != null
+            && receiverClr.IsGenericType
+            && !receiverClr.IsGenericTypeDefinition)
         {
-            var openField = declaringType.GetGenericTypeDefinition().GetField(
-                closedField.Name,
-                AllFields);
+            var receiverArguments = receiverClr.GetGenericArguments()
+                .Select((_, index) => annotated.GetTypeArgumentSymbol(index))
+                .ToImmutableArray();
+            imported = ImportedTypeSymbol.GetConstructed(
+                receiverClr,
+                receiverClr.GetGenericTypeDefinition(),
+                receiverArguments);
+        }
+
+        if (imported != null
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedField.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments)
+            && openDefinition != null)
+        {
+            var openField = openDefinition.GetField(closedField.Name, AllFields);
             var openParameter = openField?.FieldType;
-            if (openParameter?.IsGenericParameter == true)
+            if (openParameter?.IsGenericParameter == true
+                && (uint)openParameter.GenericParameterPosition
+                    < (uint)declaringTypeArguments.Length)
             {
-                return annotated.GetTypeArgumentSymbol(
-                    openParameter.GenericParameterPosition);
+                return declaringTypeArguments[openParameter.GenericParameterPosition];
             }
         }
 
