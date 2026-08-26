@@ -1310,7 +1310,13 @@ internal sealed partial class ExpressionBinder
             {
                 // offset is 1 only for a probe collected with includeExtensions:
                 // true, which above is gated on receiverType?.ClrType != null.
-                argTypes[0] = receiverType!.ClrType;
+                // Issue #3551: prefer the REIFIED closed shape over the cached
+                // (possibly erased) ClrType — a symbolic receiver like
+                // IGrouping[string?, (string, int32?)] can cache a closed shape
+                // whose tuple argument lost its Nullable element, and inferring
+                // the deferred lambda's parameter from that shape rebinds the
+                // literal against the wrong tuple.
+                argTypes[0] = ReifiedReceiverClrType(receiverType) ?? receiverType!.ClrType;
             }
 
             var usable = true;
@@ -1506,6 +1512,34 @@ internal sealed partial class ExpressionBinder
     /// resulting parameter types; otherwise the fallback declines (preserving the
     /// existing GS0304 behaviour) to avoid binding against an ambiguous shape.
     /// </summary>
+    /// <summary>
+    /// Issue #3551: resolves the receiver's REIFIED closed CLR shape for
+    /// deferred-lambda parameter inference. The cached <see cref="TypeSymbol.ClrType"/>
+    /// of a symbolic imported generic can carry an erased or stale closed
+    /// shape (e.g. `IGrouping&lt;string, ValueTuple&lt;string, int&gt;&gt;` for the
+    /// symbolic `IGrouping[string?, (string, int32?)]`, the tuple's Nullable
+    /// element lost), and a lambda rebound against a target inferred from that
+    /// shape disagrees with the receiver everywhere else, failing resolution
+    /// (GS0159). Returns <see langword="null"/> when no better shape exists.
+    /// </summary>
+    /// <param name="receiverType">The symbolic receiver type.</param>
+    /// <returns>The reified closed CLR type, or <see langword="null"/>.</returns>
+    private static System.Type? ReifiedReceiverClrType(TypeSymbol? receiverType)
+    {
+        if (receiverType is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            var reified = imported.ReifyClosedClrType();
+            if (reified != null && !reified.ContainsGenericParameters)
+            {
+                return reified;
+            }
+        }
+
+        return null;
+    }
+
     private bool TryMapDeferredLambdaParameterTargets(
         IReadOnlyList<MethodInfo> methods,
         int offset,
@@ -1526,7 +1560,10 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            argTypes[0] = receiverClrType;
+            // Issue #3551: see the full-inference path above — use the reified
+            // closed shape so a nullable tuple element survives into the
+            // deferred lambda's inferred parameter type.
+            argTypes[0] = ReifiedReceiverClrType(receiverType) ?? receiverClrType;
         }
 
         for (var i = 0; i < boundArgs.Length; i++)
