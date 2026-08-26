@@ -82,6 +82,27 @@ unsafe func f(p *Managed) {
     }
 
     [Fact]
+    public void PointerToNullableValueTypes_ReportsGS0398()
+    {
+        const string source = """
+            package P
+
+            struct Pair {
+                var x int32
+                var y int32
+            }
+
+            unsafe func primitive(p *int32?) {}
+            unsafe func valueStruct(p *Pair?) {}
+            """;
+
+        var diagnostics = GetDiagnostics(source).Where(d => d.Id == "GS0398").ToArray();
+        Assert.Equal(2, diagnostics.Length);
+        Assert.Contains(diagnostics, d => d.Location.Text.ToString(d.Location.Span) == "int32?");
+        Assert.Contains(diagnostics, d => d.Location.Text.ToString(d.Location.Span) == "Pair?");
+    }
+
+    [Fact]
     public void DereferenceMemberAccess_Binds_NoErrors()
     {
         const string source = @"

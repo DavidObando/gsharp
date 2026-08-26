@@ -177,6 +177,12 @@ public sealed class Issue3520ImportedBlittablePointerEmitTests
     {
         using var artifacts = new TestArtifacts();
         using var resolver = ReferenceResolver.WithReferences(new[] { artifacts.FixturePath });
+        var detector = new BlittableDetector();
+        var nullableInt = NullableTypeSymbol.Get(TypeSymbol.Int32);
+
+        Assert.False(detector.IsBlittable(nullableInt));
+        Assert.False(detector.IsUnmanaged(nullableInt));
+        Assert.False(BlittableDetector.IsBlittableValueStructPointee(nullableInt));
 
         AssertClassification("BlittablePair", expected: true);
         AssertClassification("NestedBlittablePair", expected: true);
@@ -201,6 +207,14 @@ public sealed class Issue3520ImportedBlittablePointerEmitTests
         void AssertClassification(string name, bool expected)
         {
             Assert.True(resolver.TryResolveType("Issue3520.Library." + name, out var type));
+            if (expected)
+            {
+                var nullableType = NullableTypeSymbol.Get(TypeSymbol.FromClrType(type));
+                Assert.False(detector.IsBlittable(nullableType));
+                Assert.False(detector.IsUnmanaged(nullableType));
+                Assert.False(BlittableDetector.IsBlittableValueStructPointee(nullableType));
+            }
+
             Assert.Equal(
                 expected,
                 BlittableDetector.IsBlittableValueStructPointee(TypeSymbol.FromClrType(type)));

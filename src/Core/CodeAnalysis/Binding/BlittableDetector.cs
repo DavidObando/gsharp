@@ -115,6 +115,11 @@ internal sealed class BlittableDetector
 
     private bool ClassifyImpl(TypeSymbol type, HashSet<StructSymbol> visiting, bool unmanaged)
     {
+        if (type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
         if (IsBlittablePrimitive(type))
         {
             return true;
