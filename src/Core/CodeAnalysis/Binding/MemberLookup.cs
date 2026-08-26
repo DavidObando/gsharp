@@ -3928,6 +3928,17 @@ internal sealed class MemberLookup
         return targetType;
     }
 
+    internal static TypeSymbol? GetClrFieldReferenceContainer(
+        TypeSymbol? receiverType,
+        MemberInfo member)
+    {
+        return receiverType != null
+            && member is FieldInfo
+            && GetImportedTypeSymbol(receiverType) != null
+                ? GetClrMemberDeclaringTypeSymbol(receiverType, member)
+                : null;
+    }
+
     /// <summary>Resolves an imported method return through a symbolic receiver/interface hierarchy.</summary>
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="closedMethod">The reflected method selected from the erased receiver.</param>

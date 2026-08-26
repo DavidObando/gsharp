@@ -134,22 +134,41 @@ internal static class NullableFlagsBuilder
                 var core = nullable?.UnderlyingType ?? projected;
                 TypeSymbol merged = core;
                 if (core is ImportedTypeSymbol imported
-                    && imported.ClrType is Type importedClr
-                    && imported.TypeArguments.Length == layoutArguments.Length)
+                    && imported.ClrType is Type importedClr)
                 {
-                    var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(
-                        layoutArguments.Length);
-                    for (var i = 0; i < layoutArguments.Length; i++)
+                    var projectedArguments = imported.TypeArguments;
+                    if (projectedArguments.IsDefaultOrEmpty
+                        && importedClr.IsGenericType
+                        && !importedClr.IsGenericTypeDefinition)
                     {
-                        arguments.Add(Merge(
-                            imported.TypeArguments[i],
-                            layoutArguments[i]));
+                        projectedArguments = importedClr.GetGenericArguments()
+                            .Select(TypeSymbol.FromClrType)
+                            .ToImmutableArray();
                     }
 
-                    merged = ImportedTypeSymbol.GetConstructed(
-                        importedClr,
-                        imported.OpenDefinition ?? layout.GetGenericTypeDefinition(),
-                        arguments.MoveToImmutable());
+                    if (projectedArguments.Length == layoutArguments.Length)
+                    {
+                        var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(
+                            layoutArguments.Length);
+                        for (var i = 0; i < layoutArguments.Length; i++)
+                        {
+                            arguments.Add(Merge(
+                                projectedArguments[i],
+                                layoutArguments[i]));
+                        }
+
+                        merged = ImportedTypeSymbol.GetConstructed(
+                            importedClr,
+                            imported.OpenDefinition ?? layout.GetGenericTypeDefinition(),
+                            arguments.MoveToImmutable());
+                    }
+                    else
+                    {
+                        foreach (var argument in layoutArguments)
+                        {
+                            position += ClrNullability.CountNullabilityBytes(argument);
+                        }
+                    }
                 }
                 else
                 {

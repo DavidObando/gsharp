@@ -36,7 +36,8 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
         Receiver = receiver;
         Member = member;
         Type = resultType;
-        StaticContainerType = staticContainerType;
+        StaticContainerType = staticContainerType
+            ?? MemberLookup.GetClrFieldReferenceContainer(receiver?.Type, member);
         ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
         ConstrainedInterfaceType = constrainedInterfaceType;
         IsAddressableStaticField = isAddressableStaticField;

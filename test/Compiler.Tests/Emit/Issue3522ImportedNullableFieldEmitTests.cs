@@ -102,6 +102,36 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             {
             }
 
+            public class GenericConcreteBase<T>
+            {
+                public List<string?> Values = new();
+            }
+
+            public sealed class GenericConcreteDerived<T>
+                : GenericConcreteBase<T>
+            {
+            }
+
+            public class GenericCountBase<T>
+            {
+                public int Count;
+            }
+
+            public sealed class GenericCountDerived<TFirst, TSecond>
+                : GenericCountBase<TSecond>
+            {
+            }
+
+            public class GenericCountMiddle<TLeft, TRight>
+                : GenericCountBase<TLeft>
+            {
+            }
+
+            public sealed class GenericCountLeaf<TFirst, TSecond>
+                : GenericCountMiddle<TSecond, TFirst>
+            {
+            }
+
             public static class DirectFields
             {
                 public static string Required = "";
@@ -161,6 +191,8 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                     NullableListDeclared = new();
                 public static GenericDictionaryDerived<string>
                     DictionaryNullableDeclared = new();
+                public static GenericConcreteDerived<string>
+                    ConcreteNullableDeclared = new();
             }
 
             public static class GenericMethods
@@ -486,6 +518,31 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               holder.Values[key] = value
             }
 
+            func EchoCount[T class](
+                holder GenericCountDerived[string, T])
+                GenericCountDerived[string, T] -> holder
+
+            func MutateCount[T class](
+                holder GenericCountDerived[string, T]) int32 {
+              holder.Count = 40
+              holder.Count += 2
+              return holder.Count
+            }
+
+            func MutateCountExpression[T class](
+                holder GenericCountDerived[string, T]) int32 {
+              EchoCount(holder).Count = 20
+              EchoCount(holder).Count += 2
+              return holder.Count
+            }
+
+            func MutateLeafCount[T class](
+                holder GenericCountLeaf[string, T]) int32 {
+              holder.Count = 6
+              holder.Count *= 7
+              return holder.Count
+            }
+
             func Main() int32 {
               DirectFields.DerivedSecondNonNull.Value = "derived"
               let derived string = DirectFields.DerivedSecondNonNull.Value
@@ -518,6 +575,15 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               SetSymbolicDictionary(symbolicDictionary, "key", nil)
               let symbolicDictionaryValue string? = symbolicDictionary.Values["key"]
 
+              DirectFields.ConcreteNullableDeclared.Values.Add(nil)
+              let concreteNullable string? =
+                DirectFields.ConcreteNullableDeclared.Values[0]
+
+              let count = MutateCount(GenericCountDerived[string, string]())
+              let expressionCount = MutateCountExpression(
+                GenericCountDerived[string, string]())
+              let leafCount = MutateLeafCount(GenericCountLeaf[string, string]())
+
               return derived == "derived"
                 && derivedNullable == nil
                 && leaf == "leaf"
@@ -527,7 +593,11 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                 && nestedNullable == nil
                 && listItem == "item"
                 && symbolicNestedValue == nil
-                && symbolicDictionaryValue == nil ? 0 : 1
+                && symbolicDictionaryValue == nil
+                && concreteNullable == nil
+                && count == 42
+                && expressionCount == 22
+                && leafCount == 42 ? 0 : 1
             }
             """;
 
@@ -578,6 +648,10 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               let list List[string] = DirectFields.NullableListDeclared.Value
               DirectFields.NullableListDeclared.Value = List[string]()
               DirectFields.NullableListDeclared.Value!![0] = nil
+
+              DirectFields.ConcreteNullableDeclared.Values.Add(nil)
+              let concrete string =
+                DirectFields.ConcreteNullableDeclared.Values[0]
             }
             """;
 
@@ -590,7 +664,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(
-            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 11,
+            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 12,
             result.Diagnostics);
         Assert.DoesNotContain("GS9998", result.Diagnostics, StringComparison.Ordinal);
     }
