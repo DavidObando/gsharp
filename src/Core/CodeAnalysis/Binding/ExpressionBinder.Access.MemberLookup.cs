@@ -1923,7 +1923,7 @@ internal sealed partial class ExpressionBinder
                 return conversions.BindConversion(diagnosticLocation, boundValueOverride, elementType);
             }
 
-            return conversions.BindConversion(
+            return BindExpression(
                 Invariant.Required(valueSyntax, "index assignments have a value expression"),
                 elementType);
         }

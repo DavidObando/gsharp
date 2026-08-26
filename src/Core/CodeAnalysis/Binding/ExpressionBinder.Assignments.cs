@@ -521,8 +521,7 @@ internal sealed partial class ExpressionBinder
                 return null;
             }
 
-            var value = BindExpression(initSyntax.Value);
-            var converted = conversions.BindConversion(initSyntax.Value.Location, value, instTargetSymbol);
+            var converted = BindExpression(initSyntax.Value, instTargetSymbol);
             var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
             return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, instanceMember, converted, instTargetSymbol, staticContainerType: null);
         }
@@ -539,8 +538,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportMemberInaccessible(initSyntax.PropertyIdentifier.Location, field.Name, fieldDeclaringType.Name, field.Accessibility);
                 }
 
-                var value = BindExpression(initSyntax.Value);
-                var converted = conversions.BindConversion(initSyntax.Value.Location, value, field.Type);
+                var converted = BindExpression(initSyntax.Value, field.Type);
                 return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, fieldDeclaringType, field, converted);
             }
 
@@ -561,8 +559,7 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportMemberInaccessible(initSyntax.PropertyIdentifier.Location, prop.Name, propDeclaringType.Name, prop.SetterAccessibility);
                 }
 
-                var value = BindExpression(initSyntax.Value);
-                var converted = conversions.BindConversion(initSyntax.Value.Location, value, prop.Type);
+                var converted = BindExpression(initSyntax.Value, prop.Type);
                 var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
                 return new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, structSymbol, prop, converted);
             }
@@ -583,8 +580,7 @@ internal sealed partial class ExpressionBinder
                         return null;
                     }
 
-                    var value = BindExpression(initSyntax.Value);
-                    var converted = conversions.BindConversion(initSyntax.Value.Location, value, inhTargetSymbol);
+                    var converted = BindExpression(initSyntax.Value, inhTargetSymbol);
                     var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
                     return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, inhMember, converted, inhTargetSymbol, staticContainerType: null);
                 }

@@ -988,18 +988,12 @@ internal sealed partial class ExpressionBinder
             // member type is inferred from the initializer expression exactly
             // like an ordinary `let x = expr` local declaration.
             var memberType = member.TypeClause == null ? null : bindTypeClause(member.TypeClause);
-            var value = BindExpression(member.Value);
+            var value = memberType == null
+                ? BindExpression(member.Value)
+                : BindExpression(member.Value, memberType);
             if (value is BoundErrorExpression)
             {
                 hadError = true;
-            }
-            else if (memberType != null)
-            {
-                value = conversions.BindConversion(member.Value.Location, value, memberType);
-                if (value is BoundErrorExpression)
-                {
-                    hadError = true;
-                }
             }
 
             memberNames.Add(name);
@@ -1325,6 +1319,13 @@ internal sealed partial class ExpressionBinder
                         continue;
                     }
 
+                    // Concrete members cannot constrain this construction's
+                    // type arguments; bind them once in the final closed pass.
+                    if (!TypeSymbol.ContainsTypeParameter(memberType))
+                    {
+                        continue;
+                    }
+
                     var valueExpr = BindExpression(initSyntax.Value);
                     Binder.InferTypeArguments(memberType, valueExpr.Type, substitution);
                 }
@@ -1495,8 +1496,9 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var valueExpr = BindExpression(initSyntax.Value);
-            valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, memberType);
+            // Issue #3521: member type must reach target-dependent initializer
+            // forms before they bind, not only their later conversion.
+            var valueExpr = BindExpression(initSyntax.Value, memberType);
             inits.Add(hasField
                 ? new BoundFieldInitializer(
                     Invariant.Required(field, "a resolved field has an initializer"),
@@ -1565,10 +1567,8 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var value = BindExpression(initializer.Syntax.Value);
-            var converted = conversions.BindConversion(
-                initializer.Syntax.Value.Location,
-                value,
+            var converted = BindExpression(
+                initializer.Syntax.Value,
                 initializer.MemberType);
             BoundExpression assignment = initializer.Field != null
                 ? new BoundFieldAssignmentExpression(
@@ -1700,8 +1700,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var value = BindExpression(initializer.Value);
-            values.Add(name, conversions.BindConversion(initializer.Value.Location, value, slotType));
+            values.Add(name, BindExpression(initializer.Value, slotType));
             order.Add(name);
         }
 
@@ -1880,8 +1879,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var value = BindExpression(initSyntax.Value);
-            var converted = conversions.BindConversion(initSyntax.Value.Location, value, targetSymbol);
+            var converted = BindExpression(initSyntax.Value, targetSymbol);
             var receiverExpr = new BoundVariableExpression(initSyntax, tempVar);
             statements.Add(new BoundExpressionStatement(
                 initSyntax,
@@ -1977,8 +1975,7 @@ internal sealed partial class ExpressionBinder
             {
                 if (TypeMemberModel.TryGetFieldIncludingInherited(classConstraint, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
                 {
-                    var fieldValue = BindExpression(initSyntax.Value);
-                    var fieldConverted = conversions.BindConversion(initSyntax.Value.Location, fieldValue, field.Type);
+                    var fieldConverted = BindExpression(initSyntax.Value, field.Type);
                     statements.Add(new BoundExpressionStatement(
                         initSyntax,
                         BoundFieldAssignmentExpression.WithExpressionReceiver(initSyntax, receiverExpr, fieldDeclaringType, field, fieldConverted)));
@@ -1994,8 +1991,7 @@ internal sealed partial class ExpressionBinder
                         continue;
                     }
 
-                    var classPropValue = BindExpression(initSyntax.Value);
-                    var classPropConverted = conversions.BindConversion(initSyntax.Value.Location, classPropValue, classProp.Type);
+                    var classPropConverted = BindExpression(initSyntax.Value, classProp.Type);
                     statements.Add(new BoundExpressionStatement(
                         initSyntax,
                         new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, classPropDeclaringType, classProp, classPropConverted)));
@@ -2015,8 +2011,7 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                var ifacePropValue = BindExpression(initSyntax.Value);
-                var ifacePropConverted = conversions.BindConversion(initSyntax.Value.Location, ifacePropValue, ifaceProp.Type);
+                var ifacePropConverted = BindExpression(initSyntax.Value, ifaceProp.Type);
                 statements.Add(new BoundExpressionStatement(
                     initSyntax,
                     new BoundPropertyAssignmentExpression(initSyntax, receiverExpr, null, ifaceProp, ifacePropConverted)));
@@ -2044,11 +2039,7 @@ internal sealed partial class ExpressionBinder
                     var declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(
                         clrInterfaceConstraint,
                         clrProperty);
-                    var propertyValue = BindExpression(initSyntax.Value);
-                    var converted = conversions.BindConversion(
-                        initSyntax.Value.Location,
-                        propertyValue,
-                        propertyType);
+                    var converted = BindExpression(initSyntax.Value, propertyType);
                     statements.Add(new BoundExpressionStatement(
                         initSyntax,
                         new BoundClrPropertyAssignmentExpression(
@@ -2402,7 +2393,7 @@ internal sealed partial class ExpressionBinder
             var rectangularElements = ImmutableArray.CreateBuilder<BoundExpression>(elementSyntaxes.Count);
             foreach (var elementSyntax in elementSyntaxes)
             {
-                rectangularElements.Add(conversions.BindConversion(elementSyntax, elementType));
+                rectangularElements.Add(BindExpression(elementSyntax, elementType));
             }
 
             var rectangularLengths = ImmutableArray<int>.Empty;
@@ -2465,7 +2456,7 @@ internal sealed partial class ExpressionBinder
 
         foreach (var elementSyntax in elementSyntaxes)
         {
-            elements.Add(conversions.BindConversion(elementSyntax, elementType));
+            elements.Add(BindExpression(elementSyntax, elementType));
         }
 
         if (syntax.LengthToken == null)
@@ -2720,8 +2711,8 @@ internal sealed partial class ExpressionBinder
         var entries = ImmutableArray.CreateBuilder<BoundMapEntry>(syntax.Entries.Count);
         foreach (var entrySyntax in syntax.Entries)
         {
-            var key = conversions.BindConversion(entrySyntax.Key, mts.KeyType);
-            var value = conversions.BindConversion(entrySyntax.Value, mts.ValueType);
+            var key = BindExpression(entrySyntax.Key, mts.KeyType);
+            var value = BindExpression(entrySyntax.Value, mts.ValueType);
             entries.Add(new BoundMapEntry(key, value));
         }
 
