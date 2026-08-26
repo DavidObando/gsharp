@@ -124,6 +124,32 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
     }
 
     /// <inheritdoc/>
+    protected override BoundExpression RewriteFunctionPointerInvocationExpression(
+        BoundFunctionPointerInvocationExpression node)
+    {
+        var rewritten = (BoundFunctionPointerInvocationExpression)base.RewriteFunctionPointerInvocationExpression(node);
+        if (rewritten.Arguments.IsDefaultOrEmpty)
+        {
+            return rewritten;
+        }
+
+        // `calli` requires arguments below the pointer on the IL stack, while
+        // source order evaluates the pointer first. Capture it before arguments
+        // so a member owner is evaluated exactly once at the correct point.
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var pointer = this.MaybeSpill(rewritten.Pointer, true, "fnptr", statements);
+        var invocation = new BoundFunctionPointerInvocationExpression(
+            rewritten.Syntax,
+            pointer,
+            rewritten.Arguments,
+            rewritten.FunctionPointerType);
+        return new BoundBlockExpression(
+            rewritten.Syntax,
+            statements.ToImmutable(),
+            invocation);
+    }
+
+    /// <inheritdoc/>
     protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
         // Rewrite children first so any nested duplicating contexts inside

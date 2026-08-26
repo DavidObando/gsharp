@@ -2955,11 +2955,11 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            // Issues #527 and #2925: source struct/class and interface
-            // delegate members are callable before their CLR types exist.
+            // Issues #527, #2925, and #3523: source struct/class and interface
+            // callable members are invokable before their CLR types exist.
             if (receiver != null
                 && receiver.Type is StructSymbol or InterfaceSymbol
-                && TryBindUserDelegateMemberInvocation(receiver, receiver.Type, methodName, arguments, ce, isStatic: false, out var userDelegateFieldCall))
+                && TryBindUserCallableMemberInvocation(receiver, receiver.Type, methodName, arguments, ce, isStatic: false, out var userDelegateFieldCall))
             {
                 return userDelegateFieldCall;
             }
@@ -3142,10 +3142,10 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        // Issues #527 and #2925: a G#-defined struct/class or interface
-        // delegate member is invokable through bare call syntax.
+        // Issues #527, #2925, and #3523: a G#-defined struct/class or interface
+        // callable member is invokable through bare call syntax.
         if (receiver.Type is StructSymbol or InterfaceSymbol
-            && TryBindUserDelegateMemberInvocation(receiver, receiver.Type, methodName, arguments, ce, isStatic: false, out var userDelegateCall))
+            && TryBindUserCallableMemberInvocation(receiver, receiver.Type, methodName, arguments, ce, isStatic: false, out var userDelegateCall))
         {
             return userDelegateCall;
         }
@@ -3654,7 +3654,7 @@ internal sealed partial class ExpressionBinder
             }
 
             if (underlyingType is StructSymbol or InterfaceSymbol
-                && TryBindUserDelegateMemberInvocation(
+                && TryBindUserCallableMemberInvocation(
                     narrowedReceiver,
                     underlyingType,
                     methodName,

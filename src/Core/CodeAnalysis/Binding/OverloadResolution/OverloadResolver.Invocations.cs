@@ -307,6 +307,88 @@ internal sealed partial class OverloadResolver
         return default;
     }
 
+    internal BoundExpression BindFunctionPointerInvocation(
+        CallExpressionSyntax syntax,
+        BoundExpression pointer,
+        FunctionPointerTypeSymbol functionPointerType,
+        string calleeName,
+        TextLocation calleeLocation,
+        ImmutableArray<BoundExpression> boundArguments,
+        ImmutableArray<string> argumentNames,
+        ImmutableArray<string> parameterNames = default)
+    {
+        if (syntax.Arguments.Count != functionPointerType.Arity)
+        {
+            Diagnostics.ReportWrongArgumentCount(
+                calleeLocation,
+                calleeName,
+                functionPointerType.Arity,
+                syntax.Arguments.Count);
+            return new BoundErrorExpression(null);
+        }
+
+        Func<int, string> parameterNameAt = parameterIndex => parameterNames[parameterIndex];
+        ExpressionSyntax?[] parameterSyntax;
+        var arguments = boundArguments;
+        if (!argumentNames.IsDefault)
+        {
+            if (parameterNames.IsDefaultOrEmpty
+                || parameterNames.Length != functionPointerType.Arity)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(
+                    calleeLocation,
+                    calleeName,
+                    FirstNamedArgumentName(argumentNames));
+                return new BoundErrorExpression(null);
+            }
+
+            if (!TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    arguments,
+                    functionPointerType.Arity,
+                    parameterNameAt,
+                    calleeName,
+                    out parameterSyntax,
+                    out arguments))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+        else
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
+        var convertedArguments = ImmutableArray.CreateBuilder<BoundExpression>(
+            functionPointerType.Arity);
+        for (var i = 0; i < functionPointerType.Arity; i++)
+        {
+            var argumentLocation = i < parameterSyntax.Length
+                ? parameterSyntax[i]?.Location ?? calleeLocation
+                : calleeLocation;
+            convertedArguments.Add(
+                conversions.BindConversion(
+                    argumentLocation,
+                    arguments[i],
+                    functionPointerType.ParameterTypes[i]));
+        }
+
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            convertedArguments.MoveToImmutable(),
+            parameterNameAt);
+
+        return new BoundFunctionPointerInvocationExpression(
+            syntax,
+            pointer,
+            finalArguments,
+            functionPointerType);
+    }
+
     private bool TryBindFunctionTypeArguments(
         string calleeName,
         FunctionTypeSymbol functionType,
@@ -1001,6 +1083,19 @@ internal sealed partial class OverloadResolver
             nullSafeInvocation))
         {
             return new BoundErrorExpression(null);
+        }
+
+        if (callee.Type is FunctionPointerTypeSymbol functionPointerType)
+        {
+            return CompleteInvocation(BindFunctionPointerInvocation(
+                syntax,
+                callee,
+                functionPointerType,
+                calleeName,
+                calleeLocation,
+                boundArguments.ToImmutable(),
+                argumentNames,
+                GetIndirectCallableParameterNames(callee)));
         }
 
         if (callee.Type is FunctionTypeSymbol fnType)

@@ -1033,76 +1033,39 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        // ADR-0122 §9 / issue #1035: invoking a function-pointer-typed
-        // variable goes through the `calli` path. Sites like `fp(1, 2)` where
-        // `fp` is `let fp *func(int32, int32) int32 = &Add` reduce to a
-        // BoundFunctionPointerInvocationExpression.
+        // ADR-0122 §9 / issues #1035 and #3523: invoking a function-pointer-
+        // typed variable goes through the shared `calli` path. Implicit field
+        // and property symbols must first become real member loads rather than
+        // non-existent local slots.
         var fpVar = symbol as VariableSymbol;
-        var fpSym = fpVar?.Type as FunctionPointerTypeSymbol;
+        var fpSym = (narrowedCallTargetType ?? fpVar?.Type) as FunctionPointerTypeSymbol;
         if (fpVar != null && fpSym != null)
         {
-            Func<int, string> functionPointerParameterNameAt =
-                parameterIndex => fpVar.CallableParameterNames[parameterIndex];
-            if (syntax.Arguments.Count != fpSym.Arity)
+            BoundExpression pointer;
+            if (TryBuildImplicitMemberLoad(
+                fpVar,
+                syntax.Identifier.Location,
+                out var implicitPointer,
+                narrowedCallTargetType))
             {
-                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, fpVar.Name, fpSym.Arity, syntax.Arguments.Count);
-                return new BoundErrorExpression(null);
-            }
-
-            ExpressionSyntax?[] fpParameterSyntax;
-            var fpArguments = boundArguments.ToImmutable();
-            if (!argumentNames.IsDefault)
-            {
-                if (fpVar.CallableParameterNames.IsDefaultOrEmpty ||
-                    fpVar.CallableParameterNames.Length != fpSym.Arity)
-                {
-                    Diagnostics.ReportNamedArgumentParameterNotFound(
-                        syntax.Identifier.Location,
-                        fpVar.Name,
-                        FirstNamedArgumentName(argumentNames));
-                    return new BoundErrorExpression(null);
-                }
-
-                if (!TryReorderUserCallArguments(
-                        syntax.Arguments,
-                        fpArguments,
-                        fpSym.Arity,
-                        functionPointerParameterNameAt,
-                        fpVar.Name,
-                        out fpParameterSyntax,
-                        out fpArguments))
-                {
-                    return new BoundErrorExpression(null);
-                }
+                pointer = Invariant.Required(
+                    implicitPointer,
+                    "an implicit function-pointer member load succeeds with a bound expression");
             }
             else
             {
-                fpParameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
-                for (var i = 0; i < syntax.Arguments.Count; i++)
-                {
-                    fpParameterSyntax[i] = syntax.Arguments[i];
-                }
+                pointer = new BoundVariableExpression(null, fpVar, narrowedCallTargetType);
             }
 
-            var fpConvertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(fpSym.Arity);
-            for (var i = 0; i < fpSym.Arity; i++)
-            {
-                var argLoc = i < fpParameterSyntax.Length
-                    ? fpParameterSyntax[i]?.Location ?? syntax.Identifier.Location
-                    : syntax.Identifier.Location;
-                fpConvertedArgs.Add(conversions.BindConversion(argLoc, fpArguments[i], fpSym.ParameterTypes[i]));
-            }
-
-            var finalArguments = PreserveNamedArgumentEvaluationOrder(
-                syntax.Arguments,
-                fpConvertedArgs.MoveToImmutable(),
-                functionPointerParameterNameAt);
-
-            return new BoundFunctionPointerInvocationExpression(
-                null,
-                new BoundVariableExpression(null, fpVar),
-                finalArguments,
-                fpSym);
+            return BindFunctionPointerInvocation(
+                syntax,
+                pointer,
+                fpSym,
+                fpVar.Name,
+                syntax.Identifier.Location,
+                boundArguments.ToImmutable(),
+                argumentNames,
+                fpVar.CallableParameterNames);
         }
 
         if (symbol is VariableSymbol nullableDelegateVar
