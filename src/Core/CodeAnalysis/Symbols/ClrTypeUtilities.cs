@@ -1550,15 +1550,25 @@ public static class ClrTypeUtilities
             return null;
         }
 
+        // Issue #3501: enumerate each hierarchy level DECLARED-ONLY rather
+        // than filtering one flattened enumeration of `type`. Reflection's
+        // flattened view applies hide-by-name BEFORE the visibility filter, so
+        // an INTERNAL `new` shadow in a derived class (Roslyn's
+        // `CSharpSyntaxNode.SyntaxTree` over the public
+        // `SyntaxNode.SyntaxTree`) removes the base member from the flattened
+        // set while the shadow itself is excluded by the Public flag — the
+        // member vanishes entirely and every `node.SyntaxTree` read failed
+        // GS0158. Walking most-derived-first with DeclaredOnly matches C#
+        // lookup: an accessible shadow wins at its own level, and an
+        // inaccessible one simply doesn't hide the base member.
         TMember? FindCanonical()
         {
             for (Type? declaringType = type; declaringType != null; declaringType = declaringType.BaseType)
             {
                 TMember? match = null;
-                foreach (TMember candidate in safeEnumerate(type, flags))
+                foreach (TMember candidate in safeEnumerate(declaringType, flags | BindingFlags.DeclaredOnly))
                 {
-                    if (!EmittedMemberNameMatches(candidate, name)
-                        || !AreSame(candidate.DeclaringType, declaringType))
+                    if (!EmittedMemberNameMatches(candidate, name))
                     {
                         continue;
                     }
@@ -1592,32 +1602,7 @@ public static class ClrTypeUtilities
         }
         catch (AmbiguousMatchException)
         {
-            for (var declaringType = type; declaringType != null; declaringType = declaringType.BaseType)
-            {
-                TMember? match = null;
-                foreach (var member in safeEnumerate(type, flags))
-                {
-                    if (!EmittedMemberNameMatches(member, name)
-                        || !AreSame(member.DeclaringType, declaringType))
-                    {
-                        continue;
-                    }
-
-                    if (match != null)
-                    {
-                        return null;
-                    }
-
-                    match = member;
-                }
-
-                if (match != null)
-                {
-                    return match;
-                }
-            }
-
-            return null;
+            return FindCanonical();
         }
         catch (Exception ex) when (IsMetadataLoadFailure(ex))
         {
