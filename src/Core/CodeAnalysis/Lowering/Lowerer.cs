@@ -1209,7 +1209,13 @@ public sealed class Lowerer : BoundTreeRewriter
         // those.)
         if (disposeMethod == null)
         {
-            if (!typeof(System.IDisposable).IsAssignableFrom(clrType))
+            // Issue #3501: a byref-like enumerator (Span<T>.Enumerator) can
+            // report IDisposable on modern runtimes (ref structs implement
+            // interfaces since .NET 9), but the interface dispatch below
+            // boxes — invalid IL for a byref-like type. Roslyn likewise
+            // emits no disposal for the span pattern enumerator.
+            if (ClrTypeUtilities.IsByRefLike(clrType)
+                || !typeof(System.IDisposable).IsAssignableFrom(clrType))
             {
                 return null;
             }
@@ -1496,11 +1502,17 @@ public sealed class Lowerer : BoundTreeRewriter
                 moveNextCallFactory = createMoveNextCall;
                 currentAccessFactory = receiver =>
                 {
-                    return new BoundClrPropertyAccessExpression(
-                        null,
-                        receiver,
-                        currentMember,
-                        currentType);
+                    // Issue #3501 / ADR-0056 §1: a ref-struct enumerator's
+                    // `Current` is `ref T` (Span<T>.Enumerator); the loop
+                    // variable observes the pointee, so the read auto-
+                    // dereferences (the emitter's ldind), matching the
+                    // binder-side element typing.
+                    return ConversionClassifier.AutoDereferenceRefReturn(
+                        new BoundClrPropertyAccessExpression(
+                            null,
+                            receiver,
+                            currentMember,
+                            currentType));
                 };
                 return true;
             }
@@ -1536,10 +1548,24 @@ public sealed class Lowerer : BoundTreeRewriter
     {
         return member switch
         {
-            System.Reflection.PropertyInfo property => TypeSymbol.FromClrType(property.PropertyType),
-            System.Reflection.FieldInfo field => TypeSymbol.FromClrType(field.FieldType),
+            System.Reflection.PropertyInfo property => FromClrMemberType(property.PropertyType),
+            System.Reflection.FieldInfo field => FromClrMemberType(field.FieldType),
             _ => TypeSymbol.Error,
         };
+    }
+
+    /// <summary>
+    /// Issue #3501: a ref-returning member (Span&lt;T&gt;.Enumerator's
+    /// <c>Current</c> is <c>ref T</c>) reflects as an <c>IsByRef</c> CLR type,
+    /// which <see cref="TypeSymbol.FromClrType"/> does not model. Wrap the
+    /// pointee in a <see cref="ByRefTypeSymbol"/> so ADR-0056 §1
+    /// auto-dereference sees a managed pointer and inserts the load-indirect.
+    /// </summary>
+    private static TypeSymbol FromClrMemberType(System.Type clrType)
+    {
+        return clrType.IsByRef
+            ? ByRefTypeSymbol.Get(TypeSymbol.FromClrType(clrType.GetElementType()))
+            : TypeSymbol.FromClrType(clrType);
     }
 
     private BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)

@@ -907,14 +907,14 @@ internal sealed class MemberLookup
         var currentProperty = ClrTypeUtilities.SafeGetProperty(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public);
         if (currentProperty != null)
         {
-            elementType = currentProperty.PropertyType;
+            elementType = DereferenceByRefElement(currentProperty.PropertyType);
             return true;
         }
 
         var currentField = ClrTypeUtilities.SafeGetField(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public);
         if (currentField != null)
         {
-            elementType = currentField.FieldType;
+            elementType = DereferenceByRefElement(currentField.FieldType);
             return true;
         }
 
@@ -925,7 +925,7 @@ internal sealed class MemberLookup
         var inheritedCurrent = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
         if (inheritedCurrent != null)
         {
-            elementType = inheritedCurrent.PropertyType;
+            elementType = DereferenceByRefElement(inheritedCurrent.PropertyType);
             return true;
         }
 
@@ -6258,6 +6258,17 @@ internal sealed class MemberLookup
             _ => null,
         };
     }
+
+    /// <summary>
+    /// Issue #3501: a ref-struct enumerator's <c>Current</c> is <c>ref T</c>
+    /// (Span&lt;T&gt;.Enumerator), but the iteration VARIABLE observes the
+    /// pointee value — ADR-0056 §1 auto-dereference. The lowered <c>Current</c>
+    /// read applies the matching <c>BoundDereferenceExpression</c>.
+    /// </summary>
+    /// <param name="elementType">The reflected <c>Current</c> member type.</param>
+    /// <returns>The pointee type for a by-ref member; the type unchanged otherwise.</returns>
+    private static Type DereferenceByRefElement(Type elementType) =>
+        elementType.IsByRef ? elementType.GetElementType() ?? elementType : elementType;
 
     /// <summary>
     /// Issue #985: a single CLR interface method slot that an implementing type
