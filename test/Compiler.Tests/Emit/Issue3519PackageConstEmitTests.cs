@@ -10,10 +10,17 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
+using CSharpCompilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation;
+using CSharpCompilationOptions = Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions;
+using CSharpSyntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree;
+using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
+using MetadataReference = Microsoft.CodeAnalysis.MetadataReference;
+using OutputKind = Microsoft.CodeAnalysis.OutputKind;
 
 namespace GSharp.Compiler.Tests.Emit;
 
@@ -261,6 +268,57 @@ public sealed class Issue3519PackageConstEmitTests
     }
 
     [Fact]
+    public void ExplicitReferenceEnumPackageConsts_UseExactUnderlyingMetadataPayloads()
+    {
+        var fixturePath = CompileExplicitEnumFixture();
+        try
+        {
+            var fixture = AssemblyLoadContext.Default.LoadFromAssemblyPath(fixturePath);
+            using var program = CompileWithReferences(
+                new[] { fixturePath },
+                ("Reader.gs", """
+                    package FindingExplicitReferenceEnumPackageConsts
+
+                    import Issue3519.ExplicitEnums
+
+                    func CheckExplicitEnums() int32 {
+                        return U == ByteCode.Combined && S == SByteCode.Adjusted ? 0 : 1
+                    }
+                    """),
+                ("Values.gs", """
+                    package FindingExplicitReferenceEnumPackageConsts
+
+                    import Issue3519.ExplicitEnums
+
+                    const U ByteCode = ByteCode.High | ByteCode.Low
+                    const S SByteCode = SByteCode.Negative + int8(2)
+                    """));
+
+            var assembly = program.Load();
+            var container = assembly.GetTypes().Single(type => type.Name == "<Program>");
+            var check = container.GetMethod("CheckExplicitEnums", BindingFlags.Public | BindingFlags.Static);
+            Assert.NotNull(check);
+            Assert.Equal(0, check!.Invoke(null, null));
+            Assert.DoesNotContain(
+                IlInstructionReader.Read(check.GetMethodBody()!.GetILAsByteArray()!),
+                instruction => instruction.OpCode == OpCodes.Ldsfld);
+
+            var byteEnum = fixture.GetType("Issue3519.ExplicitEnums.ByteCode")!;
+            var sbyteEnum = fixture.GetType("Issue3519.ExplicitEnums.SByteCode")!;
+            var unsigned = GetLiteral(container, "U");
+            var signed = GetLiteral(container, "S");
+            Assert.Equal(byteEnum, unsigned.FieldType);
+            Assert.Equal(sbyteEnum, signed.FieldType);
+            Assert.Equal((byte)201, Assert.IsType<byte>(unsigned.GetRawConstantValue()));
+            Assert.Equal((sbyte)-5, Assert.IsType<sbyte>(signed.GetRawConstantValue()));
+        }
+        finally
+        {
+            File.Delete(fixturePath);
+        }
+    }
+
+    [Fact]
     public void DecimalPackageConst_FromAnotherSourceFile_UsesInitializedReadOnlyStorage()
     {
         using var program = Compile(
@@ -441,10 +499,15 @@ public sealed class Issue3519PackageConstEmitTests
     {
         var tree = SyntaxTree.Parse(SourceText.From(source, "Values.gs"));
         using var peStream = new MemoryStream();
-        return new Compilation(tree).Emit(peStream);
+        return new GsCompilation(tree).Emit(peStream);
     }
 
     private static CompiledProgram Compile(params (string FileName, string Source)[] sources)
+        => CompileWithReferences(Array.Empty<string>(), sources);
+
+    private static CompiledProgram CompileWithReferences(
+        IReadOnlyList<string> references,
+        params (string FileName, string Source)[] sources)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
@@ -468,12 +531,17 @@ public sealed class Issue3519PackageConstEmitTests
                 "/target:exe",
                 "/targetframework:net10.0",
             };
+            foreach (var reference in references)
+            {
+                arguments.Add("/r:" + reference);
+            }
+
             arguments.AddRange(sourcePaths);
 
             var exitCode = Program.Main(arguments.ToArray());
             Assert.Equal(0, exitCode);
             Assert.True(File.Exists(outputPath));
-            IlVerifier.Verify(outputPath);
+            IlVerifier.Verify(outputPath, additionalReferences: references);
             return new CompiledProgram(directory, outputPath);
         }
         catch
@@ -481,6 +549,46 @@ public sealed class Issue3519PackageConstEmitTests
             Directory.Delete(directory, recursive: true);
             throw;
         }
+    }
+
+    private static string CompileExplicitEnumFixture()
+    {
+        var outputPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Issue3519.ExplicitEnums." + Guid.NewGuid().ToString("N") + ".dll");
+        var trustedPlatformAssemblies = Assert.IsType<string>(
+            AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"));
+        var references = trustedPlatformAssemblies
+            .Split(Path.PathSeparator)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "Issue3519.ExplicitEnums",
+            new[]
+            {
+                CSharpSyntaxTree.ParseText(
+                    """
+                    namespace Issue3519.ExplicitEnums;
+
+                    public enum ByteCode : byte
+                    {
+                        Low = 1,
+                        High = 200,
+                        Combined = 201,
+                    }
+
+                    public enum SByteCode : sbyte
+                    {
+                        Negative = -7,
+                        Adjusted = -5,
+                    }
+                    """),
+            },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        using var output = File.Create(outputPath);
+        var result = compilation.Emit(output);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        return outputPath;
     }
 
     private static ProcessResult Run(string outputPath)

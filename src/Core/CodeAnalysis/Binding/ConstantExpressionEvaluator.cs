@@ -359,12 +359,6 @@ internal static class ConstantExpressionEvaluator
     private static Expression PromoteSubIntOperand(Expression operand, TypeSymbol type)
     {
         var storageType = GetConstantStorageType(type);
-        if (operand.Type.IsEnum
-            && TryGetRuntimeType(storageType, out var enumStorageType))
-        {
-            operand = Expression.Convert(operand, enumStorageType);
-        }
-
         return IsSubInt(storageType) && !operand.Type.IsSameAs(typeof(int))
             ? Expression.Convert(operand, typeof(int))
             : operand;
@@ -390,11 +384,6 @@ internal static class ConstantExpressionEvaluator
 
             built = Expression.Constant(null, runtimeType);
             return true;
-        }
-
-        if (runtimeType.IsEnum)
-        {
-            value = Enum.ToObject(runtimeType, value);
         }
 
         if (runtimeType.IsInstanceOfType(value))
@@ -470,15 +459,16 @@ internal static class ConstantExpressionEvaluator
         TypeSymbol type,
         [NotNullWhen(true)] out Type? runtimeType)
     {
+        var storageType = GetConstantStorageType(type);
+        if (storageType != type)
+        {
+            return TryGetRuntimeType(storageType, out runtimeType);
+        }
+
         if (type == TypeSymbol.Null)
         {
             runtimeType = typeof(object);
             return true;
-        }
-
-        if (type is EnumSymbol enumType && enumType.ClrType == null)
-        {
-            return TryGetRuntimeType(enumType.UnderlyingType, out runtimeType);
         }
 
         if (type.ClrType != null)
@@ -549,16 +539,7 @@ internal static class ConstantExpressionEvaluator
     }
 
     private static TypeSymbol GetConstantStorageType(TypeSymbol type)
-    {
-        if (type is EnumSymbol enumType)
-        {
-            return enumType.UnderlyingType;
-        }
-
-        return type.ClrType is { IsEnum: true } clrEnum
-            ? TypeSymbol.FromClrType(Enum.GetUnderlyingType(clrEnum))
-            : type;
-    }
+        => EnumOperatorTable.GetUnderlyingType(type) ?? type;
 
     private static bool IsUnsignedRuntimeType(Type type)
         => type.IsSameAs(typeof(byte))
