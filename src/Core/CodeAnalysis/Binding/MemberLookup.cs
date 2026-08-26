@@ -3845,18 +3845,8 @@ internal sealed class MemberLookup
                 var declarationFlags = ClrNullability.ReadNullableFlags(
                     openField,
                     openDefinition);
-                if (TypeSymbol.RequiresSymbolicProjection(mapped))
-                {
-                    return openField.FieldType.IsGenericParameter
-                        && !declarationFlags.IsDefaultOrEmpty
-                        && declarationFlags[0] == NullableFlagsBuilder.Annotated
-                            ? NullableTypeSymbol.Get(mapped)
-                            : mapped;
-                }
-
                 return NullableFlagsBuilder.MergeDeclarationNullability(
                     mapped,
-                    closedField.FieldType,
                     openField.FieldType,
                     declarationFlags);
             }

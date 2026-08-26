@@ -71,14 +71,11 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
     public bool IsReadOnlySubmissionGlobal { get; }
 
     /// <summary>
-    /// Gets, for a static member read on a generic type constructed over
-    /// an in-scope generic type parameter (e.g. <c>Comparer[TResult].Default</c>),
-    /// the symbolic constructed container (an <see cref="ImportedTypeSymbol"/>
-    /// over the open definition with symbolic type arguments). The emitter
-    /// parents the static getter/field reference at this constructed TypeSpec
-    /// (<c>Comparer&lt;!TResult&gt;</c>) instead of the erased
-    /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary static or
-    /// instance member access.
+    /// Gets the symbolic constructed container used to parent a generic member
+    /// reference. Covers static members such as
+    /// <c>Comparer[TResult].Default</c> and inherited instance fields such as
+    /// <c>Base[T].Value</c> reached through a symbolic derived receiver.
+    /// <c>null</c> when no symbolic TypeSpec parent is needed.
     /// </summary>
     public TypeSymbol? StaticContainerType { get; }
 

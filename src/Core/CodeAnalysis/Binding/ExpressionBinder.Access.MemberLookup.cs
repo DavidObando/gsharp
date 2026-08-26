@@ -628,7 +628,18 @@ internal sealed partial class ExpressionBinder
                                 clrInstanceReceiverType,
                                 fld),
                             fld);
-                        return new BoundClrPropertyAccessExpression(null, receiver!, fld, fieldType);
+                        var fieldContainer =
+                            MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                                clrInstanceReceiverType,
+                                fld);
+                        return new BoundClrPropertyAccessExpression(
+                            null,
+                            Invariant.Required(
+                                receiver,
+                                "an instance field lookup has a receiver"),
+                            fld,
+                            fieldType,
+                            fieldContainer);
                     }
 
                     // Issue #337: an instance member name that resolves to a

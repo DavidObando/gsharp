@@ -66,18 +66,15 @@ internal static class NullableFlagsBuilder
 
     /// <summary>
     /// Merges receiver-projected generic nullability with declaration-site
-    /// nullable metadata, then decodes the closed reflected type.
-    /// Declaration byte <c>2</c> widens a projected position; other declaration
-    /// bytes never erase nullable type arguments supplied by the receiver.
+    /// nullable metadata node by node. A substituted type-parameter subtree is
+    /// kept intact; the declaration's byte annotates only that subtree's root.
     /// </summary>
     /// <param name="projectedType">Type after receiver generic substitution.</param>
-    /// <param name="actualType">Closed reflected member type.</param>
     /// <param name="layoutType">Open declaration type defining metadata positions.</param>
     /// <param name="declarationFlags">Declaration nullable flags.</param>
     /// <returns>Combined nullability-aware type.</returns>
     internal static TypeSymbol MergeDeclarationNullability(
         TypeSymbol projectedType,
-        Type actualType,
         Type layoutType,
         ImmutableArray<byte> declarationFlags)
     {
@@ -86,25 +83,124 @@ internal static class NullableFlagsBuilder
             return projectedType;
         }
 
-        var projectedFlags = ClrNullability.ExpandNullableFlags(
-            layoutType,
-            Build(projectedType));
         var declaredFlags = ClrNullability.ExpandNullableFlags(
             layoutType,
             declarationFlags);
-        var merged = ImmutableArray.CreateBuilder<byte>(projectedFlags.Length);
-        for (var i = 0; i < projectedFlags.Length; i++)
+        var position = 0;
+        return Merge(projectedType, layoutType);
+
+        TypeSymbol Merge(TypeSymbol projected, Type layout)
         {
-            merged.Add(
-                declaredFlags[i] == Annotated
-                    ? Annotated
-                    : projectedFlags[i]);
+            if (NullableLifting.GetValueTypeNullableUnderlyingClr(layout) is { } nullableUnderlying)
+            {
+                return Merge(projected, nullableUnderlying);
+            }
+
+            if (layout.IsGenericParameter)
+            {
+                return ApplyRootAnnotation(projected, declaredFlags[position++]);
+            }
+
+            if (layout.IsArray)
+            {
+                var flag = declaredFlags[position++];
+                var elementLayout = Invariant.Required(
+                    layout.GetElementType(),
+                    "an array type has an element type");
+                TypeSymbol merged = projected switch
+                {
+                    ArrayTypeSymbol array => ArrayTypeSymbol.Get(
+                        Merge(array.ElementType, elementLayout),
+                        array.Length),
+                    SliceTypeSymbol slice => SliceTypeSymbol.Get(
+                        Merge(slice.ElementType, elementLayout)),
+                    RectangularArrayTypeSymbol rectangular =>
+                        RectangularArrayTypeSymbol.Get(
+                            Merge(rectangular.ElementType, elementLayout),
+                            rectangular.Rank),
+                    _ => SkipChildren(projected, elementLayout),
+                };
+                return layout.IsValueType
+                    ? merged
+                    : ApplyRootAnnotation(merged, flag);
+            }
+
+            var isClosedGeneric = layout.IsGenericType && !layout.IsGenericTypeDefinition;
+            if (isClosedGeneric)
+            {
+                var flag = declaredFlags[position++];
+                var layoutArguments = layout.GetGenericArguments();
+                var nullable = projected as NullableTypeSymbol;
+                var core = nullable?.UnderlyingType ?? projected;
+                TypeSymbol merged = core;
+                if (core is ImportedTypeSymbol imported
+                    && imported.ClrType is Type importedClr
+                    && imported.TypeArguments.Length == layoutArguments.Length)
+                {
+                    var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(
+                        layoutArguments.Length);
+                    for (var i = 0; i < layoutArguments.Length; i++)
+                    {
+                        arguments.Add(Merge(
+                            imported.TypeArguments[i],
+                            layoutArguments[i]));
+                    }
+
+                    merged = ImportedTypeSymbol.GetConstructed(
+                        importedClr,
+                        imported.OpenDefinition ?? layout.GetGenericTypeDefinition(),
+                        arguments.MoveToImmutable());
+                }
+                else
+                {
+                    foreach (var argument in layoutArguments)
+                    {
+                        position += ClrNullability.CountNullabilityBytes(argument);
+                    }
+                }
+
+                if (nullable != null)
+                {
+                    merged = NullableTypeSymbol.Get(merged);
+                }
+
+                return layout.IsValueType
+                    ? merged
+                    : ApplyRootAnnotation(merged, flag);
+            }
+
+            if (!layout.IsValueType)
+            {
+                return ApplyRootAnnotation(projected, declaredFlags[position++]);
+            }
+
+            return projected;
         }
 
-        return ClrNullability.SymbolFromLayoutFlags(
-            actualType,
-            layoutType,
-            merged.MoveToImmutable());
+        TypeSymbol SkipChildren(TypeSymbol projected, Type childLayout)
+        {
+            position += ClrNullability.CountNullabilityBytes(childLayout);
+            return projected;
+        }
+
+        static TypeSymbol ApplyRootAnnotation(TypeSymbol projected, byte flag)
+        {
+            if (flag != Annotated || projected is NullableTypeSymbol)
+            {
+                return projected;
+            }
+
+            var isValueType = projected switch
+            {
+                TypeParameterSymbol parameter => parameter.HasValueTypeConstraint,
+                StructSymbol structure => !structure.IsClass,
+                EnumSymbol => true,
+                _ => projected.ClrType?.IsValueType == true,
+            };
+            return isValueType
+                ? projected
+                : NullableTypeSymbol.Get(projected);
+        }
     }
 
     private static void Append(

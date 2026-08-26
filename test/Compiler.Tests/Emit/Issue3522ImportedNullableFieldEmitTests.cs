@@ -90,6 +90,18 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             {
             }
 
+            public class GenericDictionaryBase<T>
+                where T : class
+            {
+                public Dictionary<T, string?> Values = new();
+            }
+
+            public sealed class GenericDictionaryDerived<T>
+                : GenericDictionaryBase<T>
+                where T : class
+            {
+            }
+
             public static class DirectFields
             {
                 public static string Required = "";
@@ -145,6 +157,10 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                     NullableDeclaredLeaf = new();
                 public static GenericNestedDerived<string>
                     NestedNullableDeclared = new();
+                public static GenericNullableDerived<List<string>>
+                    NullableListDeclared = new();
+                public static GenericDictionaryDerived<string>
+                    DictionaryNullableDeclared = new();
             }
 
             public static class GenericMethods
@@ -454,7 +470,21 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         const string source = """
             package Issue3522.InheritedFields
 
+            import System.Collections.Generic
             import Issue3522.Metadata
+
+            func AddSymbolicNested[T class](
+                holder GenericNestedDerived[T],
+                value T?) {
+              holder.Values.Add(value)
+            }
+
+            func SetSymbolicDictionary[T class](
+                holder GenericDictionaryDerived[T],
+                key T,
+                value string?) {
+              holder.Values[key] = value
+            }
 
             func Main() int32 {
               DirectFields.DerivedSecondNonNull.Value = "derived"
@@ -475,13 +505,29 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               DirectFields.NestedNullableDeclared.Values.Add(nil)
               let nestedNullable string? = DirectFields.NestedNullableDeclared.Values[0]
 
+              DirectFields.NullableListDeclared.Value = nil
+              DirectFields.NullableListDeclared.Value = List[string]()
+              DirectFields.NullableListDeclared.Value!!.Add("item")
+              let listItem string = DirectFields.NullableListDeclared.Value!![0]
+
+              let symbolicNested = GenericNestedDerived[string]()
+              AddSymbolicNested(symbolicNested, nil)
+              let symbolicNestedValue string? = symbolicNested.Values[0]
+
+              let symbolicDictionary = GenericDictionaryDerived[string]()
+              SetSymbolicDictionary(symbolicDictionary, "key", nil)
+              let symbolicDictionaryValue string? = symbolicDictionary.Values["key"]
+
               return derived == "derived"
                 && derivedNullable == nil
                 && leaf == "leaf"
                 && leafNullable == nil
                 && declaredNullable == nil
                 && leafDeclaredNullable == nil
-                && nestedNullable == nil ? 0 : 1
+                && nestedNullable == nil
+                && listItem == "item"
+                && symbolicNestedValue == nil
+                && symbolicDictionaryValue == nil ? 0 : 1
             }
             """;
 
@@ -504,7 +550,19 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         const string source = """
             package Issue3522.InheritedFieldsNegative
 
+            import System.Collections.Generic
             import Issue3522.Metadata
+
+            func RequireSymbolicNested[T class](
+                holder GenericNestedDerived[T]) T {
+              return holder.Values[0]
+            }
+
+            func RequireSymbolicDictionary[T class](
+                holder GenericDictionaryDerived[T],
+                key T) string {
+              return holder.Values[key]
+            }
 
             func Break() {
               DirectFields.DerivedSecondNonNull.Value = nil
@@ -516,6 +574,10 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
               let leafDeclared string = DirectFields.NullableDeclaredLeaf.Value
               DirectFields.NestedNullableDeclared.Values.Add(nil)
               let nested string = DirectFields.NestedNullableDeclared.Values[0]
+
+              let list List[string] = DirectFields.NullableListDeclared.Value
+              DirectFields.NullableListDeclared.Value = List[string]()
+              DirectFields.NullableListDeclared.Value!![0] = nil
             }
             """;
 
@@ -528,7 +590,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(
-            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 7,
+            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 11,
             result.Diagnostics);
         Assert.DoesNotContain("GS9998", result.Diagnostics, StringComparison.Ordinal);
     }
