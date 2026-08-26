@@ -15,7 +15,8 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// well-known encoding:
 /// <list type="bullet">
 /// <item><c>0</c> — oblivious (no nullability information), including a
-/// non-Nullable closed generic value type's required leading placeholder.</item>
+/// non-Nullable closed generic value type's leading placeholder and a
+/// struct-constrained generic parameter's slot.</item>
 /// <item><c>1</c> — not-annotated (non-nullable reference / open type parameter).</item>
 /// <item><c>2</c> — annotated (nullable reference / nullable open type parameter).</item>
 /// </list>
@@ -24,7 +25,8 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// type occupies a reference-type position. Closed generic value types
 /// contribute a leading oblivious placeholder byte before their arguments,
 /// except metadata-transparent <c>Nullable&lt;T&gt;</c>, which contributes
-/// only T's subtree. Non-generic value types contribute none (matches
+/// only T's subtree. Struct-constrained generic parameters contribute one
+/// oblivious slot. Non-generic value types contribute none (matches
 /// <see cref="ClrNullability.CountNullabilityBytes(System.Type)"/>).
 /// </para>
 /// <para>
@@ -125,7 +127,9 @@ internal static class NullableFlagsBuilder
         {
             if (tp.HasValueTypeConstraint)
             {
-                // `struct`-constrained TPs occupy value-type positions — no byte.
+                // CLR generic parameters with a `struct` constraint occupy an
+                // explicit oblivious placeholder position.
+                builder.Add(Oblivious);
                 return;
             }
 
@@ -247,6 +251,15 @@ internal static class NullableFlagsBuilder
         if (type is ImportedTypeSymbol imported)
         {
             var clr = imported.ClrType;
+            if (clr?.IsGenericParameter == true)
+            {
+                builder.Add(
+                    ClrNullability.IsNotNullableValueTypeParameter(clr)
+                        ? Oblivious
+                        : NotAnnotated);
+                return;
+            }
+
             var isValueType = clr != null && clr.IsValueType;
             if (!isValueType)
             {
@@ -422,11 +435,10 @@ internal static class NullableFlagsBuilder
 
         if (clrType.IsGenericParameter)
         {
-            // Open CLR generic parameter (e.g. encountered when walking the
-            // CLR generic-argument list of an imported type). Treat as a
-            // reference-position slot: matches Roslyn's behaviour for an
-            // unconstrained or class-constrained type parameter.
-            builder.Add(NotAnnotated);
+            builder.Add(
+                ClrNullability.IsNotNullableValueTypeParameter(clrType)
+                    ? Oblivious
+                    : NotAnnotated);
             return;
         }
 

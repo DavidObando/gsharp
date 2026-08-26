@@ -623,7 +623,11 @@ internal sealed partial class ExpressionBinder
 
                     if (fld != null)
                     {
-                        var fieldType = NormalizeImportedSemanticAggregate(ClrNullability.GetFieldTypeSymbol(fld), fld);
+                        var fieldType = NormalizeImportedSemanticAggregate(
+                            MemberLookup.GetClrFieldTypeSymbol(
+                                clrInstanceReceiverType,
+                                fld),
+                            fld);
                         return new BoundClrPropertyAccessExpression(null, receiver!, fld, fieldType);
                     }
 

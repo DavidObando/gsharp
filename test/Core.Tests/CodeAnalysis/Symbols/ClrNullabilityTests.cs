@@ -245,6 +245,72 @@ public class ClrNullabilityTests
     }
 
     [Fact]
+    public void StructConstrainedGenericParameter_ConsumesObliviousSlot()
+    {
+        var pairMethod = typeof(Sample).GetMethod(nameof(Sample.MakeStructPair));
+        Assert.NotNull(pairMethod);
+        var pairFlags = ClrNullability.ReadNullableFlags(
+            pairMethod.ReturnParameter,
+            pairMethod);
+        Assert.Equal(new byte[] { 1, 0, 2 }, pairFlags.ToArray());
+        Assert.Equal(3, ClrNullability.CountNullabilityBytes(pairMethod.ReturnType));
+
+        var pair = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(pairMethod));
+        Assert.IsNotType<NullableTypeSymbol>(pair.GetTypeArgumentSymbol(0));
+        Assert.IsType<NullableTypeSymbol>(pair.GetTypeArgumentSymbol(1));
+        Assert.Equal(pairFlags.ToArray(), NullableFlagsBuilder.Build(pair).ToArray());
+
+        var valueMethod = typeof(Sample).GetMethod(nameof(Sample.MakeStructValue));
+        Assert.NotNull(valueMethod);
+        var valueFlags = ClrNullability.ReadNullableFlags(
+            valueMethod.ReturnParameter,
+            valueMethod);
+        Assert.Equal(new byte[] { 0 }, valueFlags.ToArray());
+        Assert.Equal(2, ClrNullability.CountNullabilityBytes(valueMethod.ReturnType));
+        Assert.Equal(
+            new byte[] { 0, 0 },
+            ClrNullability.ExpandNullableFlags(
+                valueMethod.ReturnType,
+                valueFlags).ToArray());
+
+        var value = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(valueMethod));
+        Assert.IsNotType<NullableTypeSymbol>(value.GetTypeArgumentSymbol(0));
+        Assert.Equal(valueFlags.ToArray(), NullableFlagsBuilder.Build(value).ToArray());
+    }
+
+    [Fact]
+    public void SymbolicStructConstraint_EmitsPairAndValueOuterSlots()
+    {
+        var parameter = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None)
+        {
+            HasValueTypeConstraint = true,
+        };
+        var pair = ImportedTypeSymbol.GetConstructed(
+            typeof(PairContainer<int, string>),
+            typeof(PairContainer<,>),
+            ImmutableArray.Create<TypeSymbol>(
+                parameter,
+                NullableTypeSymbol.Get(TypeSymbol.String)));
+        var value = ImportedTypeSymbol.GetConstructed(
+            typeof(ValueContainer<int>),
+            typeof(ValueContainer<>),
+            ImmutableArray.Create<TypeSymbol>(parameter));
+
+        Assert.Equal(
+            new byte[] { 1, 0, 2 },
+            NullableFlagsBuilder.Build(pair).ToArray());
+        Assert.Equal(
+            new byte[] { 0, 0 },
+            NullableFlagsBuilder.Build(value).ToArray());
+    }
+
+    [Fact]
     public void RectangularArray_NullableElementAndOuterAnnotations_RoundTrip()
     {
         var nonNullMethod = typeof(Sample).GetMethod(nameof(Sample.GetNullableElementGrid));
@@ -559,6 +625,10 @@ public class ClrNullabilityTests
     {
     }
 
+    public struct ValueContainer<T>
+    {
+    }
+
     /// <summary>
     /// Carries the C# 8 nullability annotations we need to test against.
     /// Compiled with the surrounding project's nullable context — the
@@ -569,6 +639,18 @@ public class ClrNullabilityTests
     /// </summary>
     public class Sample
     {
+        public static PairContainer<T, string?> MakeStructPair<T>()
+            where T : struct
+        {
+            return new PairContainer<T, string?>();
+        }
+
+        public static ValueContainer<T> MakeStructValue<T>()
+            where T : struct
+        {
+            return default;
+        }
+
         public string? AnnotatedReturn()
         {
             return null;

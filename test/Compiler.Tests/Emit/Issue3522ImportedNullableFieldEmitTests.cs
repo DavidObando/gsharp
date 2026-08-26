@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -32,6 +33,11 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             {
                 public TFirst First = default!;
                 public TSecond Second = default!;
+            }
+
+            public struct ValueContainer<T>
+            {
+                public T Value;
             }
 
             public static class DirectFields
@@ -75,6 +81,18 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                     string? E15) Tuple15 =
                     (null, "", "", "", "", "", "", null, "", "", "", "", "", "", null);
                 public static string[] NonNullArray = Array.Empty<string>();
+            }
+
+            public static class GenericMethods
+            {
+                public static PairContainer<T, string?> MakeStructPair<T>()
+                    where T : struct => new();
+
+                public static PairContainer<T, string> MakeRequiredStructPair<T>()
+                    where T : struct => new();
+
+                public static ValueContainer<T> MakeStructValue<T>()
+                    where T : struct => default;
             }
 
             public static class ContextFields
@@ -192,6 +210,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         using var resolver = ReferenceResolver.WithReferences(new[] { artifacts.MetadataPath });
 
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.DirectFields", out var direct));
+        Assert.True(resolver.TryResolveType("Issue3522.Metadata.GenericMethods", out var genericMethods));
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.ContextFields", out var context));
         Assert.True(resolver.TryResolveType("Issue3522.Metadata.ObliviousFields", out var oblivious));
 
@@ -211,6 +230,35 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         Assert.Equal(Tuple8Flags, GetNullableFlags(direct.GetField("Tuple8")!));
         Assert.Equal(Tuple15Flags, GetNullableFlags(direct.GetField("Tuple15")!));
         Assert.Empty(GetNullableFlags(direct.GetField("NonNullArray")!));
+
+        var pairMethod = genericMethods.GetMethod("MakeStructPair")!;
+        Assert.Equal(
+            new byte[] { 1, 0, 2 },
+            GetNullableFlags(pairMethod.ReturnParameter));
+        Assert.Equal(
+            new byte[] { 1, 0, 1 },
+            GetNullableFlags(
+                genericMethods.GetMethod("MakeRequiredStructPair")!.ReturnParameter));
+        var metadataInt = resolver.MapClrTypeToReferences(typeof(int));
+        var closedOptionalPair = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(
+                pairMethod.MakeGenericMethod(metadataInt)));
+        Assert.IsType<NullableTypeSymbol>(
+            closedOptionalPair.GetTypeArgumentSymbol(1));
+        var closedRequiredPair = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(
+                genericMethods.GetMethod("MakeRequiredStructPair")!
+                    .MakeGenericMethod(metadataInt)));
+        Assert.IsNotType<NullableTypeSymbol>(
+            closedRequiredPair.GetTypeArgumentSymbol(1));
+        var valueMethod = genericMethods.GetMethod("MakeStructValue")!;
+        Assert.Empty(GetNullableFlags(valueMethod.ReturnParameter));
+        Assert.Equal(2, ClrNullability.CountNullabilityBytes(valueMethod.ReturnType));
+        var valueSymbol = Assert.IsType<NullabilityAnnotatedTypeSymbol>(
+            ClrNullability.GetReturnTypeSymbol(valueMethod));
+        Assert.Equal(
+            new byte[] { 0, 0 },
+            NullableFlagsBuilder.Build(valueSymbol).ToArray());
 
         Assert.Equal((byte)2, GetNullableContext(context));
         Assert.Empty(GetNullableFlags(context.GetField("Values")!));
@@ -338,6 +386,11 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
               DirectFields.NullablePairContainer.First = nil
               DirectFields.NullablePairContainer.Second = nil
+
+              var optionalPair = GenericMethods.MakeStructPair[int32]()
+              optionalPair.Second = nil
+              var requiredPair = GenericMethods.MakeRequiredStructPair[int32]()
+              requiredPair.Second = nil
             }
             """;
 
@@ -350,7 +403,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(
-            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 3,
+            Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 4,
             result.Diagnostics);
         Assert.Contains("Cannot convert type 'nil' to 'string[]'.", result.Diagnostics, StringComparison.Ordinal);
         Assert.Contains("Cannot convert type 'nil' to 'string'.", result.Diagnostics, StringComparison.Ordinal);
@@ -364,6 +417,13 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             package Issue3522.Reemit
 
             import Issue3522.Metadata
+
+            public func ReemitStructPair[T struct]() PairContainer[T, string?] ->
+              GenericMethods.MakeStructPair[T]()
+            public func ReemitRequiredStructPair[T struct]() PairContainer[T, string] ->
+              GenericMethods.MakeRequiredStructPair[T]()
+            public func ReemitStructValue[T struct]() ValueContainer[T] ->
+              GenericMethods.MakeStructValue[T]()
 
             public var OuterArray = DirectFields.NullableOuterArray
             public var OuterGeneric = DirectFields.NullableOuterGeneric
@@ -409,6 +469,18 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
                 GetNullableFlags(program.GetField("NestedScalarTuple")!));
             Assert.Equal(Tuple8Flags, GetNullableFlags(program.GetField("Tuple8")!));
             Assert.Equal(Tuple15Flags, GetNullableFlags(program.GetField("Tuple15")!));
+            Assert.Equal(
+                new byte[] { 1, 0, 2 },
+                GetNullableFlags(
+                    program.GetMethod("ReemitStructPair")!.ReturnParameter));
+            Assert.Equal(
+                new byte[] { 1, 0, 1 },
+                GetNullableFlags(
+                    program.GetMethod("ReemitRequiredStructPair")!.ReturnParameter));
+            Assert.Equal(
+                new byte[] { 0, 0 },
+                GetNullableFlags(
+                    program.GetMethod("ReemitStructValue")!.ReturnParameter));
         }
 
         Assert.Equal(0, Run(result.OutputPath));
@@ -507,9 +579,15 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         return process.ExitCode;
     }
 
-    private static byte[] GetNullableFlags(MemberInfo member)
+    private static byte[] GetNullableFlags(ICustomAttributeProvider provider)
     {
-        var attribute = member.GetCustomAttributesData().SingleOrDefault(
+        var attributes = provider switch
+        {
+            MemberInfo member => member.GetCustomAttributesData(),
+            ParameterInfo parameter => parameter.GetCustomAttributesData(),
+            _ => throw new ArgumentException("Unsupported attribute provider.", nameof(provider)),
+        };
+        var attribute = attributes.SingleOrDefault(
             data => data.AttributeType.FullName == "System.Runtime.CompilerServices.NullableAttribute");
         if (attribute == null)
         {

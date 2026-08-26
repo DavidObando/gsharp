@@ -3798,6 +3798,37 @@ internal sealed class MemberLookup
         return ClrNullability.GetPropertyTypeSymbol(closedProperty);
     }
 
+    /// <summary>
+    /// Resolves a CLR field type through receiver-carried generic nullability.
+    /// </summary>
+    /// <param name="targetType">Imported receiver type.</param>
+    /// <param name="closedField">Reflected field on the closed receiver.</param>
+    /// <returns>Field type with receiver generic-argument nullability.</returns>
+    internal static TypeSymbol GetClrFieldTypeSymbol(
+        TypeSymbol targetType,
+        FieldInfo closedField)
+    {
+        const BindingFlags AllFields = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static;
+        if (targetType is NullabilityAnnotatedTypeSymbol annotated
+            && closedField.DeclaringType is Type declaringType
+            && declaringType.IsGenericType
+            && !declaringType.IsGenericTypeDefinition)
+        {
+            var openField = declaringType.GetGenericTypeDefinition().GetField(
+                closedField.Name,
+                AllFields);
+            var openParameter = openField?.FieldType;
+            if (openParameter?.IsGenericParameter == true)
+            {
+                return annotated.GetTypeArgumentSymbol(
+                    openParameter.GenericParameterPosition);
+            }
+        }
+
+        return ClrNullability.GetFieldTypeSymbol(closedField);
+    }
+
     /// <summary>Resolves an imported event handler type through a symbolic receiver/interface hierarchy.</summary>
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="closedEvent">The reflected event selected from the erased receiver.</param>
