@@ -317,6 +317,12 @@ internal sealed partial class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<string> parameterNames = default)
     {
+        if (functionPointerType.IsManaged && !binderCtx.InUnsafeContext)
+        {
+            Diagnostics.ReportUnmanagedPointerOutsideUnsafe(calleeLocation);
+            return new BoundErrorExpression(null);
+        }
+
         if (syntax.Arguments.Count != functionPointerType.Arity)
         {
             Diagnostics.ReportWrongArgumentCount(

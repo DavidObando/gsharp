@@ -6005,6 +6005,24 @@ public sealed class Binder
                 : type;
         }
 
+        if (type is ByRefTypeSymbol byRef)
+        {
+            var pointee = SubstituteType(byRef.PointeeType, substitution, mapClrType);
+            return ReferenceEquals(pointee, byRef.PointeeType) ? type : ByRefTypeSymbol.Get(pointee);
+        }
+
+        if (type is PointerTypeSymbol pointer)
+        {
+            var pointee = SubstituteType(pointer.PointeeType, substitution, mapClrType);
+            return ReferenceEquals(pointee, pointer.PointeeType) ? type : PointerTypeSymbol.Get(pointee);
+        }
+
+        if (type is FunctionPointerTypeSymbol functionPointer)
+        {
+            return functionPointer.Substitute(
+                nested => SubstituteType(nested, substitution, mapClrType));
+        }
+
         // Issue #1250: a member-signature type that is itself a constructed
         // generic G# user class (e.g. `Holder[T]` on `Box[T]`) must have its
         // own type arguments substituted with the receiver's type-argument map

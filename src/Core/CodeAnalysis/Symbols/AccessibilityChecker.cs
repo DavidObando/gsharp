@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Linq;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -38,12 +40,34 @@ internal static class AccessibilityChecker
     /// <param name="declaringType">The type that declares the member.</param>
     /// <param name="currentFunction">The function whose body contains the access (may be <see langword="null"/> for top-level code).</param>
     /// <returns><see langword="true"/> when the access is permitted.</returns>
-    public static bool IsAccessible(Accessibility accessibility, StructSymbol? declaringType, FunctionSymbol? currentFunction)
+    public static bool IsAccessible(
+        Accessibility accessibility,
+        TypeSymbol? declaringType,
+        FunctionSymbol? currentFunction)
     {
+        if (declaringType is InterfaceSymbol declaringInterface)
+        {
+            if (accessibility != Accessibility.Protected
+                && accessibility != Accessibility.Private)
+            {
+                return true;
+            }
+
+            var enclosingInterface = GetEnclosingInterface(currentFunction);
+            if (accessibility == Accessibility.Private)
+            {
+                return SameDeclaringInterface(enclosingInterface, declaringInterface);
+            }
+
+            return enclosingInterface?.SelfAndAllBaseInterfaces()
+                .Any(candidate => SameDeclaringInterface(candidate, declaringInterface))
+                == true;
+        }
+
         var enclosingType = (currentFunction?.ReceiverType as StructSymbol)
             ?? (currentFunction?.StaticOwnerType as StructSymbol)
             ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
-        return IsAccessibleFromType(accessibility, declaringType, enclosingType);
+        return IsAccessibleFromType(accessibility, declaringType as StructSymbol, enclosingType);
     }
 
     /// <summary>
@@ -124,5 +148,48 @@ internal static class AccessibilityChecker
 
         return string.Equals(a.Name, b.Name, System.StringComparison.Ordinal)
             && string.Equals(a.PackageName, b.PackageName, System.StringComparison.Ordinal);
+    }
+
+    private static InterfaceSymbol? GetEnclosingInterface(FunctionSymbol? function)
+    {
+        var candidates = new[]
+        {
+            function?.ReceiverType,
+            function?.StaticOwnerType,
+            function?.LexicalEnclosingType,
+        };
+        foreach (var candidate in candidates)
+        {
+            for (var current = candidate; current != null; current = current.ContainingType)
+            {
+                if (current is InterfaceSymbol iface)
+                {
+                    return iface;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool SameDeclaringInterface(InterfaceSymbol? left, InterfaceSymbol? right)
+    {
+        if (left == null || right == null)
+        {
+            return false;
+        }
+
+        var leftDefinition = left.Definition ?? left;
+        var rightDefinition = right.Definition ?? right;
+        return ReferenceEquals(leftDefinition, rightDefinition)
+            || ReferenceEquals(leftDefinition.Declaration, rightDefinition.Declaration)
+            || (string.Equals(
+                    leftDefinition.Name,
+                    rightDefinition.Name,
+                    System.StringComparison.Ordinal)
+                && string.Equals(
+                    leftDefinition.PackageName,
+                    rightDefinition.PackageName,
+                    System.StringComparison.Ordinal));
     }
 }
