@@ -1111,7 +1111,14 @@ public static class GSharpPrinter
                 return $"{RenderPattern(binary.Left, indent, includeTypeDesignator)} {(binary.IsConjunction ? "and" : "or")} {RenderPattern(binary.Right, indent, includeTypeDesignator)}";
 
             case NotPattern not:
-                return $"not {RenderPattern(not.Pattern, indent, includeTypeDesignator)}";
+                // Issue #3501: `not` binds tighter than `and`/`or` in gsc's
+                // pattern grammar, so a combinator child must keep its grouping
+                // (`not (T and { … })`); printing it bare re-associates to
+                // `(not T) and { … }` and the property pattern escapes the
+                // negation (GS0172/GS0173 against the scrutinee's own type).
+                return not.Pattern is BinaryPattern
+                    ? $"not ({RenderPattern(not.Pattern, indent, includeTypeDesignator)})"
+                    : $"not {RenderPattern(not.Pattern, indent, includeTypeDesignator)}";
 
             case ParenthesizedPattern paren:
                 return $"({RenderPattern(paren.Pattern, indent, includeTypeDesignator)})";
