@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -3798,6 +3799,62 @@ internal sealed class MemberLookup
         return ClrNullability.GetPropertyTypeSymbol(closedProperty);
     }
 
+    /// <summary>
+    /// Resolves a CLR field type through receiver-carried generic nullability.
+    /// </summary>
+    /// <param name="targetType">Imported receiver type.</param>
+    /// <param name="closedField">Reflected field on the closed receiver.</param>
+    /// <returns>Field type with receiver generic-argument nullability.</returns>
+    internal static TypeSymbol GetClrFieldTypeSymbol(
+        TypeSymbol targetType,
+        FieldInfo closedField)
+    {
+        const BindingFlags AllFields = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static;
+        var imported = GetImportedTypeSymbol(targetType);
+        var receiverClr = imported?.ClrType;
+        if (targetType is NullabilityAnnotatedTypeSymbol annotated
+            && receiverClr != null
+            && receiverClr.IsGenericType
+            && !receiverClr.IsGenericTypeDefinition)
+        {
+            var receiverArguments = receiverClr.GetGenericArguments()
+                .Select((_, index) => annotated.GetTypeArgumentSymbol(index))
+                .ToImmutableArray();
+            imported = ImportedTypeSymbol.GetConstructed(
+                receiverClr,
+                receiverClr.GetGenericTypeDefinition(),
+                receiverArguments);
+        }
+
+        if (imported != null
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedField.DeclaringType,
+                out var openDefinition,
+                out var declaringTypeArguments)
+            && openDefinition != null)
+        {
+            var openField = openDefinition.GetField(closedField.Name, AllFields);
+            if (openField != null)
+            {
+                var mapped = MapOpenClrTypeToSymbolic(
+                    openField.FieldType,
+                    openDefinition,
+                    declaringTypeArguments);
+                var declarationFlags = ClrNullability.ReadNullableFlags(
+                    openField,
+                    openDefinition);
+                return NullableFlagsBuilder.MergeDeclarationNullability(
+                    mapped,
+                    openField.FieldType,
+                    declarationFlags);
+            }
+        }
+
+        return ClrNullability.GetFieldTypeSymbol(closedField);
+    }
+
     /// <summary>Resolves an imported event handler type through a symbolic receiver/interface hierarchy.</summary>
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="closedEvent">The reflected event selected from the erased receiver.</param>
@@ -3869,6 +3926,17 @@ internal sealed class MemberLookup
         }
 
         return targetType;
+    }
+
+    internal static TypeSymbol? GetClrFieldReferenceContainer(
+        TypeSymbol? receiverType,
+        MemberInfo member)
+    {
+        return receiverType != null
+            && member is FieldInfo
+            && GetImportedTypeSymbol(receiverType) != null
+                ? GetClrMemberDeclaringTypeSymbol(receiverType, member)
+                : null;
     }
 
     /// <summary>Resolves an imported method return through a symbolic receiver/interface hierarchy.</summary>

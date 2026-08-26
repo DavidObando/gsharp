@@ -242,9 +242,43 @@ public static class NullableLifting
     /// <returns><see langword="true"/> for a constructed <c>Nullable&lt;T&gt;</c>.</returns>
     internal static bool IsValueTypeNullableClr(Type? type)
     {
-        return type != null
-            && type.IsGenericType
+        return GetValueTypeNullableUnderlyingClr(type) != null;
+    }
+
+    /// <summary>
+    /// Returns the underlying type of a constructed CLR <c>Nullable&lt;T&gt;</c>.
+    /// Uses <see cref="Nullable.GetUnderlyingType(Type)"/> for runtime types and
+    /// a metadata-name fallback for types owned by a
+    /// <see cref="System.Reflection.MetadataLoadContext"/>.
+    /// </summary>
+    /// <param name="type">CLR type to inspect.</param>
+    /// <returns>The underlying <c>T</c>, or <see langword="null"/>.</returns>
+    internal static Type? GetValueTypeNullableUnderlyingClr(Type? type)
+    {
+        if (type == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (Nullable.GetUnderlyingType(type) is { } underlying)
+            {
+                return underlying;
+            }
+        }
+        catch (ArgumentException)
+        {
+            // MetadataLoadContext types cannot be passed to runtime Nullable APIs.
+        }
+
+        return type.IsGenericType
             && !type.IsGenericTypeDefinition
-            && string.Equals(type.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal);
+            && string.Equals(
+                type.GetGenericTypeDefinition().FullName,
+                "System.Nullable`1",
+                StringComparison.Ordinal)
+            ? type.GetGenericArguments()[0]
+            : null;
     }
 }

@@ -119,6 +119,32 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
         Assert.Contains("@NotNullWhen(true)", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ImportedGenericTupleReturn_AssertsReferenceElementAtInvocation()
+    {
+        string printed = Translate("""
+            using System;
+            using System.Linq;
+
+            public static class Repro
+            {
+                public static int Run()
+                {
+                    var tools = new (string Name, Func<int> Handler)[]
+                    {
+                        ("answer", () => 42),
+                    };
+                    var tool = tools.FirstOrDefault(item => item.Name == "answer");
+                    if (tool.Name is null)
+                        return 0;
+                    return tool.Handler();
+                }
+            }
+            """);
+
+        Assert.Contains("tool.Item2!!()", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

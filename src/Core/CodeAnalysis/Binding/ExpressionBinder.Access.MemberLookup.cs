@@ -623,8 +623,18 @@ internal sealed partial class ExpressionBinder
 
                     if (fld != null)
                     {
-                        var fieldType = NormalizeImportedSemanticAggregate(ClrNullability.GetFieldTypeSymbol(fld), fld);
-                        return new BoundClrPropertyAccessExpression(null, receiver!, fld, fieldType);
+                        var fieldType = NormalizeImportedSemanticAggregate(
+                            MemberLookup.GetClrFieldTypeSymbol(
+                                clrInstanceReceiverType,
+                                fld),
+                            fld);
+                        return new BoundClrPropertyAccessExpression(
+                            null,
+                            Invariant.Required(
+                                receiver,
+                                "an instance field lookup has a receiver"),
+                            fld,
+                            fieldType);
                     }
 
                     // Issue #337: an instance member name that resolves to a

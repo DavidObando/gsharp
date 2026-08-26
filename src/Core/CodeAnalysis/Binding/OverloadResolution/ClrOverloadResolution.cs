@@ -1638,7 +1638,12 @@ internal static class ClrOverloadResolution
     /// </summary>
     private static bool IsVariantGenericInterfaceConversion(Type target, Type source)
     {
-        if (source.IsValueType || source.IsArray || source.IsGenericParameter
+        // Issue #3501: a VALUE-TYPE source is allowed — struct→variant-interface
+        // is C#'s boxing conversion composed with variance
+        // (`ImmutableArray<IMethodSymbol>` → `IEnumerable<ISymbol>`); the
+        // emitter's struct→interface arm boxes and the boxed reference is
+        // runtime-assignment-compatible with the variant interface.
+        if (source.IsArray || source.IsGenericParameter
             || !target.IsGenericType || target.IsGenericTypeDefinition)
         {
             return false;

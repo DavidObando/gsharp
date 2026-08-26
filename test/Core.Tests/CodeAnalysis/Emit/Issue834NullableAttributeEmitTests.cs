@@ -271,11 +271,11 @@ func Compose(s1 string, s2 string?, s3 string) string {
     }
 
     [Fact]
-    public void StructConstrainedNullable_LowersToValueTypeNullableT_NoNullableAttribute()
+    public void StructConstrainedNullable_LowersToValueTypeNullableT_WithObliviousContextSlot()
     {
         // For `T?` over a `struct`-constrained TP, the signature lowers to
-        // `Nullable<T>` (a value type) — no NullableAttribute is needed on
-        // the receiver because there are no reference-typed positions.
+        // metadata-transparent `Nullable<T>`. T contributes one oblivious
+        // generic-parameter slot, compacted into method context 0.
         const string Source = @"package Issue834.ValueOptional
 
 import System
@@ -299,9 +299,7 @@ func (self T?) OrZero[T struct](defaultValue T) T {
             Assert.Null(GetNullableAttributeValue(p));
         }
 
-        // And no method-level NullableContextAttribute either — there are
-        // no reference positions at all to bias.
-        Assert.Null(GetNullableContextAttributeValue(orZero!));
+        Assert.Equal((byte)0, GetNullableContextAttributeValue(orZero!));
     }
 
     [Fact]

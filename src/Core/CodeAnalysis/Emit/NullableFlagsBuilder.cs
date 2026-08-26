@@ -14,17 +14,19 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (DFS pre-order) for a GSharp <see cref="TypeSymbol"/>. The bytes use the
 /// well-known encoding:
 /// <list type="bullet">
-/// <item><c>0</c> — oblivious (no nullability information; we never emit this byte
-/// ourselves but pass it through when present on an imported
-/// <see cref="NullabilityAnnotatedTypeSymbol"/>).</item>
+/// <item><c>0</c> — oblivious (no nullability information), including a
+/// non-Nullable closed generic value type's leading placeholder and a
+/// struct-constrained generic parameter's slot.</item>
 /// <item><c>1</c> — not-annotated (non-nullable reference / open type parameter).</item>
 /// <item><c>2</c> — annotated (nullable reference / nullable open type parameter).</item>
 /// </list>
 /// <para>
 /// Layout mirrors the C# compiler: byte 0 belongs to the outer type when that
-/// type occupies a reference-type position; value-type positions contribute no
-/// byte, but the walker still recurses into their generic-type arguments so
-/// inner reference-type positions are surfaced (matches
+/// type occupies a reference-type position. Closed generic value types
+/// contribute a leading oblivious placeholder byte before their arguments,
+/// except metadata-transparent <c>Nullable&lt;T&gt;</c>, which contributes
+/// only T's subtree. Struct-constrained generic parameters contribute one
+/// oblivious slot. Non-generic value types contribute none (matches
 /// <see cref="ClrNullability.CountNullabilityBytes(System.Type)"/>).
 /// </para>
 /// <para>
@@ -37,6 +39,9 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal static class NullableFlagsBuilder
 {
+    /// <summary>The byte used for oblivious positions and generic value-type placeholders.</summary>
+    internal const byte Oblivious = 0;
+
     /// <summary>The byte the C# compiler uses for non-nullable reference positions.</summary>
     internal const byte NotAnnotated = 1;
 
@@ -46,8 +51,8 @@ internal static class NullableFlagsBuilder
     /// <summary>
     /// Computes the DFS pre-order nullable byte array for the supplied
     /// <see cref="TypeSymbol"/>. Returns an empty array when the type
-    /// contributes no reference-type positions (e.g. a pure value type with no
-    /// reference-typed generic arguments) — in which case no
+    /// contributes no nullable-metadata positions (e.g. a non-generic value
+    /// type) — in which case no
     /// <c>NullableAttribute</c> need be emitted.
     /// </summary>
     /// <param name="type">The parameter / return / field / property type to inspect.</param>
@@ -55,11 +60,172 @@ internal static class NullableFlagsBuilder
     internal static ImmutableArray<byte> Build(TypeSymbol type)
     {
         var builder = ImmutableArray.CreateBuilder<byte>();
-        Append(type, builder);
+        Append(type, builder, isRoot: true);
         return builder.ToImmutable();
     }
 
-    private static void Append(TypeSymbol type, ImmutableArray<byte>.Builder builder)
+    /// <summary>
+    /// Merges receiver-projected generic nullability with declaration-site
+    /// nullable metadata node by node. A substituted type-parameter subtree is
+    /// kept intact; the declaration's byte annotates only that subtree's root.
+    /// </summary>
+    /// <param name="projectedType">Type after receiver generic substitution.</param>
+    /// <param name="layoutType">Open declaration type defining metadata positions.</param>
+    /// <param name="declarationFlags">Declaration nullable flags.</param>
+    /// <returns>Combined nullability-aware type.</returns>
+    internal static TypeSymbol MergeDeclarationNullability(
+        TypeSymbol projectedType,
+        Type layoutType,
+        ImmutableArray<byte> declarationFlags)
+    {
+        if (declarationFlags.IsDefaultOrEmpty)
+        {
+            return projectedType;
+        }
+
+        var declaredFlags = ClrNullability.ExpandNullableFlags(
+            layoutType,
+            declarationFlags);
+        var position = 0;
+        return Merge(projectedType, layoutType);
+
+        TypeSymbol Merge(TypeSymbol projected, Type layout)
+        {
+            if (NullableLifting.GetValueTypeNullableUnderlyingClr(layout) is { } nullableUnderlying)
+            {
+                return Merge(projected, nullableUnderlying);
+            }
+
+            if (layout.IsGenericParameter)
+            {
+                return ApplyRootAnnotation(projected, declaredFlags[position++]);
+            }
+
+            if (layout.IsArray)
+            {
+                var flag = declaredFlags[position++];
+                var elementLayout = Invariant.Required(
+                    layout.GetElementType(),
+                    "an array type has an element type");
+                TypeSymbol merged = projected switch
+                {
+                    ArrayTypeSymbol array => ArrayTypeSymbol.Get(
+                        Merge(array.ElementType, elementLayout),
+                        array.Length),
+                    SliceTypeSymbol slice => SliceTypeSymbol.Get(
+                        Merge(slice.ElementType, elementLayout)),
+                    RectangularArrayTypeSymbol rectangular =>
+                        RectangularArrayTypeSymbol.Get(
+                            Merge(rectangular.ElementType, elementLayout),
+                            rectangular.Rank),
+                    _ => SkipChildren(projected, elementLayout),
+                };
+                return layout.IsValueType
+                    ? merged
+                    : ApplyRootAnnotation(merged, flag);
+            }
+
+            var isClosedGeneric = layout.IsGenericType && !layout.IsGenericTypeDefinition;
+            if (isClosedGeneric)
+            {
+                var flag = declaredFlags[position++];
+                var layoutArguments = layout.GetGenericArguments();
+                var nullable = projected as NullableTypeSymbol;
+                var core = nullable?.UnderlyingType ?? projected;
+                TypeSymbol merged = core;
+                if (core is ImportedTypeSymbol imported
+                    && imported.ClrType is Type importedClr)
+                {
+                    var projectedArguments = imported.TypeArguments;
+                    if (projectedArguments.IsDefaultOrEmpty
+                        && importedClr.IsGenericType
+                        && !importedClr.IsGenericTypeDefinition)
+                    {
+                        projectedArguments = importedClr.GetGenericArguments()
+                            .Select(TypeSymbol.FromClrType)
+                            .ToImmutableArray();
+                    }
+
+                    if (projectedArguments.Length == layoutArguments.Length)
+                    {
+                        var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(
+                            layoutArguments.Length);
+                        for (var i = 0; i < layoutArguments.Length; i++)
+                        {
+                            arguments.Add(Merge(
+                                projectedArguments[i],
+                                layoutArguments[i]));
+                        }
+
+                        merged = ImportedTypeSymbol.GetConstructed(
+                            importedClr,
+                            imported.OpenDefinition ?? layout.GetGenericTypeDefinition(),
+                            arguments.MoveToImmutable());
+                    }
+                    else
+                    {
+                        foreach (var argument in layoutArguments)
+                        {
+                            position += ClrNullability.CountNullabilityBytes(argument);
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (var argument in layoutArguments)
+                    {
+                        position += ClrNullability.CountNullabilityBytes(argument);
+                    }
+                }
+
+                if (nullable != null)
+                {
+                    merged = NullableTypeSymbol.Get(merged);
+                }
+
+                return layout.IsValueType
+                    ? merged
+                    : ApplyRootAnnotation(merged, flag);
+            }
+
+            if (!layout.IsValueType)
+            {
+                return ApplyRootAnnotation(projected, declaredFlags[position++]);
+            }
+
+            return projected;
+        }
+
+        TypeSymbol SkipChildren(TypeSymbol projected, Type childLayout)
+        {
+            position += ClrNullability.CountNullabilityBytes(childLayout);
+            return projected;
+        }
+
+        static TypeSymbol ApplyRootAnnotation(TypeSymbol projected, byte flag)
+        {
+            if (flag != Annotated || projected is NullableTypeSymbol)
+            {
+                return projected;
+            }
+
+            var isValueType = projected switch
+            {
+                TypeParameterSymbol parameter => parameter.HasValueTypeConstraint,
+                StructSymbol structure => !structure.IsClass,
+                EnumSymbol => true,
+                _ => projected.ClrType?.IsValueType == true,
+            };
+            return isValueType
+                ? projected
+                : NullableTypeSymbol.Get(projected);
+        }
+    }
+
+    private static void Append(
+        TypeSymbol type,
+        ImmutableArray<byte>.Builder builder,
+        bool isRoot = false)
     {
         if (type == null)
         {
@@ -67,11 +233,21 @@ internal static class NullableFlagsBuilder
         }
 
         // Imported wrapper that already carries the C# DFS byte array — pass
-        // it through verbatim. This is the shape C# emits for generic types
-        // with inner-position nullability (e.g. `IEnumerable<string?>`).
-        if (type is NullabilityAnnotatedTypeSymbol annotated && !annotated.NullableFlags.IsDefaultOrEmpty)
+        // physical flags through verbatim. An empty wrapper represents
+        // absent/oblivious metadata; expand it using the importer's existing
+        // nullable-by-default semantics before re-emission.
+        if (type is NullabilityAnnotatedTypeSymbol annotated)
         {
-            builder.AddRange(annotated.NullableFlags);
+            if (isRoot && !annotated.NullableFlags.IsDefaultOrEmpty)
+            {
+                builder.AddRange(annotated.NullableFlags);
+            }
+            else if (annotated.ClrType != null)
+            {
+                builder.AddRange(
+                    ClrNullability.ExpandNullableFlags(annotated.ClrType, annotated.NullableFlags));
+            }
+
             return;
         }
 
@@ -80,17 +256,28 @@ internal static class NullableFlagsBuilder
             var inner = nullable.UnderlyingType;
 
             // `T?` over a struct-constrained type parameter lowers to
-            // `Nullable<T>` at the signature level — that's a value type, so
-            // the outer position contributes no byte and the inner type
-            // parameter contributes none either. Result: empty.
+            // `Nullable<T>` at the signature level. Nullable<T> is transparent
+            // in nullable metadata: recurse into T at the same position.
             if (IsValueTypeNullableLowering(inner))
             {
+                Append(inner, builder, isRoot);
                 return;
             }
 
             // Reference-position annotated as nullable.
             builder.Add(Annotated);
-            AppendGenericArguments(inner, builder);
+            if (inner is NullabilityAnnotatedTypeSymbol annotatedInner)
+            {
+                AppendAnnotatedTail(
+                    annotatedInner,
+                    builder,
+                    allowScalarCompression: isRoot);
+            }
+            else
+            {
+                AppendGenericArguments(inner, builder);
+            }
+
             return;
         }
 
@@ -98,7 +285,9 @@ internal static class NullableFlagsBuilder
         {
             if (tp.HasValueTypeConstraint)
             {
-                // `struct`-constrained TPs occupy value-type positions — no byte.
+                // CLR generic parameters with a `struct` constraint occupy an
+                // explicit oblivious placeholder position.
+                builder.Add(Oblivious);
                 return;
             }
 
@@ -138,11 +327,20 @@ internal static class NullableFlagsBuilder
 
         if (type is TupleTypeSymbol tup)
         {
-            // ValueTuple<...> is a value type — outer position contributes
-            // no byte, but element positions are visited in declaration order.
-            foreach (var elem in tup.ElementTypes)
+            var index = 0;
+            while (tup.ElementTypes.Length - index > 7)
             {
-                Append(elem, builder);
+                builder.Add(Oblivious);
+                for (var i = 0; i < 7; i++)
+                {
+                    Append(tup.ElementTypes[index++], builder);
+                }
+            }
+
+            builder.Add(Oblivious);
+            while (index < tup.ElementTypes.Length)
+            {
+                Append(tup.ElementTypes[index++], builder);
             }
 
             return;
@@ -156,9 +354,15 @@ internal static class NullableFlagsBuilder
 
         if (type is StructSymbol structSym)
         {
+            var isGeneric = !structSym.TypeArguments.IsDefaultOrEmpty
+                || !structSym.TypeParameters.IsDefaultOrEmpty;
             if (structSym.IsClass)
             {
                 builder.Add(NotAnnotated);
+            }
+            else if (isGeneric)
+            {
+                builder.Add(Oblivious);
             }
 
             if (!structSym.TypeArguments.IsDefaultOrEmpty)
@@ -205,10 +409,24 @@ internal static class NullableFlagsBuilder
         if (type is ImportedTypeSymbol imported)
         {
             var clr = imported.ClrType;
+            if (clr?.IsGenericParameter == true)
+            {
+                builder.Add(
+                    ClrNullability.IsNotNullableValueTypeParameter(clr)
+                        ? Oblivious
+                        : NotAnnotated);
+                return;
+            }
+
             var isValueType = clr != null && clr.IsValueType;
             if (!isValueType)
             {
                 builder.Add(NotAnnotated);
+            }
+            else if ((!imported.TypeArguments.IsDefaultOrEmpty)
+                || (clr != null && clr.IsGenericType && !clr.IsGenericTypeDefinition))
+            {
+                builder.Add(Oblivious);
             }
 
             // Prefer the symbolic TypeArguments — they preserve in-scope
@@ -242,6 +460,39 @@ internal static class NullableFlagsBuilder
 
         // Last-resort: a symbolic reference type with no other information.
         builder.Add(NotAnnotated);
+    }
+
+    private static void AppendAnnotatedTail(
+        NullabilityAnnotatedTypeSymbol annotated,
+        ImmutableArray<byte>.Builder builder,
+        bool allowScalarCompression)
+    {
+        if (annotated.ClrType == null)
+        {
+            return;
+        }
+
+        var expanded = ClrNullability.ExpandNullableFlags(
+            annotated.ClrType,
+            annotated.NullableFlags);
+        var tail = expanded.AsSpan().Slice(1);
+        if (!allowScalarCompression)
+        {
+            builder.AddRange(tail.ToArray());
+            return;
+        }
+
+        foreach (var flag in tail)
+        {
+            if (flag != Annotated)
+            {
+                builder.AddRange(tail.ToArray());
+                return;
+            }
+        }
+
+        // Every nested position is also nullable. Keep the single outer `2`;
+        // NullableAttribute(byte) applies that scalar to the whole type tree.
     }
 
     private static void AppendGenericArguments(TypeSymbol type, ImmutableArray<byte>.Builder builder)
@@ -342,11 +593,16 @@ internal static class NullableFlagsBuilder
 
         if (clrType.IsGenericParameter)
         {
-            // Open CLR generic parameter (e.g. encountered when walking the
-            // CLR generic-argument list of an imported type). Treat as a
-            // reference-position slot: matches Roslyn's behaviour for an
-            // unconstrained or class-constrained type parameter.
-            builder.Add(NotAnnotated);
+            builder.Add(
+                ClrNullability.IsNotNullableValueTypeParameter(clrType)
+                    ? Oblivious
+                    : NotAnnotated);
+            return;
+        }
+
+        if (NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is { } nullableUnderlying)
+        {
+            AppendClrType(nullableUnderlying, builder);
             return;
         }
 
@@ -363,13 +619,17 @@ internal static class NullableFlagsBuilder
             return;
         }
 
-        var isValueType = clrType.IsValueType;
-        if (!isValueType)
+        var isClosedGeneric = clrType.IsGenericType && !clrType.IsGenericTypeDefinition;
+        if (!clrType.IsValueType)
         {
             builder.Add(NotAnnotated);
         }
+        else if (isClosedGeneric)
+        {
+            builder.Add(Oblivious);
+        }
 
-        if (clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
+        if (isClosedGeneric)
         {
             foreach (var arg in clrType.GetGenericArguments())
             {
@@ -391,6 +651,11 @@ internal static class NullableFlagsBuilder
         }
 
         if (inner is StructSymbol s && !s.IsClass)
+        {
+            return true;
+        }
+
+        if (inner is TupleTypeSymbol)
         {
             return true;
         }

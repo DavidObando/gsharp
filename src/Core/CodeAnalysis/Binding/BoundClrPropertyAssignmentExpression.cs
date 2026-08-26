@@ -38,7 +38,8 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
         Type = resultType;
         ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
         ConstrainedInterfaceType = constrainedInterfaceType;
-        StaticContainerType = staticContainerType;
+        StaticContainerType = staticContainerType
+            ?? MemberLookup.GetClrFieldReferenceContainer(receiver?.Type, member);
     }
 
     /// <summary>Gets the receiver, or <c>null</c> when the member is
@@ -53,9 +54,9 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 
     public TypeSymbol? ConstrainedInterfaceType { get; }
 
-    /// <summary>Gets the declaring type used to parent a static member
-    /// reference, or <c>null</c> when the binder had none to record (which
-    /// includes every instance write).</summary>
+    /// <summary>Gets the symbolic declaring type used to parent a generic
+    /// static or instance field reference, or <c>null</c> when no TypeSpec
+    /// parent is needed.</summary>
     public TypeSymbol? StaticContainerType { get; }
 
     [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
