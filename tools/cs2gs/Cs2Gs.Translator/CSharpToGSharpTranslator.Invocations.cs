@@ -54,6 +54,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerIdiom;
             }
 
+            // ADR-0169 analyzer mode: the C# switch-section/label walk has no
+            // direct G# counterpart (#3536).
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerSwitchLabelWalk(invocation, out GExpression analyzerSwitchWalk))
+            {
+                return analyzerSwitchWalk;
+            }
+
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
                     { MethodKind: MethodKind.LocalFunction } recursiveLocal
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(

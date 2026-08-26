@@ -108,8 +108,7 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "SwitchStatementSyntax",
-            "G# switch cases carry one pattern each (SwitchCaseSyntax.Value): there is no section/label nesting, so a "
-            + "Sections.SelectMany(s => s.Labels) walk needs to become a walk over Cases directly — not yet an automated idiom (#3536)."),
+            "G# switch cases carry one pattern each (SwitchCaseSyntax.Value) with no section/label nesting; a Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>() walk is idiom-rewritten to Cases.Where(c => !c.IsDefault) (#3536)."),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "SwitchCaseSyntax",
@@ -118,6 +117,10 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Syntax",
             "PropertyPatternFieldSyntax",
             "G# property-pattern fields carry the field name as Identifier directly; there is no ExpressionColon wrapper."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "ExpressionSyntax",
+            "G# call arguments are bare expressions with no ArgumentSyntax wrapper; a lambda parameter or local typed ArgumentSyntax maps to ExpressionSyntax directly (#3536)."),
 
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),

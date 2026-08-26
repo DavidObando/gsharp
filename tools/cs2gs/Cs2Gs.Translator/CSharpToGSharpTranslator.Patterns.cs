@@ -639,6 +639,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateIsPattern(IsPatternExpressionSyntax isPattern)
         {
+            // ADR-0169 analyzer mode: the C# base-call detection idiom has no
+            // direct G# counterpart (#3536).
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerBaseCallCheck(isPattern, out GExpression analyzerBaseCall))
+            {
+                return analyzerBaseCall;
+            }
+
             // Issue #1967: `x is Index i` (or any nested designation inside a
             // recursive/positional pattern) declares `i` via a pattern designation,
             // not a declarator — check the whole pattern tree here, the entry point

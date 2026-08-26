@@ -410,7 +410,12 @@ public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
 ");
 
         Assert.Contains("declaration.Parameters", printed, StringComparison.Ordinal);
-        Assert.Contains("invocation.Arguments", printed, StringComparison.Ordinal);
+
+        // The printer's statement-level width budget (issue #3470) wraps this
+        // particular chain across lines, so "invocation.Arguments" is not
+        // contiguous in the output; assert the pieces independently instead.
+        Assert.Contains("invocation", printed, StringComparison.Ordinal);
+        Assert.Contains(".Arguments", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ParameterList", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ArgumentList", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
@@ -449,6 +454,90 @@ public sealed class PatternWalkAnalyzer : DiagnosticAnalyzer
 ");
 
         Assert.Contains("PatternSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void BaseCallCheck_TranslatesToParentBaseClassCallCheck()
+    {
+        // Issue #3536 (GSA0005 groundwork): G# gives base.M(...) its own
+        // BaseClassCallExpressionSyntax node wrapping an ordinary call, rather
+        // than a member access on a base receiver, so the C# base-call
+        // detection idiom rewrites to a parent-kind check on the call itself.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BaseCallAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool IsBaseCall(InvocationExpressionSyntax invocation)
+        => invocation.Expression is MemberAccessExpressionSyntax { Expression: BaseExpressionSyntax };
+}
+");
+
+        Assert.Contains(".Parent is BaseClassCallExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("BaseExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+            && d.Message.Contains("Base-call detection idiom", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void SwitchLabelWalk_TranslatesToCasesWhereNotDefault()
+    {
+        // Issue #3536 (GSA0005 groundwork): G# switch cases carry one pattern
+        // each with no section/label nesting and no default-arm subtype, so
+        // the Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()
+        // walk rewrites to a direct Cases.Where(c => !c.IsDefault) walk.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Linq;
+using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class SwitchWalkAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static void CollectLabels(SwitchStatementSyntax switchStatement, List<string> reads)
+    {
+        foreach (var label in switchStatement.Sections.SelectMany(section => section.Labels).OfType<CasePatternSwitchLabelSyntax>())
+        {
+            reads.Add(label.ToString());
+        }
+    }
+}
+");
+
+        Assert.Contains(".Cases", printed, StringComparison.Ordinal);
+        Assert.Contains(".Where(", printed, StringComparison.Ordinal);
+        Assert.Contains(".IsDefault", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("SelectMany", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sections", printed, StringComparison.Ordinal);
+        Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+            && d.Message.Contains("Cases.Where", StringComparison.Ordinal));
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
     }

@@ -44,28 +44,47 @@ the plausible-but-wrong risk class the loud ratchet exists to prevent.
 direct, unambiguous G# counterpart is now mapped/idiom-rewritten (see
 `RoslynAnalyzerApiMap` and `CSharpToGSharpTranslator.Analyzers.cs`):
 `PatternSyntax` (exact, name and namespace both carry over), `SwitchStatementSyntax`
-and `CasePatternSwitchLabelSyntax` → `SwitchCaseSyntax` (type-level only —
-G# switch cases carry one pattern each via `SwitchCaseSyntax.Value`, so a
-`Sections.SelectMany(s => s.Labels)` walk still needs its own idiom rewrite
-to `Cases` — not yet built), `SubpatternSyntax` → `PropertyPatternFieldSyntax`
-(type-level only — the `ExpressionColon.Expression` idiom that reads the field
-name still needs rewriting to the direct `Identifier` token), `.ArgumentList`/
-`.ParameterList` drop to their direct `.Arguments`/`.Parameters` members, a
-bare `ArgumentSyntax.Expression` drop to the argument itself, and
-`Modifiers.Any(SyntaxKind.OverrideKeyword)` → `.IsOverride`.
+and `CasePatternSwitchLabelSyntax` → `SwitchCaseSyntax` (type-level), with the
+`Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()`
+walk itself now idiom-rewritten to a direct `Cases.Where(c => !c.IsDefault)`
+walk (G# switch cases carry one pattern each via `SwitchCaseSyntax.Value`,
+with no section/label nesting and no `default`-arm subtype to `OfType`
+against), `SubpatternSyntax` → `PropertyPatternFieldSyntax` (type-level;
+the `ExpressionColon.Expression` idiom that reads the field name still needs
+rewriting to the direct `Identifier` token), `ArgumentSyntax` →
+`ExpressionSyntax` (G# call arguments are bare expressions with no wrapper
+type, so a variable or lambda parameter typed `ArgumentSyntax` maps directly),
+`.ArgumentList`/`.ParameterList` drop to their direct `.Arguments`/`.Parameters`
+members, a bare `ArgumentSyntax.Expression` drop to the argument itself, and
+`Modifiers.Any(SyntaxKind.OverrideKeyword)` → `.IsOverride`. The C# base-call
+detection idiom (`invocation.Expression is MemberAccessExpressionSyntax {
+Expression: BaseExpressionSyntax }`) is also now idiom-rewritten: G# gives
+`base.M(...)` its own `BaseClassCallExpressionSyntax` node wrapping an
+ordinary `CallExpressionSyntax` as its `Call`, rather than parsing it as a
+member access on a `base` receiver, so a call found by walking for
+`CallExpressionSyntax` nodes is a base call exactly when its *parent* is that
+wrapper node — the idiom rewrites to `invocation.Parent is
+BaseClassCallExpressionSyntax`.
 
-Still open, and still the reason the ratchet stays red: `BaseExpressionSyntax`
-base-call detection has no G# counterpart at all (G# represents `base.M(...)`
-as a distinct `BaseClassCallExpressionSyntax` node wrapping an ordinary
-`CallExpressionSyntax`, not as a member access on a `base` receiver, so the
-guard clauses that key off it need restructuring, not just a renamed type),
-and `MethodKind`/constructor-vs-static-factory detection has no G# analogue
-either — G# constructors are a separate `ConstructorSymbol` type (via
-`StructSymbol.ExplicitConstructors`), not a `FunctionSymbol` flavor, so
-`FormDependentMembers` needs re-deriving against that shape. Both were
-investigated in depth for #3536 but intentionally left as loud gaps rather
-than a low-confidence, compiler-unverified port — see the issue for the
-reasoning.
+Still open, and still the reason the ratchet stays red: `MethodKind`/
+constructor-vs-static-factory detection has no G# analogue — G# constructors
+are a separate `ConstructorSymbol` type (via `StructSymbol.ExplicitConstructors`,
+not part of `GetMembers()`), not a `FunctionSymbol` flavor, so
+`FormDependentMembers` needs re-deriving against that shape: merging
+`ConstructorSymbol`s and return-type-filtered static `FunctionSymbol`s into one
+collection is a control-flow rewrite of the analyzer's own body, not a
+mechanical rename a declarative map/idiom-rewrite hook can safely make. This
+was investigated in depth for #3536 but intentionally left as a loud gap
+rather than a low-confidence, compiler-unverified port — see the issue for the
+reasoning. Two further gaps surfaced while closing the base-call and switch-walk
+idioms above, previously undocumented: `SingleVariableDesignationSyntax`
+(designation-name extraction inside a nested pattern walk) and
+`QualifiedNameSyntax` (a `TypeSyntax`-shaped switch expression matching Roslyn's
+qualified-name node, which has no direct G# `TypeClauseSyntax` counterpart to
+switch over). Both are the same category of problem as `MethodKind` — a
+C#-side control-flow/pattern-match shape that must be re-derived against G#'s
+differently-shaped surface, not renamed — and stay loud gaps for the same
+reason.
 Companion to [ADR-0169](adr/0169-gsharp-analyzer-framework.md), which defines
 the G#-side analyzer framework this document targets. First migration target:
 `src/Analyzers/InternalAnalyzers` (GSA0001–GSA0005) and its test project, which
