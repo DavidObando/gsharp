@@ -46,10 +46,26 @@ internal static class RepositoryMirror
         string sourceRoot,
         string destinationRoot,
         IReadOnlyList<string> sourceFiles,
-        IEnumerable<string> additionalFiles = null)
+        IEnumerable<string> additionalFiles = null,
+        RepositoryExcludedScope excludedScope = null)
     {
+        // Issue #3580: sources a targeted run's --exclude removed from scope
+        // have no TRANSLATED mirrors by design — the completeness contract
+        // applies only to in-scope files. Only the translated shapes are
+        // filtered (.cs → .gs, .csproj → .gsproj); every other file was
+        // copied verbatim by Prepare regardless of scope and stays expected.
+        excludedScope ??= RepositoryExcludedScope.None;
         var expected = new HashSet<string>(
-            sourceFiles.Select(DestinationRelativePath),
+            sourceFiles
+                .Where(path =>
+                {
+                    string extension = Path.GetExtension(path);
+                    bool translated =
+                        extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+                        || extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+                    return !translated || !excludedScope.IsExcluded(path);
+                })
+                .Select(DestinationRelativePath),
             StringComparer.OrdinalIgnoreCase);
         if (additionalFiles is not null)
         {
@@ -63,9 +79,15 @@ internal static class RepositoryMirror
             expected.Add(new DirectoryInfo(Path.GetFullPath(sourceRoot)).Name + ".slnx");
         }
 
+        // Issue #3580: compiling the mirrored projects (the via-sdk stage
+        // builds INSIDE the destination) leaves bin/obj build outputs there.
+        // The source inventory never lists those directories, so the
+        // destination walk must skip them by the same rule or every build
+        // artifact reads as "unexpected".
         var actual = new HashSet<string>(
             Directory.EnumerateFiles(destinationRoot, "*", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(destinationRoot, path)),
+                .Select(path => Path.GetRelativePath(destinationRoot, path))
+                .Where(path => !RepositoryFileInventory.HasExcludedDirectory(path)),
             StringComparer.OrdinalIgnoreCase);
 
         string missing = expected.Except(actual, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).FirstOrDefault();
