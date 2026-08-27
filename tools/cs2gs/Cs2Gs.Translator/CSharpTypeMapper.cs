@@ -389,8 +389,21 @@ public sealed class CSharpTypeMapper
         // ITypeParameterSymbol here is always the nullable-reference-like form.
         bool nullableReference = type.NullableAnnotation == NullableAnnotation.Annotated
             && (type.IsReferenceType || type is ITypeParameterSymbol);
+
+        // ADR-0169 analyzer mode: a declared INamespaceSymbol renders as G#'s
+        // namespace display string, whose honest type is `string?` —
+        // `Symbol.ContainingNamespace` is nil for symbols without a containing
+        // namespace, while Roslyn annotates `INamespaceSymbol` members and
+        // parameters non-nullable. Without the forced `?`, a null-tolerant C#
+        // helper taking INamespaceSymbol translates to a non-nullable `string`
+        // parameter and every `ContainingNamespace` argument gets bridged with
+        // `!!` — an assert at a site where the C# never dereferences, i.e. a
+        // runtime NRE the original could not produce (the migrated
+        // EmitCacheKeyRemapScopeAnalyzer crashed exactly this way).
+        bool analyzerNamespaceString = this.AnalyzerApiMode
+            && Analyzers.RoslynAnalyzerApiMap.IsNamespaceSymbolType(type);
         GTypeReference mapped = this.MapCore(type, context, location);
-        return nullableReference ? WithNullable(mapped, true) : mapped;
+        return nullableReference || analyzerNamespaceString ? WithNullable(mapped, true) : mapped;
     }
 
     /// <summary>

@@ -254,6 +254,66 @@ public sealed class BinaryComparisonAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void NamespaceSymbolParameter_MapsToNullableStringWithoutAssert()
+    {
+        // Roslyn annotates INamespaceSymbol non-nullable even though
+        // ContainingNamespace can be null; G#'s counterpart is honestly
+        // `string?`. A null-tolerant helper taking INamespaceSymbol must keep
+        // a nullable parameter — otherwise every ContainingNamespace argument
+        // gets bridged with `!!`, a runtime NRE the C# could not produce (the
+        // migrated EmitCacheKeyRemapScopeAnalyzer crash).
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+#nullable enable
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class NamespaceHelperAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST0007"", ""Title"", ""Message {0}"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSymbolAction(AnalyzeField, SymbolKind.Field);
+    }
+
+    private static void AnalyzeField(SymbolAnalysisContext context)
+    {
+        var field = (IFieldSymbol)context.Symbol;
+        AnalyzeCacheMember(context, field, field.Name);
+    }
+
+    private static void AnalyzeCacheMember(SymbolAnalysisContext context, ISymbol member, string memberName)
+    {
+        if (IsEmitNamespace(member.ContainingNamespace))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, member.Locations[0], memberName));
+        }
+    }
+
+    private static bool IsEmitNamespace(INamespaceSymbol namespaceSymbol)
+    {
+        var name = namespaceSymbol?.ToDisplayString();
+        return name == ""App.Emit"";
+    }
+}
+");
+
+        Assert.Contains("namespaceSymbol string?", printed, StringComparison.Ordinal);
+        Assert.Contains("IsEmitNamespace(member.ContainingNamespace)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ContainingNamespace!!", printed, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void SemanticModelAnalyzer_TranslatesDeclarationAndOverrideIdioms()
     {
         // The mechanical subset of GSA0005: GetDeclaredSymbol/GetSymbolInfo,

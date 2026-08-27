@@ -858,6 +858,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // ADR-0169 analyzer mode: an INamespaceSymbol target renders as
+            // G#'s namespace display string, which the mapper forces to
+            // `string?` (see CSharpTypeMapper.Map) — Roslyn's non-nullable
+            // annotation on the C# side is not honored by the G# surface, so
+            // the target never remains non-nullable and nullable arguments
+            // need no `!!` bridge.
+            if (this.InAnalyzerApiMode && Analyzers.RoslynAnalyzerApiMap.IsNamespaceSymbolType(targetType))
+            {
+                return false;
+            }
+
             bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences
                 .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)) == true;
 
