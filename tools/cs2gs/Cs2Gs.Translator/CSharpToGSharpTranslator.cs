@@ -1063,7 +1063,12 @@ public sealed partial class CSharpToGSharpTranslator
                 Location: member.GetLocation()))
             .Where(item => item.Symbol?.ContainingNamespace is { IsGlobalNamespace: false })
             .Select(item => (
-                nameAllocator.GetNamespaceName(item.Symbol.ContainingNamespace),
+
+                // The Where guard admits only non-global namespaces, for which
+                // GetNamespaceName never returns null (issue #3564: the
+                // suppression keeps the tuple element non-null through
+                // self-migration).
+                nameAllocator.GetNamespaceName(item.Symbol.ContainingNamespace)!,
                 item.Location))
             .ToList();
 
