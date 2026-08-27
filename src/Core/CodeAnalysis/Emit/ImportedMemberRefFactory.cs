@@ -366,6 +366,25 @@ internal sealed class ImportedMemberRefFactory
             }
         }
 
+        // Issue #3524: a user-declared named delegate used as a variadic
+        // parameter's element type (e.g. `specs ... Spec`) needs the same
+        // TypeDef/TypeSpec resolution as any other element-bearing symbolic
+        // shape. Mirrors the StructSymbol/EnumSymbol/InterfaceSymbol branches
+        // above.
+        if (element is DelegateTypeSymbol delegateSym)
+        {
+            if (ReflectionMetadataEmitter.IsUserGenericDelegateReference(delegateSym))
+            {
+                return this.outer.userTokens.GetUserDelegateTypeSpec(delegateSym);
+            }
+
+            var delegateDef = delegateSym.Definition ?? delegateSym;
+            if (this.cache.DelegateTypeDefs.TryGetValue(delegateDef, out var dtd))
+            {
+                return dtd;
+            }
+        }
+
         throw new NotSupportedException($"Cannot resolve element type token for '{element.Name}'.");
     }
 
