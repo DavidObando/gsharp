@@ -1929,6 +1929,28 @@ public sealed class Conversion
         return true;
     }
 
+    internal static bool IsClassLikeReferenceType(TypeSymbol type)
+        => type is StructSymbol { IsClass: true }
+            || type.ClrType is { IsClass: true };
+
+    internal static bool IsSealedReferenceType(TypeSymbol type)
+    {
+        if (type is StructSymbol { IsClass: true } userClass)
+        {
+            // ADR-0078: `sealed class` denotes a CLOSED HIERARCHY, not a
+            // CLR-sealed type — same-package subclasses remain legal, and
+            // TypeDefEmitter.ResolveStructTypeShape deliberately omits
+            // TypeAttributes.Sealed for it (only a plain, non-open,
+            // non-sealed-hierarchy class gets the CLR flag). Mirror that
+            // exact condition here so a known subclass implementing the
+            // tested interface is neither rejected by a checked cast nor by
+            // smart-cast narrowing.
+            return !userClass.IsOpen && !userClass.IsSealedHierarchy;
+        }
+
+        return type.ClrType is { IsClass: true, IsSealed: true };
+    }
+
     private static TypeSymbol? UnwrapReferenceNullable(TypeSymbol? type)
     {
         while (type is NullabilityAnnotatedTypeSymbol annotated)
@@ -1943,20 +1965,6 @@ public sealed class Conversion
         }
 
         return type;
-    }
-
-    private static bool IsClassLikeReferenceType(TypeSymbol type)
-        => type is StructSymbol { IsClass: true }
-            || type.ClrType is { IsClass: true };
-
-    private static bool IsSealedReferenceType(TypeSymbol type)
-    {
-        if (type is StructSymbol { IsClass: true } userClass)
-        {
-            return userClass.IsSealedHierarchy || !userClass.IsOpen;
-        }
-
-        return type.ClrType is { IsClass: true, IsSealed: true };
     }
 
     /// <summary>
