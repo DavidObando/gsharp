@@ -1353,6 +1353,11 @@ public partial class Parser
             return true;
         }
 
+        if (LooksLikeContextualAggregateMemberHead(offset))
+        {
+            return true;
+        }
+
         var token = Peek(offset);
         if (token.Kind is SyntaxKind.EndOfFileToken
             or SyntaxKind.CloseBraceToken
@@ -1372,7 +1377,55 @@ public partial class Parser
             return true;
         }
 
-        return token.Kind == SyntaxKind.IdentifierToken && IsContextualMemberKeyword(token.Text);
+        return false;
+    }
+
+    private bool LooksLikeContextualAggregateMemberHead(int offset)
+    {
+        var token = Peek(offset);
+        if (token.Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        if (token.Text is "prop" or "event")
+        {
+            return true;
+        }
+
+        if (token.Text == "init")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.OpenParenthesisToken;
+        }
+
+        if (token.Text == "shared")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.OpenBraceToken;
+        }
+
+        if (token.Text == "unsafe")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.FuncKeyword
+                || (Peek(offset + 1).Kind == SyntaxKind.AsyncKeyword
+                    && Peek(offset + 2).Kind == SyntaxKind.FuncKeyword);
+        }
+
+        if (token.Text == "convenience")
+        {
+            return (Peek(offset + 1).Kind == SyntaxKind.IdentifierToken
+                    && Peek(offset + 1).Text == "init"
+                    && Peek(offset + 2).Kind == SyntaxKind.OpenParenthesisToken)
+                || (Peek(offset + 1).Kind == SyntaxKind.FuncKeyword
+                    && Peek(offset + 2).Kind == SyntaxKind.IdentifierToken
+                    && Peek(offset + 2).Text == "init"
+                    && Peek(offset + 3).Kind == SyntaxKind.OpenParenthesisToken);
+        }
+
+        return token.Text == "deinit"
+            && (Peek(offset + 1).Kind == SyntaxKind.OpenBraceToken
+                || Peek(offset + 1).Kind == SyntaxKind.OpenParenthesisToken
+                || (Peek(offset + 1).Kind == SyntaxKind.IdentifierToken
+                    && Peek(offset + 2).Kind == SyntaxKind.OpenBraceToken));
     }
 
     // Stream D: `func (a Point) operator +(b Point) Point { … }`. After the

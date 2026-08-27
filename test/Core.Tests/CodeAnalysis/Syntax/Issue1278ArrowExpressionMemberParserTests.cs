@@ -233,6 +233,25 @@ public class Issue1278ArrowExpressionMemberParserTests
         Assert.Empty(property.Accessors);
     }
 
+    [Theory]
+    [InlineData("deinit { }")]
+    [InlineData("unsafe func M() { }")]
+    public void Issue3587_FunctionTypedPropertyBeforeContextualMember_RemainsFunctionType(string followingMember)
+    {
+        var source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Handler (int32, int32) -> int32\n" +
+            "  " + followingMember + "\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsArrowFunction);
+        Assert.Empty(property.Accessors);
+    }
+
     [Fact]
     public void Issue3587_FunctionTypedPropertyWithAccessibleAccessor_RemainsFunctionType()
     {
