@@ -407,20 +407,28 @@ public class Issue3523FunctionPointerMemberInvocationTests
             package Issue3523GenericInterfaceMemberTypes
 
             interface IBox[T] {
-                prop Value T { get }
+                prop Value T { get; set; }
                 shared { var Shared T }
             }
 
-            class IntBox : IBox[int32] {
-                prop Value int32 -> 42
+            interface IDerivedBox[T] : IBox[T] { }
+
+            class IntBox : IDerivedBox[int32] {
+                prop Value int32 { get; set; }
             }
 
             open class Animal { }
             class Dog : Animal { func Bark() string -> "woof" }
             class SmartBox { prop Pet Animal { get; init; } }
 
-            func read(box IBox[int32], smart SmartBox) {
+            func getBox(box IDerivedBox[int32]) IDerivedBox[int32] -> box
+
+            func read(box IDerivedBox[int32], smart SmartBox) {
+                box.Value = 1
+                getBox(box).Value += 2
                 let value int32 = box.Value
+                IBox[int32].Shared = 4
+                IBox[int32].Shared += 1
                 let shared int32 = IBox[int32].Shared
                 if smart.Pet is Dog {
                     smart.Pet.Bark()
@@ -432,27 +440,96 @@ public class Issue3523FunctionPointerMemberInvocationTests
         var collector = new MemberAccessCollector();
         VisitProgram(program, collector);
 
-        var genericProperty = Assert.Single(
-            collector.Properties,
-            access => access.Property.Name == "Value"
-                && access.Receiver?.Type is InterfaceSymbol);
-        Assert.Same(TypeSymbol.Int32, genericProperty.SubstitutedType);
-        Assert.Null(genericProperty.NarrowedType);
-        Assert.Same(TypeSymbol.Int32, genericProperty.Type);
+        var genericProperties = collector.Properties
+            .Where(access => access.Property.Name == "Value"
+                && access.Receiver?.Type is InterfaceSymbol)
+            .ToArray();
+        Assert.Equal(2, genericProperties.Length);
+        Assert.All(
+            genericProperties,
+            genericProperty =>
+            {
+                Assert.Same(TypeSymbol.Int32, genericProperty.SubstitutedType);
+                Assert.Null(genericProperty.NarrowedType);
+                Assert.Same(TypeSymbol.Int32, genericProperty.Type);
+            });
 
-        var genericField = Assert.Single(
-            collector.Fields,
-            access => access.Field.Name == "Shared"
-                && access.InterfaceType != null);
-        Assert.Same(TypeSymbol.Int32, genericField.SubstitutedType);
-        Assert.Null(genericField.NarrowedType);
-        Assert.Same(TypeSymbol.Int32, genericField.Type);
+        var genericAssignments = collector.Assignments
+            .Where(assignment => assignment.Property.Name == "Value")
+            .ToArray();
+        Assert.Equal(2, genericAssignments.Length);
+        Assert.All(
+            genericAssignments,
+            assignment =>
+            {
+                Assert.Same(TypeSymbol.Int32, assignment.SubstitutedType);
+                Assert.Equal("IBox[int32]", assignment.InterfaceType?.Name);
+                Assert.Same(TypeSymbol.Int32, assignment.Value.Type);
+                Assert.Same(TypeSymbol.Int32, assignment.Type);
+            });
+
+        var genericFields = collector.Fields
+            .Where(access => access.Field.Name == "Shared"
+                && access.InterfaceType != null)
+            .ToArray();
+        Assert.Equal(2, genericFields.Length);
+        Assert.All(
+            genericFields,
+            genericField =>
+            {
+                Assert.Same(TypeSymbol.Int32, genericField.SubstitutedType);
+                Assert.Null(genericField.NarrowedType);
+                Assert.Same(TypeSymbol.Int32, genericField.Type);
+            });
+
+        var genericFieldAssignments = collector.FieldAssignments
+            .Where(assignment => assignment.Field.Name == "Shared")
+            .ToArray();
+        Assert.Equal(2, genericFieldAssignments.Length);
+        Assert.All(
+            genericFieldAssignments,
+            assignment =>
+            {
+                Assert.Equal("IBox[int32]", assignment.InterfaceType?.Name);
+                Assert.Same(TypeSymbol.Int32, assignment.ResultType);
+                Assert.Same(TypeSymbol.Int32, assignment.Value.Type);
+                Assert.Same(TypeSymbol.Int32, assignment.Type);
+            });
 
         var narrowedProperty = Assert.Single(
             collector.Properties,
             access => access.Property.Name == "Pet"
                 && access.NarrowedType is StructSymbol { Name: "Dog" });
         Assert.Null(narrowedProperty.SubstitutedType);
+    }
+
+    [Fact]
+    public void GenericInterfaceWrites_BindValuesAgainstClosedTypes()
+    {
+        const string source = """
+            package Issue3523GenericInterfaceWriteDiagnostics
+
+            interface IBox[T] {
+                prop Value T { get; set; }
+                shared { var Shared T }
+            }
+
+            func bad(box IBox[int32]) {
+                box.Value = "bad"
+                IBox[int32].Shared = "bad"
+            }
+            """;
+
+        var errors = GetErrors(source);
+        Assert.Equal(2, errors.Length);
+        Assert.All(
+            errors,
+            diagnostic =>
+            {
+                Assert.Equal("GS0155", diagnostic.Id);
+                Assert.Contains("string", diagnostic.Message);
+                Assert.Contains("int32", diagnostic.Message);
+            });
     }
 
     [Fact]
@@ -886,7 +963,11 @@ public class Issue3523FunctionPointerMemberInvocationTests
     {
         public List<BoundFieldAccessExpression> Fields { get; } = new();
 
+        public List<BoundFieldAssignmentExpression> FieldAssignments { get; } = new();
+
         public List<BoundPropertyAccessExpression> Properties { get; } = new();
+
+        public List<BoundPropertyAssignmentExpression> Assignments { get; } = new();
 
         protected override void VisitFieldAccessExpression(BoundFieldAccessExpression node)
         {
@@ -894,10 +975,24 @@ public class Issue3523FunctionPointerMemberInvocationTests
             base.VisitFieldAccessExpression(node);
         }
 
+        protected override void VisitFieldAssignmentExpression(
+            BoundFieldAssignmentExpression node)
+        {
+            FieldAssignments.Add(node);
+            base.VisitFieldAssignmentExpression(node);
+        }
+
         protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
         {
             Properties.Add(node);
             base.VisitPropertyAccessExpression(node);
+        }
+
+        protected override void VisitPropertyAssignmentExpression(
+            BoundPropertyAssignmentExpression node)
+        {
+            Assignments.Add(node);
+            base.VisitPropertyAssignmentExpression(node);
         }
     }
 }

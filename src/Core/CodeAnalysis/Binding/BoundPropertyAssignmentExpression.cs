@@ -27,12 +27,41 @@ public sealed class BoundPropertyAssignmentExpression : BoundExpression
         StructSymbol? structType,
         PropertySymbol property,
         BoundExpression value)
+        : this(
+            syntax,
+            receiver,
+            structType,
+            property,
+            value,
+            substitutedType: null,
+            interfaceType: null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundPropertyAssignmentExpression"/> class with generic-construction context.</summary>
+    /// <param name="syntax">Originating syntax.</param>
+    /// <param name="receiver">Instance receiver.</param>
+    /// <param name="structType">Declaring struct/class type.</param>
+    /// <param name="property">Property to write.</param>
+    /// <param name="value">Converted assigned value.</param>
+    /// <param name="substitutedType">Construction-substituted property type.</param>
+    /// <param name="interfaceType">Effective interface owner.</param>
+    public BoundPropertyAssignmentExpression(
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
+        StructSymbol? structType,
+        PropertySymbol property,
+        BoundExpression value,
+        TypeSymbol? substitutedType,
+        InterfaceSymbol? interfaceType)
         : base(syntax)
     {
         Receiver = receiver;
         StructType = structType;
         Property = property;
         Value = value;
+        SubstitutedType = substitutedType;
+        InterfaceType = interfaceType;
     }
 
     /// <summary>Gets the instance receiver, or <see langword="null"/> for a static property.</summary>
@@ -40,11 +69,17 @@ public sealed class BoundPropertyAssignmentExpression : BoundExpression
 
     public StructSymbol? StructType { get; }
 
+    /// <summary>Gets the effective interface construction that declares <see cref="Property"/>.</summary>
+    public InterfaceSymbol? InterfaceType { get; }
+
     public PropertySymbol Property { get; }
 
     public BoundExpression Value { get; }
 
-    public override TypeSymbol Type => Property.Type;
+    /// <summary>Gets the property type after generic construction substitution.</summary>
+    public TypeSymbol? SubstitutedType { get; }
+
+    public override TypeSymbol Type => SubstitutedType ?? Property.Type;
 
     public override BoundNodeKind Kind => BoundNodeKind.PropertyAssignmentExpression;
 }

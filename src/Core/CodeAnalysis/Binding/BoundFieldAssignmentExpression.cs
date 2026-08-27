@@ -50,7 +50,13 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     /// <param name="field">The interface static field to write.</param>
     /// <param name="interfaceType">The owning interface (definition or constructed).</param>
     /// <param name="value">The value to assign.</param>
-    public BoundFieldAssignmentExpression(SyntaxNode? syntax, FieldSymbol field, InterfaceSymbol interfaceType, BoundExpression value)
+    /// <param name="resultType">Construction-substituted assignment result type.</param>
+    public BoundFieldAssignmentExpression(
+        SyntaxNode? syntax,
+        FieldSymbol field,
+        InterfaceSymbol interfaceType,
+        BoundExpression value,
+        TypeSymbol? resultType = null)
         : base(syntax)
     {
         Receiver = null;
@@ -58,6 +64,7 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
         Field = field;
         InterfaceType = interfaceType;
         Value = value;
+        ResultType = resultType;
     }
 
     private BoundFieldAssignmentExpression(

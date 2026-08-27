@@ -710,9 +710,18 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var staticValue = BindAssignmentRhs(syntax.Value, staticField.Type);
-                var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticField.Type);
-                return new BoundFieldAssignmentExpression(null, staticField, userInterface, staticConverted);
+                var fieldType = userInterface.SubstituteMemberType(staticField.Type);
+                var staticValue = BindAssignmentRhs(syntax.Value, fieldType);
+                var staticConverted = conversions.BindConversion(
+                    syntax.Value.Location,
+                    staticValue,
+                    fieldType);
+                return new BoundFieldAssignmentExpression(
+                    null,
+                    staticField,
+                    userInterface,
+                    staticConverted,
+                    fieldType);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -882,7 +891,11 @@ internal sealed partial class ExpressionBinder
         // path; the emitter dispatches via `callvirt set_W`.
         if (assignmentReceiverType is InterfaceSymbol ifaceVarType)
         {
-            if (TypeMemberModel.TryGetProperty(ifaceVarType, syntax.FieldIdentifier.Text, out var ifaceProp, out _))
+            if (TypeMemberModel.TryGetPropertyWithOwner(
+                ifaceVarType,
+                syntax.FieldIdentifier.Text,
+                out var ifaceProp,
+                out var ifaceOwner))
             {
                 if (!ifaceProp.HasSetter)
                 {
@@ -890,9 +903,35 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceProp.Type), ifaceProp.Type);
+                var effectiveInterface = Invariant.Required(
+                    ifaceOwner as InterfaceSymbol,
+                    "an interface property has an effective interface owner");
+                if (!AccessibilityChecker.IsAccessible(
+                    ifaceProp.SetterAccessibility,
+                    effectiveInterface,
+                    this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(
+                        syntax.FieldIdentifier.Location,
+                        ifaceProp.Name,
+                        effectiveInterface.Name,
+                        ifaceProp.SetterAccessibility);
+                }
+
+                var propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type);
+                var ifaceConverted = conversions.BindConversion(
+                    syntax.Value.Location,
+                    BindValue(propertyType),
+                    propertyType);
                 EnforceInitOnlyAssignment(ifaceProp, assignmentReceiver, syntax.EqualsToken.Location);
-                return new BoundPropertyAssignmentExpression(null, assignmentReceiver, null, ifaceProp, ifaceConverted);
+                return new BoundPropertyAssignmentExpression(
+                    null,
+                    assignmentReceiver,
+                    null,
+                    ifaceProp,
+                    ifaceConverted,
+                    ReferenceEquals(propertyType, ifaceProp.Type) ? null : propertyType,
+                    effectiveInterface);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
@@ -1511,12 +1550,21 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        var fieldType = interfaceSym.SubstituteMemberType(staticField.Type);
         var boundRhs = BindExpression(syntax.Value);
-        var leftRead = new BoundFieldAccessExpression(null, staticField, interfaceSym);
+        var leftRead = new BoundFieldAccessExpression(
+            null,
+            staticField,
+            interfaceSym,
+            fieldType);
         var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
         if (binary == null)
         {
-            Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, staticField.Type, boundRhs.Type);
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                fieldType,
+                boundRhs.Type);
             result = new BoundErrorExpression(null);
             return true;
         }
@@ -1526,9 +1574,112 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
         }
 
-        var converted = conversions.BindConversion(syntax.Value.Location, binary, staticField.Type);
-        result = new BoundFieldAssignmentExpression(null, staticField, interfaceSym, converted);
+        var converted = conversions.BindConversion(
+            syntax.Value.Location,
+            binary,
+            fieldType);
+        result = new BoundFieldAssignmentExpression(
+            null,
+            staticField,
+            interfaceSym,
+            converted,
+            fieldType);
         return true;
+    }
+
+    private BoundExpression? TryBindInterfaceCompoundAssignment(
+        InterfaceSymbol interfaceType,
+        BoundExpression receiver,
+        string memberName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        SyntaxKind baseOpSyntaxKind)
+    {
+        if (!TypeMemberModel.TryGetPropertyWithOwner(
+            interfaceType,
+            memberName,
+            out var property,
+            out var propertyOwner))
+        {
+            return null;
+        }
+
+        if (!property.HasGetter || !property.HasSetter)
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        var effectiveInterface = Invariant.Required(
+            propertyOwner as InterfaceSymbol,
+            "an interface property has an effective interface owner");
+        if (!AccessibilityChecker.IsAccessible(
+            property.GetterAccessibility,
+            effectiveInterface,
+            this.function)
+            || !AccessibilityChecker.IsAccessible(
+                property.SetterAccessibility,
+                effectiveInterface,
+                this.function))
+        {
+            Diagnostics.ReportMemberInaccessible(
+                memberNameSyntax.IdentifierToken.Location,
+                property.Name,
+                effectiveInterface.Name,
+                property.SetterAccessibility);
+        }
+
+        var propertyType = effectiveInterface.SubstituteMemberType(property.Type);
+        var substitutedType = ReferenceEquals(propertyType, property.Type)
+            ? null
+            : propertyType;
+        var boundRhs = BindExpression(syntax.Value);
+        var leftRead = new BoundPropertyAccessExpression(
+            null,
+            receiver,
+            null,
+            property,
+            substitutedType,
+            narrowedType: null,
+            interfaceType: effectiveInterface);
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind,
+            leftRead,
+            boundRhs,
+            syntax.Value.Location);
+        if (userCompound != null)
+        {
+            return userCompound;
+        }
+
+        var binary = TryBindCompoundBinaryOperation(
+            baseOpSyntaxKind,
+            leftRead,
+            boundRhs,
+            syntax.Value.Location);
+        if (binary == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                propertyType,
+                boundRhs.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var converted = conversions.BindConversion(
+            syntax.Value.Location,
+            binary,
+            propertyType);
+        EnforceInitOnlyAssignment(property, receiver, syntax.OperatorToken.Location);
+        return new BoundPropertyAssignmentExpression(
+            null,
+            receiver,
+            null,
+            property,
+            converted,
+            substitutedType,
+            effectiveInterface);
     }
 
     /// <summary>
@@ -2578,7 +2729,11 @@ internal sealed partial class ExpressionBinder
         // (b : IBase) dispatches via a verifiable `callvirt set_H`.
         if (receiverType is InterfaceSymbol ifaceSym)
         {
-            if (TypeMemberModel.TryGetProperty(ifaceSym, fieldName, out var ifaceProp, out _))
+            if (TypeMemberModel.TryGetPropertyWithOwner(
+                ifaceSym,
+                fieldName,
+                out var ifaceProp,
+                out var ifaceOwner))
             {
                 if (!ifaceProp.HasSetter)
                 {
@@ -2586,9 +2741,35 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceProp.Type), ifaceProp.Type);
+                var effectiveInterface = Invariant.Required(
+                    ifaceOwner as InterfaceSymbol,
+                    "an interface property has an effective interface owner");
+                if (!AccessibilityChecker.IsAccessible(
+                    ifaceProp.SetterAccessibility,
+                    effectiveInterface,
+                    this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(
+                        syntax.FieldIdentifier.Location,
+                        ifaceProp.Name,
+                        effectiveInterface.Name,
+                        ifaceProp.SetterAccessibility);
+                }
+
+                var propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type);
+                var ifaceConverted = conversions.BindConversion(
+                    syntax.Value.Location,
+                    BindValue(propertyType),
+                    propertyType);
                 EnforceInitOnlyAssignment(ifaceProp, receiver, syntax.EqualsToken.Location);
-                return new BoundPropertyAssignmentExpression(null, receiver, null, ifaceProp, ifaceConverted);
+                return new BoundPropertyAssignmentExpression(
+                    null,
+                    receiver,
+                    null,
+                    ifaceProp,
+                    ifaceConverted,
+                    ReferenceEquals(propertyType, ifaceProp.Type) ? null : propertyType,
+                    effectiveInterface);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -2756,8 +2937,18 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 }
 
-                var ifaceConverted = conversions.BindConversion(syntax.Value.Location, BindValue(ifaceStaticField.Type), ifaceStaticField.Type);
-                return new BoundFieldAssignmentExpression(null, ifaceStaticField, constructedInterface, ifaceConverted);
+                var fieldType = constructedInterface.SubstituteMemberType(
+                    ifaceStaticField.Type);
+                var ifaceConverted = conversions.BindConversion(
+                    syntax.Value.Location,
+                    BindValue(fieldType),
+                    fieldType);
+                return new BoundFieldAssignmentExpression(
+                    null,
+                    ifaceStaticField,
+                    constructedInterface,
+                    ifaceConverted,
+                    fieldType);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);

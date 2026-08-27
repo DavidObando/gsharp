@@ -361,6 +361,21 @@ internal sealed partial class ExpressionBinder
                     }
                 }
 
+                if (boundReceiver.Type is InterfaceSymbol compoundInterface)
+                {
+                    var compoundResult = TryBindInterfaceCompoundAssignment(
+                        compoundInterface,
+                        boundReceiver,
+                        eventName,
+                        eventNameSyntax,
+                        syntax,
+                        baseOpSyntaxKind);
+                    if (compoundResult != null)
+                    {
+                        return compoundResult;
+                    }
+                }
+
                 // Issue #2519: use the class constraint as the member surface
                 // for `T.member op= value`, matching simple reads/writes and
                 // method/event lookup through the same constrained receiver.

@@ -1042,14 +1042,23 @@ public static class SpillSequenceSpiller
                                 receiver: null,
                                 propAssign.StructType,
                                 propAssign.Property,
-                                value));
+                                value,
+                                propAssign.SubstitutedType,
+                                propAssign.InterfaceType));
                     }
 
                     return SpillTwoOperand(
                         propAssign,
                         propAssign.Receiver,
                         propAssign.Value,
-                        (recv, val) => new BoundPropertyAssignmentExpression(null, recv, propAssign.StructType, propAssign.Property, val));
+                        (recv, val) => new BoundPropertyAssignmentExpression(
+                            null,
+                            recv,
+                            propAssign.StructType,
+                            propAssign.Property,
+                            val,
+                            propAssign.SubstitutedType,
+                            propAssign.InterfaceType));
                 case BoundTupleLiteralExpression tupleLiteral:
                     return SpillTupleLiteral(tupleLiteral);
                 case BoundTupleElementAccessExpression tupleAccess:
@@ -1737,13 +1746,19 @@ public static class SpillSequenceSpiller
             // constructor drops that, and the emitter parents the field at the
             // open-generic TypeDef instead of a TypeSpec.
             var value = assign.InterfaceType != null
-                ? new BoundFieldAssignmentExpression(null, assign.Field, assign.InterfaceType, spilled.Value)
+                ? new BoundFieldAssignmentExpression(
+                    null,
+                    assign.Field,
+                    assign.InterfaceType,
+                    spilled.Value,
+                    assign.ResultType)
                 : new BoundFieldAssignmentExpression(
                     null,
                     assign.Receiver,
                     BoundNodeForm.DeclaringType(assign),
                     assign.Field,
-                    spilled.Value);
+                    spilled.Value,
+                    assign.ResultType);
             return new BoundSpillSequenceExpression(
                 null,
                 spilled.Locals,

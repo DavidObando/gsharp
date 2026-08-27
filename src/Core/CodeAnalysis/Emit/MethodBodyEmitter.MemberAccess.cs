@@ -958,28 +958,38 @@ internal sealed partial class MethodBodyEmitter
         // Issue #989: route generic constructed receivers through the
         // TypeSpec-parented MemberRef (mirrors EmitPropertyAccess).
         EntityHandle setterHandle;
-        var setterContainer = ResolvePropertyReferenceContainer(
-            assn.StructType as StructSymbol,
-            assn.Receiver?.Type as StructSymbol,
-            assn.Property);
-        if (setterContainer != null)
+        if (assn.InterfaceType != null)
         {
-            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true);
-        }
-        else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) && handles.Setter.HasValue)
-        {
-            setterHandle = handles.Setter.Value;
-        }
-        else if (assn.StructType is StructSymbol structType && structType.ClrType != null)
-        {
-            // Issue #2291: mirrors the getter fallback above for IMPORTED
-            // properties with no planned PropertyAccessorHandles entry.
-            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(structType, assn.Property, wantSetter: true);
+            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(
+                assn.InterfaceType,
+                assn.Property,
+                wantSetter: true);
         }
         else
         {
-            throw new InvalidOperationException(
-                $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
+            var setterContainer = ResolvePropertyReferenceContainer(
+                assn.StructType as StructSymbol,
+                assn.Receiver?.Type as StructSymbol,
+                assn.Property);
+            if (setterContainer != null)
+            {
+                setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(setterContainer, assn.Property, wantSetter: true);
+            }
+            else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(assn.Property, out var handles) && handles.Setter.HasValue)
+            {
+                setterHandle = handles.Setter.Value;
+            }
+            else if (assn.StructType is StructSymbol structType && structType.ClrType != null)
+            {
+                // Issue #2291: mirrors the getter fallback above for IMPORTED
+                // properties with no planned PropertyAccessorHandles entry.
+                setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(structType, assn.Property, wantSetter: true);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Property '{assn.Property.Name}' has no emitted setter MethodDef.");
+            }
         }
 
         // Issue #418 (P1-2): spill the assigned value to a temp so the

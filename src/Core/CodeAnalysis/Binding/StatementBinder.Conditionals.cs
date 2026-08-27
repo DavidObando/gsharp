@@ -1386,7 +1386,9 @@ internal sealed partial class StatementBinder
                         propertyReceiver,
                         property.StructType,
                         property.Property,
-                        value));
+                        value,
+                        property.SubstitutedType,
+                        property.InterfaceType));
                 return true;
 
             case BoundClrPropertyAssignmentExpression clrProperty:

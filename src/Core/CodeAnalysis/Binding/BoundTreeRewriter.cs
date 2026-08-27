@@ -2147,7 +2147,12 @@ public abstract class BoundTreeRewriter
         // variable-receiver one, or the emitter/interpreter lose the interface
         // static routing and mis-codegen/crash.
         return node.InterfaceType != null
-            ? new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value)
+            ? new BoundFieldAssignmentExpression(
+                null,
+                node.Field,
+                node.InterfaceType,
+                value,
+                node.ResultType)
             : new BoundFieldAssignmentExpression(null, node.Receiver, Invariant.Required(node.StructType, "a variable field assignment has a struct type"), node.Field, value, node.ResultType);
     }
 
@@ -2187,7 +2192,16 @@ public abstract class BoundTreeRewriter
         // parameter is nullable to accept it. The early return only covers the
         // case where the value is also unchanged, so asserting here (as this
         // line briefly did) crashed any rewrite of a static property's RHS.
-        return receiver == node.Receiver && value == node.Value ? node : new BoundPropertyAssignmentExpression(null, receiver, node.StructType, node.Property, value);
+        return receiver == node.Receiver && value == node.Value
+            ? node
+            : new BoundPropertyAssignmentExpression(
+                null,
+                receiver,
+                node.StructType,
+                node.Property,
+                value,
+                node.SubstitutedType,
+                node.InterfaceType);
     }
 
     /// <summary>Rewrites a null-conditional access expression (Phase 3.C.3b).</summary>

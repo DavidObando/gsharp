@@ -131,7 +131,12 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             // carry the same guard the base BoundTreeRewriter does.
             if (node.InterfaceType != null)
             {
-                return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value);
+                return new BoundFieldAssignmentExpression(
+                    null,
+                    node.Field,
+                    node.InterfaceType,
+                    value,
+                    node.ResultType);
             }
 
             return new BoundFieldAssignmentExpression(

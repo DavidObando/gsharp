@@ -344,12 +344,14 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
             import System
 
             interface IBox[T] {
-                prop Value T { get }
+                prop Value T { get; set; }
                 shared { var Shared T }
             }
 
-            class IntBox : IBox[int32] {
-                prop Value int32 -> 42
+            interface IDerivedBox[T] : IBox[T] { }
+
+            class IntBox : IDerivedBox[int32] {
+                prop Value int32 { get; set; }
             }
 
             open class Animal {
@@ -364,9 +366,19 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
                 prop Pet Animal { get; init; }
             }
 
+            func GetBox(box IDerivedBox[int32]) IDerivedBox[int32] -> box
+
+            func Set(box IDerivedBox[int32]) {
+                box.Value = 1
+                GetBox(box).Value += 2
+            }
+
             func Main() {
-                let box IBox[int32] = IntBox()
+                let box IDerivedBox[int32] = IntBox()
+                Set(box)
                 Console.WriteLine(box.Value)
+                IBox[int32].Shared = 4
+                IBox[int32].Shared += 1
                 Console.WriteLine(IBox[int32].Shared)
 
                 let smart = SmartBox() { Pet = Dog() }
@@ -379,8 +391,8 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
         Assert.Equal(
             string.Join(
                 Environment.NewLine,
-                "42",
-                "0",
+                "3",
+                "5",
                 "woof",
                 string.Empty),
             CompileAndRun(source, AssertNoBoxOrUnboxInstructions));
