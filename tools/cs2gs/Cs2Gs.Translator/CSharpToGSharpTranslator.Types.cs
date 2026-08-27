@@ -361,17 +361,20 @@ public sealed partial class CSharpToGSharpTranslator
         // to a same-named non-generic type (unlike the older bare-name form,
         // which stayed ambiguous for same-base-name multi-arity families such
         // as `Func`/`Action`).
+        // Issue #3589: nested forms carry an unbound generic in a NON-terminal
+        // segment (`Dictionary<,>.Enumerator`, `Outer<>.Inner<>`). Each unbound
+        // segment renders with its own `_` placeholder list — the older
+        // `qualified.Left.ToString()` composition leaked the C# `<>` spelling
+        // verbatim into the emitted file (a round-trip GS0005). gsc binds only
+        // the terminal-segment form today; the nested spelling parses cleanly
+        // and starts binding when #3589 lands.
         private GTypeReference MapTypeOfOperand(TypeSyntax type)
         {
-            if (IsUnboundGeneric(type, out string unboundName, out int arity))
+            if (type is NameSyntax nameSyntax
+                && HasOmittedTypeArgument(nameSyntax)
+                && RenderUnboundGenericName(nameSyntax) is { } unboundName)
             {
-                var placeholders = new GTypeReference[arity];
-                for (int i = 0; i < arity; i++)
-                {
-                    placeholders[i] = new NamedTypeReference("_");
-                }
-
-                return new NamedTypeReference(unboundName, placeholders);
+                return new NamedTypeReference(unboundName);
             }
 
             ITypeSymbol symbol = this.context.GetTypeInfo(type).Type;
@@ -380,34 +383,41 @@ public sealed partial class CSharpToGSharpTranslator
                 : new NamedTypeReference(type.ToString());
         }
 
-        private static bool IsUnboundGeneric(TypeSyntax type, out string name, out int arity)
+        private static bool HasOmittedTypeArgument(NameSyntax name) => name switch
         {
-            name = null;
-            arity = 0;
-            GenericNameSyntax generic;
-            switch (type)
+            GenericNameSyntax generic => generic.TypeArgumentList.Arguments.Any(a => a is OmittedTypeArgumentSyntax),
+            QualifiedNameSyntax qualified => HasOmittedTypeArgument(qualified.Left) || HasOmittedTypeArgument(qualified.Right),
+            AliasQualifiedNameSyntax alias => HasOmittedTypeArgument(alias.Name),
+            _ => false,
+        };
+
+        // Renders a (possibly nested) unbound-generic name with `_` placeholder
+        // bracket arguments per generic segment: `IEnumerable<>` → `IEnumerable[_]`,
+        // `Dictionary<,>.Enumerator` → `Dictionary[_, _].Enumerator`,
+        // `Outer<>.Inner<>` → `Outer[_].Inner[_]`. Null for shapes with no
+        // canonical spelling.
+        private static string RenderUnboundGenericName(NameSyntax name)
+        {
+            switch (name)
             {
-                case GenericNameSyntax simple:
-                    generic = simple;
-                    name = simple.Identifier.ValueText;
-                    break;
-                case QualifiedNameSyntax { Right: GenericNameSyntax right } qualified:
-                    generic = right;
-                    name = qualified.Left.ToString().Replace("global::", string.Empty, StringComparison.Ordinal)
-                        + "."
-                        + right.Identifier.ValueText;
-                    break;
+                case IdentifierNameSyntax identifier:
+                    return identifier.Identifier.ValueText;
+                case GenericNameSyntax generic:
+                    return generic.Identifier.ValueText
+                        + "["
+                        + string.Join(", ", Enumerable.Repeat("_", generic.TypeArgumentList.Arguments.Count))
+                        + "]";
+                case QualifiedNameSyntax qualified:
+                    string left = RenderUnboundGenericName(qualified.Left);
+                    string right = RenderUnboundGenericName(qualified.Right);
+                    return left == null || right == null ? null : left + "." + right;
+                case AliasQualifiedNameSyntax alias:
+                    // `global::` (or another extern alias) has no G# spelling;
+                    // the aliased segment renders bare.
+                    return RenderUnboundGenericName(alias.Name);
                 default:
-                    return false;
+                    return null;
             }
-
-            if (!generic.TypeArgumentList.Arguments.Any(a => a is OmittedTypeArgumentSyntax))
-            {
-                return false;
-            }
-
-            arity = generic.TypeArgumentList.Arguments.Count;
-            return true;
         }
 
         private GTypeReference MapTypeSyntax(TypeSyntax type)

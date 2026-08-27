@@ -64,6 +64,85 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #3589: an unbound generic in a NON-terminal segment renders each
+    /// generic segment with its own <c>_</c> placeholder list instead of
+    /// leaking the C# <c>&lt;,&gt;</c> spelling verbatim (which failed the
+    /// round-trip parse). gsc binds only the terminal-segment form today, so
+    /// validation is parse-only until #3589 lands.
+    /// </summary>
+    [Fact]
+    public void UnboundNestedType_TypeOf_RendersPlaceholdersPerSegment()
+    {
+        string printed = TranslateNestedUnit(@"
+using System;
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class C
+    {
+        public Type Describe() => typeof(Dictionary<,>.Enumerator);
+    }
+}");
+
+        Assert.Contains("typeof(Dictionary[_, _].Enumerator)", printed);
+        Assert.DoesNotContain("<,>", printed);
+    }
+
+    [Fact]
+    public void UnboundNestedGeneric_TypeOf_RendersPlaceholdersPerSegment()
+    {
+        string printed = TranslateNestedUnit(@"
+using System;
+
+namespace Demo
+{
+    public class Outer<T>
+    {
+        public class Inner<U>
+        {
+        }
+    }
+
+    public class C
+    {
+        public Type Describe() => typeof(Outer<>.Inner<>);
+    }
+}");
+
+        Assert.Contains("typeof(Outer[_].Inner[_])", printed);
+        Assert.DoesNotContain("<>", printed);
+    }
+
+    // Same as TranslateUnit but parse-only: gsc cannot BIND a non-terminal
+    // `_` placeholder segment until #3589, while the emitted spelling must
+    // already round-trip-parse.
+    private static string TranslateNestedUnit(string source)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+        Assert.True(
+            project.BoundWithoutErrors,
+            "Snippet should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Empty(context.Diagnostics);
+
+        string printed = GSharpPrinter.Print(unit);
+        RoundTripResult result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "gsc binds `_` placeholders only in the terminal segment until #3589");
+        Assert.True(
+            result.Success,
+            "Translated G# must round-trip-parse. Errors:\n" +
+                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
+        return printed;
+    }
+
+    /// <summary>
     /// Full producer round-trip: the translated <c>typeof(Func[_])</c>
     /// compiles with the real <c>gsc</c> and, at run time, is REFLECTION-equal
     /// (not merely name-equal) to C#'s own <c>typeof(System.Func&lt;&gt;)</c> —
