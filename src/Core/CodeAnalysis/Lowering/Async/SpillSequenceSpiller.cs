@@ -1546,12 +1546,23 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundConstrainedStaticCallExpression(
-                call.Syntax,
-                call.TypeParameter,
-                call.InterfaceMethod,
-                args.ToImmutable(),
-                call.ReturnType);
+            // Issue #3525: the imported-CLR-interface shape carries a
+            // MethodInfo (ClrMethod) instead of a FunctionSymbol (InterfaceMethod).
+            var value = call.InterfaceMethod != null
+                ? new BoundConstrainedStaticCallExpression(
+                    call.Syntax,
+                    call.TypeParameter,
+                    call.InterfaceMethod,
+                    args.ToImmutable(),
+                    call.ReturnType)
+                : new BoundConstrainedStaticCallExpression(
+                    call.Syntax,
+                    call.TypeParameter,
+                    call.ClrMethod!,
+                    args.ToImmutable(),
+                    call.ArgumentRefKinds,
+                    call.ReturnType,
+                    call.ConstrainedInterfaceType!);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),

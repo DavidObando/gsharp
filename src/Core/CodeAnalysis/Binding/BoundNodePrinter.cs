@@ -1120,7 +1120,7 @@ public static class BoundNodePrinter
         // type parameter, the slot is an interface static-virtual method.
         writer.WriteIdentifier(node.TypeParameter.Name);
         writer.WritePunctuation(SyntaxKind.DotToken);
-        writer.WriteIdentifier(node.InterfaceMethod.Name);
+        writer.WriteIdentifier(node.InterfaceMethod?.Name ?? node.ClrMethod?.Name ?? "?");
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
 
         var isFirst = true;
