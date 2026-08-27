@@ -74,6 +74,10 @@ public sealed class BoundConstrainedStaticCallExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.ConstrainedStaticCallExpression;
 
     /// <inheritdoc/>
+    // ReturnType is always supplied by both constructors (see call sites), so this
+    // fallback chain is dead in practice; ClrMethod! is safe because the only way
+    // to reach it is InterfaceMethod being null, which happens exclusively via the
+    // ClrMethod-taking constructor overload, which requires a non-null clrMethod.
     public override TypeSymbol Type => ReturnType ?? InterfaceMethod?.Type ?? TypeSymbol.FromClrType(ClrMethod!.ReturnType);
 
     /// <summary>Gets the type-parameter symbol that supplies the runtime receiver (the <c>T</c> in <c>T.M(...)</c>).</summary>
