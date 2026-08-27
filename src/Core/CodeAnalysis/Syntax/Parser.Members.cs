@@ -1348,6 +1348,11 @@ public partial class Parser
 
     private bool IsFunctionTypedPropertyFollower(int offset)
     {
+        if (TryDetectAggregateDeclarationHead(offset))
+        {
+            return true;
+        }
+
         var token = Peek(offset);
         if (token.Kind is SyntaxKind.EndOfFileToken
             or SyntaxKind.CloseBraceToken

@@ -212,6 +212,27 @@ public class Issue1278ArrowExpressionMemberParserTests
         Assert.Empty(property.Accessors);
     }
 
+    [Theory]
+    [InlineData("class Nested { }")]
+    [InlineData("struct Nested { }")]
+    [InlineData("interface Nested { }")]
+    [InlineData("enum Nested { A }")]
+    public void Issue3587_FunctionTypedPropertyBeforeNestedAggregate_RemainsFunctionType(string nestedType)
+    {
+        var source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Handler (int32, int32) -> int32\n" +
+            "  " + nestedType + "\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsArrowFunction);
+        Assert.Empty(property.Accessors);
+    }
+
     [Fact]
     public void Issue3587_FunctionTypedPropertyWithAccessibleAccessor_RemainsFunctionType()
     {
