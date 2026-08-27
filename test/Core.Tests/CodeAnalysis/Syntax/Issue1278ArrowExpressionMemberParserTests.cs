@@ -116,6 +116,85 @@ public class Issue1278ArrowExpressionMemberParserTests
     }
 
     [Fact]
+    public void Issue3587_SliceOfTuplePropertyArrowBody_ParsesAsPropertyBody()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Rows [](string, string) -> [](string, string){(\"a\", \"b\")}\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsSlice);
+        Assert.True(property.Type.ArrayElementType.IsTuple);
+        Assert.False(property.Type.ArrayElementType.IsArrowFunction);
+        Assert.Single(property.Accessors);
+    }
+
+    [Fact]
+    public void Issue3587_TuplePropertyArrowBody_ParsesAsPropertyBody()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Pair (int32, int32) -> (1, 2)\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsTuple);
+        Assert.Single(property.Accessors);
+    }
+
+    [Fact]
+    public void Issue3587_SliceOfTupleFunctionArrowBody_ParsesAsFunctionBody()
+    {
+        const string source =
+            "package P\n" +
+            "func Rows() [](string, string) -> makeRows()\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var function = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        Assert.True(function.Type.IsSlice);
+        Assert.True(function.Type.ArrayElementType.IsTuple);
+        Assert.NotNull(function.Body);
+    }
+
+    [Fact]
+    public void Issue3587_MissingPropertyArrowExpression_ReportsDiagnostic()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Rows [](string, string) ->\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Contains(tree.Diagnostics, diagnostic => diagnostic.Id == "GS0005");
+    }
+
+    [Fact]
+    public void Issue3587_SliceOfFunctionPropertyWithAccessors_RemainsFunctionType()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Handlers [](string, string) -> int32 { get }\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsSlice);
+        Assert.True(property.Type.ArrayElementType.IsArrowFunction);
+        Assert.Single(property.Accessors);
+    }
+
+    [Fact]
     public void FunctionFatArrowBody_ReportsDiagnostic()
     {
         // Issue #1278: the C# fat arrow `=>` is not a G# member body form.

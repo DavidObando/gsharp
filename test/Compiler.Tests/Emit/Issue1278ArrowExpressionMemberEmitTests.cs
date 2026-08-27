@@ -101,6 +101,56 @@ public class Issue1278ArrowExpressionMemberEmitTests
     }
 
     [Fact]
+    public void Issue3587_SliceOfTuplePropertyArrow_RunsAndReturns()
+    {
+        var source = """
+            package P
+
+            class C {
+                prop Rows [](string, string) -> [](string, string){("a", "b")}
+            }
+
+            public var result = C().Rows.Length
+            """;
+
+        Assert.Equal(1, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void Issue3587_SliceOfTupleFunctionArrow_RunsAndReturns()
+    {
+        var source = """
+            package P
+
+            func MakeRows() [](string, string) {
+                return [](string, string){("a", "b"), ("c", "d")}
+            }
+
+            func Rows() [](string, string) -> MakeRows()
+
+            public var result = Rows().Length
+            """;
+
+        Assert.Equal(2, RunAndGetIntResult(source));
+    }
+
+    [Fact]
+    public void Issue3587_MissingPropertyArrowExpression_FailsCompilation()
+    {
+        var source = """
+            package P
+
+            class C {
+                prop Rows [](string, string) ->
+            }
+            """;
+
+        var (exitCode, output, _) = CompileToFile(source);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0005", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AccessorArrows_RoundTripThroughField()
     {
         var source = """
