@@ -272,6 +272,37 @@ internal static class ObliviousNullabilityAnalyzer
         return entities;
     }
 
+    internal static bool TryGetGenericReceiverTuplePath(
+        INamedTypeSymbol receiverType,
+        IParameterSymbol parameter,
+        out INamedTypeSymbol tupleType,
+        out IReadOnlyList<int> tuplePath)
+    {
+        tupleType = null;
+        tuplePath = null;
+        if (receiverType == null
+            || parameter?.OriginalDefinition.Type
+                is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } typeParameter
+            || typeParameter.ContainingType is not INamedTypeSymbol declaringType)
+        {
+            return false;
+        }
+
+        if (!TryResolveReceiverTypeParameterPath(
+                receiverType,
+                declaringType.OriginalDefinition,
+                typeParameter.Ordinal,
+                out INamedTypeSymbol actualTuple,
+                out IReadOnlyList<int> path))
+        {
+            return false;
+        }
+
+        tupleType = actualTuple;
+        tuplePath = path;
+        return true;
+    }
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -1239,7 +1270,70 @@ internal static class ObliviousNullabilityAnalyzer
                     tupleEdges,
                     tupleScalarEdges);
             }
+
+            CollectGenericReceiverTupleArgumentFlow(
+                call,
+                argument,
+                model,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges);
         }
+    }
+
+    // Issue #3564: Dictionary<TKey, TValue> indexer/method parameters use the
+    // receiver's generic TKey slot. When a promoted tuple flows into that slot,
+    // carry its per-element taint back to the source field/property type so all
+    // uses share Dictionary[(T?, U), TValue] instead of asserting at each use.
+    private static void CollectGenericReceiverTupleArgumentFlow(
+        SyntaxNode call,
+        IArgumentOperation argument,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        ExpressionSyntax receiver = call switch
+        {
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax member } =>
+                member.Expression,
+            ElementAccessExpressionSyntax elementAccess => elementAccess.Expression,
+            _ => null,
+        };
+
+        ISymbol target = receiver == null ? null : model.GetSymbolInfo(receiver).Symbol;
+        ITypeSymbol targetType = target switch
+        {
+            IFieldSymbol field => field.Type,
+            IPropertySymbol property => property.Type,
+            _ => null,
+        };
+
+        // Scalar flow already treats out as callee-to-caller and deliberately
+        // excludes ref, so neither is receiver-directed here.
+        if (target is not (IFieldSymbol or IPropertySymbol)
+            || targetType is not INamedTypeSymbol receiverType
+            || argument.Parameter is not IParameterSymbol parameter
+            || parameter.RefKind is RefKind.Out or RefKind.Ref
+            || !TryGetGenericReceiverTuplePath(
+                receiverType,
+                parameter,
+                out INamedTypeSymbol tupleType,
+                out IReadOnlyList<int> tuplePath)
+            || argument.Value?.Syntax is not ExpressionSyntax value)
+        {
+            return;
+        }
+
+        CollectTupleValueFlow(
+            Canonical(target),
+            tupleType,
+            value,
+            model,
+            EncodeTuplePath(tuplePath),
+            tupleTainted,
+            tupleEdges,
+            tupleScalarEdges);
     }
 
     private static void CollectTupleValueFlow(
@@ -1742,6 +1836,99 @@ internal static class ObliviousNullabilityAnalyzer
 
         tupleType = type as INamedTypeSymbol;
         return tupleType is { IsTupleType: true };
+    }
+
+    private static bool TryResolveReceiverTypeParameterPath(
+        INamedTypeSymbol receiverType,
+        INamedTypeSymbol declaringType,
+        int ordinal,
+        out INamedTypeSymbol tupleType,
+        out IReadOnlyList<int> path)
+    {
+        tupleType = null;
+        path = null;
+        if (SymbolEqualityComparer.Default.Equals(receiverType.OriginalDefinition, declaringType))
+        {
+            if (ordinal >= receiverType.TypeArguments.Length
+                || receiverType.TypeArguments[ordinal]
+                    is not INamedTypeSymbol { IsTupleType: true } directTuple)
+            {
+                return false;
+            }
+
+            tupleType = directTuple;
+            path = new[] { ordinal };
+            return true;
+        }
+
+        foreach ((INamedTypeSymbol constructed, INamedTypeSymbol template) in
+            EnumerateDirectReceiverTypes(receiverType))
+        {
+            if (!TryResolveReceiverTypeParameterPath(
+                    constructed,
+                    declaringType,
+                    ordinal,
+                    out INamedTypeSymbol inheritedTuple,
+                    out IReadOnlyList<int> inheritedPath)
+                || !TryFollowTypeArgumentPath(template, inheritedPath, out ITypeSymbol source)
+                || source is not ITypeParameterSymbol sourceParameter
+                || sourceParameter.ContainingType is not INamedTypeSymbol sourceOwner
+                || !SymbolEqualityComparer.Default.Equals(
+                    sourceOwner.OriginalDefinition,
+                    receiverType.OriginalDefinition))
+            {
+                continue;
+            }
+
+            tupleType = inheritedTuple;
+            path = new[] { sourceParameter.Ordinal };
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<(INamedTypeSymbol Constructed, INamedTypeSymbol Template)>
+        EnumerateDirectReceiverTypes(INamedTypeSymbol receiverType)
+    {
+        INamedTypeSymbol original = receiverType.OriginalDefinition;
+        if (receiverType.BaseType is INamedTypeSymbol baseType
+            && original.BaseType is INamedTypeSymbol baseTemplate)
+        {
+            yield return (baseType, baseTemplate);
+        }
+
+        foreach (INamedTypeSymbol iface in receiverType.Interfaces)
+        {
+            INamedTypeSymbol template = original.Interfaces.FirstOrDefault(candidate =>
+                SymbolEqualityComparer.Default.Equals(
+                    candidate.OriginalDefinition,
+                    iface.OriginalDefinition));
+            if (template != null)
+            {
+                yield return (iface, template);
+            }
+        }
+    }
+
+    private static bool TryFollowTypeArgumentPath(
+        INamedTypeSymbol type,
+        IReadOnlyList<int> path,
+        out ITypeSymbol result)
+    {
+        result = type;
+        foreach (int index in path)
+        {
+            if (result is not INamedTypeSymbol named || index >= named.TypeArguments.Length)
+            {
+                result = null;
+                return false;
+            }
+
+            result = named.TypeArguments[index];
+        }
+
+        return true;
     }
 
     private static bool IsEligibleTupleLeaf(ITypeSymbol type) =>
