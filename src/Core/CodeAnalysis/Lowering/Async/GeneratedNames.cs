@@ -88,8 +88,19 @@ public static class GeneratedNames
     /// Returns the name of a reusable hoisted temp introduced by the spiller
     /// (analogue of Roslyn's <c>&lt;&gt;7__wrapN</c>).
     /// </summary>
-    /// <param name="ordinal">A per-method monotonic ordinal.</param>
+    /// <param name="ordinal">A per-spiller-pass monotonic ordinal.</param>
+    /// <param name="domain">A pass-distinguishing tag appended to the shared
+    /// prefix. A method body can run through SEVERAL spiller passes
+    /// (control-flow block lifting during general lowering, iterator block
+    /// lifting, and the async await spiller), each with its own ordinal
+    /// counter starting at zero — without a domain tag two passes both mint
+    /// <c>&lt;&gt;7__wrap0</c> with different types, and the async state
+    /// machine (which maps hoisted locals to fields by name) silently binds
+    /// both to one field (issue #3592, ilverify StackUnexpected). Every name
+    /// still starts with <see cref="SpillTempPrefix"/> so
+    /// <see cref="AsyncCaptureWalker"/>'s prefix detection keeps hoisting
+    /// them.</param>
     /// <returns>The mangled spill-temp field name.</returns>
-    public static string SpillTempField(int ordinal)
-        => SpillTempPrefix + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public static string SpillTempField(int ordinal, string domain = "")
+        => SpillTempPrefix + domain + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }
