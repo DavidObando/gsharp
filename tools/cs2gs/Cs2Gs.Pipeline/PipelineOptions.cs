@@ -4,6 +4,7 @@
 
 namespace Cs2Gs.Pipeline;
 
+using System;
 using System.Collections.Generic;
 using Cs2Gs.Translator.Loading;
 
@@ -69,6 +70,17 @@ public sealed class PipelineOptions
     /// app id.
     /// </summary>
     public List<string> ExcludeAppIdPrefixes { get; } = new List<string>();
+
+    /// <summary>
+    /// Gets the absolute <c>.csproj</c> paths of the apps that
+    /// <see cref="ExcludeAppIdPrefixes"/> filtered out of this run (issue
+    /// #3580). The orphan-mirror step skips checked-in sources these projects
+    /// compile — files under their directories and their explicit
+    /// <c>&lt;Compile Include&gt;</c> links (e.g. <c>test/Shared/*</c>): they
+    /// are out of the run's scope, not repository orphans, and standalone
+    /// translation of them is not meaningful.
+    /// </summary>
+    public List<string> ExcludedProjectPaths { get; } = new List<string>();
 
     /// <summary>
     /// Gets or sets the build configuration used to locate the default compiler

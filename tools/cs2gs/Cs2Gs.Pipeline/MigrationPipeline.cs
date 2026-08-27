@@ -242,12 +242,28 @@ public sealed class MigrationPipeline
 
         if (repositoryLayout)
         {
+            RepositoryExcludedScope excludedScope = RepositoryExcludedScope.Compute(
+                this.options.SourceRoot,
+                this.options.ExcludedProjectPaths);
             if (runResult.Succeeded)
             {
-                RepositoryOrphanSourceTranslator.TranslateMissing(
+                // Issue #3580: an orphan-mirror failure marks the run failed
+                // (the nightly gate must still catch a checked-in C# file with
+                // no translatable mirror) but no longer throws — the report
+                // table and run.json land either way.
+                IReadOnlyList<string> orphanFailures = RepositoryOrphanSourceTranslator.TranslateMissing(
                     this.options.SourceRoot,
                     destinationRoot,
-                    repositoryFiles);
+                    repositoryFiles,
+                    excludedScope);
+                if (orphanFailures.Count > 0)
+                {
+                    runResult.Succeeded = false;
+                    foreach (string failure in orphanFailures)
+                    {
+                        Console.Error.WriteLine("cs2gs: " + failure);
+                    }
+                }
             }
 
             RepositorySolutionGenerator.Generate(
@@ -257,11 +273,23 @@ public sealed class MigrationPipeline
                 repositoryFiles);
             if (runResult.Succeeded)
             {
-                RepositoryMirror.ValidateCompleted(
-                    this.options.SourceRoot,
-                    destinationRoot,
-                    repositoryFiles,
-                    this.options.RepositoryAdditionalFiles);
+                try
+                {
+                    RepositoryMirror.ValidateCompleted(
+                        this.options.SourceRoot,
+                        destinationRoot,
+                        repositoryFiles,
+                        this.options.RepositoryAdditionalFiles,
+                        excludedScope);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // Issue #3580: same recorded-not-thrown contract as the
+                    // orphan step — completeness failures gate the run but
+                    // must not eat the report.
+                    runResult.Succeeded = false;
+                    Console.Error.WriteLine("cs2gs: " + ex.Message);
+                }
             }
         }
         else

@@ -190,10 +190,25 @@ internal static class Program
             if (options.ExcludeAppIdPrefixes.Count > 0)
             {
                 int before = apps.Count;
-                apps = apps
-                    .Where(app => !options.ExcludeAppIdPrefixes.Any(prefix =>
+                var kept = new List<CorpusApp>(apps.Count);
+                foreach (CorpusApp app in apps)
+                {
+                    if (options.ExcludeAppIdPrefixes.Any(prefix =>
                         app.Id.StartsWith(prefix, StringComparison.Ordinal)))
-                    .ToList();
+                    {
+                        // Issue #3580: the orphan-mirror step must know which
+                        // projects left the run via --exclude — the sources
+                        // they compile are out of scope, not repository
+                        // orphans.
+                        options.ExcludedProjectPaths.Add(app.ProjectPath);
+                    }
+                    else
+                    {
+                        kept.Add(app);
+                    }
+                }
+
+                apps = kept;
                 Console.WriteLine($"cs2gs: excluded {before - apps.Count} project(s) via --exclude.");
             }
         }
