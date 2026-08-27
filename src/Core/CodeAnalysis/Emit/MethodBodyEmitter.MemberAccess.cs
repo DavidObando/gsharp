@@ -2120,6 +2120,20 @@ internal sealed partial class MethodBodyEmitter
     /// <summary>ADR-0039: Emits ldind.* or ldobj for loading a value through a managed pointer.</summary>
     private void EmitLoadIndirect(TypeSymbol pointeeType)
     {
+        // Issue #3501: a value-type `T?` pointee (e.g. an `out x int32?`
+        // parameter) stores/loads the full Nullable<T> struct, but
+        // NullableTypeSymbol borrows the UNDERLYING type's ClrType, so the
+        // primitive arms below would pick the bare-T ldind/stind form and
+        // desynchronize the stack from the Nullable<T> slot (ilverify
+        // StackUnexpected). Route through ldobj/stobj with the wrapper token.
+        if (pointeeType is NullableTypeSymbol loadNullable
+            && NullableLifting.IsAnyValueTypeNullable(loadNullable))
+        {
+            this.il.OpCode(ILOpCode.Ldobj);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
+            return;
+        }
+
         var clrType = pointeeType.ClrType;
         if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
@@ -2172,6 +2186,16 @@ internal sealed partial class MethodBodyEmitter
     /// <summary>ADR-0056 §2: Emits stind.* or stobj to store a value through a managed pointer.</summary>
     private void EmitStoreIndirect(TypeSymbol pointeeType)
     {
+        // Issue #3501: see EmitLoadIndirect — a value-type `T?` pointee needs
+        // the Nullable<T> stobj, not the underlying primitive's stind.
+        if (pointeeType is NullableTypeSymbol storeNullable
+            && NullableLifting.IsAnyValueTypeNullable(storeNullable))
+        {
+            this.il.OpCode(ILOpCode.Stobj);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
+            return;
+        }
+
         var clrType = pointeeType.ClrType;
         if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
