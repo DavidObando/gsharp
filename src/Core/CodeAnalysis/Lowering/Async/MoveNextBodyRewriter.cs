@@ -470,7 +470,12 @@ public static class MoveNextBodyRewriter
                     // BoundTreeRewriter does.
                     if (node.InterfaceType != null)
                     {
-                        return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, rewrittenValue);
+                        return new BoundFieldAssignmentExpression(
+                            null,
+                            node.Field,
+                            node.InterfaceType,
+                            rewrittenValue,
+                            node.ResultType);
                     }
 
                     if (node.ReceiverExpression != null)

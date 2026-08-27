@@ -879,12 +879,14 @@ internal sealed partial class StatementBinder
                     var interfaceRead = new BoundFieldAccessExpression(
                         syntax,
                         fieldAccess.Field,
-                        fieldAccess.InterfaceType);
+                        fieldAccess.InterfaceType,
+                        fieldAccess.SubstitutedType);
                     var interfaceWrite = new BoundFieldAssignmentExpression(
                         syntax,
                         fieldAccess.Field,
                         fieldAccess.InterfaceType,
-                        boundRhs);
+                        boundRhs,
+                        fieldAccess.SubstitutedType);
                     return (interfaceRead, interfaceWrite);
                 }
 
@@ -968,8 +970,22 @@ internal sealed partial class StatementBinder
                 var receiver = propAccess.Receiver == null
                     ? null
                     : CaptureReceiver(syntax, propAccess.Receiver, preStatements);
-                var read = new BoundPropertyAccessExpression(syntax, receiver, propAccess.StructType, propAccess.Property);
-                var write = new BoundPropertyAssignmentExpression(syntax, receiver, propAccess.StructType, propAccess.Property, boundRhs);
+                var read = new BoundPropertyAccessExpression(
+                    syntax,
+                    receiver,
+                    propAccess.StructType,
+                    propAccess.Property,
+                    propAccess.SubstitutedType,
+                    propAccess.NarrowedType,
+                    propAccess.InterfaceType);
+                var write = new BoundPropertyAssignmentExpression(
+                    syntax,
+                    receiver,
+                    propAccess.StructType,
+                    propAccess.Property,
+                    boundRhs,
+                    propAccess.SubstitutedType,
+                    propAccess.InterfaceType);
                 return (read, write);
             }
 

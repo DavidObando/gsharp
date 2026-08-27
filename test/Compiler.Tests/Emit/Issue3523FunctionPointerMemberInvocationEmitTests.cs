@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using Xunit;
@@ -194,12 +195,218 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
         Assert.Equal($"41{Environment.NewLine}", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source)
+    [Fact]
+    public void GenericStructClassAndMethodPointerSignatures_RunClosed()
+    {
+        const string source = """
+            package Issue3523GenericOwners
+            import System
+
+            unsafe func identity(value int32) int32 -> value
+            unsafe func choose[T](pointer *func(T) T) *func(T) T -> pointer
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(T) T
+                prop Handler *func(T) T -> Apply
+                shared { var SharedApply *func(T) T }
+            }
+
+            unsafe class Holder[T] {
+                let Apply *func(T) T
+                init(apply *func(T) T) { Apply = apply }
+            }
+
+            unsafe func Main() {
+                let dispatch = Dispatch[int32]{Apply: &identity}
+                Dispatch[int32].SharedApply = &identity
+                let holder = Holder[int32](&identity)
+                let selected *func(int32) int32 = choose[int32](&identity)
+
+                Console.WriteLine(dispatch.Apply(41))
+                Console.WriteLine(dispatch.Handler(42))
+                Console.WriteLine(Dispatch[int32].SharedApply(43))
+                Console.WriteLine(holder.Apply(44))
+                Console.WriteLine(selected(45))
+            }
+            """;
+
+        var output = CompileAndRun(source, AssertCalliSignaturesClosedInt32);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "41",
+                "42",
+                "43",
+                "44",
+                "45",
+                string.Empty),
+            output);
+    }
+
+    [Fact]
+    public void GenericInterfaceInstanceAndStaticCalls_EmitClosedCalli()
+    {
+        const string source = """
+            package Issue3523GenericInterface
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (T) -> T { get }
+                shared { var SharedApply unmanaged[Cdecl] (T) -> T }
+            }
+
+            struct Dispatch[T] : IDispatch[T] {
+                var Pointer unmanaged[Cdecl] (T) -> T
+                prop Apply unmanaged[Cdecl] (T) -> T -> Pointer
+            }
+
+            func invoke(dispatch IDispatch[int32]) int32 {
+                let first int32 = dispatch.Apply(41)
+                let second int32 = IDispatch[int32].SharedApply(42)
+                return first + second
+            }
+
+            func Main() { }
+            """;
+
+        var outputDirectory = Compile(source, out var outputPath);
+        try
+        {
+            VerifyFunctionPointerAssembly(outputPath);
+            Assert.True(
+                CountCalli(outputPath) >= 2,
+                "expected closed generic interface instance/static calli sites");
+            AssertCalliSignaturesClosedInt32(outputPath);
+        }
+        finally
+        {
+            DeleteDirectory(outputDirectory);
+        }
+    }
+
+    [Fact]
+    public void CompositeGenericPointerSignatures_RunAndEmitClosedCalli()
+    {
+        const string source = """
+            package Issue3523CompositePointers
+            import System
+            import System.Linq
+
+            unsafe func combine(
+                values map[string,int32],
+                pair (int32, string),
+                items sequence[int32],
+                asyncItems async sequence[int32]) int32 {
+                return values["x"] + pair.Item1 + items.First()
+            }
+
+            async func getAsyncItems() async sequence[int32] { yield 4 }
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(map[string,T], (T, string), sequence[T], async sequence[T]) T
+            }
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (map[string,T], (T, string), sequence[T], async sequence[T]) -> T { get }
+                shared {
+                    var SharedApply unmanaged[Cdecl] (map[string,T], (T, string), sequence[T], async sequence[T]) -> T
+                }
+            }
+
+            func invokeInterface(dispatch IDispatch[int32]) int32 {
+                let values = map[string,int32]{"x": 1}
+                let pair = (2, "two")
+                let items = []int32{3}
+                let asyncItems = getAsyncItems()
+                return dispatch.Apply(values, pair, items, asyncItems)
+                    + IDispatch[int32].SharedApply(values, pair, items, asyncItems)
+            }
+
+            unsafe func Main() {
+                let dispatch = Dispatch[int32]{Apply: &combine}
+                Console.WriteLine(dispatch.Apply(
+                    map[string,int32]{"x": 1},
+                    (2, "two"),
+                    []int32{3},
+                    getAsyncItems()))
+            }
+            """;
+
+        Assert.Equal(
+            $"6{Environment.NewLine}",
+            CompileAndRun(source, AssertCalliSignaturesClosedInt32));
+    }
+
+    [Fact]
+    public void GenericInterfaceMemberSubstitution_DoesNotEmitSmartCast()
+    {
+        const string source = """
+            package Issue3523GenericInterfaceMembers
+            import System
+
+            interface IBox[T] {
+                prop Value T { get; set; }
+                shared { var Shared T }
+            }
+
+            interface IDerivedBox[T] : IBox[T] { }
+
+            class IntBox : IDerivedBox[int32] {
+                prop Value int32 { get; set; }
+            }
+
+            open class Animal {
+                func Speak() string -> "animal"
+            }
+
+            class Dog : Animal {
+                func Bark() string -> "woof"
+            }
+
+            class SmartBox {
+                prop Pet Animal { get; init; }
+            }
+
+            func GetBox(box IDerivedBox[int32]) IDerivedBox[int32] -> box
+
+            func Set(box IDerivedBox[int32]) {
+                box.Value = 1
+                GetBox(box).Value += 2
+            }
+
+            func Main() {
+                let box IDerivedBox[int32] = IntBox()
+                Set(box)
+                Console.WriteLine(box.Value)
+                IBox[int32].Shared = 4
+                IBox[int32].Shared += 1
+                Console.WriteLine(IBox[int32].Shared)
+
+                let smart = SmartBox() { Pet = Dog() }
+                if smart.Pet is Dog {
+                    Console.WriteLine(smart.Pet.Bark())
+                }
+            }
+            """;
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "3",
+                "5",
+                "woof",
+                string.Empty),
+            CompileAndRun(source, AssertNoBoxOrUnboxInstructions));
+    }
+
+    private static string CompileAndRun(
+        string source,
+        Action<string> inspectAssembly = null)
     {
         var outputDirectory = Compile(source, out var outputPath);
         try
         {
             VerifyFunctionPointerAssembly(outputPath);
+            inspectAssembly?.Invoke(outputPath);
 
             var startInfo = new ProcessStartInfo("dotnet")
             {
@@ -285,7 +492,11 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
     }
 
     private static bool ContainsCalli(string outputPath)
+        => CountCalli(outputPath) != 0;
+
+    private static int CountCalli(string outputPath)
     {
+        var count = 0;
         using var peReader = new PEReader(File.OpenRead(outputPath));
         var metadata = peReader.GetMetadataReader();
         foreach (var methodHandle in metadata.MethodDefinitions)
@@ -298,13 +509,72 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
 
             var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
             var instructions = IlInstructionReader.Read(body.GetILBytes() ?? Array.Empty<byte>());
-            if (instructions.Any(instruction => instruction.OpCode == OpCodes.Calli))
+            count += instructions.Count(instruction => instruction.OpCode == OpCodes.Calli);
+        }
+
+        return count;
+    }
+
+    private static void AssertCalliSignaturesClosedInt32(string outputPath)
+    {
+        using var peReader = new PEReader(File.OpenRead(outputPath));
+        var metadata = peReader.GetMetadataReader();
+        var calliCount = 0;
+        foreach (var methodHandle in metadata.MethodDefinitions)
+        {
+            var method = metadata.GetMethodDefinition(methodHandle);
+            if (method.RelativeVirtualAddress == 0)
             {
-                return true;
+                continue;
+            }
+
+            var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
+            var il = body.GetILBytes() ?? Array.Empty<byte>();
+            foreach (var instruction in IlInstructionReader.Read(il))
+            {
+                if (instruction.OpCode != OpCodes.Calli)
+                {
+                    continue;
+                }
+
+                calliCount++;
+                var token = BitConverter.ToInt32(il, instruction.Offset + 1);
+                var signatureHandle = MetadataTokens.StandaloneSignatureHandle(
+                    token & 0x00FFFFFF);
+                var signature = metadata.GetStandaloneSignature(signatureHandle);
+                var blob = metadata.GetBlobBytes(signature.Signature);
+                Assert.DoesNotContain((byte)SignatureTypeCode.GenericTypeParameter, blob);
+                Assert.DoesNotContain((byte)SignatureTypeCode.GenericMethodParameter, blob);
+                Assert.True(
+                    blob.Count(value => value == (byte)SignatureTypeCode.Int32) >= 2,
+                    $"expected closed int32 parameter/return signature: {Convert.ToHexString(blob)}");
             }
         }
 
-        return false;
+        Assert.True(calliCount > 0, "expected at least one calli signature");
+    }
+
+    private static void AssertNoBoxOrUnboxInstructions(string outputPath)
+    {
+        using var peReader = new PEReader(File.OpenRead(outputPath));
+        var metadata = peReader.GetMetadataReader();
+        foreach (var methodHandle in metadata.MethodDefinitions)
+        {
+            var method = metadata.GetMethodDefinition(methodHandle);
+            if (method.RelativeVirtualAddress == 0)
+            {
+                continue;
+            }
+
+            var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
+            var instructions = IlInstructionReader.Read(
+                body.GetILBytes() ?? Array.Empty<byte>());
+            Assert.DoesNotContain(
+                instructions,
+                instruction => instruction.OpCode == OpCodes.Box
+                    || instruction.OpCode == OpCodes.Unbox
+                    || instruction.OpCode == OpCodes.Unbox_Any);
+        }
     }
 
     private static void DeleteDirectory(string path)

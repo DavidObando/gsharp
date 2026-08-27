@@ -359,6 +359,27 @@ public static class TypeMemberModel
     /// <returns>True if found.</returns>
     public static bool TryGetProperty(TypeSymbol type, string name, [NotNullWhen(true)] out PropertySymbol? property, out StructSymbol? declaringType)
     {
+        var found = TryGetPropertyWithOwner(type, name, out property, out var owner);
+        declaringType = owner as StructSymbol;
+        return found;
+    }
+
+    /// <summary>
+    /// Finds an instance property and returns its effective struct or interface
+    /// owner. Constructed interface owners are preserved so callers can close
+    /// member signature types before binding a load.
+    /// </summary>
+    /// <param name="type">Type to resolve against.</param>
+    /// <param name="name">Property name.</param>
+    /// <param name="property">Found property.</param>
+    /// <param name="declaringType">Effective declaring struct/class/interface.</param>
+    /// <returns>Whether a property was found.</returns>
+    public static bool TryGetPropertyWithOwner(
+        TypeSymbol type,
+        string name,
+        [NotNullWhen(true)] out PropertySymbol? property,
+        out TypeSymbol? declaringType)
+    {
         if (type is StructSymbol structSymbol)
         {
             foreach (var c in GetHierarchy(structSymbol))
@@ -387,12 +408,16 @@ public static class TypeMemberModel
             foreach (var iface in interfaceSymbol.SelfAndAllBaseInterfaces())
             {
                 iface.EnsureMembersResolved();
-                foreach (var p in iface.Properties)
+                var propertyOwner = iface.Definition != null
+                    && !ReferenceEquals(iface.Definition, iface)
+                    ? iface.Definition
+                    : iface;
+                foreach (var p in propertyOwner.Properties)
                 {
-                    if (p.Name == name)
+                    if (!p.IsIndexer && p.Name == name)
                     {
                         property = p;
-                        declaringType = null;
+                        declaringType = iface;
                         return true;
                     }
                 }

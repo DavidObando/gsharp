@@ -2549,7 +2549,21 @@ internal sealed partial class ExpressionBinder
         var field = fieldOwner.GetStaticField(memberName);
         if (field != null)
         {
-            return new BoundFieldAccessExpression(null, field, interfaceSym);
+            if (!AccessibilityChecker.IsAccessible(field.Accessibility, fieldOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(
+                    ne.Location,
+                    field.Name,
+                    fieldOwner.Name,
+                    field.Accessibility);
+            }
+
+            var fieldType = interfaceSym.SubstituteMemberType(field.Type);
+            return new BoundFieldAccessExpression(
+                null,
+                field,
+                interfaceSym,
+                ReferenceEquals(fieldType, field.Type) ? null : fieldType);
         }
 
         // Issue #1433: a default-bodied static (`shared`) property on the
@@ -2565,7 +2579,23 @@ internal sealed partial class ExpressionBinder
             {
                 if (prop.GetterSymbol != null && prop.HasGetter)
                 {
-                    return new BoundCallExpression(null, prop.GetterSymbol, ImmutableArray<BoundExpression>.Empty, prop.Type)
+                    if (!AccessibilityChecker.IsAccessible(
+                        prop.GetterAccessibility,
+                        fieldOwner,
+                        function))
+                    {
+                        Diagnostics.ReportMemberInaccessible(
+                            ne.Location,
+                            prop.Name,
+                            fieldOwner.Name,
+                            prop.GetterAccessibility);
+                    }
+
+                    return new BoundCallExpression(
+                        null,
+                        prop.GetterSymbol,
+                        ImmutableArray<BoundExpression>.Empty,
+                        interfaceSym.SubstituteMemberType(prop.Type))
                     {
                         StaticGenericInterfaceOwnerType = interfaceSym.Definition != null ? interfaceSym : null,
                     };
@@ -3366,7 +3396,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var fieldType = fieldOwner.SubstituteMemberType(field.Type);
-            return new BoundFieldAccessExpression(null, receiver: null, fieldOwner, field, fieldType);
+            return new BoundFieldAccessExpression(
+                null,
+                receiver: null,
+                fieldOwner,
+                field,
+                fieldType,
+                narrowedType: null);
         }
 
         if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, memberName, out var prop, out var propertyOwner))

@@ -446,6 +446,10 @@ public class TypeSymbol : Symbol
                 return AnyTypeParameter(a.ElementType, match);
             case RectangularArrayTypeSymbol a:
                 return AnyTypeParameter(a.ElementType, match);
+            case PinnedTypeSymbol pinned:
+                return AnyTypeParameter(pinned.UnderlyingType, match);
+            case NullabilityAnnotatedTypeSymbol annotated:
+                return AnyTypeParameter(annotated.BaseType, match);
             case SequenceTypeSymbol seq:
                 return AnyTypeParameter(seq.ElementType, match);
             case AsyncSequenceTypeSymbol aseq:
@@ -482,6 +486,18 @@ public class TypeSymbol : Symbol
                 return false;
             case ByRefTypeSymbol br:
                 return AnyTypeParameter(br.PointeeType, match);
+            case PointerTypeSymbol pointer:
+                return AnyTypeParameter(pointer.PointeeType, match);
+            case FunctionPointerTypeSymbol functionPointer:
+                foreach (var parameterType in functionPointer.ParameterTypes)
+                {
+                    if (AnyTypeParameter(parameterType, match))
+                    {
+                        return true;
+                    }
+                }
+
+                return AnyTypeParameter(functionPointer.ReturnType, match);
             case EnumSymbol en when !en.EnclosingTypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in en.EnclosingTypeArguments)
                 {
@@ -1048,6 +1064,139 @@ public class TypeSymbol : Symbol
             case InterfaceSymbol:
             case DelegateTypeSymbol:
                 return type.ClrType == null;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Recursively substitutes immediate children of built-in composite types.
+    /// Construction-specific callers remain responsible for user/imported
+    /// generic symbols, while every shared wrapper shape is rebuilt here.
+    /// </summary>
+    /// <param name="type">Potential composite type.</param>
+    /// <param name="substitute">Recursive substitution callback.</param>
+    /// <param name="result">Rebuilt type, or <paramref name="type"/> when unchanged/unrecognized.</param>
+    /// <returns>Whether <paramref name="type"/> is a handled composite shape.</returns>
+    internal static bool TrySubstituteCompositeType(
+        TypeSymbol type,
+        Func<TypeSymbol, TypeSymbol> substitute,
+        out TypeSymbol result)
+    {
+        result = type;
+        switch (type)
+        {
+            case NullableTypeSymbol nullable:
+                var nullableInner = substitute(nullable.UnderlyingType);
+                result = ReferenceEquals(nullableInner, nullable.UnderlyingType)
+                    ? type
+                    : NullableTypeSymbol.Get(nullableInner);
+                return true;
+            case SliceTypeSymbol slice:
+                var sliceElement = substitute(slice.ElementType);
+                result = ReferenceEquals(sliceElement, slice.ElementType)
+                    ? type
+                    : SliceTypeSymbol.Get(sliceElement);
+                return true;
+            case ArrayTypeSymbol array:
+                var arrayElement = substitute(array.ElementType);
+                result = ReferenceEquals(arrayElement, array.ElementType)
+                    ? type
+                    : ArrayTypeSymbol.Get(arrayElement, array.Length);
+                return true;
+            case RectangularArrayTypeSymbol rectangular:
+                var rectangularElement = substitute(rectangular.ElementType);
+                result = ReferenceEquals(rectangularElement, rectangular.ElementType)
+                    ? type
+                    : RectangularArrayTypeSymbol.Get(rectangularElement, rectangular.Rank);
+                return true;
+            case PinnedTypeSymbol pinned:
+                var pinnedInner = substitute(pinned.UnderlyingType);
+                result = ReferenceEquals(pinnedInner, pinned.UnderlyingType)
+                    ? type
+                    : new PinnedTypeSymbol(pinnedInner);
+                return true;
+            case NullabilityAnnotatedTypeSymbol annotated:
+                var annotatedBase = substitute(annotated.BaseType);
+                result = ReferenceEquals(annotatedBase, annotated.BaseType)
+                    ? type
+                    : new NullabilityAnnotatedTypeSymbol(annotatedBase, annotated.NullableFlags);
+                return true;
+            case SequenceTypeSymbol sequence:
+                var sequenceElement = substitute(sequence.ElementType);
+                result = ReferenceEquals(sequenceElement, sequence.ElementType)
+                    ? type
+                    : SequenceTypeSymbol.Get(sequenceElement);
+                return true;
+            case AsyncSequenceTypeSymbol asyncSequence:
+                var asyncSequenceElement = substitute(asyncSequence.ElementType);
+                result = ReferenceEquals(asyncSequenceElement, asyncSequence.ElementType)
+                    ? type
+                    : AsyncSequenceTypeSymbol.Get(asyncSequenceElement);
+                return true;
+            case ChannelTypeSymbol channel:
+                var channelElement = substitute(channel.ElementType);
+                result = ReferenceEquals(channelElement, channel.ElementType)
+                    ? type
+                    : ChannelTypeSymbol.Get(channelElement);
+                return true;
+            case MapTypeSymbol map:
+                var mapKey = substitute(map.KeyType);
+                var mapValue = substitute(map.ValueType);
+                result = ReferenceEquals(mapKey, map.KeyType)
+                    && ReferenceEquals(mapValue, map.ValueType)
+                    ? type
+                    : MapTypeSymbol.Get(mapKey, mapValue);
+                return true;
+            case TupleTypeSymbol tuple:
+                var tupleElements = ImmutableArray.CreateBuilder<TypeSymbol>(tuple.ElementTypes.Length);
+                var tupleChanged = false;
+                foreach (var elementType in tuple.ElementTypes)
+                {
+                    var substitutedElement = substitute(elementType);
+                    tupleElements.Add(substitutedElement);
+                    tupleChanged |= !ReferenceEquals(substitutedElement, elementType);
+                }
+
+                result = tupleChanged
+                    ? TupleTypeSymbol.Get(tupleElements.MoveToImmutable())
+                    : type;
+                return true;
+            case ByRefTypeSymbol byRef:
+                var byRefPointee = substitute(byRef.PointeeType);
+                result = ReferenceEquals(byRefPointee, byRef.PointeeType)
+                    ? type
+                    : ByRefTypeSymbol.Get(byRefPointee);
+                return true;
+            case PointerTypeSymbol pointer:
+                var pointerPointee = substitute(pointer.PointeeType);
+                result = ReferenceEquals(pointerPointee, pointer.PointeeType)
+                    ? type
+                    : PointerTypeSymbol.Get(pointerPointee);
+                return true;
+            case FunctionTypeSymbol function:
+                var functionParameters = ImmutableArray.CreateBuilder<TypeSymbol>(
+                    function.ParameterTypes.Length);
+                var functionChanged = false;
+                foreach (var parameterType in function.ParameterTypes)
+                {
+                    var substitutedParameter = substitute(parameterType);
+                    functionParameters.Add(substitutedParameter);
+                    functionChanged |= !ReferenceEquals(substitutedParameter, parameterType);
+                }
+
+                var functionReturn = substitute(function.ReturnType);
+                functionChanged |= !ReferenceEquals(functionReturn, function.ReturnType);
+                result = functionChanged
+                    ? FunctionTypeSymbol.Get(
+                        functionParameters.MoveToImmutable(),
+                        function.IsVariadic,
+                        functionReturn)
+                    : type;
+                return true;
+            case FunctionPointerTypeSymbol functionPointer:
+                result = functionPointer.Substitute(substitute);
+                return true;
             default:
                 return false;
         }

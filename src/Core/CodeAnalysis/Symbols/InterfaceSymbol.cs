@@ -611,6 +611,18 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => ConstructedCache.Clear();
 
+    /// <summary>Substitutes a member type through this interface construction.</summary>
+    /// <param name="type">Member type declared on the generic definition.</param>
+    /// <returns>Type closed over this interface's type arguments.</returns>
+    internal TypeSymbol SubstituteMemberType(TypeSymbol type)
+    {
+        return Definition != null
+            && !ReferenceEquals(Definition, this)
+            && !TypeArguments.IsDefaultOrEmpty
+            ? SubstituteType(type, GetTypeSubstitution(), mapClrType)
+            : type;
+    }
+
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
     private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type>? mapClrType)
@@ -819,6 +831,14 @@ public sealed class InterfaceSymbol : TypeSymbol
             return concrete;
         }
 
+        if (TypeSymbol.TrySubstituteCompositeType(
+            type,
+            nested => SubstituteType(nested, subst, mapClrType),
+            out var composite))
+        {
+            return composite;
+        }
+
         // Issue #974: a constructed generic interface used as a member type
         // (e.g. a base interface `ISeq[T]` exposing `IComparable[T]`) carries
         // the definition's type parameters in its arguments. Recurse so they
@@ -958,36 +978,6 @@ public sealed class InterfaceSymbol : TypeSymbol
                 System.Diagnostics.Debug.WriteLine(assertMessage);
                 return imported;
             }
-        }
-
-        if (type is SliceTypeSymbol s)
-        {
-            var sub = SubstituteType(s.ElementType, subst, mapClrType);
-            return sub == s.ElementType ? s : SliceTypeSymbol.Get(sub);
-        }
-
-        if (type is ArrayTypeSymbol a)
-        {
-            var sub = SubstituteType(a.ElementType, subst, mapClrType);
-            return sub == a.ElementType ? a : ArrayTypeSymbol.Get(sub, a.Length);
-        }
-
-        if (type is RectangularArrayTypeSymbol rectangularArray)
-        {
-            var sub = SubstituteType(rectangularArray.ElementType, subst, mapClrType);
-            return sub == rectangularArray.ElementType ? rectangularArray : RectangularArrayTypeSymbol.Get(sub, rectangularArray.Rank);
-        }
-
-        if (type is ChannelTypeSymbol channel)
-        {
-            var sub = SubstituteType(channel.ElementType, subst, mapClrType);
-            return sub == channel.ElementType ? channel : ChannelTypeSymbol.Get(sub);
-        }
-
-        if (type is NullableTypeSymbol n)
-        {
-            var sub = SubstituteType(n.UnderlyingType, subst, mapClrType);
-            return sub == n.UnderlyingType ? n : NullableTypeSymbol.Get(sub);
         }
 
         return type;

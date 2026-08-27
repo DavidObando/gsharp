@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Linq;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -38,12 +40,34 @@ internal static class AccessibilityChecker
     /// <param name="declaringType">The type that declares the member.</param>
     /// <param name="currentFunction">The function whose body contains the access (may be <see langword="null"/> for top-level code).</param>
     /// <returns><see langword="true"/> when the access is permitted.</returns>
-    public static bool IsAccessible(Accessibility accessibility, StructSymbol? declaringType, FunctionSymbol? currentFunction)
+    public static bool IsAccessible(
+        Accessibility accessibility,
+        TypeSymbol? declaringType,
+        FunctionSymbol? currentFunction)
     {
+        if (declaringType is InterfaceSymbol declaringInterface)
+        {
+            if (accessibility != Accessibility.Protected
+                && accessibility != Accessibility.Private)
+            {
+                return true;
+            }
+
+            var enclosingInterface = GetEnclosingInterface(currentFunction);
+            if (accessibility == Accessibility.Private)
+            {
+                return SameDeclaringInterface(enclosingInterface, declaringInterface);
+            }
+
+            return enclosingInterface?.SelfAndAllBaseInterfaces()
+                .Any(candidate => SameDeclaringInterface(candidate, declaringInterface))
+                == true;
+        }
+
         var enclosingType = (currentFunction?.ReceiverType as StructSymbol)
             ?? (currentFunction?.StaticOwnerType as StructSymbol)
             ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
-        return IsAccessibleFromType(accessibility, declaringType, enclosingType);
+        return IsAccessibleFromType(accessibility, declaringType as StructSymbol, enclosingType);
     }
 
     /// <summary>
@@ -87,6 +111,65 @@ internal static class AccessibilityChecker
     }
 
     /// <summary>
+    /// Resolves read accessibility for binder pseudo-variables that represent
+    /// implicit instance/static fields or properties.
+    /// </summary>
+    /// <param name="variable">Potential implicit-member pseudo-variable.</param>
+    /// <param name="currentFunction">Function containing the bare read/call.</param>
+    /// <param name="declaringType">Actual member owner.</param>
+    /// <param name="memberName">Underlying field/property name.</param>
+    /// <param name="accessibility">Field or getter accessibility.</param>
+    /// <returns>Whether the pseudo-variable denotes an inaccessible member read.</returns>
+    public static bool TryGetInaccessibleImplicitMemberRead(
+        VariableSymbol variable,
+        FunctionSymbol? currentFunction,
+        out TypeSymbol? declaringType,
+        out string memberName,
+        out Accessibility accessibility)
+    {
+        declaringType = null;
+        memberName = variable.Name;
+        accessibility = Accessibility.Public;
+        switch (variable)
+        {
+            // Field-like event backing fields are injected into derived scopes
+            // specifically so the declaring/derived type can raise the event.
+            // Subscription accessibility belongs to the EventSymbol path.
+            case ImplicitFieldVariableSymbol eventField
+                when eventField.Field.IsEventBackingField:
+            case ImplicitStaticFieldVariableSymbol staticEventField
+                when staticEventField.Field.IsEventBackingField:
+                return false;
+            case ImplicitFieldVariableSymbol instanceField:
+                declaringType = instanceField.StructType;
+                memberName = instanceField.Field.Name;
+                accessibility = instanceField.Field.Accessibility;
+                break;
+            case ImplicitStaticFieldVariableSymbol staticField:
+                declaringType = (TypeSymbol?)staticField.StructType
+                    ?? staticField.InterfaceType?.Definition
+                    ?? staticField.InterfaceType;
+                memberName = staticField.Field.Name;
+                accessibility = staticField.Field.Accessibility;
+                break;
+            case ImplicitPropertyVariableSymbol instanceProperty:
+                declaringType = instanceProperty.StructType;
+                memberName = instanceProperty.Property.Name;
+                accessibility = instanceProperty.Property.GetterAccessibility;
+                break;
+            case ImplicitStaticPropertyVariableSymbol staticProperty:
+                declaringType = staticProperty.StructType;
+                memberName = staticProperty.Property.Name;
+                accessibility = staticProperty.Property.GetterAccessibility;
+                break;
+            default:
+                return false;
+        }
+
+        return !IsAccessible(accessibility, declaringType, currentFunction);
+    }
+
+    /// <summary>
     /// Issue #2044: walks <see cref="Symbol.ContainingType"/> to the
     /// outermost enclosing type, so nested types declared inside the same
     /// top-level type share `private` access to each other's members.
@@ -124,5 +207,48 @@ internal static class AccessibilityChecker
 
         return string.Equals(a.Name, b.Name, System.StringComparison.Ordinal)
             && string.Equals(a.PackageName, b.PackageName, System.StringComparison.Ordinal);
+    }
+
+    private static InterfaceSymbol? GetEnclosingInterface(FunctionSymbol? function)
+    {
+        var candidates = new[]
+        {
+            function?.ReceiverType,
+            function?.StaticOwnerType,
+            function?.LexicalEnclosingType,
+        };
+        foreach (var candidate in candidates)
+        {
+            for (var current = candidate; current != null; current = current.ContainingType)
+            {
+                if (current is InterfaceSymbol iface)
+                {
+                    return iface;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool SameDeclaringInterface(InterfaceSymbol? left, InterfaceSymbol? right)
+    {
+        if (left == null || right == null)
+        {
+            return false;
+        }
+
+        var leftDefinition = left.Definition ?? left;
+        var rightDefinition = right.Definition ?? right;
+        return ReferenceEquals(leftDefinition, rightDefinition)
+            || ReferenceEquals(leftDefinition.Declaration, rightDefinition.Declaration)
+            || (string.Equals(
+                    leftDefinition.Name,
+                    rightDefinition.Name,
+                    System.StringComparison.Ordinal)
+                && string.Equals(
+                    leftDefinition.PackageName,
+                    rightDefinition.PackageName,
+                    System.StringComparison.Ordinal));
     }
 }

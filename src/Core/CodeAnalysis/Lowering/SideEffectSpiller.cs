@@ -324,7 +324,9 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             receiver,
             rewritten.StructType,
             rewritten.Property,
-            value);
+            value,
+            rewritten.SubstitutedType,
+            rewritten.InterfaceType);
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
     }
@@ -530,6 +532,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
                     inner,
                     BoundNodeForm.DeclaringType(fieldLink),
                     fieldLink.Field,
+                    fieldLink.SubstitutedType,
                     fieldLink.NarrowedType);
             }
 

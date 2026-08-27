@@ -96,6 +96,35 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Recursively substitutes this pointer's parameter and return types while
+    /// preserving its managed/unmanaged ABI.
+    /// </summary>
+    /// <param name="substitute">Substitution applied to each signature type.</param>
+    /// <returns>This symbol when unchanged; otherwise the interned substituted symbol.</returns>
+    internal FunctionPointerTypeSymbol Substitute(System.Func<TypeSymbol, TypeSymbol> substitute)
+    {
+        var parameters = ImmutableArray.CreateBuilder<TypeSymbol>(ParameterTypes.Length);
+        var changed = false;
+        foreach (var parameterType in ParameterTypes)
+        {
+            var substituted = substitute(parameterType);
+            parameters.Add(substituted);
+            changed |= !ReferenceEquals(substituted, parameterType);
+        }
+
+        var returnType = substitute(ReturnType);
+        changed |= !ReferenceEquals(returnType, ReturnType);
+        if (!changed)
+        {
+            return this;
+        }
+
+        return IsManaged
+            ? GetManaged(parameters.MoveToImmutable(), returnType)
+            : Get(CallingConvention, parameters.MoveToImmutable(), returnType);
+    }
+
+    /// <summary>
     /// Removes all entries from the static type cache. Called by
     /// <see cref="ReferenceResolver.Dispose"/> to release stale
     /// <see cref="Type"/> objects backed by a disposed metadata load context

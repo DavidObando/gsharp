@@ -1386,7 +1386,9 @@ internal sealed partial class StatementBinder
                         propertyReceiver,
                         property.StructType,
                         property.Property,
-                        value));
+                        value,
+                        property.SubstitutedType,
+                        property.InterfaceType));
                 return true;
 
             case BoundClrPropertyAssignmentExpression clrProperty:
@@ -1547,6 +1549,7 @@ internal sealed partial class StatementBinder
                         receiver,
                         field.StructType,
                         field.Field,
+                        field.SubstitutedType,
                         field.NarrowedType);
 
             case BoundIndexExpression index:

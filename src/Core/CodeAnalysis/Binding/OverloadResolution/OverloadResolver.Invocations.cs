@@ -66,12 +66,11 @@ internal sealed partial class OverloadResolver
         // IL verification.
         BoundExpression receiverLoad;
         TypeSymbol receiverType;
-        if (variable is ImplicitFieldVariableSymbol implicitField)
-        {
-            receiverLoad = BuildImplicitFieldLoad(implicitField, narrowedTargetType);
-            receiverType = receiverLoad.Type;
-        }
-        else if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad, narrowedTargetType))
+        if (TryBuildImplicitMemberLoad(
+            variable,
+            syntax.Identifier.Location,
+            out var memberLoad,
+            narrowedTargetType))
         {
             receiverLoad = Invariant.Required(memberLoad, "an implicit member load succeeds with a bound expression");
             receiverType = receiverLoad.Type ?? narrowedTargetType ?? variable.Type;
@@ -153,23 +152,6 @@ internal sealed partial class OverloadResolver
         return new BoundNullConditionalAccessExpression(
             syntax, receiverLoad, capture, whenNotNull, resultType, resultSlot);
     }
-
-    /// <summary>
-    /// Issue #1213 / #1221: loads an <see cref="ImplicitFieldVariableSymbol"/>
-    /// (the implicit <c>this</c>-field exposed for a bare field/event name) as
-    /// a field read on its declaring type. The declaring type carried by the
-    /// symbol may be a base class, producing the correct base field token when
-    /// the access originates from a derived method.
-    /// </summary>
-    private static BoundExpression BuildImplicitFieldLoad(
-        ImplicitFieldVariableSymbol implicitField,
-        TypeSymbol? narrowedType = null) =>
-        new BoundFieldAccessExpression(
-            null,
-            new BoundVariableExpression(null, implicitField.Receiver),
-            implicitField.StructType,
-            implicitField.Field,
-            narrowedType);
 
     private bool TryBindNullableDelegateInvocation(
         VariableSymbol variable,
@@ -317,6 +299,12 @@ internal sealed partial class OverloadResolver
         ImmutableArray<string> argumentNames,
         ImmutableArray<string> parameterNames = default)
     {
+        if (functionPointerType.IsManaged && !binderCtx.InUnsafeContext)
+        {
+            Diagnostics.ReportUnmanagedPointerOutsideUnsafe(calleeLocation);
+            return new BoundErrorExpression(null);
+        }
+
         if (syntax.Arguments.Count != functionPointerType.Arity)
         {
             Diagnostics.ReportWrongArgumentCount(

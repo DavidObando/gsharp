@@ -259,6 +259,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
+                    if (!fn.IsVariadic.IsDefaultOrEmpty && fn.IsVariadic[i])
+                    {
+                        builder.Append("...");
+                    }
+
                     AppendIdentityKey(builder, fn.ParameterTypes[i]);
                 }
 
@@ -298,6 +303,8 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             case PinnedTypeSymbol:
             case NullabilityAnnotatedTypeSymbol:
             case TupleTypeSymbol:
+            case PointerTypeSymbol:
+            case FunctionPointerTypeSymbol:
                 AppendStructuralKey(builder, type);
                 break;
 
@@ -420,6 +427,37 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             case ByRefTypeSymbol br:
                 builder.Append("!byref(");
                 AppendIdentityKey(builder, br.PointeeType);
+                builder.Append(')');
+                break;
+            case PointerTypeSymbol pointer:
+                builder.Append("!ptr(");
+                AppendIdentityKey(builder, pointer.PointeeType);
+                builder.Append(')');
+                break;
+            case FunctionPointerTypeSymbol functionPointer:
+                if (functionPointer.IsManaged)
+                {
+                    builder.Append("!fnptr:m(");
+                }
+                else
+                {
+                    builder.Append("!fnptr:u[")
+                        .Append(functionPointer.CallingConvention)
+                        .Append("](");
+                }
+
+                for (var i = 0; i < functionPointer.ParameterTypes.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    AppendIdentityKey(builder, functionPointer.ParameterTypes[i]);
+                }
+
+                builder.Append(")->");
+                AppendIdentityKey(builder, functionPointer.ReturnType);
                 builder.Append(')');
                 break;
             case StructSymbol st when !st.EnclosingTypeArguments.IsDefaultOrEmpty || !st.TypeArguments.IsDefaultOrEmpty:

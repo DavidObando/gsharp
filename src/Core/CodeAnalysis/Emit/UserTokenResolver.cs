@@ -1774,6 +1774,67 @@ internal sealed class UserTokenResolver
     }
 
     /// <summary>
+    /// Resolves a user-interface property accessor against its effective
+    /// interface construction. Generic interfaces use a TypeSpec-parented
+    /// MemberRef so VAR slots in the open accessor signature are closed by
+    /// the receiver construction.
+    /// </summary>
+    /// <param name="containingInterface">Effective interface owner.</param>
+    /// <param name="property">Property slot.</param>
+    /// <param name="wantSetter">Whether to resolve the setter.</param>
+    /// <returns>Accessor MethodDef or constructed MemberRef.</returns>
+    internal EntityHandle ResolveUserPropertyAccessorToken(
+        InterfaceSymbol containingInterface,
+        PropertySymbol property,
+        bool wantSetter)
+    {
+        var definition = containingInterface.Definition ?? containingInterface;
+        var definitionProperty = property;
+        if (!ReferenceEquals(definition, containingInterface))
+        {
+            foreach (var candidate in definition.Properties)
+            {
+                if (candidate.Name == property.Name
+                    && candidate.IsIndexer == property.IsIndexer)
+                {
+                    definitionProperty = candidate;
+                    break;
+                }
+            }
+        }
+
+        if (!this.cache.PropertyAccessorHandles.TryGetValue(
+            definitionProperty,
+            out var handles))
+        {
+            throw new InvalidOperationException(
+                $"Interface property '{property.Name}' has no emitted accessor handles.");
+        }
+
+        var accessor = wantSetter ? handles.Setter : handles.Getter;
+        if (!accessor.HasValue)
+        {
+            throw new InvalidOperationException(
+                $"Interface property '{property.Name}' has no emitted {(wantSetter ? "setter" : "getter")} MethodDef.");
+        }
+
+        if (!ReflectionMetadataEmitter.IsUserGenericInterfaceReference(containingInterface))
+        {
+            return accessor.Value;
+        }
+
+        var accessorName = (wantSetter ? "set_" : "get_")
+            + definitionProperty.Name;
+        return this.GetUserInterfaceMethodRef(
+            containingInterface,
+            accessor.Value,
+            accessorName,
+            this.EncodeOpenPropertyAccessorSignature(
+                definitionProperty,
+                wantSetter));
+    }
+
+    /// <summary>
     /// Issue #989: encodes the open accessor signature for a user property,
     /// matching the MethodDef shape emitted by <c>MemberDefEmitter</c>: a
     /// getter is <c>instance PropertyType get_Name(indexParams...)</c>; a setter

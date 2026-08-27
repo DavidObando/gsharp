@@ -651,6 +651,24 @@ internal sealed partial class OverloadResolver
         }
 
         var symbol = Scope.TryLookupSymbol(syntax.Identifier.Text);
+        if (symbol is VariableSymbol callTarget
+            && AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
+                callTarget,
+                getCurrentFunction(),
+                out var declaringOwner,
+                out var memberName,
+                out var memberAccessibility))
+        {
+            var owner = Invariant.Required(
+                declaringOwner,
+                "an inaccessible implicit callable member has a declaring owner");
+            Diagnostics.ReportMemberInaccessible(
+                syntax.Identifier.Location,
+                memberName,
+                owner.Name,
+                memberAccessibility);
+            return new BoundErrorExpression(null);
+        }
 
         // Issue #2066: a smart-cast null-guard (`if x != nil { x(...) }`)
         // narrows the static type seen by a bare *read* of `x`, but the direct
@@ -1169,11 +1187,7 @@ internal sealed partial class OverloadResolver
             // shape so emit can parent Invoke at the reified generic TypeSpec
             // instead of the nullable declaration's erased ClrType.
             BoundExpression receiver;
-            if (delegateVar is ImplicitFieldVariableSymbol clrImplicitField)
-            {
-                receiver = BuildImplicitFieldLoad(clrImplicitField, narrowedCallTargetType);
-            }
-            else if (TryBuildImplicitMemberLoad(
+            if (TryBuildImplicitMemberLoad(
                 delegateVar,
                 syntax.Identifier.Location,
                 out var clrMemberLoad,
