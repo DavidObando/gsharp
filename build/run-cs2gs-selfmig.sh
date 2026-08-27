@@ -35,6 +35,17 @@ work_root=$(cd "$work_root" && pwd -P)
 migrated_dir="$work_root/migrated"
 runs_dir="$work_root/runs"
 
+# MSBuildWorkspace design-time project loads evaluate in Debug regardless of
+# --config Release, and Gsharp.Extensions.csproj's Bootstrap SDK import
+# hard-errors when out/bin/Debug/{Compiler/gsc.dll, Gsharp.NET.Sdk/
+# Gsharp.NET.Sdk.dll} are missing — which fails ProjectLoad (CS2GS0001) for
+# every app that transitively references Gsharp.Extensions (Repl, the
+# Compiler/Extensions/Interpreter test projects, ...). Build both Debug
+# prerequisites up front; the Compiler must come first because the SDK build
+# compiles Gsharp.Extensions' .gs sources with the bootstrap gsc.
+dotnet build "$repo_root/src/Compiler/Compiler.csproj" -c Debug -graph
+dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --corpus "$repo_root" \
