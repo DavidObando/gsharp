@@ -376,6 +376,12 @@ public sealed class ImportedClassSymbol : Symbol
             filteredNameMatches.Add(method);
         }
 
+        // Issue #3501: `structuralProjectionArgumentCheck` (the ADR-0148
+        // symbol-aware applicability fallback) was wired on the
+        // instance/extension call paths but not here — a `[T ImportedBase]`-
+        // typed argument erases to `object`, so a static imported call like
+        // `ImmutableArray.Create[Base](T())` found no applicable candidate
+        // even though `T -> Base` is a constraint-proven implicit conversion.
         var result = ClrOverloadResolution.Resolve<MethodInfo>(
             filteredNameMatches,
             argTypes,
@@ -393,6 +399,7 @@ public sealed class ImportedClassSymbol : Symbol
             },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(arguments),
             delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
                 arguments,

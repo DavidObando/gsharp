@@ -1949,16 +1949,8 @@ internal sealed class MemberLookup
 
         switch (t)
         {
-            case TypeParameterSymbol typeParam:
-                // Issue #3501: a type parameter with a CLR-backed class
-                // constraint erases to that class, not bare `object` — a
-                // `[T Base init()]`-typed argument passed to an imported
-                // `Base`-typed parameter must gate as assignable
-                // (`ImmutableArray.Create[Base](T())`, the
-                // GSharpAnalyzerVerifier wall). Erasing tighter is sound for
-                // gating: any `object`-typed candidate still accepts the
-                // constraint class.
-                erased = typeParam.ClassConstraint?.ClrType ?? typeof(object);
+            case TypeParameterSymbol:
+                erased = typeof(object);
                 return true;
             case SliceTypeSymbol slice:
                 if (TryProjectErasedClrType(slice.ElementType, out var sliceElement)
