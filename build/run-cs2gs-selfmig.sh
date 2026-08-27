@@ -16,11 +16,11 @@
 # baseline within the same PR so progress ratchets.
 #
 # E2E fixtures that are not migration targets are excluded via --exclude.
-# The two net472 VS-extension apps (VsGsharp, VsGsharp.CodeLens) are excluded
-# by policy: they build only under the Windows-only VSSDK toolchain (VSCT
-# compile, pkgdef), so the Linux gate cannot even load them (no net472
-# targeting pack) and a migrated G# build has no toolchain to run against.
-# VsGsharp.UnitTests (net10.0) stays in the corpus.
+# The Visual Studio extension stays in C# by decision (like the VSCode
+# extension stays in TypeScript), so all three vs-gsharp apps are excluded:
+# VsGsharp and VsGsharp.CodeLens build only under the Windows-only VSSDK
+# toolchain (VSCT compile, pkgdef), and VsGsharp.UnitTests tests the
+# permanently-C# extension via linked sources.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -61,6 +61,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --exclude samples/PropertyRef/CSharpApp \
   --exclude src/vs-gsharp/src/VsGsharp/VsGsharp.csproj \
   --exclude src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj \
+  --exclude src/vs-gsharp/test/VsGsharp.UnitTests \
   --exclude tools/cs2gs/corpus/CompileGap-Library \
   | tee "$work_root/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
