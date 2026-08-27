@@ -62,7 +62,22 @@ rewriting to the direct `Identifier` token), `ArgumentSyntax` →
 `ExpressionSyntax` (G# call arguments are bare expressions with no wrapper
 type, so a variable or lambda parameter typed `ArgumentSyntax` maps directly),
 `.ArgumentList`/`.ParameterList` drop to their direct `.Arguments`/`.Parameters`
-members, a bare `ArgumentSyntax.Expression` drop to the argument itself, and
+members — each restricted to its one verified receiver type
+(`InvocationExpressionSyntax` and `MethodDeclarationSyntax` respectively,
+checked via the resolved property's declaring type, not spelling), because
+Roslyn's other `ArgumentList`/`ParameterList`-bearing node kinds each
+independently declare their own same-named property with no shared base. For
+`ArgumentList`, `ElementAccessExpressionSyntax` and
+`ObjectCreationExpressionSyntax` are both already mapped to a differently-
+shaped G# node (`IndexExpressionSyntax.Indices`; a nested `Target` call) that
+does not expose `Arguments`, so admitting them would silently rewrite to a
+nonexistent member on an otherwise-clean translation. For `ParameterList`,
+`ConstructorDeclarationSyntax`, `LocalFunctionStatementSyntax`, lambda
+expressions, `DelegateDeclarationSyntax`, `IndexerDeclarationSyntax`, and
+type declarations (primary constructors) have no G# analyzer-API mapping at
+all today, so the restriction is defense-in-depth against a future mapping
+landing without revisiting this idiom — a bare `ArgumentSyntax.Expression`
+drop to the argument itself, and
 `Modifiers.Any(SyntaxKind.OverrideKeyword)` → `.IsOverride`. The C# base-call
 detection idiom (`invocation.Expression is MemberAccessExpressionSyntax {
 Expression: BaseExpressionSyntax }`) is also now idiom-rewritten: G# gives

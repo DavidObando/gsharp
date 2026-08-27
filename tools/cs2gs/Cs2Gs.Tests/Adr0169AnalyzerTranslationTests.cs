@@ -535,6 +535,76 @@ public sealed class ArgumentListSpanAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void ArgumentListIdiom_RestrictedToInvocationReceiver_OtherMappedReceiversStayLoud()
+    {
+        // Copilot review of #3556: the '.ArgumentList.Arguments' drop must
+        // only fire for an InvocationExpressionSyntax receiver.
+        // ElementAccessExpressionSyntax and ObjectCreationExpressionSyntax
+        // each independently declare their own same-named ArgumentList
+        // property, and — unlike the '.Span' case in the test above — BOTH
+        // receiver types themselves DO have a mapped G# counterpart
+        // (IndexExpressionSyntax with Indices; ObjectCreationExpressionSyntax
+        // with a nested Target call), so nothing else here would otherwise
+        // flag the mismatch: dropping the wrapper for them would silently
+        // reference a nonexistent 'Arguments' member on an
+        // otherwise-cleanly-translated receiver. Both must stay untranslated
+        // (identity 'ArgumentList') and fail loudly only at bind time.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OtherArgumentListReceiversAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(AnalyzeElementAccess, SyntaxKind.ElementAccessExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeObjectCreation, SyntaxKind.ObjectCreationExpression);
+    }
+
+    private static void AnalyzeElementAccess(SyntaxNodeAnalysisContext context)
+    {
+        var elementAccess = (ElementAccessExpressionSyntax)context.Node;
+        int count = elementAccess.ArgumentList.Arguments.Count;
+        _ = count;
+    }
+
+    private static void AnalyzeObjectCreation(SyntaxNodeAnalysisContext context)
+    {
+        var objectCreation = (ObjectCreationExpressionSyntax)context.Node;
+        int count = objectCreation.ArgumentList.Arguments.Count;
+        _ = count;
+    }
+}
+");
+
+        Assert.Contains("elementAccess.ArgumentList", printed, StringComparison.Ordinal);
+        Assert.Contains("objectCreation.ArgumentList", printed, StringComparison.Ordinal);
+
+        var trees = new[]
+        {
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+                GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "otherargumentlist.gs")),
+        };
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
+            new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees) { IsLibrary = true };
+        bool translationIsLoud = diagnostics.Any(d => d.Severity == TranslationSeverity.Unsupported)
+            || trees.Any(t => !t.Diagnostics.IsEmpty)
+            || compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).Any(d => d.IsError);
+        Assert.True(
+            translationIsLoud,
+            "ElementAccessExpressionSyntax/ObjectCreationExpressionSyntax '.ArgumentList' reads should fail loudly, not silently reference a nonexistent 'Arguments' member:\n" + printed);
+    }
+
+    [Fact]
     public void PatternSyntaxParameter_TranslatesExactly()
     {
         // Issue #3536 (GSA0005 groundwork): Roslyn's PatternSyntax and G#'s
