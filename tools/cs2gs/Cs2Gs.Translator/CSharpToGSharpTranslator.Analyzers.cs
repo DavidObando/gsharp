@@ -225,11 +225,22 @@ public sealed partial class CSharpToGSharpTranslator
         /// <summary>
         /// Rewrites the C# switch-label walk idiom
         /// (<c>switchStatement.Sections.SelectMany(s => s.Labels).OfType&lt;CasePatternSwitchLabelSyntax&gt;()</c>)
-        /// to a direct walk over G#'s cases: G# switch cases carry one pattern
+        /// to a direct walk over G#'s cases. G# switch cases carry one pattern
         /// each via <c>SwitchCaseSyntax.Value</c> with no section/label
-        /// nesting, and have no <c>default</c>-arm subtype to filter with
-        /// <c>OfType</c> — <c>Cases.Where(c =&gt; !c.IsDefault)</c> is the
-        /// faithful equivalent (#3536).
+        /// nesting, and have no <c>default</c>-arm or pattern-label subtype to
+        /// filter with <c>OfType</c>. Roslyn's <c>CasePatternSwitchLabelSyntax</c>
+        /// excludes both the <c>default</c> arm and plain constant labels
+        /// (<c>CaseSwitchLabelSyntax</c>, e.g. <c>case 5:</c>) — cs2gs's own
+        /// switch-label translation (<see cref="CSharpToGSharpTranslator"/>'s
+        /// case-label lowering) turns a plain constant label into a G#
+        /// <c>ConstantPatternSyntax</c> value with no guard, while a guarded
+        /// constant (<c>case 5 when b:</c>, still a
+        /// <c>CasePatternSwitchLabelSyntax</c> in Roslyn because <c>when</c>
+        /// forces pattern-label parsing) keeps a non-null <c>Guard</c>. So the
+        /// faithful G# equivalent excludes the <c>default</c> arm and any
+        /// unguarded <c>ConstantPatternSyntax</c> value: <c>Cases.Where(c =&gt;
+        /// !c.IsDefault &amp;&amp; (c.Guard != nil || c.Value is not
+        /// ConstantPatternSyntax))</c> (#3536).
         /// </summary>
         private bool TryTranslateAnalyzerSwitchLabelWalk(InvocationExpressionSyntax invocation, out GExpression result)
         {
@@ -254,7 +265,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             this.context.Report(new TranslationDiagnostic(
                 "analyzer-api",
-                "'Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()' translated as 'Cases.Where(c => !c.IsDefault)': G# switch cases carry one pattern each with no section/label nesting or default-arm subtype.",
+                "'Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()' translated as 'Cases.Where(c => !c.IsDefault && (c.Guard != nil || c.Value is not ConstantPatternSyntax))': G# switch cases carry one pattern each with no section/label nesting or default-arm/pattern-label subtype, so the walk excludes the default arm and unguarded constant-value cases (Roslyn's plain, non-pattern case labels) to keep only genuine pattern labels.",
                 invocation.GetLocation(),
                 TranslationSeverity.Warning)
             {
@@ -267,9 +278,21 @@ public sealed partial class CSharpToGSharpTranslator
                 "Cases",
                 isArrow: false);
             var filterParameter = new Parameter("switchCase", new NamedTypeReference("SwitchCaseSyntax"));
-            GExpression filterBody = new UnaryExpression(
+            GExpression switchCaseIdentifier = new IdentifierExpression("switchCase");
+            GExpression notDefault = new UnaryExpression(
                 "!",
-                new MemberAccessExpression(new IdentifierExpression("switchCase"), "IsDefault", isArrow: false));
+                new MemberAccessExpression(switchCaseIdentifier, "IsDefault", isArrow: false));
+            GExpression hasGuard = new BinaryExpression(
+                new MemberAccessExpression(switchCaseIdentifier, "Guard", isArrow: false),
+                "!=",
+                LiteralExpression.Null());
+            GExpression valueIsNotConstant = new PatternTestExpression(
+                new MemberAccessExpression(switchCaseIdentifier, "Value", isArrow: false),
+                new NotPattern(new TypePattern("_", new NamedTypeReference("ConstantPatternSyntax"), designationAfterType: true)));
+            GExpression filterBody = new BinaryExpression(
+                notDefault,
+                "&&",
+                new BinaryExpression(hasGuard, "||", valueIsNotConstant));
             result = new InvocationExpression(
                 new MemberAccessExpression(cases, "Where", isArrow: false),
                 new List<GExpression>

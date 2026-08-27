@@ -108,7 +108,7 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "SwitchStatementSyntax",
-            "G# switch cases carry one pattern each (SwitchCaseSyntax.Value) with no section/label nesting; a Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>() walk is idiom-rewritten to Cases.Where(c => !c.IsDefault) (#3536)."),
+            "G# switch cases carry one pattern each (SwitchCaseSyntax.Value) with no section/label nesting; a Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>() walk is idiom-rewritten to Cases.Where(c => !c.IsDefault && (c.Guard != nil || c.Value is not ConstantPatternSyntax)) (#3536)."),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "SwitchCaseSyntax",

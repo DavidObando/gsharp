@@ -611,9 +611,14 @@ public sealed class BaseCallAnalyzer : DiagnosticAnalyzer
     public void SwitchLabelWalk_TranslatesToCasesWhereNotDefault()
     {
         // Issue #3536 (GSA0005 groundwork): G# switch cases carry one pattern
-        // each with no section/label nesting and no default-arm subtype, so
-        // the Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()
-        // walk rewrites to a direct Cases.Where(c => !c.IsDefault) walk.
+        // each with no section/label nesting and no default-arm or
+        // pattern-label subtype. Roslyn's OfType<CasePatternSwitchLabelSyntax>()
+        // excludes both the default arm AND plain constant labels (Copilot
+        // review of #3556: `!c.IsDefault` alone would wrongly keep constant
+        // labels too), so the walk rewrites to
+        // Cases.Where(c => !c.IsDefault && (c.Guard != nil || c.Value is not
+        // ConstantPatternSyntax)) — a guarded constant (`case 5 when b:`) is
+        // still a Roslyn CasePatternSwitchLabelSyntax, kept via the Guard check.
         var (printed, diagnostics) = TranslateAnalyzer(@"
 using System.Linq;
 using System.Collections.Generic;
@@ -646,12 +651,68 @@ public sealed class SwitchWalkAnalyzer : DiagnosticAnalyzer
         Assert.Contains(".Cases", printed, StringComparison.Ordinal);
         Assert.Contains(".Where(", printed, StringComparison.Ordinal);
         Assert.Contains(".IsDefault", printed, StringComparison.Ordinal);
+        Assert.Contains(".Guard", printed, StringComparison.Ordinal);
+        Assert.Contains("ConstantPatternSyntax", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("SelectMany", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Sections", printed, StringComparison.Ordinal);
         Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
             && d.Message.Contains("Cases.Where", StringComparison.Ordinal));
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void SwitchLabelWalk_FilterPredicate_KeepsOnlyPatternLabelsAgainstRealGsCases()
+    {
+        // Copilot review of #3556: prove the actual filter predicate
+        // ('!c.IsDefault && (c.Guard != nil || c.Value is not
+        // ConstantPatternSyntax)') against real GSharp.Core.CodeAnalysis
+        // SwitchCaseSyntax nodes parsed from a switch with all four label
+        // kinds cs2gs's own translation can produce on the ANALYZED-code
+        // side: a plain constant label (Roslyn CaseSwitchLabelSyntax, no
+        // pattern-label counterpart), a guarded constant label (still a
+        // Roslyn CasePatternSwitchLabelSyntax, since 'when' forces
+        // pattern-label parsing), a real pattern label, and 'default'. Only
+        // the guarded-constant and pattern arms should survive — a plain
+        // '!IsDefault' filter would wrongly keep the plain constant arm too.
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From(
+                @"
+func Run(v object) string {
+    switch v {
+        case 1 {
+            return ""plain-constant""
+        }
+        case 1 when true {
+            return ""guarded-constant""
+        }
+        case string s {
+            return ""pattern""
+        }
+        default {
+            return ""default""
+        }
+    }
+}
+",
+                "switchfilter.gs"));
+        Assert.Empty(tree.Diagnostics);
+
+        var switchStatement = tree.Root
+            .DescendantNodes()
+            .OfType<GSharp.Core.CodeAnalysis.Syntax.SwitchStatementSyntax>()
+            .Single();
+
+        bool Keep(GSharp.Core.CodeAnalysis.Syntax.SwitchCaseSyntax c) =>
+            !c.IsDefault && (c.Guard != null || c.Value is not GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+
+        var kept = switchStatement.Cases.Where(Keep).ToList();
+
+        Assert.Equal(2, kept.Count);
+        Assert.All(kept, c => Assert.False(c.IsDefault));
+        Assert.Contains(kept, c => c.Guard != null && c.Value is GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+        Assert.Contains(kept, c => c.Guard is null && c.Value is not GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+        Assert.DoesNotContain(kept, c => c.Guard is null && c.Value is GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
     }
 
     [Fact]

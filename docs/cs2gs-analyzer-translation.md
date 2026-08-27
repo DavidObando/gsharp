@@ -44,12 +44,19 @@ the plausible-but-wrong risk class the loud ratchet exists to prevent.
 direct, unambiguous G# counterpart is now mapped/idiom-rewritten (see
 `RoslynAnalyzerApiMap` and `CSharpToGSharpTranslator.Analyzers.cs`):
 `PatternSyntax` (exact, name and namespace both carry over), `SwitchStatementSyntax`
-and `CasePatternSwitchLabelSyntax` → `SwitchCaseSyntax` (type-level), with the
+→ `SwitchStatementSyntax` (type-level, exact) and `CasePatternSwitchLabelSyntax`
+→ `SwitchCaseSyntax` (type-level, Adapted — G# has no per-label node), with the
 `Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()`
-walk itself now idiom-rewritten to a direct `Cases.Where(c => !c.IsDefault)`
-walk (G# switch cases carry one pattern each via `SwitchCaseSyntax.Value`,
-with no section/label nesting and no `default`-arm subtype to `OfType`
-against), `SubpatternSyntax` → `PropertyPatternFieldSyntax` (type-level;
+walk itself now idiom-rewritten to `Cases.Where(c => !c.IsDefault && (c.Guard
+!= nil || c.Value is not ConstantPatternSyntax))` (G# switch cases carry one
+pattern each via `SwitchCaseSyntax.Value`, with no section/label nesting and
+no `default`-arm or pattern-label subtype to `OfType` against; Roslyn's
+`OfType<CasePatternSwitchLabelSyntax>()` excludes both the `default` arm and
+plain constant labels (`CaseSwitchLabelSyntax`, e.g. `case 5:`), so the G#
+walk excludes the default arm and any unguarded `ConstantPatternSyntax`
+value — a guarded constant like `case 5 when b:` is still a Roslyn
+`CasePatternSwitchLabelSyntax`, kept via the `Guard` check), `SubpatternSyntax`
+→ `PropertyPatternFieldSyntax` (type-level;
 the `ExpressionColon.Expression` idiom that reads the field name still needs
 rewriting to the direct `Identifier` token), `ArgumentSyntax` →
 `ExpressionSyntax` (G# call arguments are bare expressions with no wrapper
