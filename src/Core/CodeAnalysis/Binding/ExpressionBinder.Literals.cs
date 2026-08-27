@@ -85,13 +85,12 @@ internal sealed partial class ExpressionBinder
             }
             else if (TryGetNestedUnboundGenericReflectionSegments(typeClause, out var reflectionSegments, out var firstGenericSegment))
             {
-                bool resolved = TryResolveNestedUnboundGenericType(
+                var qualifiedType = ResolveNestedUnboundGenericType(
                     reflectionSegments,
                     firstGenericSegment,
-                    out var qualifiedType,
                     out var reflectionName,
                     out var isAmbiguous);
-                if (!resolved)
+                if (qualifiedType == null)
                 {
                     if (isAmbiguous)
                     {
@@ -277,14 +276,12 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private bool TryResolveNestedUnboundGenericType(
+    private Type? ResolveNestedUnboundGenericType(
         string[] segments,
         int firstGenericSegment,
-        out Type type,
         out string reflectionName,
         out bool isAmbiguous)
     {
-        type = null!;
         reflectionName = string.Empty;
         isAmbiguous = false;
         for (var firstTypeSegment = firstGenericSegment; firstTypeSegment >= 0; firstTypeSegment--)
@@ -298,27 +295,26 @@ internal sealed partial class ExpressionBinder
             reflectionName = builder.ToString();
             if (scope.References.TryResolveType(reflectionName, out var direct) && direct != null)
             {
-                type = direct;
-                return true;
+                return direct;
             }
 
-            if (TryResolveImportedReflectionType(reflectionName, out type, out isAmbiguous))
+            var imported = ResolveImportedReflectionType(reflectionName, out isAmbiguous);
+            if (imported != null)
             {
-                return true;
+                return imported;
             }
 
             if (isAmbiguous)
             {
-                return false;
+                return null;
             }
         }
 
-        return false;
+        return null;
     }
 
-    private bool TryResolveImportedReflectionType(string reflectionName, out Type type, out bool isAmbiguous)
+    private Type? ResolveImportedReflectionType(string reflectionName, out bool isAmbiguous)
     {
-        type = null!;
         isAmbiguous = false;
         Type? match = null;
         foreach (var import in scope.GetDeclaredImports())
@@ -331,19 +327,13 @@ internal sealed partial class ExpressionBinder
             if (match != null && match != candidate)
             {
                 isAmbiguous = true;
-                return false;
+                return null;
             }
 
             match = candidate;
         }
 
-        if (match == null)
-        {
-            return false;
-        }
-
-        type = match;
-        return true;
+        return match;
     }
 
     /// <summary>
