@@ -258,6 +258,43 @@ internal sealed partial class OverloadResolver
             return true;
         }
 
+        if (HasEnclosingMemberCallableCandidate(name))
+        {
+            return true;
+        }
+
+        // Issue #1159: the implicit `this` an unqualified instance-member
+        // reference would bind against (mirrors GetEffectiveThisParameter's
+        // callers below).
+        var effThis = GetEffectiveThisParameter();
+        if (effThis?.Type is StructSymbol receiverStruct)
+        {
+            // An imported type with the same simple name as an inherited CLR
+            // method must not turn an implicit-receiver call into construction.
+            var inheritedClr = ExpressionBinder.GetInheritedClrBaseType(receiverStruct) ?? typeof(object);
+            if (MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(inheritedClr, name).Count > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3527: whether <paramref name="name"/> resolves to a genuine
+    /// member of the type lexically enclosing the current call — an instance
+    /// or static (`shared`) sibling method reached through the implicit
+    /// <c>this</c> (issue #1147) or implicit static-self (issue #1585) paths,
+    /// or a private helper on an enclosing interface default/static method
+    /// body (ADR-0085 / ADR-0089 / ADR-0090). Member scope always shadows
+    /// package scope inside the declaring type, mirroring C#: an unqualified
+    /// call to a same-named member must never fall through to a same-named
+    /// top-level package function or a same-named import, even though both
+    /// are also visible through <see cref="Scope"/>.
+    /// </summary>
+    private bool HasEnclosingMemberCallableCandidate(string name)
+    {
         // Issue #1159: the implicit `this` an unqualified instance-member
         // reference would bind against (mirrors GetEffectiveThisParameter's
         // callers below).
@@ -269,14 +306,6 @@ internal sealed partial class OverloadResolver
             // overload set of the enclosing type — mirror that union here.
             if (!TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty
                 || !TypeMemberModel.GetMethods(receiverStruct, name, MemberQuery.Static(MemberKinds.Method)).IsDefaultOrEmpty)
-            {
-                return true;
-            }
-
-            // An imported type with the same simple name as an inherited CLR
-            // method must not turn an implicit-receiver call into construction.
-            var inheritedClr = ExpressionBinder.GetInheritedClrBaseType(receiverStruct) ?? typeof(object);
-            if (MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(inheritedClr, name).Count > 0)
             {
                 return true;
             }
@@ -697,7 +726,19 @@ internal sealed partial class OverloadResolver
         // from types with no such member, are unaffected).
         var resolvedIsExtensionOnly = symbol is FunctionSymbol
             && IsAllExtensionOverloadSet(syntax.Identifier.Text);
-        if (symbol == null || resolvedIsExtensionOnly)
+
+        // Issue #3527: a same-named PACKAGE-level function is visible through
+        // the same scope symbol table as any enclosing-type member (issue
+        // #1566's extension case above), but must not shadow a genuine
+        // instance/static (`shared`) sibling method — member scope always
+        // wins over package scope inside the declaring type. Without this, an
+        // unqualified call inside a `shared` method silently bound to a
+        // same-named package function ahead of the type's own (possibly
+        // private) `shared` method, with no diagnostic.
+        var resolvedIsShadowedByEnclosingMember = symbol is FunctionSymbol
+            && !resolvedIsExtensionOnly
+            && HasEnclosingMemberCallableCandidate(syntax.Identifier.Text);
+        if (symbol == null || resolvedIsExtensionOnly || resolvedIsShadowedByEnclosingMember)
         {
             if (binderCtx.InConstructorInitializer
                 && GetConstructorInitializerReceiverType() is { } initializerReceiverType)
@@ -927,10 +968,12 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            // Issue #1566: reaching here with a non-null symbol means the name
-            // denotes only extension function(s) and the enclosing type had no
-            // matching member — fall through to the free-function/extension
-            // binding below rather than the not-found paths.
+            // Issue #1566 / #3527: reaching here with a non-null symbol means
+            // the name denotes only extension function(s), or a package
+            // function that looked shadowable, and in either case the
+            // enclosing type had no matching member — fall through to the
+            // free-function/extension binding below rather than the
+            // not-found paths.
             if (symbol == null)
             {
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
