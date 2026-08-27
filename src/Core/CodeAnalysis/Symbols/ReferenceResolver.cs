@@ -1661,6 +1661,11 @@ public sealed class ReferenceResolver : IDisposable
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var peReader = new PEReader(stream);
+            if (!peReader.HasMetadata)
+            {
+                return false;
+            }
+
             var metadata = peReader.GetMetadataReader();
             foreach (var handle in metadata.TypeDefinitions)
             {

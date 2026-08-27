@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -81,6 +82,29 @@ public class ReferenceResolverTests
 
         Assert.True(resolver.TryResolveType(fullName, out var type));
         Assert.Equal("netstandard", type.Assembly.GetName().Name);
+    }
+
+    [Fact]
+    public void WithReferences_Ignores_Native_PE_With_Core_Assembly_Name()
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "reference-resolver-3594",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            var path = Path.Combine(directory, "System.Runtime.dll");
+            File.WriteAllBytes(path, CreateNativePeImage());
+
+            using var resolver = ReferenceResolver.WithReferences(new[] { path });
+            Assert.Empty(resolver.Assemblies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     /// <summary>
@@ -438,6 +462,29 @@ public class ReferenceResolverTests
             result.Success,
             string.Join(Environment.NewLine, result.Diagnostics));
         return path;
+    }
+
+    private static byte[] CreateNativePeImage()
+    {
+        var image = new byte[512];
+        image[0] = (byte)'M';
+        image[1] = (byte)'Z';
+        BinaryPrimitives.WriteInt32LittleEndian(image.AsSpan(0x3c), 0x80);
+        image[0x80] = (byte)'P';
+        image[0x81] = (byte)'E';
+        BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(0x84), 0x14c);
+        BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(0x94), 0xe0);
+        BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(0x96), 0x102);
+        BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(0x98), 0x10b);
+        BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(0xb4), 0x400000);
+        BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(0xb8), 0x1000);
+        BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(0xbc), 0x200);
+        BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(0xc0), 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(0xd0), 0x1000);
+        BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(0xd4), 0x200);
+        BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(0xdc), 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(image.AsSpan(0xf4), 16);
+        return image;
     }
 
     private static ReferenceResolver BuildMetadataLoadContextResolver()
