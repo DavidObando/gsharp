@@ -83,6 +83,66 @@ namespace N
     }
 
     [Fact]
+    public void TupleArrayReturningExpressionBodiedMethod_RendersAsBlockBody()
+    {
+        // The nested slice-element type position absorbs a following arrow as a
+        // function type (`(string, string) -> Expr`), unlike the TOP-LEVEL
+        // tuple return, which gsc's parser explicitly disambiguates and which
+        // keeps the flat arrow spelling (see Issue1278's tuple-returning test).
+        string g = Render(@"
+namespace N
+{
+    public class C
+    {
+        public (string, string)[] Rows(bool first) =>
+            first ? new[] { (""a"", ""b"") } : new[] { (""c"", ""d"") };
+    }
+}");
+
+        Assert.Contains("func Rows(first bool) [](string, string) {", g, StringComparison.Ordinal);
+        Assert.DoesNotContain("[](string, string) ->", g, StringComparison.Ordinal);
+
+        var result = EmittedOracle.Evaluate(
+            new[] { g },
+            new EmittedOracleOptions { IsLibrary = true });
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public void TupleArrayExpressionBodiedProperty_RendersAsArrowGetAccessor()
+    {
+        string g = Render(@"
+namespace N
+{
+    public class C
+    {
+        public (string, string)[] Rows => new[] { (""a"", ""b"") };
+    }
+}");
+
+        Assert.Contains("prop Rows [](string, string) {", g, StringComparison.Ordinal);
+        Assert.DoesNotContain("[](string, string) ->", g, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TupleReturningExpressionBodiedMethod_KeepsArrowForm()
+    {
+        // The top-level tuple return stays on the flat arrow spelling — gsc's
+        // parser disambiguates exactly this shape.
+        string g = Render(@"
+namespace N
+{
+    public class C
+    {
+        private static (int, int) Pair() => (1, 2);
+    }
+}");
+
+        Assert.Contains("private func Pair() (int32, int32) -> (1, 2)", g, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NonTupleExpressionBodiedProperty_KeepsArrowForm()
     {
         string g = Render(@"

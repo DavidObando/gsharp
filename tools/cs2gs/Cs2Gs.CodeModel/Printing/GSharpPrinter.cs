@@ -1996,10 +1996,15 @@ public static class GSharpPrinter
         {
             // A property type rendered with a leading '(' (a tuple type, or a
             // function type) followed by ` -> expr` re-parses as a function-TYPE
-            // annotation (`(int64, int64) -> Expr`), swallowing the arrow body.
-            // Spell those with an ADR-0131 arrow get accessor inside a block,
-            // where the type ends unambiguously at the '{'.
-            if (RenderType(property.Type).StartsWith("(", StringComparison.Ordinal))
+            // annotation (`(int64, int64) -> Expr`), swallowing the arrow body;
+            // a type whose rendering ENDS inside a parenthesized component
+            // (`[](string, string)`) lets the nested type position absorb the
+            // arrow the same way (unlike funcs, props have no tuple-before-arrow
+            // parser disambiguation at all). Spell those with an ADR-0131 arrow
+            // get accessor inside a block, where the type ends unambiguously at
+            // the '{'.
+            if (RenderType(property.Type).StartsWith("(", StringComparison.Ordinal)
+                || RenderType(property.Type).EndsWith(")", StringComparison.Ordinal))
             {
                 sb.Append(" {\n");
                 sb.Append($"{Indent(indent + 1)}get -> {RenderArrowInline(property.ExpressionBody, indent + 1)}");
@@ -2150,6 +2155,26 @@ public static class GSharpPrinter
 
         if (method.ExpressionBody != null)
         {
+            // A return type whose rendering ends inside a parenthesized
+            // component (`[](string, string)`, `Func[(int32, int32)]`'s slice
+            // forms, ...) followed by ` -> expr` lets the NESTED type position
+            // absorb the arrow as a function-type (`(string, string) -> Expr`),
+            // so the emitted file fails the round-trip parse. gsc disambiguates
+            // only the top-level tuple-return shape (`func F() (A, B) -> e`,
+            // Parser.LooksLikeTupleReturnTypeBeforeArrowBody), which keeps the
+            // flat arrow spelling; everything else falls back to a block body.
+            if (method.ReturnType != null
+                && !IsSingleTopLevelParenGroup(RenderType(method.ReturnType))
+                && RenderType(method.ReturnType).EndsWith(")", StringComparison.Ordinal))
+            {
+                sb.Append(" {\n");
+                sb.Append(RenderStatement(method.ExpressionBody, indent + 1));
+                sb.Append('\n');
+                sb.Append(pad);
+                sb.Append('}');
+                return sb.ToString();
+            }
+
             // Issue #1278 / ADR-0131: expression-bodied method/function.
             sb.Append($" -> {RenderArrowInline(method.ExpressionBody, indent)}");
             return sb.ToString();
@@ -2164,6 +2189,36 @@ public static class GSharpPrinter
         sb.Append(' ');
         sb.Append(RenderBlock(method.Body, indent));
         return sb.ToString();
+    }
+
+    // True when the rendered type is one balanced top-level `(...)` group —
+    // the tuple-return shape gsc's function parser explicitly disambiguates
+    // ahead of an arrow body, so it may keep the flat arrow spelling.
+    private static bool IsSingleTopLevelParenGroup(string renderedType)
+    {
+        if (renderedType.Length < 2 || renderedType[0] != '(')
+        {
+            return false;
+        }
+
+        int depth = 0;
+        for (int i = 0; i < renderedType.Length; i++)
+        {
+            if (renderedType[i] == '(')
+            {
+                depth++;
+            }
+            else if (renderedType[i] == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return i == renderedType.Length - 1;
+                }
+            }
+        }
+
+        return false;
     }
 
     // Issue #1278 / ADR-0131: render the inline content of an expression-bodied
