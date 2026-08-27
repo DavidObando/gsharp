@@ -147,6 +147,21 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #3566: IEnumerable<T> (and its sequence[T] alias) implements
+        // the non-generic System.Collections.IEnumerable BY DEFINITION, but
+        // the reflection walk cannot prove it when the element type is a
+        // MetadataLoadContext type constructed onto the runtime
+        // IEnumerable<> definition (a hybrid constructed type whose
+        // interface set is unreadable). Answer semantically so the
+        // non-generic self-parameter of OfType/Cast binds. IAsyncEnumerable
+        // shapes are excluded — they do not implement IEnumerable.
+        if (SequenceTypeSymbol.TryGetEnumerableInterfaceShape(from, out var fromEnumerableDefinition, out _)
+            && fromEnumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1"
+            && to.ClrType?.FullName == "System.Collections.IEnumerable")
+        {
+            return Conversion.Implicit;
+        }
+
         // Issue #2290: a referenced (cross-assembly) type can be independently
         // re-minted into TWO non-reference-equal TypeSymbol wrappers for the
         // SAME underlying CLR type — e.g. an imported `data class`/`data
