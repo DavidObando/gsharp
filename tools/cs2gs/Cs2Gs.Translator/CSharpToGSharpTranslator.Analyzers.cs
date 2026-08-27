@@ -104,6 +104,58 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (member.Name.Identifier.Text == "ArgumentList"
+                && member.Parent is MemberAccessExpressionSyntax { Name.Identifier.Text: "Arguments" }
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ArgumentList" } argumentListProperty
+                && RoslynTypeMetadataName(argumentListProperty.ContainingType) == "Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax")
+            {
+                // InvocationExpressionSyntax.ArgumentList.Arguments drops the
+                // wrapper: G#'s CallExpressionSyntax exposes Arguments
+                // directly, with no ArgumentListSyntax wrapper. Restricted to
+                // both the .Arguments chain AND the InvocationExpressionSyntax
+                // receiver specifically (each of ElementAccessExpressionSyntax
+                // and ObjectCreationExpressionSyntax independently declares
+                // its own same-named ArgumentList property, but their mapped
+                // G# nodes expose Indices and a nested Target call
+                // respectively, not direct Arguments) so other ArgumentList
+                // reads/receivers stay a loud gap instead of silently
+                // observing a different or nonexistent member.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
+            if (member.Name.Identifier.Text == "ParameterList"
+                && member.Parent is MemberAccessExpressionSyntax { Name.Identifier.Text: "Parameters" }
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ParameterList" } parameterListProperty
+                && RoslynTypeMetadataName(parameterListProperty.ContainingType) == "Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax")
+            {
+                // MethodDeclarationSyntax.ParameterList.Parameters drops the
+                // wrapper: G#'s FunctionDeclarationSyntax exposes Parameters
+                // directly, with no ParameterListSyntax wrapper. Restricted to
+                // both the .Parameters chain AND the MethodDeclarationSyntax
+                // receiver specifically: ConstructorDeclarationSyntax,
+                // LocalFunctionStatementSyntax, lambda expressions,
+                // DelegateDeclarationSyntax, IndexerDeclarationSyntax, and
+                // type declarations (primary constructors) each independently
+                // declare their own same-named ParameterList property, but
+                // none of those receiver types has a G# analyzer-API mapping
+                // today, so admitting them here would apply this idiom
+                // without knowing whether their (currently unmapped) G#
+                // counterpart even exposes a same-shaped Parameters member.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
+            if (member.Name.Identifier.Text == "Expression"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "Expression" } argumentExpressionProperty
+                && RoslynTypeMetadataName(argumentExpressionProperty.ContainingType) == "Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax")
+            {
+                // ArgumentSyntax.Expression drops: G# call arguments are the
+                // bound expressions directly, with no ArgumentSyntax wrapper.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
             if (member.Name.Identifier.Text != "Identifier")
             {
                 return false;
@@ -120,6 +172,145 @@ public sealed partial class CSharpToGSharpTranslator
 
             result = new InvocationExpression(
                 new MemberAccessExpression(this.TranslateExpression(member.Expression), "GetLastToken", isArrow: false));
+            return true;
+        }
+
+        /// <summary>
+        /// Extracts the type-name expression from a bare type-test subpattern
+        /// (<c>{ Member: SomeType }</c>, no designation). The C# parser emits
+        /// this as a <see cref="TypePatternSyntax"/> only when it can tell
+        /// syntactically; a bare simple name is ambiguous with a constant
+        /// pattern at parse time, so it comes through as a
+        /// <see cref="ConstantPatternSyntax"/> whose expression the binder
+        /// resolves to a type symbol instead. Returns null for anything else.
+        /// </summary>
+        private static ExpressionSyntax BaseSubpatternTypeSyntax(PatternSyntax pattern) => pattern switch
+        {
+            TypePatternSyntax typePattern => typePattern.Type,
+            ConstantPatternSyntax constantPattern => constantPattern.Expression,
+            _ => null,
+        };
+
+        /// <summary>
+        /// Rewrites the C# base-call detection idiom
+        /// (<c>invocation.Expression is MemberAccessExpressionSyntax { Expression: BaseExpressionSyntax }</c>)
+        /// to G#'s faithful shape. G# gives <c>base.M(...)</c> its own
+        /// <c>BaseClassCallExpressionSyntax</c> node wrapping an ordinary
+        /// <c>CallExpressionSyntax</c> as its <c>Call</c>, rather than parsing
+        /// it as a member access on a <c>base</c> receiver (issue #2534) — so a
+        /// call found by walking for <c>CallExpressionSyntax</c> nodes is a
+        /// base call exactly when its <em>parent</em> is that wrapper node.
+        /// </summary>
+        private bool TryTranslateAnalyzerBaseCallCheck(IsPatternExpressionSyntax isPattern, out GExpression result)
+        {
+            result = null;
+            if (isPattern.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "Expression" } expressionAccess
+                || this.context.GetSymbolInfo(expressionAccess).Symbol is not IPropertySymbol { Name: "Expression" } expressionProperty
+                || RoslynTypeMetadataName(expressionProperty.ContainingType) != "Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax"
+                || isPattern.Pattern is not RecursivePatternSyntax { Designation: null, PositionalPatternClause: null, PropertyPatternClause.Subpatterns: [SubpatternSyntax subpattern] } recursivePattern
+                || subpattern.ExpressionColon?.Expression is not IdentifierNameSyntax { Identifier.Text: "Expression" }
+                || BaseSubpatternTypeSyntax(subpattern.Pattern) is not { } baseTypeSyntax
+                || this.context.GetTypeInfo(recursivePattern.Type).Type is not INamedTypeSymbol recursiveType
+                || RoslynTypeMetadataName(recursiveType) != "Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax"
+                || this.context.GetTypeInfo(baseTypeSyntax).Type is not INamedTypeSymbol baseType
+                || RoslynTypeMetadataName(baseType) != "Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax")
+            {
+                return false;
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                "Base-call detection idiom 'invocation.Expression is MemberAccessExpressionSyntax { Expression: BaseExpressionSyntax }' translated as 'invocation.Parent is BaseClassCallExpressionSyntax': G# gives base.M(...) its own node wrapping an ordinary call, rather than a member access on a base receiver.",
+                isPattern.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
+            result = new PatternTestExpression(
+                new MemberAccessExpression(this.TranslateExpression(expressionAccess.Expression), "Parent", isArrow: false),
+                new TypePattern("_", new NamedTypeReference("BaseClassCallExpressionSyntax"), designationAfterType: true));
+            return true;
+        }
+
+        /// <summary>
+        /// Rewrites the C# switch-label walk idiom
+        /// (<c>switchStatement.Sections.SelectMany(s => s.Labels).OfType&lt;CasePatternSwitchLabelSyntax&gt;()</c>)
+        /// to a direct walk over G#'s cases. G# switch cases carry one pattern
+        /// each via <c>SwitchCaseSyntax.Value</c> with no section/label
+        /// nesting, and have no <c>default</c>-arm or pattern-label subtype to
+        /// filter with <c>OfType</c>. Roslyn's <c>CasePatternSwitchLabelSyntax</c>
+        /// excludes both the <c>default</c> arm and plain constant labels
+        /// (<c>CaseSwitchLabelSyntax</c>, e.g. <c>case 5:</c>) — cs2gs's own
+        /// switch-label translation (<see cref="CSharpToGSharpTranslator"/>'s
+        /// case-label lowering) turns a plain constant label into a G#
+        /// <c>ConstantPatternSyntax</c> value with no guard, while a guarded
+        /// constant (<c>case 5 when b:</c>, still a
+        /// <c>CasePatternSwitchLabelSyntax</c> in Roslyn because <c>when</c>
+        /// forces pattern-label parsing) keeps a non-null <c>Guard</c>. So the
+        /// faithful G# equivalent excludes the <c>default</c> arm and any
+        /// unguarded <c>ConstantPatternSyntax</c> value: <c>Cases.Where(c =&gt;
+        /// !c.IsDefault &amp;&amp; (c.Guard != nil || c.Value is not
+        /// ConstantPatternSyntax))</c> (#3536).
+        /// </summary>
+        private bool TryTranslateAnalyzerSwitchLabelWalk(InvocationExpressionSyntax invocation, out GExpression result)
+        {
+            result = null;
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol { Name: "OfType" } ofTypeMethod
+                || ofTypeMethod.TypeArguments.Length != 1
+                || RoslynTypeMetadataName(ofTypeMethod.TypeArguments[0] as INamedTypeSymbol) != "Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax"
+                || invocation.Expression is not MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax selectManyInvocation }
+                || this.context.GetSymbolInfo(selectManyInvocation).Symbol is not IMethodSymbol { Name: "SelectMany" }
+                || selectManyInvocation.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "SelectMany", Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "Sections" } sectionsAccess }
+                || this.context.GetSymbolInfo(sectionsAccess).Symbol is not IPropertySymbol { Name: "Sections" } sectionsProperty
+                || RoslynTypeMetadataName(sectionsProperty.ContainingType) != "Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax"
+                || selectManyInvocation.ArgumentList.Arguments.Count != 1
+                || selectManyInvocation.ArgumentList.Arguments[0].Expression is not SimpleLambdaExpressionSyntax { Parameter.Identifier.Text: { } sectionParameterName, ExpressionBody: MemberAccessExpressionSyntax { Name.Identifier.Text: "Labels" } labelsAccess }
+                || labelsAccess.Expression is not IdentifierNameSyntax { Identifier.Text: { } labelsReceiverName }
+                || labelsReceiverName != sectionParameterName
+                || this.context.GetSymbolInfo(labelsAccess).Symbol is not IPropertySymbol { Name: "Labels" } labelsProperty
+                || RoslynTypeMetadataName(labelsProperty.ContainingType) != "Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax")
+            {
+                return false;
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                "'Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()' translated as 'Cases.Where(c => !c.IsDefault && (c.Guard != nil || c.Value is not ConstantPatternSyntax))': G# switch cases carry one pattern each with no section/label nesting or default-arm/pattern-label subtype, so the walk excludes the default arm and unguarded constant-value cases (Roslyn's plain, non-pattern case labels) to keep only genuine pattern labels.",
+                invocation.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
+            GExpression cases = new MemberAccessExpression(
+                this.TranslateExpression(sectionsAccess.Expression),
+                "Cases",
+                isArrow: false);
+            var filterParameter = new Parameter("switchCase", new NamedTypeReference("SwitchCaseSyntax"));
+            GExpression switchCaseIdentifier = new IdentifierExpression("switchCase");
+            GExpression notDefault = new UnaryExpression(
+                "!",
+                new MemberAccessExpression(switchCaseIdentifier, "IsDefault", isArrow: false));
+            GExpression hasGuard = new BinaryExpression(
+                new MemberAccessExpression(switchCaseIdentifier, "Guard", isArrow: false),
+                "!=",
+                LiteralExpression.Null());
+            GExpression valueIsNotConstant = new PatternTestExpression(
+                new MemberAccessExpression(switchCaseIdentifier, "Value", isArrow: false),
+                new NotPattern(new TypePattern("_", new NamedTypeReference("ConstantPatternSyntax"), designationAfterType: true)));
+            GExpression filterBody = new BinaryExpression(
+                notDefault,
+                "&&",
+                new BinaryExpression(hasGuard, "||", valueIsNotConstant));
+            result = new InvocationExpression(
+                new MemberAccessExpression(cases, "Where", isArrow: false),
+                new List<GExpression>
+                {
+                    new LambdaExpression(new List<Parameter> { filterParameter }, expressionBody: filterBody),
+                });
             return true;
         }
 
@@ -155,6 +346,34 @@ public sealed partial class CSharpToGSharpTranslator
                 // SyntaxReference.GetSyntax() drops: DeclaringSyntaxNodes
                 // already holds the syntax nodes.
                 result = this.TranslateExpression(syntaxReferenceReceiver.Expression);
+                return true;
+            }
+
+            if (method.Name == "Any"
+                && invocation.ArgumentList.Arguments.Count == 1
+                && invocation.Expression is MemberAccessExpressionSyntax anyReceiver
+                && anyReceiver.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Modifiers" } modifiersReceiver
+                && this.context.GetSymbolInfo(modifiersReceiver).Symbol is IPropertySymbol { Name: "Modifiers" } modifiersProperty
+                && RoslynAnalyzerApiMap.IsRoslynNamespace(modifiersProperty.ContainingType?.ContainingNamespace?.ToDisplayString())
+                && invocation.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax overrideKeywordArgument
+                && this.context.GetSymbolInfo(overrideKeywordArgument).Symbol is IFieldSymbol { Name: "OverrideKeyword" } overrideKeywordField
+                && RoslynTypeMetadataName(overrideKeywordField.ContainingType) == "Microsoft.CodeAnalysis.CSharp.SyntaxKind")
+            {
+                // declaration.Modifiers.Any(SyntaxKind.OverrideKeyword) -> G#'s
+                // FunctionDeclarationSyntax.IsOverride: there is no modifier
+                // token list, only discrete typed modifier properties.
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    "'Modifiers.Any(SyntaxKind.OverrideKeyword)' translated as 'IsOverride': G# has no modifier token list, only discrete typed modifier properties.",
+                    invocation.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
+                result = new MemberAccessExpression(
+                    this.TranslateExpression(modifiersReceiver.Expression),
+                    "IsOverride",
+                    isArrow: false);
                 return true;
             }
 

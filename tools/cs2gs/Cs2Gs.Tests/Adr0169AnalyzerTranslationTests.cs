@@ -322,6 +322,470 @@ public sealed class OverrideAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void ModifiersOverrideCheck_TranslatesToIsOverride()
+    {
+        // Issue #3536 (GSA0005 groundwork): G# has no Roslyn-style modifier
+        // token list, only discrete typed modifier properties.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OverrideCheckAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        if (!declaration.Modifiers.Any(SyntaxKind.OverrideKeyword))
+        {
+            return;
+        }
+    }
+}
+");
+
+        Assert.Contains("declaration.IsOverride", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Modifiers", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE");
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void ModifiersOverrideCheck_DoesNotMatchLookalikeMember()
+    {
+        // Copilot review of #3556: the 'OverrideKeyword' idiom must resolve
+        // the argument to the real Microsoft.CodeAnalysis.CSharp.SyntaxKind
+        // enum field, not just match on spelling — otherwise a user-defined
+        // 'OverrideKeyword' member of type SyntaxKind but a different value
+        // would be silently rewritten to '.IsOverride' too.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+public static class Helpers
+{
+    public const SyntaxKind OverrideKeyword = SyntaxKind.PartialKeyword;
+}
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class LookalikeOverrideCheckAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        if (!declaration.Modifiers.Any(Helpers.OverrideKeyword))
+        {
+            return;
+        }
+    }
+}
+");
+
+        Assert.DoesNotContain("IsOverride", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+            && d.Message.Contains("IsOverride", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ArgumentListAndParameterList_DropToDirectMembers()
+    {
+        // Issue #3536 (GSA0005 groundwork): G#'s CallExpressionSyntax and
+        // FunctionDeclarationSyntax expose Arguments/Parameters directly —
+        // there is no ArgumentListSyntax/ParameterListSyntax wrapper, and call
+        // arguments are bare expressions with no ArgumentSyntax wrapper.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        if (declaration.ParameterList.Parameters.Count != 1)
+        {
+            return;
+        }
+
+        string parameterName = declaration.ParameterList.Parameters[0].Identifier.ValueText;
+        foreach (var invocation in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            bool passesParameter = invocation.ArgumentList.Arguments.Any(argument =>
+                argument.Expression is IdentifierNameSyntax identifier && identifier.Identifier.ValueText == parameterName);
+            _ = passesParameter;
+        }
+    }
+}
+");
+
+        Assert.Contains("declaration.Parameters", printed, StringComparison.Ordinal);
+
+        // The printer's statement-level width budget (issue #3470) wraps this
+        // particular chain across lines, so "invocation.Arguments" is not
+        // contiguous in the output; assert the pieces independently instead.
+        Assert.Contains("invocation", printed, StringComparison.Ordinal);
+        Assert.Contains(".Arguments", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ParameterList", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ArgumentList", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void ArgumentListAndParameterList_OtherAccesses_StayLoud()
+    {
+        // Copilot review of #3556: only the '.ArgumentList.Arguments' and
+        // '.ParameterList.Parameters' chains have a faithful G# counterpart.
+        // Any other wrapper access (e.g. '.Span') must NOT be collapsed to
+        // the receiver — that would silently observe a different node
+        // ('invocation.Span' instead of 'invocation.ArgumentList.Span') — so
+        // it stays untranslated and fails loudly at bind time instead.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ArgumentListSpanAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeMethod, SyntaxKind.MethodDeclaration);
+    }
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        var span = invocation.ArgumentList.Span;
+        _ = span;
+    }
+
+    private static void AnalyzeMethod(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        var span = declaration.ParameterList.Span;
+        _ = span;
+    }
+}
+");
+
+        Assert.Contains(".ArgumentList", printed, StringComparison.Ordinal);
+        Assert.Contains(".ParameterList", printed, StringComparison.Ordinal);
+
+        var trees = new[]
+        {
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+                GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "argparamspan.gs")),
+        };
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
+            new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees) { IsLibrary = true };
+        bool translationIsLoud = diagnostics.Any(d => d.Severity == TranslationSeverity.Unsupported)
+            || trees.Any(t => !t.Diagnostics.IsEmpty)
+            || compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).Any(d => d.IsError);
+        Assert.True(
+            translationIsLoud,
+            "ArgumentList/ParameterList access other than .Arguments/.Parameters should fail loudly, not silently observe a different node:\n" + printed);
+    }
+
+    [Fact]
+    public void ArgumentListIdiom_RestrictedToInvocationReceiver_OtherMappedReceiversStayLoud()
+    {
+        // Copilot review of #3556: the '.ArgumentList.Arguments' drop must
+        // only fire for an InvocationExpressionSyntax receiver.
+        // ElementAccessExpressionSyntax and ObjectCreationExpressionSyntax
+        // each independently declare their own same-named ArgumentList
+        // property, and — unlike the '.Span' case in the test above — BOTH
+        // receiver types themselves DO have a mapped G# counterpart
+        // (IndexExpressionSyntax with Indices; ObjectCreationExpressionSyntax
+        // with a nested Target call), so nothing else here would otherwise
+        // flag the mismatch: dropping the wrapper for them would silently
+        // reference a nonexistent 'Arguments' member on an
+        // otherwise-cleanly-translated receiver. Both must stay untranslated
+        // (identity 'ArgumentList') and fail loudly only at bind time.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OtherArgumentListReceiversAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterSyntaxNodeAction(AnalyzeElementAccess, SyntaxKind.ElementAccessExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeObjectCreation, SyntaxKind.ObjectCreationExpression);
+    }
+
+    private static void AnalyzeElementAccess(SyntaxNodeAnalysisContext context)
+    {
+        var elementAccess = (ElementAccessExpressionSyntax)context.Node;
+        int count = elementAccess.ArgumentList.Arguments.Count;
+        _ = count;
+    }
+
+    private static void AnalyzeObjectCreation(SyntaxNodeAnalysisContext context)
+    {
+        var objectCreation = (ObjectCreationExpressionSyntax)context.Node;
+        int count = objectCreation.ArgumentList.Arguments.Count;
+        _ = count;
+    }
+}
+");
+
+        Assert.Contains("elementAccess.ArgumentList", printed, StringComparison.Ordinal);
+        Assert.Contains("objectCreation.ArgumentList", printed, StringComparison.Ordinal);
+
+        var trees = new[]
+        {
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+                GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "otherargumentlist.gs")),
+        };
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
+            new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees) { IsLibrary = true };
+        bool translationIsLoud = diagnostics.Any(d => d.Severity == TranslationSeverity.Unsupported)
+            || trees.Any(t => !t.Diagnostics.IsEmpty)
+            || compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).Any(d => d.IsError);
+        Assert.True(
+            translationIsLoud,
+            "ElementAccessExpressionSyntax/ObjectCreationExpressionSyntax '.ArgumentList' reads should fail loudly, not silently reference a nonexistent 'Arguments' member:\n" + printed);
+    }
+
+    [Fact]
+    public void PatternSyntaxParameter_TranslatesExactly()
+    {
+        // Issue #3536 (GSA0005 groundwork): Roslyn's PatternSyntax and G#'s
+        // PatternSyntax share both name and namespace-only-rewrite shape.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class PatternWalkAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static void Describe(PatternSyntax pattern, HashSet<string> reads)
+    {
+        reads.Add(pattern.ToString());
+    }
+}
+");
+
+        Assert.Contains("PatternSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void BaseCallCheck_TranslatesToParentBaseClassCallCheck()
+    {
+        // Issue #3536 (GSA0005 groundwork): G# gives base.M(...) its own
+        // BaseClassCallExpressionSyntax node wrapping an ordinary call, rather
+        // than a member access on a base receiver, so the C# base-call
+        // detection idiom rewrites to a parent-kind check on the call itself.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BaseCallAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool IsBaseCall(InvocationExpressionSyntax invocation)
+        => invocation.Expression is MemberAccessExpressionSyntax { Expression: BaseExpressionSyntax };
+}
+");
+
+        Assert.Contains(".Parent is BaseClassCallExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("BaseExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+            && d.Message.Contains("Base-call detection idiom", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void SwitchLabelWalk_TranslatesToCasesWhereNotDefault()
+    {
+        // Issue #3536 (GSA0005 groundwork): G# switch cases carry one pattern
+        // each with no section/label nesting and no default-arm or
+        // pattern-label subtype. Roslyn's OfType<CasePatternSwitchLabelSyntax>()
+        // excludes both the default arm AND plain constant labels (Copilot
+        // review of #3556: `!c.IsDefault` alone would wrongly keep constant
+        // labels too), so the walk rewrites to
+        // Cases.Where(c => !c.IsDefault && (c.Guard != nil || c.Value is not
+        // ConstantPatternSyntax)) — a guarded constant (`case 5 when b:`) is
+        // still a Roslyn CasePatternSwitchLabelSyntax, kept via the Guard check.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Linq;
+using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class SwitchWalkAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static void CollectLabels(SwitchStatementSyntax switchStatement, List<string> reads)
+    {
+        foreach (var label in switchStatement.Sections.SelectMany(section => section.Labels).OfType<CasePatternSwitchLabelSyntax>())
+        {
+            reads.Add(label.ToString());
+        }
+    }
+}
+");
+
+        Assert.Contains(".Cases", printed, StringComparison.Ordinal);
+        Assert.Contains(".Where(", printed, StringComparison.Ordinal);
+        Assert.Contains(".IsDefault", printed, StringComparison.Ordinal);
+        Assert.Contains(".Guard", printed, StringComparison.Ordinal);
+        Assert.Contains("ConstantPatternSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("SelectMany", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sections", printed, StringComparison.Ordinal);
+        Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+            && d.Message.Contains("Cases.Where", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void SwitchLabelWalk_FilterPredicate_KeepsOnlyPatternLabelsAgainstRealGsCases()
+    {
+        // Copilot review of #3556: prove the actual filter predicate
+        // ('!c.IsDefault && (c.Guard != nil || c.Value is not
+        // ConstantPatternSyntax)') against real GSharp.Core.CodeAnalysis
+        // SwitchCaseSyntax nodes parsed from a switch with all four label
+        // kinds cs2gs's own translation can produce on the ANALYZED-code
+        // side: a plain constant label (Roslyn CaseSwitchLabelSyntax, no
+        // pattern-label counterpart), a guarded constant label (still a
+        // Roslyn CasePatternSwitchLabelSyntax, since 'when' forces
+        // pattern-label parsing), a real pattern label, and 'default'. Only
+        // the guarded-constant and pattern arms should survive — a plain
+        // '!IsDefault' filter would wrongly keep the plain constant arm too.
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From(
+                @"
+func Run(v object) string {
+    switch v {
+        case 1 {
+            return ""plain-constant""
+        }
+        case 1 when true {
+            return ""guarded-constant""
+        }
+        case string s {
+            return ""pattern""
+        }
+        default {
+            return ""default""
+        }
+    }
+}
+",
+                "switchfilter.gs"));
+        Assert.Empty(tree.Diagnostics);
+
+        var switchStatement = tree.Root
+            .DescendantNodes()
+            .OfType<GSharp.Core.CodeAnalysis.Syntax.SwitchStatementSyntax>()
+            .Single();
+
+        bool Keep(GSharp.Core.CodeAnalysis.Syntax.SwitchCaseSyntax c) =>
+            !c.IsDefault && (c.Guard != null || c.Value is not GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+
+        var kept = switchStatement.Cases.Where(Keep).ToList();
+
+        Assert.Equal(2, kept.Count);
+        Assert.All(kept, c => Assert.False(c.IsDefault));
+        Assert.Contains(kept, c => c.Guard != null && c.Value is GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+        Assert.Contains(kept, c => c.Guard is null && c.Value is not GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+        Assert.DoesNotContain(kept, c => c.Guard is null && c.Value is GSharp.Core.CodeAnalysis.Syntax.ConstantPatternSyntax);
+    }
+
+    [Fact]
     public void RealGsa0001Source_TranslatesWithReviewWarningsOnly()
     {
         // The real GSA0001 file end-to-end: everything maps or lowers, the

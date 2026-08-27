@@ -262,11 +262,15 @@ internal static class GSharpProjectTransformer
     // ADR-0169: a consumer wiring an analyzer project via
     // OutputItemType="Analyzer" (Roslyn's item) DROPS the reference for now.
     // The cs2gs analyzer-API translation (Roslyn syntax/symbol surface →
-    // GSharpDiagnosticAnalyzer) is designed but not built, so the migrated
-    // analyzer assembly carries no [GSharpDiagnosticAnalyzer] types and the
-    // SDK rejects it as an analyzer input (GS9301) — wiring it via
-    // GsharpCodeAnalyzer fails every consumer build. Restore the rewrite to
-    // the G# item once the analyzer translation lands.
+    // GSharpDiagnosticAnalyzer) is built for GSA0001-GSA0004 (#3536), but
+    // GSA0005 (RewriterClonePreservationAnalyzer) still translates loud —
+    // MethodKind/constructor-vs-static-factory detection has no G# analogue
+    // yet (docs/cs2gs-analyzer-translation.md) — so InternalAnalyzers as a
+    // whole does not compile, the migrated assembly carries no
+    // [GSharpDiagnosticAnalyzer] types, and the SDK rejects it as an analyzer
+    // input (GS9301) — wiring it via GsharpCodeAnalyzer would fail every
+    // consumer build. Restore the rewrite to the G# item once GSA0005's
+    // reviewed adaptation lands and InternalAnalyzers compiles clean.
     private static void RewriteAnalyzerConsumerReferences(XDocument document)
     {
         foreach (XElement projectReference in ElementsNamed(document, "ProjectReference").ToList())
