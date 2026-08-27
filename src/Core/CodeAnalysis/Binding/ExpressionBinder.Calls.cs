@@ -1540,7 +1540,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeArgumentList">The call's <c>[T1, T2]</c> list.</param>
     /// <param name="clrArgs">On success, the resolved (mapped) CLR type arguments ready for MakeGenericType.</param>
     /// <param name="symbolicArgs">On success, the symbolic type arguments in source order.</param>
-    /// <param name="hasSymbolicArg">On success, whether any argument carries information its CLR type cannot represent.</param>
+    /// <param name="hasSymbolicArg">On success, whether any argument carries symbolic or tuple-conversion information to retain.</param>
     /// <returns>Whether all type arguments resolved.</returns>
     private bool TryResolveClrConstructionTypeArgs(
         TypeArgumentListSyntax typeArgumentList,
@@ -1583,11 +1583,9 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            // Issue #2664: preserve every symbolic argument shape that its CLR
-            // type cannot represent, including nullable references. Indexer and
-            // Add binding can then recover `T?` instead of target-typing `nil`
-            // against the erased non-null `T`.
-            if (TypeSymbol.RequiresSymbolicProjection(ta))
+            // Issues #2664/#3560: preserve symbolic shapes and tuple conversion
+            // semantics so member arguments can recover their language target.
+            if (TypeSymbol.RequiresSymbolicProjection(ta) || ta is TupleTypeSymbol)
             {
                 hasSymbolicArg = true;
             }

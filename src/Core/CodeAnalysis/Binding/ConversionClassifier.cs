@@ -1376,7 +1376,7 @@ internal sealed class ConversionClassifier
         TypeSymbol? receiverType,
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default)
     {
-        // Issues #2385/#2664: the receiver type-argument gate below previously only
+        // Issues #2385/#2664: the receiver type-argument gate previously only
         // matched a same-compilation user type when it was DIRECTLY a
         // StructSymbol/InterfaceSymbol/EnumSymbol/DelegateTypeSymbol (or
         // nested inside another ImportedTypeSymbol). A same-compilation
@@ -1398,11 +1398,15 @@ internal sealed class ConversionClassifier
         // same-compilation enums and array/tuple-wrapped shapes used as a
         // generic type argument, and also retains nullable-reference
         // annotations whose CLR type is otherwise identical to its underlying
-        // non-null reference.
+        // non-null reference. Issue #3560 also retains fully CLR-backed tuple
+        // arguments because their element-wise conversion semantics cannot be
+        // recovered from the nominal ValueTuple reflection type alone.
         if (method == null
             || receiverType is not ImportedTypeSymbol imported
             || imported.TypeArguments.IsDefaultOrEmpty
-            || !imported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+            || !imported.TypeArguments.Any(
+                static argument => TypeSymbol.RequiresSymbolicProjection(argument)
+                    || argument is TupleTypeSymbol))
         {
             return null;
         }
@@ -1494,7 +1498,8 @@ internal sealed class ConversionClassifier
         mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
         return mapped != null
             && mapped != TypeSymbol.Error
-            && TypeSymbol.RequiresSymbolicProjection(mapped)
+            && (TypeSymbol.RequiresSymbolicProjection(mapped)
+                || mapped is TupleTypeSymbol)
             ? mapped
             : null;
     }

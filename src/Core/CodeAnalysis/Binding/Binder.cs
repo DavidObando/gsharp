@@ -4930,9 +4930,11 @@ public sealed class Binder
         Type erasedArgument,
         ref bool hasSymbolicArgument)
     {
-        // #313 / #671: preserve symbolic type parameters, user types, and
-        // nested generic/array/nullable shapes beside their erased CLR form.
-        if (TypeSymbol.RequiresSymbolicProjection(type) || type.ClrType == null)
+        // #313 / #671 / #3560: preserve symbolic type parameters, user types,
+        // and tuple conversion semantics beside their CLR form.
+        if (TypeSymbol.RequiresSymbolicProjection(type)
+            || type.ClrType == null
+            || type is TupleTypeSymbol)
         {
             hasSymbolicArgument = true;
 
