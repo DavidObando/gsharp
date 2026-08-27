@@ -194,6 +194,74 @@ public class Issue1278ArrowExpressionMemberParserTests
         Assert.Single(property.Accessors);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("\n  prop Other int32")]
+    public void Issue3587_BareFunctionTypedProperty_RemainsFunctionType(string followingMember)
+    {
+        var source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Handler (int32, int32) -> int32" + followingMember + "\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.First();
+        Assert.True(property.Type.IsArrowFunction);
+        Assert.Empty(property.Accessors);
+    }
+
+    [Fact]
+    public void Issue3587_FunctionTypedPropertyWithAccessibleAccessor_RemainsFunctionType()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Handler (int32, int32) -> int32 { private set; get; }\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsArrowFunction);
+        Assert.Equal(2, property.Accessors.Length);
+    }
+
+    [Fact]
+    public void Issue3587_NullableNestedSliceTuplePropertyArrow_ParsesAsPropertyBody()
+    {
+        const string source =
+            "package P\n" +
+            "class C {\n" +
+            "  prop Rows []?[](string, string) -> makeRows()\n" +
+            "}\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var property = tree.Root.Members.OfType<StructDeclarationSyntax>().Single().Properties.Single();
+        Assert.True(property.Type.IsArrayNullable);
+        Assert.True(property.Type.ArrayElementType.IsSlice);
+        Assert.True(property.Type.ArrayElementType.ArrayElementType.IsTuple);
+        Assert.Single(property.Accessors);
+    }
+
+    [Fact]
+    public void Issue3587_NullableNestedSliceTupleFunctionArrow_ParsesAsFunctionBody()
+    {
+        const string source =
+            "package P\n" +
+            "func Rows() []?[](string, string) -> makeRows()\n";
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics);
+        var function = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        Assert.True(function.Type.IsArrayNullable);
+        Assert.True(function.Type.ArrayElementType.IsSlice);
+        Assert.True(function.Type.ArrayElementType.ArrayElementType.IsTuple);
+        Assert.NotNull(function.Body);
+    }
+
     [Fact]
     public void FunctionFatArrowBody_ReportsDiagnostic()
     {

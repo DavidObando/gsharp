@@ -151,6 +151,31 @@ public class Issue1278ArrowExpressionMemberEmitTests
     }
 
     [Fact]
+    public void Issue3587_NullableNestedSliceTupleArrows_RunAndReturn()
+    {
+        var source = """
+            package P
+
+            func MakeRows() []?[](string, string) {
+                return [][](string, string){
+                    [](string, string){("a", "b")},
+                    [](string, string){("c", "d")},
+                }
+            }
+
+            class C {
+                prop Rows []?[](string, string) -> MakeRows()
+            }
+
+            func Rows() []?[](string, string) -> MakeRows()
+
+            public var result = C().Rows!!.Length * 10 + Rows()!!.Length
+            """;
+
+        Assert.Equal(22, RunAndGetIntResult(source));
+    }
+
+    [Fact]
     public void AccessorArrows_RoundTripThroughField()
     {
         var source = """

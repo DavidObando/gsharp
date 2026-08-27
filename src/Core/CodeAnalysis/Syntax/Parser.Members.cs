@@ -1263,9 +1263,15 @@ public partial class Parser
     private bool LooksLikeTupleTypeBeforeArrowBody(bool isProperty, out int tupleOffset)
     {
         tupleOffset = 0;
-        while (Peek(tupleOffset).Kind == SyntaxKind.OpenSquareBracketToken)
+        var openBracketAlreadyConsumed = false;
+        while (openBracketAlreadyConsumed || Peek(tupleOffset).Kind == SyntaxKind.OpenSquareBracketToken)
         {
-            tupleOffset++;
+            if (!openBracketAlreadyConsumed)
+            {
+                tupleOffset++;
+            }
+
+            openBracketAlreadyConsumed = false;
             if (Peek(tupleOffset).Kind == SyntaxKind.NumberToken)
             {
                 tupleOffset++;
@@ -1284,7 +1290,12 @@ public partial class Parser
             }
 
             tupleOffset++;
-            if (Peek(tupleOffset).Kind == SyntaxKind.QuestionToken)
+            if (Peek(tupleOffset).Kind == SyntaxKind.QuestionOpenBracketToken)
+            {
+                tupleOffset++;
+                openBracketAlreadyConsumed = true;
+            }
+            else if (Peek(tupleOffset).Kind == SyntaxKind.QuestionToken)
             {
                 tupleOffset++;
             }
@@ -1308,6 +1319,11 @@ public partial class Parser
             return false;
         }
 
+        if (isProperty && IsFunctionTypedPropertyFollower(functionTypeEnd))
+        {
+            return false;
+        }
+
         if (endKind != SyntaxKind.OpenBraceToken)
         {
             return true;
@@ -1321,7 +1337,37 @@ public partial class Parser
         var firstBodyToken = Peek(functionTypeEnd + 1);
         return firstBodyToken.Kind != SyntaxKind.CloseBraceToken
             && !(firstBodyToken.Kind == SyntaxKind.IdentifierToken
-                && firstBodyToken.Text is "get" or "set" or "init");
+                && firstBodyToken.Text is "get" or "set" or "init")
+            && !((firstBodyToken.Kind is SyntaxKind.PublicKeyword
+                    or SyntaxKind.InternalKeyword
+                    or SyntaxKind.PrivateKeyword
+                    or SyntaxKind.ProtectedKeyword)
+                && Peek(functionTypeEnd + 2).Kind == SyntaxKind.IdentifierToken
+                && Peek(functionTypeEnd + 2).Text is "get" or "set" or "init");
+    }
+
+    private bool IsFunctionTypedPropertyFollower(int offset)
+    {
+        var token = Peek(offset);
+        if (token.Kind is SyntaxKind.EndOfFileToken
+            or SyntaxKind.CloseBraceToken
+            or SyntaxKind.AtToken
+            or SyntaxKind.FuncKeyword
+            or SyntaxKind.AsyncKeyword
+            or SyntaxKind.VarKeyword
+            or SyntaxKind.LetKeyword
+            or SyntaxKind.ConstKeyword
+            or SyntaxKind.PublicKeyword
+            or SyntaxKind.InternalKeyword
+            or SyntaxKind.PrivateKeyword
+            or SyntaxKind.ProtectedKeyword
+            or SyntaxKind.OpenKeyword
+            or SyntaxKind.OverrideKeyword)
+        {
+            return true;
+        }
+
+        return token.Kind == SyntaxKind.IdentifierToken && IsContextualMemberKeyword(token.Text);
     }
 
     // Stream D: `func (a Point) operator +(b Point) Point { … }`. After the
