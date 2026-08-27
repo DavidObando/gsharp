@@ -353,8 +353,15 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
         Assert.Equal(new[] { "GS0159" }, diagnosticIds);
     }
 
+    // Issue #3501: this shape was pinned as REJECTED (GS0159) while
+    // `SatisfiesClassConstraint` could not see a source class deriving an
+    // imported base — the constraint failure was the loud guard for the
+    // then-unclosable delegate-in-constructed-generic. With the constraint
+    // fixed the call closes, ilverifies, and runs (the configure delegate
+    // observably mutates the constructed T), so the guard flips to a
+    // behavior assertion.
     [Fact]
-    public void ExplicitGenericTypeArgument_WithDelegateInConstructedGenericAcrossReference_IsRejected()
+    public void ExplicitGenericTypeArgument_WithDelegateInConstructedGenericAcrossReference_Runs()
     {
         const string PackageName = "i3178constructedgeneric";
         var library = $$"""
@@ -382,15 +389,12 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             func Main() {
                 let configure = List[((Derived) -> void)]()
                 configure.Add((item Derived) -> { item.Value = 9 })
-                {{PackageName}}.Base.Make[Derived](configure)
+                let made = {{PackageName}}.Base.Make[Derived](configure)
+                System.Console.WriteLine(made.Value)
             }
             """;
 
-        var output = CompileExpectingFailure(library, consumer, PackageName);
-        var diagnosticIds = Regex.Matches(output, @"\berror (GS\d{4}):")
-            .Select(match => match.Groups[1].Value)
-            .ToArray();
-        Assert.Equal(new[] { "GS0159" }, diagnosticIds);
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(library, consumer, PackageName));
     }
 
     private static string CompileAndRun(string library, string consumer, string libraryAssemblyName)
