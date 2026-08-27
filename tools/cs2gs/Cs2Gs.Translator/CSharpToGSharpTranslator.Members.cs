@@ -854,18 +854,16 @@ public sealed partial class CSharpToGSharpTranslator
             // indexer explicit-interface qualifier clause to events for the first
             // time — a C# explicit event implementation
             // (`event Handler IFoo.Changed { add; remove; }`) maps to
-            // `event (IFoo) Changed T` for a G# USER interface, using the same
-            // clause + CLR MethodImpl bridge as every other member kind. Only the
+            // `event (IFoo) Changed T`, using the same clause + CLR MethodImpl
+            // bridge as every other member kind. Source and imported CLR
+            // interfaces both resolve through the clause. Only the
             // custom add/remove accessor form (this method) can carry an explicit
             // interface specifier in C# — a field-like event never can — so
-            // TranslateEventField needs no matching change. An EXTERNAL/BCL
-            // interface explicit event implementation still falls back to the
-            // #1911-style forced-public name-based dispatch.
+            // TranslateEventField needs no matching change.
             bool isExplicitInterfaceEventImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
 
-            bool isUserInterfaceExplicitEventImpl = isExplicitInterfaceEventImpl &&
-                symbol.ExplicitInterfaceImplementations.Length == 1 &&
-                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+            bool usesExplicitInterfaceEventClause = isExplicitInterfaceEventImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1;
 
             if (isExplicitInterfaceEventImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
                 symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
@@ -883,7 +881,7 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.EventDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
             }
 
-            if (isExplicitInterfaceEventImpl && !isUserInterfaceExplicitEventImpl)
+            if (isExplicitInterfaceEventImpl && !usesExplicitInterfaceEventClause)
             {
                 IEventSymbol eventSurvivor = FindPriorCollidingSiblingEvent(symbol, node);
                 if (eventSurvivor != null)
@@ -891,14 +889,13 @@ public sealed partial class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface event implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfaceEventName(symbol)}' " +
                         $"shares its name with '{symbol.ContainingType.Name}.{FormatSiblingEventName(eventSurvivor)}'; " +
-                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
-                        "two C# events cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
+                        "one C# declaration targets multiple interface slots, while ADR-0149 carries one qualifier, so the " +
+                        "two events cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
                         "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
                         "by name; if the surviving sibling's accessors differ from this dropped declaration's, any C# " +
                         "subscription through the interface-typed reference that previously reached this event now " +
                         "silently observes the surviving event instead (semantic loss, known gap, issue #1911 " +
-                        "analogue). This diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision " +
-                        "between two G# user-interface explicit event implementations is fully supported (issue " +
+                        "analogue). Separate explicit declarations with distinct qualifiers are fully supported (issue " +
                         "#2362 follow-up, ADR-0149 explicit-interface clause).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.EventDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
@@ -908,10 +905,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // ADR-0149: the resolved explicit-interface qualifier clause type for
-            // a G# user-interface explicit event implementation, or null
-            // otherwise (ordinary event, or external-interface explicit
-            // implementation, which keeps the pre-#2010 name-based dispatch).
-            GTypeReference explicitInterfaceEventType = isUserInterfaceExplicitEventImpl
+            // a single-slot explicit event implementation, or null otherwise.
+            GTypeReference explicitInterfaceEventType = usesExplicitInterfaceEventClause
                 ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
@@ -936,13 +931,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             // ADR-0149: see the matching visibility comment in
             // TranslatePropertyDeclaration for the full rationale — a G#
-            // user-interface explicit event implementation (explicit-interface
-            // clause + CLR MethodImpl) keeps C#'s own `private`-equivalent
-            // visibility; an EXTERNAL/BCL interface explicit event
-            // implementation still relies on name-based dispatch and must stay
-            // forced-public (`Visibility.Default`) or ilverify would reject the
-            // missing interface method.
-            Visibility eventVisibility = isExplicitInterfaceEventImpl && !isUserInterfaceExplicitEventImpl
+            // explicit event implementation (explicit-interface clause + CLR
+            // MethodImpl) keeps C#'s own `private`-equivalent visibility.
+            Visibility eventVisibility = isExplicitInterfaceEventImpl && !usesExplicitInterfaceEventClause
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 
@@ -2503,17 +2494,16 @@ public sealed partial class CSharpToGSharpTranslator
             // get the exact same treatment as explicit interface METHODS (issues
             // #1911/#2010/#2181) — see the extensive comment on this same
             // decision tree in TranslateMethod, which this mirrors verbatim
-            // (explicit-interface qualifier clause + CLR MethodImpl bridge for a
-            // G# USER interface; forced-public collision-drop fallback for an
-            // EXTERNAL/BCL interface). The property-specific difference: there is
+            // (explicit-interface qualifier clause + CLR MethodImpl bridge).
+            // Source and imported CLR interfaces use the same clause. The
+            // property-specific difference: there is
             // no covariant-return "bridge" mechanism for properties (issue #985
             // has no property analogue), so collision detection never exempts
             // a type mismatch — see FindPriorCollidingSiblingProperty.
             bool isExplicitInterfacePropertyImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
 
-            bool isUserInterfaceExplicitPropertyImpl = isExplicitInterfacePropertyImpl &&
-                symbol.ExplicitInterfaceImplementations.Length == 1 &&
-                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+            bool usesExplicitInterfacePropertyClause = isExplicitInterfacePropertyImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1;
 
             if (isExplicitInterfacePropertyImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
                 symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
@@ -2531,7 +2521,7 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.PropertyDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
             }
 
-            if (isExplicitInterfacePropertyImpl && !isUserInterfaceExplicitPropertyImpl)
+            if (isExplicitInterfacePropertyImpl && !usesExplicitInterfacePropertyClause)
             {
                 IPropertySymbol propertySurvivor = FindPriorCollidingSiblingProperty(symbol, node);
                 if (propertySurvivor != null)
@@ -2539,14 +2529,13 @@ public sealed partial class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface property implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
                         $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(propertySurvivor)}'; " +
-                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
-                        "two C# properties cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
+                        "one C# declaration targets multiple interface slots, while ADR-0149 carries one qualifier, so the " +
+                        "two properties cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
                         "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
                         "by name; if the surviving sibling's accessors differ from this dropped declaration's, any C# " +
                         "access through the interface-typed reference that previously reached this property now " +
                         "silently observes the surviving property instead (semantic loss, known gap, issue #1911 " +
-                        "analogue). This diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision " +
-                        "between two G# user-interface explicit property implementations is fully supported (issue " +
+                        "analogue). Separate explicit declarations with distinct qualifiers are fully supported (issue " +
                         "#2362, ADR-0149 explicit-interface clause).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.PropertyDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
@@ -2556,10 +2545,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // ADR-0149: the resolved explicit-interface qualifier clause type
-            // for a G# user-interface explicit property implementation, or null
-            // otherwise (ordinary property, or external-interface explicit
-            // implementation, which keeps the pre-#2010 name-based dispatch).
-            GTypeReference explicitInterfacePropertyType = isUserInterfaceExplicitPropertyImpl
+            // for a single-slot explicit property implementation, or null otherwise.
+            GTypeReference explicitInterfacePropertyType = usesExplicitInterfacePropertyClause
                 ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
@@ -2661,12 +2648,8 @@ public sealed partial class CSharpToGSharpTranslator
             // explicit property implementation (explicit-interface clause + CLR
             // MethodImpl) keeps C#'s own `private`-equivalent visibility
             // (Roslyn reports `Private`, mapped straight through by
-            // MapVisibility); an EXTERNAL/BCL interface explicit property
-            // implementation still relies on name-based dispatch and must stay
-            // forced-public (`Visibility.Default`, which for a class-member
-            // position IS public per ADR-0115 §B.10) or ilverify would reject
-            // the missing interface method.
-            Visibility explicitInterfacePropertyVisibility = isExplicitInterfacePropertyImpl && !isUserInterfaceExplicitPropertyImpl
+            // MapVisibility).
+            Visibility explicitInterfacePropertyVisibility = isExplicitInterfacePropertyImpl && !usesExplicitInterfacePropertyClause
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 

@@ -196,14 +196,12 @@ public sealed partial class CSharpToGSharpTranslator
             // interface member now uses the exact same explicit-interface
             // qualifier clause (`prop (IFoo) this[...] T`) as an ordinary
             // property or method (issue #2010 / #2362 / ADR-0149), instead of
-            // the #1911-style forced-public collision-drop fallback. That
-            // fallback is now reserved for EXTERNAL/BCL interfaces only,
-            // mirroring TranslatePropertyDeclaration exactly.
+            // the #1911-style forced-public collision-drop fallback. Imported
+            // CLR interfaces use the clause too.
             bool isExplicitInterfaceIndexerImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
 
-            bool isUserInterfaceExplicitIndexerImpl = isExplicitInterfaceIndexerImpl &&
-                symbol.ExplicitInterfaceImplementations.Length == 1 &&
-                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+            bool usesExplicitInterfaceIndexerClause = isExplicitInterfaceIndexerImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1;
 
             if (isExplicitInterfaceIndexerImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
                 symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
@@ -222,7 +220,7 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.IndexerDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
             }
 
-            if (isExplicitInterfaceIndexerImpl && !isUserInterfaceExplicitIndexerImpl)
+            if (isExplicitInterfaceIndexerImpl && !usesExplicitInterfaceIndexerClause)
             {
                 IPropertySymbol indexerSurvivor = FindPriorCollidingSiblingProperty(symbol, node);
                 if (indexerSurvivor != null)
@@ -230,14 +228,13 @@ public sealed partial class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface indexer implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfacePropertyName(symbol)}' " +
                         $"shares its parameter shape with '{symbol.ContainingType.Name}.{FormatSiblingPropertyName(indexerSurvivor)}'; " +
-                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
-                        "two C# indexers cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
+                        "one C# declaration targets multiple interface slots, while ADR-0149 carries one qualifier, so the " +
+                        "two indexers cannot both be emitted (would be an exact-signature duplicate, GS0102). This " +
                         "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
                         "by parameter shape; if the surviving sibling's accessors differ from this dropped declaration's, " +
                         "any C# access through the interface-typed reference that previously reached this indexer now " +
                         "silently observes the surviving indexer instead (semantic loss, known gap, issue #1911 " +
-                        "analogue). This diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision " +
-                        "between two G# user-interface explicit indexer implementations is fully supported (issue " +
+                        "analogue). Separate explicit declarations with distinct qualifiers are fully supported (issue " +
                         "#944 follow-up, ADR-0149 explicit-interface clause).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.IndexerDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
@@ -247,10 +244,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // ADR-0149: the resolved explicit-interface qualifier clause type
-            // for a G# user-interface explicit indexer implementation, or null
-            // otherwise (ordinary indexer, or external-interface explicit
-            // implementation, which keeps the pre-#2010 name-based dispatch).
-            GTypeReference explicitInterfaceIndexerType = isUserInterfaceExplicitIndexerImpl
+            // for a single-slot explicit indexer implementation, or null otherwise.
+            GTypeReference explicitInterfaceIndexerType = usesExplicitInterfaceIndexerClause
                 ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
@@ -290,12 +285,8 @@ public sealed partial class CSharpToGSharpTranslator
             // user-interface explicit indexer implementation (explicit-
             // interface clause + CLR MethodImpl) keeps C#'s own
             // `private`-equivalent visibility (Roslyn reports `Private`,
-            // mapped straight through by MapVisibility); an EXTERNAL/BCL
-            // interface explicit indexer implementation still relies on
-            // name+parameter-shape dispatch and must stay forced-public
-            // (`Visibility.Default`) or ilverify would reject the missing
-            // interface method.
-            Visibility indexerVisibility = isExplicitInterfaceIndexerImpl && !isUserInterfaceExplicitIndexerImpl
+            // mapped straight through by MapVisibility).
+            Visibility indexerVisibility = isExplicitInterfaceIndexerImpl && !usesExplicitInterfaceIndexerClause
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 
