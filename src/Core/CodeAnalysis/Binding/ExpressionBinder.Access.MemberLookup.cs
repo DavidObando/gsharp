@@ -494,8 +494,9 @@ internal sealed partial class ExpressionBinder
                                 ifaceProp.GetterAccessibility);
                         }
 
-                        var propertyType = ifacePropertyOwner is InterfaceSymbol effectiveOwner
-                            ? effectiveOwner.SubstituteMemberType(ifaceProp.Type)
+                        var effectiveInterfaceOwner = ifacePropertyOwner as InterfaceSymbol;
+                        var propertyType = effectiveInterfaceOwner != null
+                            ? effectiveInterfaceOwner.SubstituteMemberType(ifaceProp.Type)
                             : ifaceProp.Type;
                         var substitutedPropertyType = ReferenceEquals(
                             propertyType,
@@ -507,7 +508,9 @@ internal sealed partial class ExpressionBinder
                             receiver,
                             null,
                             ifaceProp,
-                            substitutedPropertyType);
+                            substitutedPropertyType,
+                            narrowedType: null,
+                            interfaceType: effectiveInterfaceOwner);
                     }
 
                     // Issue #1397: an instance method declared on the static

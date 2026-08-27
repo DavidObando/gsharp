@@ -569,7 +569,8 @@ internal sealed partial class ExpressionBinder
                     receiver,
                     declaringType,
                     matchedField,
-                    substitutedMemberType);
+                    substitutedMemberType,
+                    narrowedType: null);
         }
         else if (matchedProperty != null)
         {
@@ -595,7 +596,9 @@ internal sealed partial class ExpressionBinder
                     receiver,
                     declaringType,
                     matchedProperty,
-                    substitutedMemberType);
+                    substitutedMemberType,
+                    narrowedType: null,
+                    interfaceType: effectiveInterfaceOwner);
             }
         }
         else

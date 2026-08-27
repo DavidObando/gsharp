@@ -89,7 +89,13 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             && this.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
         {
             var rewrittenReceiver = this.FieldRead(proxyField);
-            return new BoundFieldAccessExpression(null, rewrittenReceiver, BoundNodeForm.DeclaringType(node), node.Field, node.NarrowedType);
+            return new BoundFieldAccessExpression(
+                null,
+                rewrittenReceiver,
+                BoundNodeForm.DeclaringType(node),
+                node.Field,
+                node.SubstitutedType,
+                node.NarrowedType);
         }
 
         return base.RewriteFieldAccessExpression(node);

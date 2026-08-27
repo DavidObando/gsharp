@@ -3396,7 +3396,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var fieldType = fieldOwner.SubstituteMemberType(field.Type);
-            return new BoundFieldAccessExpression(null, receiver: null, fieldOwner, field, fieldType);
+            return new BoundFieldAccessExpression(
+                null,
+                receiver: null,
+                fieldOwner,
+                field,
+                fieldType,
+                narrowedType: null);
         }
 
         if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, memberName, out var prop, out var propertyOwner))

@@ -259,6 +259,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                         builder.Append(',');
                     }
 
+                    if (!fn.IsVariadic.IsDefaultOrEmpty && fn.IsVariadic[i])
+                    {
+                        builder.Append("...");
+                    }
+
                     AppendIdentityKey(builder, fn.ParameterTypes[i]);
                 }
 

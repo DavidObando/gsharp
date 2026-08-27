@@ -179,6 +179,56 @@ public class Issue1624SymbolCacheKeyingTests
                 TypeSymbol.Void));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StructuralCaches_DistinguishNestedFixedAndVariadicFunctions(
+        bool variadicFirst)
+    {
+        var element = new TypeParameterSymbol(
+            variadicFirst ? "TVariadicFirst" : "TFixedFirst",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var slice = SliceTypeSymbol.Get(element);
+        var fixedFunction = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(slice),
+            ImmutableArray.Create(false),
+            TypeSymbol.Void);
+        var variadicFunction = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(slice),
+            ImmutableArray.Create(true),
+            TypeSymbol.Void);
+
+        TypeSymbol first = variadicFirst ? variadicFunction : fixedFunction;
+        TypeSymbol second = variadicFirst ? fixedFunction : variadicFunction;
+        var firstPointer = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create(first),
+            TypeSymbol.Void);
+        var secondPointer = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create(second),
+            TypeSymbol.Void);
+        var firstTuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create(first, TypeSymbol.String));
+        var secondTuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create(second, TypeSymbol.String));
+        var firstOuterFunction = FunctionTypeSymbol.Get(
+            ImmutableArray.Create(first),
+            TypeSymbol.Int32);
+        var secondOuterFunction = FunctionTypeSymbol.Get(
+            ImmutableArray.Create(second),
+            TypeSymbol.Int32);
+
+        Assert.NotSame(fixedFunction, variadicFunction);
+        Assert.NotSame(firstPointer, secondPointer);
+        Assert.NotSame(firstTuple, secondTuple);
+        Assert.NotSame(firstOuterFunction, secondOuterFunction);
+        Assert.Same(first, firstPointer.ParameterTypes[0]);
+        Assert.Same(second, secondPointer.ParameterTypes[0]);
+        Assert.False(fixedFunction.IsVariadic[0]);
+        Assert.True(variadicFunction.IsVariadic[0]);
+    }
+
     /// <summary>
     /// Regression for the fix-up in this same PR: the original #1624 patch
     /// keyed a plain imported CLR reference-type element (one with a

@@ -336,6 +336,56 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
             CompileAndRun(source, AssertCalliSignaturesClosedInt32));
     }
 
+    [Fact]
+    public void GenericInterfaceMemberSubstitution_DoesNotEmitSmartCast()
+    {
+        const string source = """
+            package Issue3523GenericInterfaceMembers
+            import System
+
+            interface IBox[T] {
+                prop Value T { get }
+                shared { var Shared T }
+            }
+
+            class IntBox : IBox[int32] {
+                prop Value int32 -> 42
+            }
+
+            open class Animal {
+                func Speak() string -> "animal"
+            }
+
+            class Dog : Animal {
+                func Bark() string -> "woof"
+            }
+
+            class SmartBox {
+                prop Pet Animal { get; init; }
+            }
+
+            func Main() {
+                let box IBox[int32] = IntBox()
+                Console.WriteLine(box.Value)
+                Console.WriteLine(IBox[int32].Shared)
+
+                let smart = SmartBox() { Pet = Dog() }
+                if smart.Pet is Dog {
+                    Console.WriteLine(smart.Pet.Bark())
+                }
+            }
+            """;
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "42",
+                "0",
+                "woof",
+                string.Empty),
+            CompileAndRun(source, AssertNoBoxOrUnboxInstructions));
+    }
+
     private static string CompileAndRun(
         string source,
         Action<string> inspectAssembly = null)
@@ -490,6 +540,29 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
         }
 
         Assert.True(calliCount > 0, "expected at least one calli signature");
+    }
+
+    private static void AssertNoBoxOrUnboxInstructions(string outputPath)
+    {
+        using var peReader = new PEReader(File.OpenRead(outputPath));
+        var metadata = peReader.GetMetadataReader();
+        foreach (var methodHandle in metadata.MethodDefinitions)
+        {
+            var method = metadata.GetMethodDefinition(methodHandle);
+            if (method.RelativeVirtualAddress == 0)
+            {
+                continue;
+            }
+
+            var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
+            var instructions = IlInstructionReader.Read(
+                body.GetILBytes() ?? Array.Empty<byte>());
+            Assert.DoesNotContain(
+                instructions,
+                instruction => instruction.OpCode == OpCodes.Box
+                    || instruction.OpCode == OpCodes.Unbox
+                    || instruction.OpCode == OpCodes.Unbox_Any);
+        }
     }
 
     private static void DeleteDirectory(string path)

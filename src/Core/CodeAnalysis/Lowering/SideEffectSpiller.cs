@@ -530,6 +530,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
                     inner,
                     BoundNodeForm.DeclaringType(fieldLink),
                     fieldLink.Field,
+                    fieldLink.SubstitutedType,
                     fieldLink.NarrowedType);
             }
 

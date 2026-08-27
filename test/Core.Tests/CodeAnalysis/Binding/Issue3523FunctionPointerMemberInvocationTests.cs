@@ -401,6 +401,61 @@ public class Issue3523FunctionPointerMemberInvocationTests
     }
 
     [Fact]
+    public void GenericInterfaceMemberTypes_AreSubstitutedWithoutFlowNarrowing()
+    {
+        const string source = """
+            package Issue3523GenericInterfaceMemberTypes
+
+            interface IBox[T] {
+                prop Value T { get }
+                shared { var Shared T }
+            }
+
+            class IntBox : IBox[int32] {
+                prop Value int32 -> 42
+            }
+
+            open class Animal { }
+            class Dog : Animal { func Bark() string -> "woof" }
+            class SmartBox { prop Pet Animal { get; init; } }
+
+            func read(box IBox[int32], smart SmartBox) {
+                let value int32 = box.Value
+                let shared int32 = IBox[int32].Shared
+                if smart.Pet is Dog {
+                    smart.Pet.Bark()
+                }
+            }
+            """;
+
+        var program = BindWithoutErrors(source);
+        var collector = new MemberAccessCollector();
+        VisitProgram(program, collector);
+
+        var genericProperty = Assert.Single(
+            collector.Properties,
+            access => access.Property.Name == "Value"
+                && access.Receiver?.Type is InterfaceSymbol);
+        Assert.Same(TypeSymbol.Int32, genericProperty.SubstitutedType);
+        Assert.Null(genericProperty.NarrowedType);
+        Assert.Same(TypeSymbol.Int32, genericProperty.Type);
+
+        var genericField = Assert.Single(
+            collector.Fields,
+            access => access.Field.Name == "Shared"
+                && access.InterfaceType != null);
+        Assert.Same(TypeSymbol.Int32, genericField.SubstitutedType);
+        Assert.Null(genericField.NarrowedType);
+        Assert.Same(TypeSymbol.Int32, genericField.Type);
+
+        var narrowedProperty = Assert.Single(
+            collector.Properties,
+            access => access.Property.Name == "Pet"
+                && access.NarrowedType is StructSymbol { Name: "Dog" });
+        Assert.Null(narrowedProperty.SubstitutedType);
+    }
+
+    [Fact]
     public void ClosedGenericPointerMembers_RejectWrongArgumentTypes()
     {
         const string source = """
@@ -824,6 +879,25 @@ public class Issue3523FunctionPointerMemberInvocationTests
         {
             Calls.Add(node);
             base.VisitIndirectCallExpression(node);
+        }
+    }
+
+    private sealed class MemberAccessCollector : BoundTreeWalker
+    {
+        public List<BoundFieldAccessExpression> Fields { get; } = new();
+
+        public List<BoundPropertyAccessExpression> Properties { get; } = new();
+
+        protected override void VisitFieldAccessExpression(BoundFieldAccessExpression node)
+        {
+            Fields.Add(node);
+            base.VisitFieldAccessExpression(node);
+        }
+
+        protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
+        {
+            Properties.Add(node);
+            base.VisitPropertyAccessExpression(node);
         }
     }
 }

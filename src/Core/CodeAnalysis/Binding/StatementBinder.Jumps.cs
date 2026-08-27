@@ -968,7 +968,14 @@ internal sealed partial class StatementBinder
                 var receiver = propAccess.Receiver == null
                     ? null
                     : CaptureReceiver(syntax, propAccess.Receiver, preStatements);
-                var read = new BoundPropertyAccessExpression(syntax, receiver, propAccess.StructType, propAccess.Property);
+                var read = new BoundPropertyAccessExpression(
+                    syntax,
+                    receiver,
+                    propAccess.StructType,
+                    propAccess.Property,
+                    propAccess.SubstitutedType,
+                    propAccess.NarrowedType,
+                    propAccess.InterfaceType);
                 var write = new BoundPropertyAssignmentExpression(syntax, receiver, propAccess.StructType, propAccess.Property, boundRhs);
                 return (read, write);
             }

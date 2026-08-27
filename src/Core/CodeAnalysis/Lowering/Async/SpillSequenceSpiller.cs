@@ -1028,7 +1028,9 @@ public static class SpillSequenceSpiller
                             receiver,
                             propAccess.StructType,
                             propAccess.Property,
-                            propAccess.NarrowedType));
+                            propAccess.SubstitutedType,
+                            propAccess.NarrowedType,
+                            propAccess.InterfaceType));
                 case BoundPropertyAssignmentExpression propAssign:
                     if (propAssign.Receiver == null)
                     {
@@ -2546,7 +2548,13 @@ public static class SpillSequenceSpiller
             return SpillOneOperand(
                 fieldAccess,
                 fieldAccess.Receiver,
-                recv => new BoundFieldAccessExpression(null, recv, BoundNodeForm.DeclaringType(fieldAccess), fieldAccess.Field, fieldAccess.NarrowedType));
+                recv => new BoundFieldAccessExpression(
+                    null,
+                    recv,
+                    BoundNodeForm.DeclaringType(fieldAccess),
+                    fieldAccess.Field,
+                    fieldAccess.SubstitutedType,
+                    fieldAccess.NarrowedType));
         }
 
         private BoundSpillSequenceExpression SpillTupleLiteral(BoundTupleLiteralExpression tupleLiteral)

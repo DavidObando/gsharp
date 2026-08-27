@@ -2107,7 +2107,15 @@ public abstract class BoundTreeRewriter
         }
 
         var receiver = RewriteExpression(node.Receiver);
-        return receiver == node.Receiver ? node : new BoundFieldAccessExpression(null, receiver, Invariant.Required(node.StructType, "an instance field access has a struct type"), node.Field, node.NarrowedType);
+        return receiver == node.Receiver
+            ? node
+            : new BoundFieldAccessExpression(
+                null,
+                receiver,
+                Invariant.Required(node.StructType, "an instance field access has a struct type"),
+                node.Field,
+                node.SubstitutedType,
+                node.NarrowedType);
     }
 
     /// <summary>Rewrites a field assignment.</summary>
@@ -2154,7 +2162,16 @@ public abstract class BoundTreeRewriter
         }
 
         var receiver = RewriteExpression(node.Receiver);
-        return receiver == node.Receiver ? node : new BoundPropertyAccessExpression(null, receiver, node.StructType, node.Property, node.NarrowedType);
+        return receiver == node.Receiver
+            ? node
+            : new BoundPropertyAccessExpression(
+                null,
+                receiver,
+                node.StructType,
+                node.Property,
+                node.SubstitutedType,
+                node.NarrowedType,
+                node.InterfaceType);
     }
 
     /// <summary>Rewrites a property assignment (ADR-0051).</summary>

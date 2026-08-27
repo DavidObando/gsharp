@@ -1400,7 +1400,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var fieldType = fieldOwner.SubstituteMemberType(staticField.Type);
-            var leftRead = new BoundFieldAccessExpression(null, receiver: null, fieldOwner, staticField, fieldType);
+            var leftRead = new BoundFieldAccessExpression(
+                null,
+                receiver: null,
+                fieldOwner,
+                staticField,
+                fieldType,
+                narrowedType: null);
 
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the target in place, replacing the read/binary/write rewrite.

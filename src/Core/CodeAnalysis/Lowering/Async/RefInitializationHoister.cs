@@ -250,7 +250,13 @@ public static class RefInitializationHoister
                             || !IsReconstructableStorage(field.Receiver)
                             ? HoistIfNeeded(field.Receiver, prelude)
                             : HoistOperand(field.Receiver, prelude);
-                        return new BoundFieldAccessExpression(field.Syntax, receiver, BoundNodeForm.DeclaringType(field), field.Field, field.NarrowedType);
+                        return new BoundFieldAccessExpression(
+                            field.Syntax,
+                            receiver,
+                            BoundNodeForm.DeclaringType(field),
+                            field.Field,
+                            field.SubstitutedType,
+                            field.NarrowedType);
                     }
 
                 case BoundClrIndexExpression clrIdx:

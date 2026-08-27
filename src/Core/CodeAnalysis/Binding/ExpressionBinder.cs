@@ -993,17 +993,20 @@ internal sealed partial class ExpressionBinder
                     null,
                     fieldAccess.Receiver,
                     fieldAccess.StructType,
-                    fieldAccess.Field);
+                    fieldAccess.Field,
+                    fieldAccess.SubstitutedType,
+                    narrowedType: null);
                 Func<TypeSymbol, BoundExpression> makeNarrowedField = narrowedType =>
                     new BoundFieldAccessExpression(
                         null,
                         fieldAccess.Receiver,
                         fieldAccess.StructType,
                         fieldAccess.Field,
+                        fieldAccess.SubstitutedType,
                         narrowedType);
                 return BuildNarrowedRead(
                     baseRead,
-                    fieldAccess.Field.Type,
+                    fieldAccess.SubstitutedType ?? fieldAccess.Field.Type,
                     narrowed,
                     makeNarrowedField);
         }
@@ -1029,17 +1032,22 @@ internal sealed partial class ExpressionBinder
                     null,
                     propertyAccess.Receiver,
                     propertyAccess.StructType,
-                    propertyAccess.Property);
+                    propertyAccess.Property,
+                    propertyAccess.SubstitutedType,
+                    narrowedType: null,
+                    interfaceType: propertyAccess.InterfaceType);
                 Func<TypeSymbol, BoundExpression> makeNarrowedProperty = narrowedType =>
                     new BoundPropertyAccessExpression(
                         null,
                         propertyAccess.Receiver,
                         propertyAccess.StructType,
                         propertyAccess.Property,
-                        narrowedType);
+                        propertyAccess.SubstitutedType,
+                        narrowedType,
+                        propertyAccess.InterfaceType);
                 return BuildNarrowedRead(
                     baseRead,
-                    propertyAccess.Property.Type,
+                    propertyAccess.SubstitutedType ?? propertyAccess.Property.Type,
                     narrowed,
                     makeNarrowedProperty);
         }

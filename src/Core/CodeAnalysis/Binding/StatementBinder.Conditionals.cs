@@ -1547,6 +1547,7 @@ internal sealed partial class StatementBinder
                         receiver,
                         field.StructType,
                         field.Field,
+                        field.SubstitutedType,
                         field.NarrowedType);
 
             case BoundIndexExpression index:

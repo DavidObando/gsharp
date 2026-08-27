@@ -21,7 +21,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="structType">The declaring struct/class type, or <see langword="null"/> for an interface static field.</param>
     /// <param name="field">The field to read.</param>
     public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, FieldSymbol field)
-        : this(syntax, receiver, structType, field, narrowedType: null)
+        : this(syntax, receiver, structType, field, substitutedType: null, narrowedType: null)
     {
     }
 
@@ -38,7 +38,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="field">The interface static field to read.</param>
     /// <param name="interfaceType">The owning interface (definition or constructed).</param>
     public BoundFieldAccessExpression(SyntaxNode? syntax, FieldSymbol field, InterfaceSymbol interfaceType)
-        : this(syntax, field, interfaceType, narrowedType: null)
+        : this(syntax, field, interfaceType, substitutedType: null, narrowedType: null)
     {
     }
 
@@ -46,11 +46,27 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="syntax">Originating syntax.</param>
     /// <param name="field">Field declared on the interface definition.</param>
     /// <param name="interfaceType">Effective interface construction.</param>
-    /// <param name="narrowedType">Substituted member type.</param>
+    /// <param name="substitutedType">Construction-substituted member type.</param>
     public BoundFieldAccessExpression(
         SyntaxNode? syntax,
         FieldSymbol field,
         InterfaceSymbol interfaceType,
+        TypeSymbol? substitutedType)
+        : this(syntax, field, interfaceType, substitutedType, narrowedType: null)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundFieldAccessExpression"/> class for an interface static-field read with distinct substituted and narrowed types.</summary>
+    /// <param name="syntax">Originating syntax.</param>
+    /// <param name="field">Field declared on the interface definition.</param>
+    /// <param name="interfaceType">Effective interface construction.</param>
+    /// <param name="substitutedType">Construction-substituted member type.</param>
+    /// <param name="narrowedType">Flow-narrowed type.</param>
+    public BoundFieldAccessExpression(
+        SyntaxNode? syntax,
+        FieldSymbol field,
+        InterfaceSymbol interfaceType,
+        TypeSymbol? substitutedType,
         TypeSymbol? narrowedType)
         : base(syntax)
     {
@@ -58,6 +74,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
         StructType = null;
         Field = field;
         NarrowedType = narrowedType;
+        SubstitutedType = substitutedType;
         InterfaceType = interfaceType;
     }
 
@@ -75,12 +92,31 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="field">The field to read.</param>
     /// <param name="narrowedType">The narrowed type to surface, or <c>null</c> to use <paramref name="field"/>'s declared type.</param>
     public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, FieldSymbol field, TypeSymbol? narrowedType)
+        : this(syntax, receiver, structType, field, substitutedType: null, narrowedType: narrowedType)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundFieldAccessExpression"/> class with distinct construction-substituted and flow-narrowed types.</summary>
+    /// <param name="syntax">The originating syntax.</param>
+    /// <param name="receiver">Instance receiver, or <see langword="null"/> for static access.</param>
+    /// <param name="structType">Declaring struct/class type.</param>
+    /// <param name="field">Field to read.</param>
+    /// <param name="substitutedType">Construction-substituted member type.</param>
+    /// <param name="narrowedType">Flow-narrowed type.</param>
+    public BoundFieldAccessExpression(
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
+        StructSymbol? structType,
+        FieldSymbol field,
+        TypeSymbol? substitutedType,
+        TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = receiver;
         StructType = structType;
         Field = field;
         NarrowedType = narrowedType;
+        SubstitutedType = substitutedType;
     }
 
     public BoundExpression? Receiver { get; }
@@ -107,7 +143,10 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// </summary>
     public TypeSymbol? NarrowedType { get; }
 
-    public override TypeSymbol Type => NarrowedType ?? Field.Type;
+    /// <summary>Gets the member type after generic construction substitution, before flow narrowing.</summary>
+    public TypeSymbol? SubstitutedType { get; }
+
+    public override TypeSymbol Type => NarrowedType ?? SubstitutedType ?? Field.Type;
 
     public override BoundNodeKind Kind => BoundNodeKind.FieldAccessExpression;
 }

@@ -590,9 +590,10 @@ internal sealed partial class MethodBodyEmitter
     }
 
     private static TypeSymbol GetEffectiveFieldType(BoundFieldAccessExpression access)
-        => access.StructType is StructSymbol owner
-            ? owner.SubstituteMemberType(access.Field.Type)
-            : access.Field.Type;
+        => access.SubstitutedType
+            ?? (access.StructType is StructSymbol owner
+                ? owner.SubstituteMemberType(access.Field.Type)
+                : access.Field.Type);
 
     private void EmitFieldAssignment(BoundFieldAssignmentExpression fas)
     {
@@ -870,29 +871,39 @@ internal sealed partial class MethodBodyEmitter
         // parameter is read with the substitution applied. The non-generic case
         // keeps using the plain accessor MethodDef.
         EntityHandle getterHandle;
-        var getterContainer = ResolvePropertyReferenceContainer(
-            access.StructType as StructSymbol,
-            access.Receiver?.Type as StructSymbol,
-            access.Property);
-        if (getterContainer != null)
+        if (access.InterfaceType != null)
         {
-            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false);
-        }
-        else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) && handles.Getter.HasValue)
-        {
-            getterHandle = handles.Getter.Value;
-        }
-        else if (access.StructType is { ClrType: not null } importedGetterContainer)
-        {
-            // Issue #2291: a property on an IMPORTED type (e.g. a C# record's
-            // auto-property) has no planned PropertyAccessorHandles entry —
-            // resolve its getter MethodRef directly off the imported CLR type.
-            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(importedGetterContainer, access.Property, wantSetter: false);
+            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(
+                access.InterfaceType,
+                access.Property,
+                wantSetter: false);
         }
         else
         {
-            throw new InvalidOperationException(
-                $"Property '{access.Property.Name}' has no emitted getter MethodDef.");
+            var getterContainer = ResolvePropertyReferenceContainer(
+                access.StructType as StructSymbol,
+                access.Receiver?.Type as StructSymbol,
+                access.Property);
+            if (getterContainer != null)
+            {
+                getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(getterContainer, access.Property, wantSetter: false);
+            }
+            else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(access.Property, out var handles) && handles.Getter.HasValue)
+            {
+                getterHandle = handles.Getter.Value;
+            }
+            else if (access.StructType is { ClrType: not null } importedGetterContainer)
+            {
+                // Issue #2291: a property on an IMPORTED type (e.g. a C# record's
+                // auto-property) has no planned PropertyAccessorHandles entry —
+                // resolve its getter MethodRef directly off the imported CLR type.
+                getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(importedGetterContainer, access.Property, wantSetter: false);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Property '{access.Property.Name}' has no emitted getter MethodDef.");
+            }
         }
 
         // Issue #263: static property access — no receiver to load.
@@ -900,7 +911,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(getterHandle);
-            this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
+            this.EmitNarrowingCastIfNeeded(GetEffectivePropertyType(access), access.NarrowedType);
             return;
         }
 
@@ -913,7 +924,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpReceiver));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getterHandle);
-            this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
+            this.EmitNarrowingCastIfNeeded(GetEffectivePropertyType(access), access.NarrowedType);
             return;
         }
 
@@ -932,8 +943,14 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
         this.il.Token(getterHandle);
-        this.EmitNarrowingCastIfNeeded(access.Property.Type, access.NarrowedType);
+        this.EmitNarrowingCastIfNeeded(GetEffectivePropertyType(access), access.NarrowedType);
     }
+
+    private static TypeSymbol GetEffectivePropertyType(BoundPropertyAccessExpression access)
+        => access.SubstitutedType
+            ?? (access.StructType is StructSymbol owner
+                ? owner.SubstituteMemberType(access.Property.Type)
+                : access.Property.Type);
 
     // ADR-0051 Phase 6: emit IL for BoundPropertyAssignmentExpression (computed properties).
     private void EmitPropertyAssignment(BoundPropertyAssignmentExpression assn)
