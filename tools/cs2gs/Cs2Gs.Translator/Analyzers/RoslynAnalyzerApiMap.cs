@@ -86,7 +86,10 @@ internal static class RoslynAnalyzerApiMap
             "AssignmentExpressionSyntax",
             "G# simple assignment targets an identifier token, and index/member writes are distinct Index/MemberIndexAssignmentExpression nodes — assignment-LHS pattern checks are usually structural no-ops in G#."),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "CallExpressionSyntax"),
-        ["Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "ObjectCreationExpressionSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "CallExpressionSyntax",
+            "A C# construction without an object initializer is a direct type call in G#; construction-detection idioms inspect CallExpressionSyntax.Identifier."),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.IsPatternExpressionSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "IsExpressionSyntax",
@@ -121,6 +124,10 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Syntax",
             "ExpressionSyntax",
             "G# call arguments are bare expressions with no ArgumentSyntax wrapper; a lambda parameter or local typed ArgumentSyntax maps to ExpressionSyntax directly (#3536)."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.SingleVariableDesignationSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "PatternSyntax",
+            "G# stores a pattern's optional binding token on the pattern node itself; designation walks filter PatternSyntax.BindingIdentifier."),
 
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
@@ -204,6 +211,10 @@ internal static class RoslynAnalyzerApiMap
             "RightPart",
             "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetLastToken()."),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax", "Expression")] = new(null, "LeftPart"),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax", "Expression")] = new(
+            null,
+            "Parent",
+            "G# member calls are CallExpressionSyntax nodes whose parent is the AccessorExpressionSyntax."),
         [("Microsoft.CodeAnalysis.SyntaxToken", "ValueText")] = new(null, "Text"),
         [("Microsoft.CodeAnalysis.Operations.IConversionOperation", "Operand")] = new(null, "Expression"),
         [("Microsoft.CodeAnalysis.Diagnostics.OperationAnalysisContext", "Operation")] = new(null, "BoundNode"),
@@ -218,6 +229,9 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.Operations.IBinaryOperation", "RightOperand")] = new(null, "Right"),
         [("Microsoft.CodeAnalysis.Operations.IInvocationOperation", "TargetMethod")] = new(null, "Function"),
         [("Microsoft.CodeAnalysis.IMethodSymbol", "OverriddenMethod")] = new(null, "OverriddenMethod"),
+        [("Microsoft.CodeAnalysis.IMethodSymbol", "ReturnType")] = new(null, "Type"),
+        [("Microsoft.CodeAnalysis.IParameterSymbol", "IsOptional")] = new(null, "HasExplicitDefaultValue"),
+        [("Microsoft.CodeAnalysis.INamedTypeSymbol", "BaseType")] = new(null, "BaseType"),
         [("Microsoft.CodeAnalysis.ISymbol", "DeclaringSyntaxReferences")] = new(
             null,
             "DeclaringSyntaxNodes",
@@ -235,6 +249,10 @@ internal static class RoslynAnalyzerApiMap
             null,
             null,
             "SubpatternSyntax.ExpressionColon.Expression names the field; G#'s PropertyPatternFieldSyntax.Identifier names it directly and has no ExpressionColon wrapper (#3536)."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.SingleVariableDesignationSyntax", "Identifier")] = new(
+            null,
+            "BindingIdentifier",
+            "G# stores the designation token on PatternSyntax.BindingIdentifier rather than a child designation node."),
     };
 
     /// <summary>

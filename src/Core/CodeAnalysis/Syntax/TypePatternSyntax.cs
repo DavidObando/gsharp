@@ -61,5 +61,5 @@ public sealed class TypePatternSyntax : PatternSyntax
     /// or <see langword="null"/> when the pattern binds nothing.
     /// </summary>
     [SyntaxChildIgnore]
-    public SyntaxToken? BindingIdentifier => Identifier ?? Designation;
+    public override SyntaxToken? BindingIdentifier => Identifier ?? Designation;
 }

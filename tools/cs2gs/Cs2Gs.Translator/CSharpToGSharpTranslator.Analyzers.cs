@@ -82,6 +82,53 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryTranslateAnalyzerMemberAccess(MemberAccessExpressionSyntax member, out GExpression result)
         {
             result = null;
+            if (member.Name.Identifier.Text == "Value"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol
+                    {
+                        Name: "Value",
+                        ContainingType.Name: "EqualsValueClauseSyntax",
+                    })
+            {
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
+            if (member.Name.Identifier.Text == "Pattern"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol
+                    {
+                        Name: "Pattern",
+                        ContainingType.Name: "CasePatternSwitchLabelSyntax",
+                    })
+            {
+                result = new NonNullAssertionExpression(
+                    new MemberAccessExpression(
+                        this.TranslateExpression(member.Expression),
+                        "Value",
+                        isArrow: false));
+                return true;
+            }
+
+            if (member.Name.Identifier.Text == "Identifier"
+                && member.Expression is IdentifierNameSyntax designationName
+                && this.context.GetSymbolInfo(designationName).Symbol is ILocalSymbol designationLocal
+                && designationLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is SingleVariableDesignationSyntax
+                {
+                    Parent.Parent: IsPatternExpressionSyntax
+                    {
+                        Expression: ConditionalAccessExpressionSyntax
+                        {
+                            Expression: MemberAccessExpressionSyntax
+                            {
+                                Name.Identifier.Text: "ExpressionColon",
+                            },
+                        },
+                    },
+                })
+            {
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
             if (member.Name.Identifier.Text == "OperatorKind"
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "OperatorKind" } operatorKind
                 && RoslynTypeMetadataName(operatorKind.ContainingType) == "Microsoft.CodeAnalysis.Operations.IBinaryOperation")
@@ -204,6 +251,45 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryTranslateAnalyzerBaseCallCheck(IsPatternExpressionSyntax isPattern, out GExpression result)
         {
             result = null;
+            if (isPattern.Expression is ConditionalAccessExpressionSyntax conditional
+                && conditional.Expression is MemberAccessExpressionSyntax expressionColon
+                && expressionColon.Name.Identifier.Text == "ExpressionColon"
+                && conditional.WhenNotNull is MemberBindingExpressionSyntax { Name.Identifier.Text: "Expression" }
+                && expressionColon.Expression is ExpressionSyntax propertyFieldSource
+                && this.context.GetTypeInfo(propertyFieldSource).Type is INamedTypeSymbol propertyFieldType
+                && RoslynTypeMetadataName(propertyFieldType)
+                    == "Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax"
+                && isPattern.Pattern is DeclarationPatternSyntax
+                {
+                    Type: IdentifierNameSyntax { Identifier.Text: "IdentifierNameSyntax" },
+                    Designation: SingleVariableDesignationSyntax
+                    {
+                        Identifier.Text: { } designation,
+                    },
+                })
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    "SubpatternSyntax.ExpressionColon.Expression identifier test translated to PropertyPatternFieldSyntax.Identifier: G# property-pattern fields always carry the field token directly.",
+                    isPattern.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
+
+                this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
+                result = new PatternTestExpression(
+                    new MemberAccessExpression(
+                        this.TranslateExpression(propertyFieldSource),
+                        "Identifier",
+                        isArrow: false),
+                    new TypePattern(
+                        designation,
+                        new NamedTypeReference("SyntaxToken"),
+                        designationAfterType: true));
+                return true;
+            }
+
             if (isPattern.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "Expression" } expressionAccess
                 || this.context.GetSymbolInfo(expressionAccess).Symbol is not IPropertySymbol { Name: "Expression" } expressionProperty
                 || RoslynTypeMetadataName(expressionProperty.ContainingType) != "Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax"
@@ -314,6 +400,90 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
+        private bool TryTranslateAnalyzerDesignationWalk(InvocationExpressionSyntax invocation, out GExpression result)
+        {
+            result = null;
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol { Name: "OfType", TypeArguments.Length: 1 } method
+                || RoslynTypeMetadataName(method.TypeArguments[0] as INamedTypeSymbol)
+                    != "Microsoft.CodeAnalysis.CSharp.Syntax.SingleVariableDesignationSyntax"
+                || invocation.Expression is not MemberAccessExpressionSyntax { Expression: InvocationExpressionSyntax descendants }
+                || this.context.GetSymbolInfo(descendants).Symbol is not IMethodSymbol { Name: "DescendantNodesAndSelf" })
+            {
+                return false;
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                "SingleVariableDesignationSyntax walk translated to PatternSyntax nodes with a non-nil BindingIdentifier: G# stores designation tokens directly on pattern nodes.",
+                invocation.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
+            GExpression patterns = new InvocationExpression(
+                new MemberAccessExpression(
+                    this.TranslateExpression(descendants),
+                    "OfType",
+                    isArrow: false),
+                typeArguments: new[] { new NamedTypeReference("PatternSyntax") });
+            var parameter = new Parameter("pattern", new NamedTypeReference("PatternSyntax"));
+            GExpression binding = new MemberAccessExpression(
+                new IdentifierExpression("pattern"),
+                "BindingIdentifier",
+                isArrow: false);
+            result = new InvocationExpression(
+                new MemberAccessExpression(patterns, "Where", isArrow: false),
+                new[]
+                {
+                    new LambdaExpression(
+                        new[] { parameter },
+                        expressionBody: new BinaryExpression(binding, "!=", LiteralExpression.Null())),
+                });
+            return true;
+        }
+
+        private bool TryTranslateAnalyzerConstructionForms(InvocationExpressionSyntax invocation, out GExpression result)
+        {
+            result = null;
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol { Name: "GetMembers" } getMembers
+                || RoslynTypeMetadataName(getMembers.ContainingType) != "Microsoft.CodeAnalysis.INamespaceOrTypeSymbol"
+                || invocation.Expression is not MemberAccessExpressionSyntax { Expression: ExpressionSyntax receiver }
+                || invocation.Parent is not MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier.Text: "OfType" } } ofTypeAccess
+                || ofTypeAccess.Parent is not InvocationExpressionSyntax ofTypeInvocation
+                || this.context.GetSymbolInfo(ofTypeInvocation).Symbol is not IMethodSymbol { Name: "OfType", TypeArguments.Length: 1 } ofType
+                || RoslynTypeMetadataName(ofType.TypeArguments[0] as INamedTypeSymbol) != "Microsoft.CodeAnalysis.IMethodSymbol"
+                || ofTypeInvocation.Parent is not MemberAccessExpressionSyntax { Name.Identifier.Text: "Where" }
+                || ofTypeInvocation.Parent.Parent is not InvocationExpressionSyntax whereInvocation
+                || !whereInvocation.ArgumentList.Arguments.Any(argument =>
+                    argument.Expression.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>().Any(access =>
+                        access.Name.Identifier.Text == "MethodKind"
+                        && this.context.GetSymbolInfo(access).Symbol is IPropertySymbol { ContainingType.Name: "IMethodSymbol" })))
+            {
+                return false;
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                "TypeSymbol.GetMembers() constructor-form query augmented with TypeSymbol.GetConstructors(): G# keeps constructors outside ordinary member enumeration.",
+                invocation.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            GExpression translatedReceiver = this.TranslateExpression(receiver);
+            GExpression members = new InvocationExpression(
+                new MemberAccessExpression(translatedReceiver, "GetMembers", isArrow: false));
+            GExpression constructors = new InvocationExpression(
+                new MemberAccessExpression(this.TranslateExpression(receiver), "GetConstructors", isArrow: false));
+            result = new InvocationExpression(
+                new MemberAccessExpression(members, "Concat", isArrow: false),
+                new[] { constructors });
+            return true;
+        }
+
         /// <summary>
         /// Invocation-level analyzer idioms: Roslyn methods whose G#
         /// counterpart is not a same-shaped method (e.g.
@@ -322,6 +492,33 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryTranslateAnalyzerInvocation(InvocationExpressionSyntax invocation, out GExpression result)
         {
             result = null;
+            if (this.TryTranslateAnalyzerDesignationWalk(invocation, out result)
+                || this.TryTranslateAnalyzerConstructionForms(invocation, out result))
+            {
+                return true;
+            }
+
+            if (invocation.Expression is IdentifierNameSyntax { Identifier.Text: "TypeNameOf" }
+                && invocation.ArgumentList.Arguments.Count == 1
+                && invocation.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax typeAccess
+                && typeAccess.Name.Identifier.Text == "Type"
+                && typeAccess.Expression is ExpressionSyntax creation
+                && this.context.GetSymbolInfo(typeAccess).Symbol is IPropertySymbol
+                {
+                    Name: "Type",
+                    ContainingType.Name: "ObjectCreationExpressionSyntax",
+                })
+            {
+                result = new MemberAccessExpression(
+                    new MemberAccessExpression(
+                        this.TranslateExpression(creation),
+                        "Identifier",
+                        isArrow: false),
+                    "Text",
+                    isArrow: false);
+                return true;
+            }
+
             if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
                 || !RoslynAnalyzerApiMap.IsRoslynNamespace(method.ContainingType?.ContainingNamespace?.ToDisplayString()))
             {
@@ -393,6 +590,72 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        private bool TryTranslateAnalyzerTypeNameSwitch(SwitchExpressionSyntax node, out GExpression result)
+        {
+            result = null;
+            if (node.GoverningExpression is not IdentifierNameSyntax { Identifier.Text: { } parameterName }
+                || node.Arms.Count != 4
+                || node.Arms[0].Pattern is not DeclarationPatternSyntax first
+                || first.Type is not IdentifierNameSyntax { Identifier.Text: "IdentifierNameSyntax" }
+                || node.Arms[1].Pattern is not DeclarationPatternSyntax second
+                || second.Type is not IdentifierNameSyntax { Identifier.Text: "QualifiedNameSyntax" }
+                || node.Arms[2].Pattern is not DeclarationPatternSyntax third
+                || third.Type is not IdentifierNameSyntax { Identifier.Text: "GenericNameSyntax" }
+                || node.Arms[3].Pattern is not DiscardPatternSyntax)
+            {
+                return false;
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                "Roslyn simple/qualified/generic TypeSyntax name switch translated to TypeClauseSyntax.NameIdentifier: G# represents all named type clauses in one node.",
+                node.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            GExpression nameIdentifier = new MemberAccessExpression(
+                new IdentifierExpression(parameterName),
+                "NameIdentifier",
+                isArrow: false);
+            result = new IfExpression(
+                new BinaryExpression(nameIdentifier, "!=", LiteralExpression.Null()),
+                new MemberAccessExpression(
+                    new NonNullAssertionExpression(nameIdentifier),
+                    "Text",
+                    isArrow: false),
+                LiteralExpression.Null());
+            return true;
+        }
+
+        private string TranslateAnalyzerPatternFieldName(
+            RecursivePatternSyntax recursive,
+            SubpatternSyntax subpattern,
+            string fieldName)
+        {
+            if (!this.InAnalyzerApiMode
+                || fieldName != "Expression"
+                || recursive.Type is not IdentifierNameSyntax invocationType
+                || invocationType.Identifier.Text != "InvocationExpressionSyntax"
+                || this.GetPatternMemberSymbol(subpattern.NameColon?.Name) is not IPropertySymbol property
+                || RoslynTypeMetadataName(property.ContainingType)
+                    != "Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax")
+            {
+                return fieldName;
+            }
+
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                "InvocationExpressionSyntax.Expression property pattern translated to CallExpressionSyntax.Parent.",
+                subpattern.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+            return "Parent";
+        }
+
         /// <summary>
         /// Rewrites <c>namespaceSymbol?.ToDisplayString()</c> to the bare
         /// receiver: G#'s <c>ContainingNamespace</c> is already the (nullable)
@@ -401,6 +664,23 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryTranslateAnalyzerConditionalDisplay(ConditionalAccessExpressionSyntax conditionalAccess, out GExpression result)
         {
             result = null;
+            if (conditionalAccess.WhenNotNull is MemberBindingExpressionSyntax { Name.Identifier.Text: "Value" }
+                && this.context.GetTypeInfo(conditionalAccess.Expression).Type is INamedTypeSymbol initializerType
+                && RoslynTypeMetadataName(initializerType)
+                    == "Microsoft.CodeAnalysis.CSharp.Syntax.EqualsValueClauseSyntax")
+            {
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    "EqualsValueClauseSyntax.Value wrapper dropped: G# VariableDeclarationSyntax exposes Initializer directly.",
+                    conditionalAccess.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
+                result = this.TranslateExpression(conditionalAccess.Expression);
+                return true;
+            }
+
             if (conditionalAccess.WhenNotNull is not InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax { Name.Identifier.Text: "ToDisplayString" }, ArgumentList.Arguments.Count: 0 }
                 || this.context.GetTypeInfo(conditionalAccess.Expression).Type is not INamedTypeSymbol receiverType
                 || RoslynTypeMetadataName(receiverType) != "Microsoft.CodeAnalysis.INamespaceSymbol")
@@ -553,6 +833,43 @@ public sealed partial class CSharpToGSharpTranslator
                         }),
                     isEquals ? "==" : "!=",
                     LiteralExpression.String("global::" + specialName.Replace('_', '.')));
+                return true;
+            }
+
+            foreach ((ExpressionSyntax methodSide, ExpressionSyntax kindSide) in new[]
+                {
+                    (binary.Left, binary.Right),
+                    (binary.Right, binary.Left),
+                })
+            {
+                if (methodSide is not MemberAccessExpressionSyntax { Name.Identifier.Text: "MethodKind" } methodKindAccess
+                    || this.context.GetSymbolInfo(methodKindAccess).Symbol is not IPropertySymbol methodKindProperty
+                    || methodKindProperty.Name != "MethodKind"
+                    || methodKindProperty.ContainingType.Name != "IMethodSymbol"
+                    || kindSide is not MemberAccessExpressionSyntax { Name.Identifier.Text: "Constructor" or "Ordinary" } kindAccess
+                    || this.context.GetSymbolInfo(kindAccess).Symbol is not IFieldSymbol kindField
+                    || kindField.ContainingType.Name != "MethodKind")
+                {
+                    continue;
+                }
+
+                bool constructorKind = kindAccess.Name.Identifier.Text == "Constructor";
+                string op = constructorKind == isEquals ? "==" : "!=";
+                result = new BinaryExpression(
+                    new MemberAccessExpression(
+                        this.TranslateExpression(methodKindAccess.Expression),
+                        "Name",
+                        isArrow: false),
+                    op,
+                    LiteralExpression.String(".ctor"));
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    $"MethodKind.{kindAccess.Name.Identifier.Text} comparison translated to the G# constructor callable name '.ctor'.",
+                    binary.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
                 return true;
             }
 

@@ -495,6 +495,12 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateSwitchExpression(SwitchExpressionSyntax node)
         {
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerTypeNameSwitch(node, out GExpression analyzerTypeName))
+            {
+                return analyzerTypeName;
+            }
+
             GExpression subject = this.TranslateExpression(node.GoverningExpression);
             GTypeReference nullableResultType = this.NullableReferenceSwitchResultType(node);
             var arms = new List<SwitchArm>();
@@ -1806,9 +1812,12 @@ public sealed partial class CSharpToGSharpTranslator
                         if (sub.NameColon != null)
                         {
                             string rawFieldName = this.GetSubpatternMemberName(sub);
+                            ISymbol memberSymbol = this.GetPatternMemberSymbol(sub.NameColon.Name);
                             string fieldName = this.EmittedName(
-                                this.GetPatternMemberSymbol(sub.NameColon.Name),
+                                memberSymbol,
                                 rawFieldName);
+                            fieldName = this.TranslateAnalyzerPatternFieldName(recursive, sub, fieldName);
+
                             fields.Add(new PropertyPatternField(
                                 fieldName,
                                 this.TranslatePattern(

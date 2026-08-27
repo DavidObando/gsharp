@@ -33,6 +33,8 @@ open class Base {
 open class Animal : Base {
     prop Name string
     var legs int32
+    init() { }
+    init(name string) { }
     func Speak() string { return ""..."" }
     func Speak(loud bool) string { return ""!"" }
     func Shadowed() int32 { return 1 }
@@ -132,6 +134,17 @@ enum Color {
         var animal = GetStruct("Animal");
         var methods = TypeMemberModel.GetMethods(animal, "Make", MemberQuery.Static());
         Assert.Equal(2, methods.Length);
+    }
+
+    [Fact]
+    public void ConstructorIntrospection_StaysSeparateFromOrdinaryMembers()
+    {
+        var animal = GetStruct("Animal");
+
+        Assert.Equal(2, animal.GetConstructors().Length);
+        Assert.All(animal.GetConstructors(), constructor => Assert.Equal(".ctor", constructor.Name));
+        Assert.DoesNotContain(animal.GetMembers(), member => member.Name == ".ctor");
+        Assert.Contains(animal.GetMembers(), member => member.Name == "Make");
     }
 
     [Fact]

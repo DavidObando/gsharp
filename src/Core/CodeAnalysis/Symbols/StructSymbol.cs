@@ -388,6 +388,9 @@ public sealed class StructSymbol : TypeSymbol
         }
     }
 
+    /// <inheritdoc/>
+    public override TypeSymbol? BaseType => BaseClass ?? ImportedBaseType;
+
     /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
     public ImmutableArray<InterfaceSymbol> Interfaces
     {
@@ -682,6 +685,10 @@ public sealed class StructSymbol : TypeSymbol
         builder.AddRange(StaticEvents);
         return builder.ToImmutable();
     }
+
+    /// <inheritdoc/>
+    public override ImmutableArray<FunctionSymbol> GetConstructors() =>
+        EffectiveExplicitConstructors.Select(constructor => constructor.Function).ToImmutableArray();
 
     /// <summary>Sets <see cref="ImportedBaseType"/> after binding (issue #296). Intended to be called exactly once by the binder for a class inheriting an imported CLR base.</summary>
     /// <param name="importedBaseType">The imported CLR base type symbol.</param>

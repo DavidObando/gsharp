@@ -37,7 +37,7 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     }
 
     /// <summary>Gets the underlying non-annotated type symbol.</summary>
-    public TypeSymbol BaseType { get; }
+    public override TypeSymbol BaseType { get; }
 
     /// <summary>
     /// Gets the full <c>[NullableAttribute]</c> byte array for this type, starting

@@ -45,4 +45,8 @@ public sealed class PropertyPatternSyntax : PatternSyntax
     /// matched, non-nil value at the pattern's input type.
     /// </summary>
     public SyntaxToken? Designation { get; }
+
+    /// <inheritdoc/>
+    [SyntaxChildIgnore]
+    public override SyntaxToken? BindingIdentifier => Designation;
 }

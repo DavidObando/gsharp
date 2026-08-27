@@ -1,13 +1,9 @@
 # cs2gs: translating Roslyn analyzer projects to G# analyzers
 
 Status: implemented through the map/idiom layer (2026-08-19). The real
-GSA0001, GSA0002, GSA0003, and GSA0004 sources translate mechanically —
-attribute swap, imports, kind/type/member maps, idiom rewrites — and bind
-against `GSharp.Core` with CS2GS-ANALYZER-SHAPE review warnings only
-(`Cs2Gs.Tests/Adr0169AnalyzerTranslationTests`). GSA0005 pattern-matches
-deeply C#-specific syntax shapes and is pinned by a ratchet asserting its
-translation stays LOUD (gap or binder failure, never silently wrong) until
-its reviewed adaptation lands.
+GSA0001–GSA0005 sources translate and bind against `GSharp.Core`, with
+shape-changing adaptations reported as `CS2GS-ANALYZER-SHAPE`
+(`Cs2Gs.Tests/Adr0169AnalyzerTranslationTests`).
 
 The two verification follow-ups are implemented (2026-08-19, second pass):
 - **Parity harness** (`Cs2Gs.Tests/Adr0169AnalyzerParityTests`): the real
@@ -25,88 +21,24 @@ The two verification follow-ups are implemented (2026-08-19, second pass):
   REGIONS (G# node spans differ), verified end-to-end in
   `Adr0169SnippetTranslationTests`.
 
-### GSA0005 reviewed-adaptation inventory
+### GSA0005 reviewed adaptations
 
-The ratchet keeps GSA0005 loud until a reviewed port lands. The remaining
-C#-specific surface (from the translation gap inventory):
-`BaseExpressionSyntax` (base-call detection → G# base-call node),
-`SwitchStatementSyntax`/`SwitchSectionSyntax`/`CasePatternSwitchLabelSyntax`
-(→ G# pattern-switch shape), `SubpatternSyntax`/`SingleVariableDesignationSyntax`
-(→ ADR-0166 pattern shapes), `PatternSyntax`, `ArgumentSyntax` (G# call
-arguments are bare expressions), and `MethodKind`. Beyond the API surface,
-the analyzer's semantics must be re-derived for G#: post-migration it
-inspects G#-shaped `BoundTreeRewriter` overrides, so the "rebuilds the node
-while reading fewer members" detection needs G# equivalents of its
-object-creation, base-delegation, and switch-section walks. This is exactly
-the plausible-but-wrong risk class the loud ratchet exists to prevent.
+GSA0005 uses narrow, source-shape-specific rewrites rather than a Roslyn
+compatibility facade. `TypeSymbol.GetConstructors()` exposes constructor
+callables while keeping constructors outside `GetMembers()`. The translator
+combines those callables with static factory functions and adapts constructor
+kind tests, optional parameters, return types, base types, initializer
+wrappers, direct construction calls, static factory calls, base delegation,
+switch cases, property-pattern fields, nested designations, and final
+qualified/generic type-name extraction to their native G# shapes. Every
+shape-changing rewrite remains guarded and reports
+`CS2GS-ANALYZER-SHAPE`.
 
-**Issue #3536 progress.** The mechanical slice of this inventory that has a
-direct, unambiguous G# counterpart is now mapped/idiom-rewritten (see
-`RoslynAnalyzerApiMap` and `CSharpToGSharpTranslator.Analyzers.cs`):
-`PatternSyntax` (exact, name and namespace both carry over), `SwitchStatementSyntax`
-→ `SwitchStatementSyntax` (type-level, exact) and `CasePatternSwitchLabelSyntax`
-→ `SwitchCaseSyntax` (type-level, Adapted — G# has no per-label node), with the
-`Sections.SelectMany(s => s.Labels).OfType<CasePatternSwitchLabelSyntax>()`
-walk itself now idiom-rewritten to `Cases.Where(c => !c.IsDefault && (c.Guard
-!= nil || c.Value is not ConstantPatternSyntax))` (G# switch cases carry one
-pattern each via `SwitchCaseSyntax.Value`, with no section/label nesting and
-no `default`-arm or pattern-label subtype to `OfType` against; Roslyn's
-`OfType<CasePatternSwitchLabelSyntax>()` excludes both the `default` arm and
-plain constant labels (`CaseSwitchLabelSyntax`, e.g. `case 5:`), so the G#
-walk excludes the default arm and any unguarded `ConstantPatternSyntax`
-value — a guarded constant like `case 5 when b:` is still a Roslyn
-`CasePatternSwitchLabelSyntax`, kept via the `Guard` check), `SubpatternSyntax`
-→ `PropertyPatternFieldSyntax` (type-level;
-the `ExpressionColon.Expression` idiom that reads the field name still needs
-rewriting to the direct `Identifier` token), `ArgumentSyntax` →
-`ExpressionSyntax` (G# call arguments are bare expressions with no wrapper
-type, so a variable or lambda parameter typed `ArgumentSyntax` maps directly),
-`.ArgumentList`/`.ParameterList` drop to their direct `.Arguments`/`.Parameters`
-members — each restricted to its one verified receiver type
-(`InvocationExpressionSyntax` and `MethodDeclarationSyntax` respectively,
-checked via the resolved property's declaring type, not spelling), because
-Roslyn's other `ArgumentList`/`ParameterList`-bearing node kinds each
-independently declare their own same-named property with no shared base. For
-`ArgumentList`, `ElementAccessExpressionSyntax` and
-`ObjectCreationExpressionSyntax` are both already mapped to a differently-
-shaped G# node (`IndexExpressionSyntax.Indices`; a nested `Target` call) that
-does not expose `Arguments`, so admitting them would silently rewrite to a
-nonexistent member on an otherwise-clean translation. For `ParameterList`,
-`ConstructorDeclarationSyntax`, `LocalFunctionStatementSyntax`, lambda
-expressions, `DelegateDeclarationSyntax`, `IndexerDeclarationSyntax`, and
-type declarations (primary constructors) have no G# analyzer-API mapping at
-all today, so the restriction is defense-in-depth against a future mapping
-landing without revisiting this idiom — a bare `ArgumentSyntax.Expression`
-drop to the argument itself, and
-`Modifiers.Any(SyntaxKind.OverrideKeyword)` → `.IsOverride`. The C# base-call
-detection idiom (`invocation.Expression is MemberAccessExpressionSyntax {
-Expression: BaseExpressionSyntax }`) is also now idiom-rewritten: G# gives
-`base.M(...)` its own `BaseClassCallExpressionSyntax` node wrapping an
-ordinary `CallExpressionSyntax` as its `Call`, rather than parsing it as a
-member access on a `base` receiver, so a call found by walking for
-`CallExpressionSyntax` nodes is a base call exactly when its *parent* is that
-wrapper node — the idiom rewrites to `invocation.Parent is
-BaseClassCallExpressionSyntax`.
-
-Still open, and still the reason the ratchet stays red: `MethodKind`/
-constructor-vs-static-factory detection has no G# analogue — G# constructors
-are a separate `ConstructorSymbol` type (via `StructSymbol.ExplicitConstructors`,
-not part of `GetMembers()`), not a `FunctionSymbol` flavor, so
-`FormDependentMembers` needs re-deriving against that shape: merging
-`ConstructorSymbol`s and return-type-filtered static `FunctionSymbol`s into one
-collection is a control-flow rewrite of the analyzer's own body, not a
-mechanical rename a declarative map/idiom-rewrite hook can safely make. This
-was investigated in depth for #3536 but intentionally left as a loud gap
-rather than a low-confidence, compiler-unverified port — see the issue for the
-reasoning. Two further gaps surfaced while closing the base-call and switch-walk
-idioms above, previously undocumented: `SingleVariableDesignationSyntax`
-(designation-name extraction inside a nested pattern walk) and
-`QualifiedNameSyntax` (a `TypeSyntax`-shaped switch expression matching Roslyn's
-qualified-name node, which has no direct G# `TypeClauseSyntax` counterpart to
-switch over). Both are the same category of problem as `MethodKind` — a
-C#-side control-flow/pattern-match shape that must be re-derived against G#'s
-differently-shaped surface, not renamed — and stay loud gaps for the same
-reason.
+Consumer project references now retain the migrated analyzer project and
+rewrite `OutputItemType="Analyzer"` to
+`OutputItemType="GsharpCodeAnalyzer"`. Migrated analyzer projects reference
+the compiler host's `GSharp.Core.dll` directly, avoiding a project cycle when
+the translated analyzer is used while building Core itself.
 Companion to [ADR-0169](adr/0169-gsharp-analyzer-framework.md), which defines
 the G#-side analyzer framework this document targets. First migration target:
 `src/Analyzers/InternalAnalyzers` (GSA0001–GSA0005) and its test project, which

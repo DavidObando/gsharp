@@ -196,6 +196,9 @@ public class TypeSymbol : Symbol
     /// </summary>
     public virtual ImmutableArray<FieldSymbol> TupleElements => ImmutableArray<FieldSymbol>.Empty;
 
+    /// <summary>Gets the immediate base type, or <see langword="null"/> when none exists.</summary>
+    public virtual TypeSymbol? BaseType => ClrType?.BaseType is { } baseType ? FromClrType(baseType) : null;
+
     /// <summary>
     /// Gets the members declared on this type — the Roslyn
     /// <c>GetMembers()</c> analogue (ADR-0169). Empty by default; user-defined
@@ -203,6 +206,14 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <returns>The declared members.</returns>
     public virtual ImmutableArray<Symbol> GetMembers() => ImmutableArray<Symbol>.Empty;
+
+    /// <summary>
+    /// Gets the constructor callables declared on this type. Constructors stay
+    /// outside <see cref="GetMembers"/> because G# models them separately from
+    /// ordinary functions.
+    /// </summary>
+    /// <returns>The declared constructor callables.</returns>
+    public virtual ImmutableArray<FunctionSymbol> GetConstructors() => ImmutableArray<FunctionSymbol>.Empty;
 
     /// <summary>
     /// Renders CLR-backed types the way Roslyn's fully-qualified format does

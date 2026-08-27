@@ -159,6 +159,9 @@ public sealed class StageExecutionContext
     /// </summary>
     public string AssemblyName { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether the app is translated against the G# analyzer API.</summary>
+    public bool IsAnalyzerProject { get; set; }
+
     /// <summary>
     /// Gets the source project's declared build/dev-only <c>PackageReference</c>s
     /// (issue #2267) — e.g. a version-bumped <c>Nerdbank.GitVersioning</c> — that

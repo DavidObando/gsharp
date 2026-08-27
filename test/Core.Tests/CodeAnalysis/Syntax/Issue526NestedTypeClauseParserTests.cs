@@ -66,6 +66,7 @@ func Use() {
         Assert.Equal(2, type.QualifierIdentifierTokens.Length);
         Assert.Equal("B", type.QualifierIdentifierTokens[0].Text);
         Assert.Equal("C", type.QualifierIdentifierTokens[1].Text);
+        Assert.Equal("C", type.NameIdentifier.Text);
         Assert.Equal("A.B.C", type.DottedName);
     }
 
@@ -111,6 +112,7 @@ class Impl : IComparable[string] {
         var baseType = typeDecl.BaseTypeClauses[0];
         Assert.Equal("IComparable", baseType.DottedName);
         Assert.True(baseType.HasTypeArguments);
+        Assert.Equal("IComparable", baseType.NameIdentifier.Text);
         Assert.Single(baseType.TypeArguments);
         Assert.Equal("string", baseType.TypeArguments[0].DottedName);
     }

@@ -55,6 +55,7 @@ public sealed class Issue3409PatternDesignationParserTests
         var property = Assert.IsType<PropertyPatternSyntax>(Assert.IsType<IsExpressionSyntax>(statement.Condition).Pattern);
 
         Assert.Equal("text", property.Designation?.Text);
+        Assert.Equal("text", property.BindingIdentifier?.Text);
         Assert.Single(property.Fields);
         Assert.Single(Assert.IsType<BlockStatementSyntax>(statement.ThenStatement).Statements);
     }

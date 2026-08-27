@@ -823,6 +823,7 @@ public static class DiagnosticDescriptors
     [InlineData("StrongStaticReflectionCacheAnalyzer.cs")]
     [InlineData("ReflectionTypeComparisonAnalyzer.cs")]
     [InlineData("EmitCacheKeyRemapScopeAnalyzer.cs")]
+    [InlineData("RewriterClonePreservationAnalyzer.cs")]
     public void RealAnalyzerSources_TranslateWithReviewWarningsOnly(string fileName)
     {
         string realSource = File.ReadAllText(Path.Combine(
@@ -842,6 +843,8 @@ public static class DiagnosticDescriptors
         ""GSA0003"", ""T"", ""M {0}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
     public static readonly DiagnosticDescriptor EmitCacheKeyMissingRemapScope = new(
         ""GSA0004"", ""T"", ""M {0}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+    public static readonly DiagnosticDescriptor RewriterCloneDropsMember = new(
+        ""GSA0005"", ""T"", ""M {0} {1} {2} {3}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
 }
 ";
 
@@ -851,51 +854,18 @@ public static class DiagnosticDescriptors
 
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printedByFile.Values.ToArray());
-    }
 
-    [Fact]
-    public void RealGsa0005Source_FailsLoudly_NeverSilently()
-    {
-        // GSA0005 pattern-matches deeply C#-specific syntax shapes (switch
-        // sections, subpatterns, designations); its migration requires the
-        // reviewed adaptation the design doc predicts. This ratchet pins the
-        // honest behavior: translation is LOUD — either a translation gap or
-        // a round-trip binder failure — never a silently wrong analyzer.
-        string realSource = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers", "RewriterClonePreservationAnalyzer.cs"));
-        string descriptors = @"
-using Microsoft.CodeAnalysis;
-
-namespace GSharp.InternalAnalyzers;
-
-public static class DiagnosticDescriptors
-{
-    public static readonly DiagnosticDescriptor RewriterCloneDropsMember = new(
-        ""GSA0005"", ""T"", ""M {0} {1} {2} {3}"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
-}
-";
-
-        var (printedByFile, diagnostics) = TranslateAnalyzerProject(
-            ("RewriterClonePreservationAnalyzer.cs", realSource),
-            ("DiagnosticDescriptors.cs", descriptors));
-
-        bool translationIsLoud = diagnostics.Any(d => d.Severity == TranslationSeverity.Unsupported);
-        if (!translationIsLoud)
+        if (fileName == "RewriterClonePreservationAnalyzer.cs")
         {
-            var trees = printedByFile.Values
-                .Select(printed => GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
-                    GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "gsa0005.gs")))
-                .ToArray();
-            using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
-                new[] { typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location });
-            var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees) { IsLibrary = true };
-            translationIsLoud = trees.Any(t => !t.Diagnostics.IsEmpty)
-                || compilation.GlobalScope.Diagnostics.Concat(compilation.BoundProgram.Diagnostics).Any(d => d.IsError);
+            string printed = printedByFile[fileName];
+            Assert.Contains(".GetConstructors()", printed, StringComparison.Ordinal);
+            Assert.Contains("candidate.Name == \".ctor\"", printed, StringComparison.Ordinal);
+            Assert.Contains("parameter.HasExplicitDefaultValue", printed, StringComparison.Ordinal);
+            Assert.Contains("pattern.BindingIdentifier != nil", printed, StringComparison.Ordinal);
+            Assert.Contains("type.NameIdentifier", printed, StringComparison.Ordinal);
+            Assert.Contains("creation.Identifier.Text == nodeTypeName", printed, StringComparison.Ordinal);
+            Assert.Contains("Parent: AccessorExpressionSyntax access", printed, StringComparison.Ordinal);
         }
-
-        Assert.True(
-            translationIsLoud,
-            "GSA0005 translated AND bound cleanly — promote it into RealAnalyzerSources_TranslateWithReviewWarningsOnly and delete this ratchet.");
     }
 
     [Fact]
