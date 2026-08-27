@@ -39,6 +39,11 @@ public partial class Parser
 
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
+            if (tupleTypeBeforeArrowBodyPosition == Current.Position)
+            {
+                return ParseTupleTypeClause();
+            }
+
             // ADR-0075 / issue #715: the canonical function-type clause is
             // `(T1, T2, ...) -> R`. Disambiguated from a tuple type clause by
             // bounded look-ahead — if the matching `)` is immediately followed

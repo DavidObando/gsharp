@@ -621,7 +621,7 @@ public partial class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        var type = ParseTypeClause();
+        var type = ParseDeclarationTypeClauseBeforeArrowBody(isProperty: true);
 
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
@@ -690,7 +690,7 @@ public partial class Parser
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
         var parameters = ParseIndexerParameterList();
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-        var type = ParseTypeClause();
+        var type = ParseDeclarationTypeClauseBeforeArrowBody(isProperty: true);
 
         SyntaxToken? openBrace = null;
         var accessors = ImmutableArray<PropertyAccessorSyntax>.Empty;
@@ -1232,20 +1232,76 @@ public partial class Parser
 
     private TypeClauseSyntax? ParseOptionalFunctionReturnTypeClause()
     {
-        if (LooksLikeTupleReturnTypeBeforeArrowBody())
+        if (!CanStartTypeClause(Current)
+            || (Current.Kind == SyntaxKind.IdentifierToken && IsContextualMemberKeyword(Current.Text)))
         {
-            return ParseTupleTypeClause();
+            return null;
         }
 
-        return ParseOptionalTypeClause();
+        return ParseDeclarationTypeClauseBeforeArrowBody(isProperty: false);
     }
 
-    private bool LooksLikeTupleReturnTypeBeforeArrowBody()
+    private TypeClauseSyntax ParseDeclarationTypeClauseBeforeArrowBody(bool isProperty)
     {
-        // `(T1, T2) -> ...` is ambiguous with an arrow function type. Keep the
-        // type interpretation only when its complete scan reaches a declaration
-        // body marker; otherwise the arrow starts this function's expression body.
-        if (!LooksLikeArrowFunctionTypeClauseStart(0, out var hasTopLevelComma) ||
+        if (!LooksLikeTupleTypeBeforeArrowBody(isProperty, out var tupleOffset))
+        {
+            return ParseTypeClause();
+        }
+
+        var previous = tupleTypeBeforeArrowBodyPosition;
+        tupleTypeBeforeArrowBodyPosition = Peek(tupleOffset).Position;
+        try
+        {
+            return ParseTypeClause();
+        }
+        finally
+        {
+            tupleTypeBeforeArrowBodyPosition = previous;
+        }
+    }
+
+    private bool LooksLikeTupleTypeBeforeArrowBody(bool isProperty, out int tupleOffset)
+    {
+        tupleOffset = 0;
+        var openBracketAlreadyConsumed = false;
+        while (openBracketAlreadyConsumed || Peek(tupleOffset).Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            if (!openBracketAlreadyConsumed)
+            {
+                tupleOffset++;
+            }
+
+            openBracketAlreadyConsumed = false;
+            if (Peek(tupleOffset).Kind == SyntaxKind.NumberToken)
+            {
+                tupleOffset++;
+            }
+            else
+            {
+                while (Peek(tupleOffset).Kind == SyntaxKind.CommaToken)
+                {
+                    tupleOffset++;
+                }
+            }
+
+            if (Peek(tupleOffset).Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                return false;
+            }
+
+            tupleOffset++;
+            if (Peek(tupleOffset).Kind == SyntaxKind.QuestionOpenBracketToken)
+            {
+                tupleOffset++;
+                openBracketAlreadyConsumed = true;
+            }
+            else if (Peek(tupleOffset).Kind == SyntaxKind.QuestionToken)
+            {
+                tupleOffset++;
+            }
+        }
+
+        if (!LooksLikeArrowFunctionTypeClauseStart(tupleOffset, out var hasTopLevelComma) ||
             !hasTopLevelComma)
         {
             return false;
@@ -1257,10 +1313,124 @@ public partial class Parser
             return true;
         }
 
-        return Peek(functionTypeEnd).Kind is not (
-            SyntaxKind.OpenBraceToken or
-            SyntaxKind.SemicolonToken or
-            SyntaxKind.RightArrowToken);
+        var endKind = Peek(functionTypeEnd).Kind;
+        if (endKind is SyntaxKind.SemicolonToken or SyntaxKind.RightArrowToken)
+        {
+            return false;
+        }
+
+        if (isProperty && IsFunctionTypedPropertyFollower(functionTypeEnd))
+        {
+            return false;
+        }
+
+        if (endKind != SyntaxKind.OpenBraceToken)
+        {
+            return true;
+        }
+
+        if (!isProperty)
+        {
+            return false;
+        }
+
+        var firstBodyToken = Peek(functionTypeEnd + 1);
+        return firstBodyToken.Kind != SyntaxKind.CloseBraceToken
+            && !(firstBodyToken.Kind == SyntaxKind.IdentifierToken
+                && firstBodyToken.Text is "get" or "set" or "init")
+            && !((firstBodyToken.Kind is SyntaxKind.PublicKeyword
+                    or SyntaxKind.InternalKeyword
+                    or SyntaxKind.PrivateKeyword
+                    or SyntaxKind.ProtectedKeyword)
+                && Peek(functionTypeEnd + 2).Kind == SyntaxKind.IdentifierToken
+                && Peek(functionTypeEnd + 2).Text is "get" or "set" or "init");
+    }
+
+    private bool IsFunctionTypedPropertyFollower(int offset)
+    {
+        if (TryDetectAggregateDeclarationHead(offset))
+        {
+            return true;
+        }
+
+        if (LooksLikeContextualAggregateMemberHead(offset))
+        {
+            return true;
+        }
+
+        var token = Peek(offset);
+        if (token.Kind is SyntaxKind.EndOfFileToken
+            or SyntaxKind.CloseBraceToken
+            or SyntaxKind.AtToken
+            or SyntaxKind.FuncKeyword
+            or SyntaxKind.AsyncKeyword
+            or SyntaxKind.VarKeyword
+            or SyntaxKind.LetKeyword
+            or SyntaxKind.ConstKeyword
+            or SyntaxKind.PublicKeyword
+            or SyntaxKind.InternalKeyword
+            or SyntaxKind.PrivateKeyword
+            or SyntaxKind.ProtectedKeyword
+            or SyntaxKind.OpenKeyword
+            or SyntaxKind.OverrideKeyword)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool LooksLikeContextualAggregateMemberHead(int offset)
+    {
+        var token = Peek(offset);
+        if (token.Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        if (token.Text is "prop" or "event")
+        {
+            return true;
+        }
+
+        if (token.Text == "fixed")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.IdentifierToken;
+        }
+
+        if (token.Text == "init")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.OpenParenthesisToken;
+        }
+
+        if (token.Text == "shared")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.OpenBraceToken;
+        }
+
+        if (token.Text == "unsafe")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.FuncKeyword
+                || (Peek(offset + 1).Kind == SyntaxKind.AsyncKeyword
+                    && Peek(offset + 2).Kind == SyntaxKind.FuncKeyword);
+        }
+
+        if (token.Text == "convenience")
+        {
+            return (Peek(offset + 1).Kind == SyntaxKind.IdentifierToken
+                    && Peek(offset + 1).Text == "init"
+                    && Peek(offset + 2).Kind == SyntaxKind.OpenParenthesisToken)
+                || (Peek(offset + 1).Kind == SyntaxKind.FuncKeyword
+                    && Peek(offset + 2).Kind == SyntaxKind.IdentifierToken
+                    && Peek(offset + 2).Text == "init"
+                    && Peek(offset + 3).Kind == SyntaxKind.OpenParenthesisToken);
+        }
+
+        return token.Text == "deinit"
+            && (Peek(offset + 1).Kind == SyntaxKind.OpenBraceToken
+                || Peek(offset + 1).Kind == SyntaxKind.OpenParenthesisToken
+                || (Peek(offset + 1).Kind == SyntaxKind.IdentifierToken
+                    && Peek(offset + 2).Kind == SyntaxKind.OpenBraceToken));
     }
 
     // Stream D: `func (a Point) operator +(b Point) Point { … }`. After the

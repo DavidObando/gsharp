@@ -59,6 +59,11 @@ public partial class Parser
 
     private int position;
 
+    // Issue #3587: declaration return/property types can contain a slice-wrapped
+    // tuple immediately before an expression-body arrow. This position marks
+    // the one ambiguous tuple that must be parsed as a tuple, not a function type.
+    private int? tupleTypeBeforeArrowBodyPosition;
+
     // Issue #522: depth counter that suppresses trailing object-initializer
     // wrapping (`Call(args) { Prop = value }`). The default of zero allows
     // wrapping in regular expression contexts (variable declarations, return

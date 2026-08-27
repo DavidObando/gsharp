@@ -930,11 +930,17 @@ public partial class Parser
         // `ParseTypeClause` nesting that issue #1046 introduced. Scanning only
         // one segment made `List[[][]int32]{ … }` fail to be recognised as a
         // generic composite-literal site.
-        while (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+        var openBracketAlreadyConsumed = false;
+        while (openBracketAlreadyConsumed || Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
         {
             // An array/slice prefix is unambiguously a type shape (Issue #1323).
             isComplex = true;
-            pos++;
+            if (!openBracketAlreadyConsumed)
+            {
+                pos++;
+            }
+
+            openBracketAlreadyConsumed = false;
             if (Peek(pos).Kind == SyntaxKind.NumberToken)
             {
                 pos++;
@@ -953,7 +959,12 @@ public partial class Parser
             }
 
             pos++;
-            if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+            if (Peek(pos).Kind == SyntaxKind.QuestionOpenBracketToken)
+            {
+                pos++;
+                openBracketAlreadyConsumed = true;
+            }
+            else if (Peek(pos).Kind == SyntaxKind.QuestionToken)
             {
                 pos++;
             }
