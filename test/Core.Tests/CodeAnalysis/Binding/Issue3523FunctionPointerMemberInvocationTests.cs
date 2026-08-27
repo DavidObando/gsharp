@@ -481,6 +481,145 @@ public class Issue3523FunctionPointerMemberInvocationTests
     }
 
     [Fact]
+    public void PointerSubstitution_RecursesThroughEveryCompositeWrapper()
+    {
+        var parameter = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>
+        {
+            [parameter] = TypeSymbol.Int32,
+        };
+        var openPointer = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create<TypeSymbol>(
+                MapTypeSymbol.Get(TypeSymbol.String, parameter),
+                TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(parameter, TypeSymbol.String)),
+                SequenceTypeSymbol.Get(parameter),
+                AsyncSequenceTypeSymbol.Get(parameter),
+                ChannelTypeSymbol.Get(parameter),
+                SliceTypeSymbol.Get(parameter),
+                ArrayTypeSymbol.Get(parameter, 3),
+                FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(parameter), parameter),
+                PointerTypeSymbol.Get(parameter)),
+            NullableTypeSymbol.Get(parameter));
+
+        var closedPointer = Assert.IsType<FunctionPointerTypeSymbol>(
+            Binder.SubstituteType(openPointer, substitution));
+
+        Assert.True(closedPointer.IsManaged);
+        Assert.False(TypeSymbol.AnyTypeParameter(
+            closedPointer,
+            candidate => ReferenceEquals(candidate, parameter)));
+        Assert.IsType<MapTypeSymbol>(closedPointer.ParameterTypes[0]);
+        Assert.IsType<TupleTypeSymbol>(closedPointer.ParameterTypes[1]);
+        Assert.IsType<SequenceTypeSymbol>(closedPointer.ParameterTypes[2]);
+        Assert.IsType<AsyncSequenceTypeSymbol>(closedPointer.ParameterTypes[3]);
+        Assert.IsType<ChannelTypeSymbol>(closedPointer.ParameterTypes[4]);
+        Assert.IsType<SliceTypeSymbol>(closedPointer.ParameterTypes[5]);
+        Assert.IsType<ArrayTypeSymbol>(closedPointer.ParameterTypes[6]);
+        Assert.IsType<FunctionTypeSymbol>(closedPointer.ParameterTypes[7]);
+        Assert.IsType<PointerTypeSymbol>(closedPointer.ParameterTypes[8]);
+        var nullableReturn = Assert.IsType<NullableTypeSymbol>(closedPointer.ReturnType);
+        Assert.Same(TypeSymbol.Int32, nullableReturn.UnderlyingType);
+    }
+
+    [Fact]
+    public void CompositeGenericPointerSignatures_CloseAcrossStructAndInterface()
+    {
+        const string source = """
+            package Issue3523CompositePointers
+
+            unsafe func combine(
+                values map[string,int32],
+                pair (int32, string),
+                items sequence[int32],
+                asyncItems async sequence[int32]) int32 -> 1
+
+            async func getAsyncItems() async sequence[int32] { yield 4 }
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(map[string,T], (T, string), sequence[T], async sequence[T]) T
+            }
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (map[string,T], (T, string), sequence[T], async sequence[T]) -> T { get }
+                shared {
+                    var SharedApply unmanaged[Cdecl] (map[string,T], (T, string), sequence[T], async sequence[T]) -> T
+                }
+            }
+
+            unsafe func invoke(dispatch Dispatch[int32], iface IDispatch[int32]) {
+                let values = map[string,int32]{"x": 1}
+                let pair = (2, "two")
+                let items = []int32{3}
+                let asyncItems = getAsyncItems()
+                dispatch.Apply(values, pair, items, asyncItems)
+                iface.Apply(values, pair, items, asyncItems)
+                IDispatch[int32].SharedApply(values, pair, items, asyncItems)
+            }
+            """;
+
+        var invocations = CollectInvocations(BindWithoutErrors(source));
+        Assert.Equal(3, invocations.Count);
+        Assert.All(
+            invocations,
+            invocation =>
+            {
+                Assert.Same(TypeSymbol.Int32, invocation.FunctionPointerType.ReturnType);
+                Assert.Equal(4, invocation.FunctionPointerType.ParameterTypes.Length);
+
+                var map = Assert.IsType<MapTypeSymbol>(
+                    invocation.FunctionPointerType.ParameterTypes[0]);
+                Assert.Same(TypeSymbol.String, map.KeyType);
+                Assert.Same(TypeSymbol.Int32, map.ValueType);
+
+                var tuple = Assert.IsType<TupleTypeSymbol>(
+                    invocation.FunctionPointerType.ParameterTypes[1]);
+                Assert.Same(TypeSymbol.Int32, tuple.ElementTypes[0]);
+                Assert.Same(TypeSymbol.String, tuple.ElementTypes[1]);
+
+                var sequence = Assert.IsType<SequenceTypeSymbol>(
+                    invocation.FunctionPointerType.ParameterTypes[2]);
+                Assert.Same(TypeSymbol.Int32, sequence.ElementType);
+
+                var asyncSequence = Assert.IsType<AsyncSequenceTypeSymbol>(
+                    invocation.FunctionPointerType.ParameterTypes[3]);
+                Assert.Same(TypeSymbol.Int32, asyncSequence.ElementType);
+            });
+    }
+
+    [Fact]
+    public void CompositeGenericPointerCall_RejectsOpenOwnerTypesAfterConstruction()
+    {
+        const string source = """
+            package Issue3523CompositePointerDiagnostics
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(map[string,T], (T, string), sequence[T], async sequence[T]) T
+            }
+
+            async func badAsyncItems() async sequence[string] { yield "bad" }
+
+            unsafe func bad(dispatch Dispatch[int32]) {
+                dispatch.Apply(
+                    map[string,string]{"x": "bad"},
+                    ("bad", "pair"),
+                    []string{"bad"},
+                    badAsyncItems())
+            }
+            """;
+
+        var errors = GetErrors(source);
+        Assert.Equal(4, errors.Length);
+        Assert.Equal(
+            new[] { "GS0155", "GS0155", "GS0155", "GS0156" },
+            errors.Select(diagnostic => diagnostic.Id));
+        Assert.All(errors, diagnostic => Assert.Contains("int32", diagnostic.Message));
+    }
+
+    [Fact]
     public void CallableMembers_ApplyFieldAndGetterAccessibility()
     {
         const string source = """
@@ -542,6 +681,74 @@ public class Issue3523FunctionPointerMemberInvocationTests
         Assert.Contains(errors, diagnostic => diagnostic.Message.Contains("Owner.Restricted"));
         Assert.Contains(errors, diagnostic => diagnostic.Message.Contains("Owner.PrivateDelegate"));
         Assert.Equal(2, errors.Count(diagnostic => diagnostic.Message.Contains("IStatic.Hidden")));
+    }
+
+    [Fact]
+    public void BareCallableMembers_ApplyFieldAndGetterAccessibilityOnce()
+    {
+        const string source = """
+            package Issue3523BareAccessibility
+
+            open class Base {
+                private var PrivatePointer unmanaged[Cdecl] (int32) -> int32
+                private var PrivateDelegate (int32) -> int32
+                private var PrivateNullable ((int32) -> int32)?
+                protected var ProtectedPointer unmanaged[Cdecl] (int32) -> int32
+                internal var InternalPointer unmanaged[Cdecl] (int32) -> int32
+
+                prop Restricted unmanaged[Cdecl] (int32) -> int32 {
+                    private get -> PrivatePointer
+                }
+
+                prop RestrictedDelegate (int32) -> int32 {
+                    private get -> PrivateDelegate
+                }
+
+                prop Settable unmanaged[Cdecl] (int32) -> int32 {
+                    private get -> PrivatePointer
+                    set(value) { PrivatePointer = value }
+                }
+
+                func Allowed() {
+                    PrivatePointer(1)
+                    PrivateDelegate(2)
+                    Restricted(3)
+                    RestrictedDelegate(4)
+                }
+            }
+
+            class Derived : Base {
+                func Rejected() {
+                    PrivatePointer(1)
+                    PrivateDelegate(2)
+                    PrivateNullable(3)
+                    Restricted(4)
+                    RestrictedDelegate(5)
+                    (PrivatePointer)(6)
+                    (Restricted)(7)
+
+                    ProtectedPointer(8)
+                    InternalPointer(9)
+                    Settable = nil
+                }
+            }
+            """;
+
+        var errors = GetErrors(source);
+        Assert.Equal(7, errors.Length);
+        Assert.All(errors, diagnostic => Assert.Equal("GS0472", diagnostic.Id));
+        Assert.Equal(
+            new[]
+            {
+                "PrivatePointer",
+                "PrivateDelegate",
+                "PrivateNullable",
+                "Restricted",
+                "RestrictedDelegate",
+                "PrivatePointer",
+                "Restricted",
+            },
+            errors.Select(diagnostic => diagnostic.Location.Text.ToString(diagnostic.Location.Span)));
     }
 
     private static BoundProgram BindWithoutErrors(string source)

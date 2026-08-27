@@ -111,6 +111,65 @@ internal static class AccessibilityChecker
     }
 
     /// <summary>
+    /// Resolves read accessibility for binder pseudo-variables that represent
+    /// implicit instance/static fields or properties.
+    /// </summary>
+    /// <param name="variable">Potential implicit-member pseudo-variable.</param>
+    /// <param name="currentFunction">Function containing the bare read/call.</param>
+    /// <param name="declaringType">Actual member owner.</param>
+    /// <param name="memberName">Underlying field/property name.</param>
+    /// <param name="accessibility">Field or getter accessibility.</param>
+    /// <returns>Whether the pseudo-variable denotes an inaccessible member read.</returns>
+    public static bool TryGetInaccessibleImplicitMemberRead(
+        VariableSymbol variable,
+        FunctionSymbol? currentFunction,
+        out TypeSymbol? declaringType,
+        out string memberName,
+        out Accessibility accessibility)
+    {
+        declaringType = null;
+        memberName = variable.Name;
+        accessibility = Accessibility.Public;
+        switch (variable)
+        {
+            // Field-like event backing fields are injected into derived scopes
+            // specifically so the declaring/derived type can raise the event.
+            // Subscription accessibility belongs to the EventSymbol path.
+            case ImplicitFieldVariableSymbol eventField
+                when eventField.Field.IsEventBackingField:
+            case ImplicitStaticFieldVariableSymbol staticEventField
+                when staticEventField.Field.IsEventBackingField:
+                return false;
+            case ImplicitFieldVariableSymbol instanceField:
+                declaringType = instanceField.StructType;
+                memberName = instanceField.Field.Name;
+                accessibility = instanceField.Field.Accessibility;
+                break;
+            case ImplicitStaticFieldVariableSymbol staticField:
+                declaringType = (TypeSymbol?)staticField.StructType
+                    ?? staticField.InterfaceType?.Definition
+                    ?? staticField.InterfaceType;
+                memberName = staticField.Field.Name;
+                accessibility = staticField.Field.Accessibility;
+                break;
+            case ImplicitPropertyVariableSymbol instanceProperty:
+                declaringType = instanceProperty.StructType;
+                memberName = instanceProperty.Property.Name;
+                accessibility = instanceProperty.Property.GetterAccessibility;
+                break;
+            case ImplicitStaticPropertyVariableSymbol staticProperty:
+                declaringType = staticProperty.StructType;
+                memberName = staticProperty.Property.Name;
+                accessibility = staticProperty.Property.GetterAccessibility;
+                break;
+            default:
+                return false;
+        }
+
+        return !IsAccessible(accessibility, declaringType, currentFunction);
+    }
+
+    /// <summary>
     /// Issue #2044: walks <see cref="Symbol.ContainingType"/> to the
     /// outermost enclosing type, so nested types declared inside the same
     /// top-level type share `private` access to each other's members.

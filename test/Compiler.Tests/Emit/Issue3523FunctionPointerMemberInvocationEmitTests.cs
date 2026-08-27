@@ -283,6 +283,59 @@ public class Issue3523FunctionPointerMemberInvocationEmitTests
         }
     }
 
+    [Fact]
+    public void CompositeGenericPointerSignatures_RunAndEmitClosedCalli()
+    {
+        const string source = """
+            package Issue3523CompositePointers
+            import System
+            import System.Linq
+
+            unsafe func combine(
+                values map[string,int32],
+                pair (int32, string),
+                items sequence[int32],
+                asyncItems async sequence[int32]) int32 {
+                return values["x"] + pair.Item1 + items.First()
+            }
+
+            async func getAsyncItems() async sequence[int32] { yield 4 }
+
+            unsafe struct Dispatch[T] {
+                var Apply *func(map[string,T], (T, string), sequence[T], async sequence[T]) T
+            }
+
+            interface IDispatch[T] {
+                prop Apply unmanaged[Cdecl] (map[string,T], (T, string), sequence[T], async sequence[T]) -> T { get }
+                shared {
+                    var SharedApply unmanaged[Cdecl] (map[string,T], (T, string), sequence[T], async sequence[T]) -> T
+                }
+            }
+
+            func invokeInterface(dispatch IDispatch[int32]) int32 {
+                let values = map[string,int32]{"x": 1}
+                let pair = (2, "two")
+                let items = []int32{3}
+                let asyncItems = getAsyncItems()
+                return dispatch.Apply(values, pair, items, asyncItems)
+                    + IDispatch[int32].SharedApply(values, pair, items, asyncItems)
+            }
+
+            unsafe func Main() {
+                let dispatch = Dispatch[int32]{Apply: &combine}
+                Console.WriteLine(dispatch.Apply(
+                    map[string,int32]{"x": 1},
+                    (2, "two"),
+                    []int32{3},
+                    getAsyncItems()))
+            }
+            """;
+
+        Assert.Equal(
+            $"6{Environment.NewLine}",
+            CompileAndRun(source, AssertCalliSignaturesClosedInt32));
+    }
+
     private static string CompileAndRun(
         string source,
         Action<string> inspectAssembly = null)

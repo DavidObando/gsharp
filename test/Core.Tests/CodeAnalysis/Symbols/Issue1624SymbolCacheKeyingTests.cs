@@ -64,6 +64,121 @@ public class Issue1624SymbolCacheKeyingTests
         Assert.Same(fpA, fpAAgain);
     }
 
+    [Fact]
+    public void AnyTypeParameter_DescendsThroughPointerAndFunctionPointer()
+    {
+        var parameter = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var pointer = PointerTypeSymbol.Get(parameter);
+        var functionPointer = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create<TypeSymbol>(
+                MapTypeSymbol.Get(TypeSymbol.String, pointer)),
+            pointer);
+
+        Assert.True(TypeSymbol.AnyTypeParameter(
+            pointer,
+            candidate => ReferenceEquals(candidate, parameter)));
+        Assert.True(TypeSymbol.AnyTypeParameter(
+            functionPointer,
+            candidate => ReferenceEquals(candidate, parameter)));
+        Assert.True(TypeSymbol.ContainsTypeParameter(functionPointer));
+    }
+
+    [Fact]
+    public void StructuralCaches_DistinguishNestedPointerGenericOwners()
+    {
+        var t1 = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var t2 = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var pointer1 = PointerTypeSymbol.Get(t1);
+        var pointer2 = PointerTypeSymbol.Get(t2);
+
+        var function1 = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(pointer1),
+            TypeSymbol.Void);
+        var function2 = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(pointer2),
+            TypeSymbol.Void);
+        var function1Again = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(pointer1),
+            TypeSymbol.Void);
+
+        var outer1 = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create<TypeSymbol>(pointer1),
+            TypeSymbol.Void);
+        var outer2 = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create<TypeSymbol>(pointer2),
+            TypeSymbol.Void);
+
+        Assert.NotSame(function1, function2);
+        Assert.Same(function1, function1Again);
+        Assert.NotSame(outer1, outer2);
+    }
+
+    [Fact]
+    public void StructuralCaches_DistinguishNestedFunctionPointerAbiAndRefShapes()
+    {
+        var valueParameter = ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32);
+        var managed = FunctionPointerTypeSymbol.GetManaged(
+            valueParameter,
+            TypeSymbol.Int32);
+        var cdecl = FunctionPointerTypeSymbol.Get(
+            CallingConvention.Cdecl,
+            valueParameter,
+            TypeSymbol.Int32);
+        var stdcall = FunctionPointerTypeSymbol.Get(
+            CallingConvention.StdCall,
+            valueParameter,
+            TypeSymbol.Int32);
+        var byRef = FunctionPointerTypeSymbol.GetManaged(
+            ImmutableArray.Create<TypeSymbol>(ByRefTypeSymbol.Get(TypeSymbol.Int32)),
+            TypeSymbol.Int32);
+        var stringReturn = FunctionPointerTypeSymbol.GetManaged(
+            valueParameter,
+            TypeSymbol.String);
+
+        var managedContainer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(managed),
+            TypeSymbol.Void);
+        var cdeclContainer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(cdecl),
+            TypeSymbol.Void);
+        var stdcallContainer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(stdcall),
+            TypeSymbol.Void);
+        var byRefContainer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(byRef),
+            TypeSymbol.Void);
+        var stringReturnContainer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(stringReturn),
+            TypeSymbol.Void);
+
+        Assert.NotSame(managedContainer, cdeclContainer);
+        Assert.NotSame(cdeclContainer, stdcallContainer);
+        Assert.NotSame(managedContainer, byRefContainer);
+        Assert.NotSame(managedContainer, stringReturnContainer);
+        Assert.NotSame(
+            TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(managed, TypeSymbol.String)),
+            TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(cdecl, TypeSymbol.String)));
+        Assert.NotSame(
+            FunctionPointerTypeSymbol.GetManaged(
+                ImmutableArray.Create<TypeSymbol>(managed),
+                TypeSymbol.Void),
+            FunctionPointerTypeSymbol.GetManaged(
+                ImmutableArray.Create<TypeSymbol>(cdecl),
+                TypeSymbol.Void));
+    }
+
     /// <summary>
     /// Regression for the fix-up in this same PR: the original #1624 patch
     /// keyed a plain imported CLR reference-type element (one with a

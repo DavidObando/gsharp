@@ -2519,6 +2519,14 @@ public sealed class StructSymbol : TypeSymbol
             return subst.TryGetValue(tp, out var concrete) ? concrete : type;
         }
 
+        if (TypeSymbol.TrySubstituteCompositeType(
+            type,
+            SubstituteNested,
+            out var composite))
+        {
+            return composite;
+        }
+
         // Issue #1250: a member type that is itself a constructed generic G#
         // user class (e.g. a field/property/primary-ctor parameter typed
         // `Holder[T]` on `Box[T]`) must have its own type arguments substituted
@@ -2635,61 +2643,6 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
-        if (type is NullableTypeSymbol n)
-        {
-            var inner = SubstituteNested(n.UnderlyingType);
-            return ReferenceEquals(inner, n.UnderlyingType) ? type : NullableTypeSymbol.Get(inner);
-        }
-
-        if (type is SliceTypeSymbol s)
-        {
-            var inner = SubstituteNested(s.ElementType);
-            return ReferenceEquals(inner, s.ElementType) ? type : SliceTypeSymbol.Get(inner);
-        }
-
-        if (type is ArrayTypeSymbol a)
-        {
-            var inner = SubstituteNested(a.ElementType);
-            return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
-        }
-
-        if (type is RectangularArrayTypeSymbol rectangularArray)
-        {
-            var inner = SubstituteNested(rectangularArray.ElementType);
-            return ReferenceEquals(inner, rectangularArray.ElementType) ? type : RectangularArrayTypeSymbol.Get(inner, rectangularArray.Rank);
-        }
-
-        if (type is ChannelTypeSymbol channel)
-        {
-            var inner = SubstituteNested(channel.ElementType);
-            return ReferenceEquals(inner, channel.ElementType) ? type : ChannelTypeSymbol.Get(inner);
-        }
-
-        // Issue #1503: a `map[K, V]` element of a generic member (e.g. a
-        // generic delegate parameter typed `map[K, V]`) recursively
-        // substitutes both its key and value types so it surfaces as
-        // `map[int32, string]` on the constructed instantiation.
-        if (type is MapTypeSymbol map)
-        {
-            var substKey = SubstituteNested(map.KeyType);
-            var substValue = SubstituteNested(map.ValueType);
-            return ReferenceEquals(substKey, map.KeyType) && ReferenceEquals(substValue, map.ValueType)
-                ? type
-                : MapTypeSymbol.Get(substKey, substValue);
-        }
-
-        if (type is ByRefTypeSymbol byRef)
-        {
-            var pointee = SubstituteNested(byRef.PointeeType);
-            return ReferenceEquals(pointee, byRef.PointeeType) ? type : ByRefTypeSymbol.Get(pointee);
-        }
-
-        if (type is PointerTypeSymbol pointer)
-        {
-            var pointee = SubstituteNested(pointer.PointeeType);
-            return ReferenceEquals(pointee, pointer.PointeeType) ? type : PointerTypeSymbol.Get(pointee);
-        }
-
         // Issue #1503: a constructed generic named delegate referenced as a
         // member type (e.g. a field/parameter typed `Predicate[T]` on a
         // generic type, or a nested generic delegate argument) substitutes its
@@ -2711,39 +2664,6 @@ public sealed class StructSymbol : TypeSymbol
             return delegateChanged
                 ? DelegateTypeSymbol.Construct(del.Definition, substitutedDelegateArgs.MoveToImmutable())
                 : type;
-        }
-
-        // Issue #1192: a function/delegate type (e.g. a primary-constructor
-        // parameter of type `(T) -> void`) must have its parameter types and
-        // return type recursively substituted so the constructed generic's
-        // synthesized constructor matches a `(int32) -> void` argument.
-        if (type is FunctionTypeSymbol fn)
-        {
-            var substitutedParams = ImmutableArray.CreateBuilder<TypeSymbol>(fn.ParameterTypes.Length);
-            var changed = false;
-            for (var i = 0; i < fn.ParameterTypes.Length; i++)
-            {
-                var substituted = SubstituteNested(fn.ParameterTypes[i]);
-                substitutedParams.Add(substituted);
-                changed |= !ReferenceEquals(substituted, fn.ParameterTypes[i]);
-            }
-
-            var substitutedReturn = SubstituteNested(fn.ReturnType);
-            changed |= !ReferenceEquals(substitutedReturn, fn.ReturnType);
-
-            if (!changed)
-            {
-                return fn;
-            }
-
-            return fn.IsVariadic.IsDefaultOrEmpty
-                ? FunctionTypeSymbol.Get(substitutedParams.MoveToImmutable(), substitutedReturn)
-                : FunctionTypeSymbol.Get(substitutedParams.MoveToImmutable(), fn.IsVariadic, substitutedReturn);
-        }
-
-        if (type is FunctionPointerTypeSymbol functionPointer)
-        {
-            return functionPointer.Substitute(SubstituteNested);
         }
 
         return type;
