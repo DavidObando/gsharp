@@ -244,15 +244,53 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol returnType,
             ISymbol symbol)
         {
-            if (!this.IsObliviousCompilation()
-                || mapped is not TupleTypeReference tuple
-                || returnType is not INamedTypeSymbol { IsTupleType: true } tupleType
-                || tupleType.TupleElements.Length != tuple.ElementTypes.Count)
+            if (!this.IsObliviousCompilation())
             {
                 return mapped;
             }
 
-            return this.PromoteTupleElements(tuple, tupleType, symbol, new List<int>());
+            return this.PromoteTupleTypeArguments(mapped, returnType, symbol, new List<int>());
+        }
+
+        private GTypeReference PromoteTupleTypeArguments(
+            GTypeReference mapped,
+            ITypeSymbol declaredType,
+            ISymbol symbol,
+            List<int> path)
+        {
+            if (mapped is TupleTypeReference tuple
+                && declaredType is INamedTypeSymbol { IsTupleType: true } tupleType
+                && tupleType.TupleElements.Length == tuple.ElementTypes.Count)
+            {
+                return this.PromoteTupleElements(tuple, tupleType, symbol, path);
+            }
+
+            if (mapped is not NamedTypeReference named
+                || declaredType is not INamedTypeSymbol declaredNamed
+                || named.TypeArguments.Count != declaredNamed.TypeArguments.Length)
+            {
+                return mapped;
+            }
+
+            var arguments = new List<GTypeReference>(named.TypeArguments.Count);
+            bool changed = false;
+            for (int i = 0; i < named.TypeArguments.Count; i++)
+            {
+                path.Add(i);
+                GTypeReference argument = this.PromoteTupleTypeArguments(
+                    named.TypeArguments[i],
+                    declaredNamed.TypeArguments[i],
+                    symbol,
+                    path);
+                path.RemoveAt(path.Count - 1);
+                changed |= !ReferenceEquals(argument, named.TypeArguments[i]);
+                arguments.Add(argument);
+            }
+
+            return changed
+                ? new NamedTypeReference(named.Name, arguments, named.ContainingType)
+                    { IsNullable = named.IsNullable }
+                : mapped;
         }
 
         private GTypeReference PromoteTupleElements(

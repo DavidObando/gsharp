@@ -1239,7 +1239,66 @@ internal static class ObliviousNullabilityAnalyzer
                     tupleEdges,
                     tupleScalarEdges);
             }
+
+            CollectGenericReceiverTupleArgumentFlow(
+                call,
+                argument,
+                model,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges);
         }
+    }
+
+    // Issue #3564: Dictionary<TKey, TValue> indexer/method parameters use the
+    // receiver's generic TKey slot. When a promoted tuple flows into that slot,
+    // carry its per-element taint back to the source field/property type so all
+    // uses share Dictionary[(T?, U), TValue] instead of asserting at each use.
+    private static void CollectGenericReceiverTupleArgumentFlow(
+        SyntaxNode call,
+        IArgumentOperation argument,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        ExpressionSyntax receiver = call switch
+        {
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax member } =>
+                member.Expression,
+            ElementAccessExpressionSyntax elementAccess => elementAccess.Expression,
+            _ => null,
+        };
+
+        ISymbol target = receiver == null ? null : model.GetSymbolInfo(receiver).Symbol;
+        ITypeSymbol targetType = target switch
+        {
+            IFieldSymbol field => field.Type,
+            IPropertySymbol property => property.Type,
+            _ => null,
+        };
+
+        if (target is not (IFieldSymbol or IPropertySymbol)
+            || targetType is not INamedTypeSymbol receiverType
+            || argument.Parameter?.OriginalDefinition.Type
+                is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } typeParameter
+            || typeParameter.Ordinal >= receiverType.TypeArguments.Length
+            || receiverType.TypeArguments[typeParameter.Ordinal]
+                is not INamedTypeSymbol { IsTupleType: true } tupleType
+            || argument.Value?.Syntax is not ExpressionSyntax value)
+        {
+            return;
+        }
+
+        CollectTupleValueFlow(
+            Canonical(target),
+            tupleType,
+            value,
+            model,
+            typeParameter.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            tupleTainted,
+            tupleEdges,
+            tupleScalarEdges);
     }
 
     private static void CollectTupleValueFlow(

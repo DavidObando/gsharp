@@ -1913,6 +1913,17 @@ public sealed partial class CSharpToGSharpTranslator
                 bool keyElementStaysNonNull = keyElement.Type is { IsReferenceType: true }
                     && keyElement.Type.NullableAnnotation != NullableAnnotation.Annotated;
                 if (keyElementStaysNonNull
+                    && this.TryGetIndexReceiverGenericTuple(argument, out ISymbol receiver, out int typeArgument)
+                    && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                        this.context.Compilation,
+                        receiver,
+                        new List<int> { typeArgument, i },
+                        this.context.SiblingCompilations))
+                {
+                    keyElementStaysNonNull = false;
+                }
+
+                if (keyElementStaysNonNull
                     && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                         this.context.Compilation,
                         valueSymbol,
@@ -1932,6 +1943,32 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             rebuilt = new TupleLiteralExpression(elements);
+            return true;
+        }
+
+        private bool TryGetIndexReceiverGenericTuple(
+            ArgumentSyntax argument,
+            out ISymbol receiver,
+            out int typeArgument)
+        {
+            receiver = null;
+            typeArgument = -1;
+            if (argument.Parent?.Parent is not ElementAccessExpressionSyntax elementAccess
+                || this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation operation
+                || operation.Parameter?.OriginalDefinition.Type
+                    is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } parameter)
+            {
+                return false;
+            }
+
+            ISymbol receiverSymbol = this.context.GetSymbolInfo(elementAccess.Expression).Symbol;
+            if (receiverSymbol is not (IFieldSymbol or IPropertySymbol))
+            {
+                return false;
+            }
+
+            receiver = receiverSymbol;
+            typeArgument = parameter.Ordinal;
             return true;
         }
 

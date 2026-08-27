@@ -14,18 +14,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #3564: a tuple-typed index key whose G#-side elements are
-/// promoted-nullable while the indexer's key tuple elements are not
-/// (`store[key]` where `key` is `(ISymbol?, SyntaxNode)` against a
-/// `Dictionary[(ISymbol, SyntaxNode), bool]` field) cannot be bridged with a
-/// whole-value `!!` — G# has no implicit `(T?, U) → (T, U)`. The index
-/// argument now rebuilds per element, asserting only the promoted slots:
-/// `store[(key.Item1!!, key.Item2)]`.
+/// Issue #3564: tuple-element taint flowing through a generic field/property
+/// key promotes that declaration's matching type argument, avoiding unsafe
+/// per-use assertions.
 /// </summary>
 public class Issue3564TupleKeyIndexBridgingTests
 {
     [Fact]
-    public void PromotedTupleKey_RebuildsPerElementAtIndexer()
+    public void PromotedTupleKey_PromotesDictionaryFieldKey()
     {
         string printed = TranslateOblivious(@"
 using System.Collections.Generic;
@@ -58,8 +54,41 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("this.store[(key.Item1!!, key.Item2)] = true", printed);
-        Assert.Contains("return this.store[(key.Item1!!, key.Item2)]", printed);
+        Assert.Contains("let store Dictionary[(string?, Node), bool]", printed);
+        Assert.Contains("this.store[key] = true", printed);
+        Assert.Contains("return this.store[key]", printed);
+        Assert.DoesNotContain("key.Item1!!", printed);
+    }
+
+    [Fact]
+    public void PromotedTupleKey_PromotesDictionaryPropertyKeyFromMethodArgument()
+    {
+        string printed = TranslateOblivious(@"
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class Node
+    {
+    }
+
+    public class Cache
+    {
+        private Dictionary<(string, Node), bool> Store { get; } = new();
+
+        private static string Resolve(Node node) => null;
+
+        public bool Lookup(Node scope)
+        {
+            var key = (Resolve(scope), scope);
+            return this.Store.TryGetValue(key, out var cached) && cached;
+        }
+    }
+}");
+
+        Assert.Contains("prop Store Dictionary[(string?, Node), bool]", printed);
+        Assert.Contains("this.Store.TryGetValue(key", printed);
+        Assert.DoesNotContain("key.Item1!!", printed);
     }
 
     [Fact]
