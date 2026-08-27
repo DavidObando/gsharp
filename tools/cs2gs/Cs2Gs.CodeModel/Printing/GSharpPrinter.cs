@@ -956,6 +956,7 @@ public static class GSharpPrinter
                 if (literal.Value.IndexOf('\n') >= 0
                     && literal.Value.IndexOf('`') < 0
                     && literal.Value.IndexOf('\r') < 0
+                    && HasOnlyRawStringSafeCharacters(literal.Value)
                     && (literal.Value.Length > 120
                         || literal.Value.IndexOf('\n') != literal.Value.LastIndexOf('\n')))
                 {
@@ -970,6 +971,23 @@ public static class GSharpPrinter
             default:
                 return literal.Value;
         }
+    }
+
+    // Raw backtick strings carry their characters verbatim, so a control
+    // character other than '\n'/'\t' would land in the emitted source as a raw
+    // byte — an embedded NUL even lexes as end-of-file (GS0003 unterminated
+    // string). Such values keep the escaped one-line form.
+    private static bool HasOnlyRawStringSafeCharacters(string value)
+    {
+        foreach (char c in value)
+        {
+            if (c < ' ' && c != '\n' && c != '\t')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string RenderLambda(LambdaExpression lambda, int indent)
