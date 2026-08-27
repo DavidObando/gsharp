@@ -212,6 +212,13 @@ public static class SpillSequenceSpiller
         private readonly bool includeYieldInBlockExpressions;
         private readonly bool includeControlFlowInBlockExpressions;
 
+        // Issue #3592: each spiller pass names its temps in its own domain
+        // ("c" = control-flow block lifting, "y" = iterator block lifting,
+        // "" = the async await spiller) so passes running over the SAME method
+        // body never mint two same-named locals with different types — the
+        // async state machine maps hoisted locals to fields by name.
+        private readonly string spillTempDomain;
+
         private int spillOrdinal;
 
         public Spiller(
@@ -220,6 +227,10 @@ public static class SpillSequenceSpiller
         {
             this.includeYieldInBlockExpressions = includeYieldInBlockExpressions;
             this.includeControlFlowInBlockExpressions = includeControlFlowInBlockExpressions;
+            this.spillTempDomain =
+                includeControlFlowInBlockExpressions ? "c" :
+                includeYieldInBlockExpressions ? "y" :
+                string.Empty;
         }
 
         public BoundBlockStatement RewriteBlock(BoundBlockStatement block)
@@ -3025,7 +3036,7 @@ public static class SpillSequenceSpiller
 
         private LocalVariableSymbol MakeSpillTemp(TypeSymbol type)
         {
-            var name = GeneratedNames.SpillTempField(spillOrdinal++);
+            var name = GeneratedNames.SpillTempField(spillOrdinal++, spillTempDomain);
             return new LocalVariableSymbol(name, isReadOnly: false, type);
         }
 
