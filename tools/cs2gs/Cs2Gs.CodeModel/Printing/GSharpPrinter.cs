@@ -956,6 +956,7 @@ public static class GSharpPrinter
                 if (literal.Value.IndexOf('\n') >= 0
                     && literal.Value.IndexOf('`') < 0
                     && literal.Value.IndexOf('\r') < 0
+                    && HasOnlyRawStringSafeCharacters(literal.Value)
                     && (literal.Value.Length > 120
                         || literal.Value.IndexOf('\n') != literal.Value.LastIndexOf('\n')))
                 {
@@ -970,6 +971,23 @@ public static class GSharpPrinter
             default:
                 return literal.Value;
         }
+    }
+
+    // Raw backtick strings carry their characters verbatim, so a control
+    // character other than '\n'/'\t' would land in the emitted source as a raw
+    // byte — an embedded NUL even lexes as end-of-file (GS0003 unterminated
+    // string). Such values keep the escaped one-line form.
+    private static bool HasOnlyRawStringSafeCharacters(string value)
+    {
+        foreach (char c in value)
+        {
+            if (c < ' ' && c != '\n' && c != '\t')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string RenderLambda(LambdaExpression lambda, int indent)
@@ -1029,13 +1047,19 @@ public static class GSharpPrinter
             sb.Append('\n');
             sb.Append(armPad);
             string marker;
-            if (arm.Pattern == null)
+            if (arm.Pattern == null && arm.Guard == null)
             {
                 marker = "default:";
             }
             else if (arm.Guard != null)
             {
-                marker = $"case {RenderPattern(arm.Pattern, indent + 1)} when {RenderExpression(arm.Guard, indent + 1)}:";
+                // A guarded discard (`_ when g =>`) must keep its guard: G#'s
+                // spelling is `case _ when g:` — rendering it as `default:`
+                // dropped the guard (a silent behavior change) AND collided
+                // with the synthesized total arm (GS0169, the GeneratorHost
+                // wall in #3501).
+                string guardedPattern = arm.Pattern == null ? "_" : RenderPattern(arm.Pattern, indent + 1);
+                marker = $"case {guardedPattern} when {RenderExpression(arm.Guard, indent + 1)}:";
             }
             else
             {
@@ -1424,13 +1448,17 @@ public static class GSharpPrinter
             sb.Append('\n');
             sb.Append(casePad);
             string head;
-            if (arm.Pattern == null)
+            if (arm.Pattern == null && arm.Guard == null)
             {
                 head = "default";
             }
             else if (arm.Guard != null)
             {
-                head = $"case {RenderPattern(arm.Pattern, indent + 1)} when {RenderExpression(arm.Guard, indent + 1)}";
+                // Same guarded-discard rule as RenderSwitchExpression: the
+                // guard must survive as `case _ when g`, never fold to
+                // `default`.
+                string guardedPattern = arm.Pattern == null ? "_" : RenderPattern(arm.Pattern, indent + 1);
+                head = $"case {guardedPattern} when {RenderExpression(arm.Guard, indent + 1)}";
             }
             else
             {
@@ -1994,6 +2022,26 @@ public static class GSharpPrinter
 
         if (property.ExpressionBody != null)
         {
+            // A property type rendered with a leading '(' (a tuple type, or a
+            // function type) followed by ` -> expr` re-parses as a function-TYPE
+            // annotation (`(int64, int64) -> Expr`), swallowing the arrow body;
+            // a type whose rendering ENDS inside a parenthesized component
+            // (`[](string, string)`) lets the nested type position absorb the
+            // arrow the same way (unlike funcs, props have no tuple-before-arrow
+            // parser disambiguation at all). Spell those with an ADR-0131 arrow
+            // get accessor inside a block, where the type ends unambiguously at
+            // the '{'.
+            if (RenderType(property.Type).StartsWith("(", StringComparison.Ordinal)
+                || RenderType(property.Type).EndsWith(")", StringComparison.Ordinal))
+            {
+                sb.Append(" {\n");
+                sb.Append($"{Indent(indent + 1)}get -> {RenderArrowInline(property.ExpressionBody, indent + 1)}");
+                sb.Append('\n');
+                sb.Append(pad);
+                sb.Append('}');
+                return sb.ToString();
+            }
+
             // Issue #1278 / ADR-0131: expression-bodied read-only property/indexer.
             sb.Append($" -> {RenderArrowInline(property.ExpressionBody, indent)}");
             return sb.ToString();
@@ -2135,6 +2183,26 @@ public static class GSharpPrinter
 
         if (method.ExpressionBody != null)
         {
+            // A return type whose rendering ends inside a parenthesized
+            // component (`[](string, string)`, `Func[(int32, int32)]`'s slice
+            // forms, ...) followed by ` -> expr` lets the NESTED type position
+            // absorb the arrow as a function-type (`(string, string) -> Expr`),
+            // so the emitted file fails the round-trip parse. gsc disambiguates
+            // only the top-level tuple-return shape (`func F() (A, B) -> e`,
+            // Parser.LooksLikeTupleReturnTypeBeforeArrowBody), which keeps the
+            // flat arrow spelling; everything else falls back to a block body.
+            if (method.ReturnType != null
+                && !IsSingleTopLevelParenGroup(RenderType(method.ReturnType))
+                && RenderType(method.ReturnType).EndsWith(")", StringComparison.Ordinal))
+            {
+                sb.Append(" {\n");
+                sb.Append(RenderStatement(method.ExpressionBody, indent + 1));
+                sb.Append('\n');
+                sb.Append(pad);
+                sb.Append('}');
+                return sb.ToString();
+            }
+
             // Issue #1278 / ADR-0131: expression-bodied method/function.
             sb.Append($" -> {RenderArrowInline(method.ExpressionBody, indent)}");
             return sb.ToString();
@@ -2149,6 +2217,36 @@ public static class GSharpPrinter
         sb.Append(' ');
         sb.Append(RenderBlock(method.Body, indent));
         return sb.ToString();
+    }
+
+    // True when the rendered type is one balanced top-level `(...)` group —
+    // the tuple-return shape gsc's function parser explicitly disambiguates
+    // ahead of an arrow body, so it may keep the flat arrow spelling.
+    private static bool IsSingleTopLevelParenGroup(string renderedType)
+    {
+        if (renderedType.Length < 2 || renderedType[0] != '(')
+        {
+            return false;
+        }
+
+        int depth = 0;
+        for (int i = 0; i < renderedType.Length; i++)
+        {
+            if (renderedType[i] == '(')
+            {
+                depth++;
+            }
+            else if (renderedType[i] == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return i == renderedType.Length - 1;
+                }
+            }
+        }
+
+        return false;
     }
 
     // Issue #1278 / ADR-0131: render the inline content of an expression-bodied

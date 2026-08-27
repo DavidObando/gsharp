@@ -2917,6 +2917,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #3501 / ADR-0117: a G# collection-initializer element holds
+            // exactly one or two values, so an N-ary `{ a, b, c }` element
+            // (xunit's TheoryData rows are the canonical case — sugar for
+            // `Add(a, b, c)`) has no element form. The whole initializer lowers
+            // to a block expression that constructs the collection and issues
+            // the same `Add` calls the C# compiler synthesizes:
+            // `{ let values = T(...) \n values.Add(a, b, c) ... \n values }`.
+            if (isCollectionInitializer
+                && initializer.Expressions.Any(e =>
+                    e.IsKind(SyntaxKind.ComplexElementInitializerExpression)
+                    && e is InitializerExpressionSyntax { Expressions.Count: not 2 }))
+            {
+                result = this.TranslateAddCallCollectionInitializer(initializer, type, arguments);
+                return result != null;
+            }
+
             List<CollectionInitializerElement> elements = this.TranslateCollectionInitializerElements(initializer);
             if (elements == null)
             {
@@ -2926,6 +2942,63 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression construction = BuildConstruction(type, arguments);
             result = new CollectionInitializerExpression(construction, elements);
             return true;
+        }
+
+        // Lowers a collection initializer containing an N-ary (N != 2) complex
+        // element into a block expression of explicit `Add` calls — the exact
+        // calls C# lowers the initializer to. The local keeps a readable name,
+        // suffixed only on a (syntactic) collision with the element expressions.
+        private GExpression TranslateAddCallCollectionInitializer(
+            InitializerExpressionSyntax initializer,
+            GTypeReference type,
+            IReadOnlyList<GExpression> arguments)
+        {
+            string localName = "values";
+            string initializerText = initializer.ToString();
+            for (int suffix = 2;
+                System.Text.RegularExpressions.Regex.IsMatch(initializerText, $@"\b{localName}\b");
+                suffix++)
+            {
+                localName = "values" + suffix.ToString(CultureInfo.InvariantCulture);
+            }
+
+            var statements = new List<GStatement>
+            {
+                new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    localName,
+                    initializer: BuildConstruction(type, arguments)),
+            };
+
+            foreach (ExpressionSyntax element in initializer.Expressions)
+            {
+                IMethodSymbol addMethod =
+                    this.context.SemanticModel.GetCollectionInitializerSymbolInfo(element).Symbol as IMethodSymbol;
+                IReadOnlyList<ExpressionSyntax> valueSyntaxes =
+                    element is InitializerExpressionSyntax complex
+                        && element.IsKind(SyntaxKind.ComplexElementInitializerExpression)
+                    ? complex.Expressions
+                    : new[] { element };
+
+                var addArguments = new List<GExpression>();
+                for (int i = 0; i < valueSyntaxes.Count; i++)
+                {
+                    GExpression value = this.TranslateExpression(valueSyntaxes[i]);
+                    if (addMethod != null && addMethod.Parameters.Length == valueSyntaxes.Count)
+                    {
+                        value = this.ForgiveInitializerElementValue(
+                            valueSyntaxes[i], value, addMethod.Parameters[i].Type, addMethod.Parameters[i]);
+                    }
+
+                    addArguments.Add(value);
+                }
+
+                statements.Add(new ExpressionStatement(new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression(localName), "Add"),
+                    addArguments)));
+            }
+
+            return new BlockExpression(statements, new IdentifierExpression(localName));
         }
 
         /// <summary>
