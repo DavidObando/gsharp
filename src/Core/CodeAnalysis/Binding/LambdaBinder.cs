@@ -2338,6 +2338,31 @@ internal sealed class LambdaBinder
 
             return base.RewriteAddressOfExpression(node);
         }
+
+        // Issue #3501: a `while value is T binding { … }` condition declares
+        // its pattern binding with no BoundVariableDeclaration, and the
+        // loop's bound shape places the BODY before the controlling
+        // condition — the same order dependency as the inline out-var above.
+        // A single in-order pass walks the binding's reads first and
+        // misclassifies them as enclosing-scope captures (GS9998 "no local
+        // slot" at emit), so pattern bindings are pre-seeded here too.
+        protected override BoundPattern RewritePattern(BoundPattern node)
+        {
+            switch (node)
+            {
+                case BoundDiscardPattern { Variable: not null } varPattern:
+                    this.Declared.Add(varPattern.Variable);
+                    break;
+                case BoundTypePattern { Variable: not null } typePattern:
+                    this.Declared.Add(typePattern.Variable);
+                    break;
+                case BoundSlicePattern { Variable: not null } slicePattern:
+                    this.Declared.Add(slicePattern.Variable);
+                    break;
+            }
+
+            return base.RewritePattern(node);
+        }
     }
 
     // ADR-0076 / issue #716: walks a bound block-expression body collecting

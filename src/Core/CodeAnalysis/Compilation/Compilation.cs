@@ -395,6 +395,11 @@ public class Compilation
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
+            if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
+            {
+                System.Console.Error.WriteLine(ex.ToString());
+            }
+
             var diagnostic = CreateInternalErrorDiagnostic(ex);
             var combined = allWarnings.Add(diagnostic);
             return new EmitResult(success: false, combined);
@@ -544,6 +549,11 @@ public class Compilation
             // type) produces a structured GS9998 diagnostic anchored at the
             // offending source construct. Previously this only caught
             // NotSupportedException and InvalidOperationException (#519).
+            if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
+            {
+                System.Console.Error.WriteLine(ex.ToString());
+            }
+
             var diagnostic = CreateInternalErrorDiagnostic(ex);
             var combined = allWarnings.Add(diagnostic);
             return new EmitResult(success: false, combined);
