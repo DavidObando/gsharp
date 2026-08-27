@@ -1,8 +1,8 @@
 {
-  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps; the *Ceiling metrics cap readability regressions in the migrated output, counted over CODE lines only (string fixtures and comments excluded — re-baselined 2026-08-26 after the #3542-#3550 burn-down: 29/55 green, labels 0, lifts 29, lines>300 467, bangs 13990). Improve a metric, then tighten the corresponding number in the same PR.",
-  "greenFloor": 29,
+  "comment": "Issue #3501 Track C: ratcheting baseline for the repo self-migration gate (build/run-cs2gs-selfmig.sh). greenFloor is the minimum number of fully-green apps; the *Ceiling metrics cap readability regressions in the migrated output, counted over CODE lines only (string fixtures and comments excluded). Re-baselined 2026-08-27 after the gate-widening arc (#3585/#3586/#3591/#3593/#3596): 33/52 green, labels 0, lifts 29, lines>300 544, bangs 16912. The bangs ceiling RISES with this re-baseline because six formerly-untranslatable apps (LanguageServer, Repl, Compiler/Extensions/Sdk test projects, ...) now emit whole new code trees — the per-app density did not regress, the measured corpus grew. Improve a metric, then tighten the corresponding number in the same PR.",
+  "greenFloor": 33,
   "syntheticLabelCeiling": 0,
-  "liftedLocalCeiling": 32,
-  "longLineCeiling": 600,
-  "nullAssertionCeiling": 14200
+  "liftedLocalCeiling": 30,
+  "longLineCeiling": 560,
+  "nullAssertionCeiling": 17400
 }
