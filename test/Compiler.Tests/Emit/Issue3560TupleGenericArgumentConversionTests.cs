@@ -57,6 +57,42 @@ public sealed class Issue3560TupleGenericArgumentConversionTests
         Assert.Equal($"True{Environment.NewLine}", CompileVerifyAndRun(Source));
     }
 
+    [Fact]
+    public void ListAdd_NamedTupleLiteralNullableLift_CompileVerifyAndRun()
+    {
+        const string Source = """
+            package Issue3560
+
+            import System
+            import System.Collections.Generic
+
+            let values = List[(string, int32, int32?)]()
+            values.Add(item: ("a", 1, 2))
+
+            Console.WriteLine(values[0].Item3)
+            """;
+
+        Assert.Equal($"2{Environment.NewLine}", CompileVerifyAndRun(Source));
+    }
+
+    [Fact]
+    public void ListAdd_NamedTupleLiteralNil_CompileVerifyAndRun()
+    {
+        const string Source = """
+            package Issue3560
+
+            import System
+            import System.Collections.Generic
+
+            let values = List[(string, int32, int32?)]()
+            values.Add(item: ("b", 2, nil))
+
+            Console.WriteLine(values[0].Item3 == nil)
+            """;
+
+        Assert.Equal($"True{Environment.NewLine}", CompileVerifyAndRun(Source));
+    }
+
     private static string CompileVerifyAndRun(string source)
     {
         var directory = Path.Combine(

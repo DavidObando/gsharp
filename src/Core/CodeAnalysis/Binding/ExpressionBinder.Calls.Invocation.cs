@@ -3187,13 +3187,13 @@ internal sealed partial class ExpressionBinder
             var hasUserClassArg = false;
             for (var i = 0; i < arguments.Length; i++)
             {
-                if (argumentNames.IsDefault
-                    && TryProjectArgumentClrTypeFromSymbolicReceiver(
-                        candidates,
-                        i,
-                        effectiveReceiverType,
-                        arguments[i].Type,
-                        out var receiverProjectedArgumentType))
+                if (TryProjectArgumentClrTypeFromSymbolicReceiver(
+                    candidates,
+                    i,
+                    ce,
+                    effectiveReceiverType,
+                    arguments[i].Type,
+                    out var receiverProjectedArgumentType))
                 {
                     argTypes[i] = receiverProjectedArgumentType;
                     continue;
@@ -3473,7 +3473,8 @@ internal sealed partial class ExpressionBinder
 
     private bool TryProjectArgumentClrTypeFromSymbolicReceiver(
         IReadOnlyList<MethodInfo> candidates,
-        int argumentIndex,
+        int sourceArgumentIndex,
+        CallExpressionSyntax call,
         TypeSymbol receiverType,
         TypeSymbol argumentType,
         [NotNullWhen(true)] out Type? projectedType)
@@ -3481,9 +3482,19 @@ internal sealed partial class ExpressionBinder
         projectedType = null;
         foreach (var candidate in candidates)
         {
+            var parameterIndex = MapSourceArgumentToParameter(
+                candidate.GetParameters(),
+                call,
+                sourceArgumentIndex,
+                offset: 0);
+            if (parameterIndex < 0)
+            {
+                continue;
+            }
+
             var symbolicTarget = ConversionClassifier.TrySubstituteParameterTypeFromReceiver(
                 candidate,
-                argumentIndex,
+                parameterIndex,
                 receiverType);
             if (symbolicTarget == null)
             {
