@@ -868,6 +868,21 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #3566: IEnumerable<T> (and its sequence[T] alias) implements
+        // the non-generic System.Collections.IEnumerable by definition, so
+        // the upcast is a no-op reference conversion at the IL level. Mirrors
+        // the binder's matching arm in Conversion.ClassifyCore — needed
+        // because the hybrid runtime/MetadataLoadContext constructed shape
+        // defeats the CLR-backed assignability rules. IAsyncEnumerable
+        // shapes never classify into this conversion binder-side.
+        if (a != null
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(a, out var aEnumerableDefinition, out _)
+            && aEnumerableDefinition?.FullName == "System.Collections.Generic.IEnumerable`1"
+            && b?.ClrType?.FullName == "System.Collections.IEnumerable")
+        {
+            return true;
+        }
+
         if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
         {
             // Issue #1248: a constructed generic class's base-type reference is
