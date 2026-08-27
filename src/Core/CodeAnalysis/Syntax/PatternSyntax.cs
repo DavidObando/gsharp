@@ -13,4 +13,8 @@ public abstract class PatternSyntax : SyntaxNode
         : base(syntaxTree)
     {
     }
+
+    /// <summary>Gets the identifier bound by this pattern, or <see langword="null"/>.</summary>
+    [SyntaxChildIgnore]
+    public virtual SyntaxToken? BindingIdentifier => null;
 }

@@ -45,6 +45,24 @@ public sealed class CompileStage : IMigrationStage
             .ToList();
         IReadOnlyList<string> references =
             BuildReferenceSet(context.App.ReferencedAssemblies, context.ExternalReferencePaths);
+        IReadOnlyList<DeclaredPackageReference> buildOnlyPackageReferences = context.BuildOnlyPackageReferences;
+        IReadOnlyList<DeclaredProjectItem> packageReferences = context.PackageReferences;
+        if (context.IsAnalyzerProject)
+        {
+            references = references
+                .Where(path => !Path.GetFileName(path).StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase))
+                .Append(typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.Location)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            buildOnlyPackageReferences = buildOnlyPackageReferences
+                .Where(reference => !reference.Id.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            packageReferences = packageReferences
+                .Where(reference => reference.Element.Attribute("Include")?.Value?.StartsWith(
+                    "Microsoft.CodeAnalysis",
+                    StringComparison.OrdinalIgnoreCase) != true)
+                .ToList();
+        }
 
         if (context.Options.CompileViaSdk)
         {
@@ -67,8 +85,8 @@ public sealed class CompileStage : IMigrationStage
                         context.AdditionalGeneratorFiles,
                         context.RootNamespace,
                         context.Options.Config,
-                        context.BuildOnlyPackageReferences,
-                        context.PackageReferences,
+                        buildOnlyPackageReferences,
+                        packageReferences,
                         context.ProjectReferences,
                         context.Options.GeneratedProjectPaths,
                         context.UsesCentralPackageManagement,

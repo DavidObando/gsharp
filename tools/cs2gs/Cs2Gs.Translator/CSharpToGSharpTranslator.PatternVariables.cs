@@ -703,10 +703,13 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (sub.NameColon != null)
                 {
+                    string fieldName = this.EmittedName(
+                        this.GetPatternMemberSymbol(sub.NameColon.Name),
+                        this.GetSubpatternMemberName(sub));
+                    fieldName = this.TranslateAnalyzerPatternFieldName(recursive, sub, fieldName);
+
                     fields.Add(new PropertyPatternField(
-                        this.EmittedName(
-                            this.GetPatternMemberSymbol(sub.NameColon.Name),
-                            this.GetSubpatternMemberName(sub)),
+                        fieldName,
                         this.BuildNativePattern(sub.Pattern, binders)));
                     continue;
                 }

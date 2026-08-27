@@ -198,16 +198,22 @@ internal static class GSharpProjectTransformer
     // value (the in-proc gsc host is net10; the VS/old-host rationale for
     // netstandard2.0 does not exist for G#), drops the Roslyn compiler
     // packages and Roslyn-analyzer-authoring properties, and references the
-    // G# analyzer API via the GsharpAnalyzerApiProject property the migration
-    // host supplies.
+    // G# analyzer API assembly loaded by the compiler host.
     private static void RewriteAnalyzerProject(XDocument document)
     {
-        // Issue #3501: classification keys on the analyzer-AUTHORING marker
-        // only. Merely consuming Microsoft.CodeAnalysis as a library (e.g.
-        // Cs2Gs.Translator itself) must NOT strip the Roslyn packages — that
-        // erased the whole Roslyn surface from the migrated Translator and
-        // produced 3,093 unresolved-type errors in the nightly.
-        bool isAnalyzerProject = ElementsNamed(document, "EnforceExtendedAnalyzerRules").Any();
+        // Issue #3501: a plain Microsoft.CodeAnalysis dependency is not enough
+        // (Cs2Gs.Translator needs Roslyn at runtime). Analyzer packages use
+        // PrivateAssets=all; that marker also survives the pipeline's evaluated
+        // project projection when EnforceExtendedAnalyzerRules does not.
+        bool isAnalyzerProject = ElementsNamed(document, "EnforceExtendedAnalyzerRules").Any()
+            || ElementsNamed(document, "PackageReference").Any(reference =>
+                AttributeNamed(reference, "Include")?.Value?.StartsWith(
+                    "Microsoft.CodeAnalysis",
+                    StringComparison.OrdinalIgnoreCase) == true
+                && string.Equals(
+                    AttributeNamed(reference, "PrivateAssets")?.Value?.Trim(),
+                    "all",
+                    StringComparison.OrdinalIgnoreCase));
         if (!isAnalyzerProject)
         {
             return;
@@ -253,34 +259,26 @@ internal static class GSharpProjectTransformer
         var itemGroup = new XElement(
             "ItemGroup",
             new XElement(
-                "ProjectReference",
-                new XAttribute("Include", "$(GsharpAnalyzerApiProject)"),
-                new XAttribute("Condition", " '$(GsharpAnalyzerApiProject)' != '' ")));
+                "Reference",
+                new XAttribute("Include", "GSharp.Core"),
+                new XElement(
+                    "HintPath",
+                    "$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))/GSharp.Core.dll"),
+                new XElement("Private", "false")));
         document.Root.Add(itemGroup);
     }
 
-    // ADR-0169: a consumer wiring an analyzer project via
-    // OutputItemType="Analyzer" (Roslyn's item) DROPS the reference for now.
-    // The cs2gs analyzer-API translation (Roslyn syntax/symbol surface →
-    // GSharpDiagnosticAnalyzer) is built for GSA0001-GSA0004 (#3536), but
-    // GSA0005 (RewriterClonePreservationAnalyzer) still translates loud —
-    // MethodKind/constructor-vs-static-factory detection has no G# analogue
-    // yet (docs/cs2gs-analyzer-translation.md) — so InternalAnalyzers as a
-    // whole does not compile, the migrated assembly carries no
-    // [GSharpDiagnosticAnalyzer] types, and the SDK rejects it as an analyzer
-    // input (GS9301) — wiring it via GsharpCodeAnalyzer would fail every
-    // consumer build. Restore the rewrite to the G# item once GSA0005's
-    // reviewed adaptation lands and InternalAnalyzers compiles clean.
+    // ADR-0169: retain analyzer project references while changing Roslyn's
+    // analyzer item type to the G# SDK item type.
     private static void RewriteAnalyzerConsumerReferences(XDocument document)
     {
-        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference").ToList())
+        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference"))
         {
             XAttribute outputItemType = AttributeNamed(projectReference, "OutputItemType");
             if (outputItemType is not null
-                && (string.Equals(outputItemType.Value.Trim(), "Analyzer", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(outputItemType.Value.Trim(), "GsharpCodeAnalyzer", StringComparison.OrdinalIgnoreCase)))
+                && string.Equals(outputItemType.Value.Trim(), "Analyzer", StringComparison.OrdinalIgnoreCase))
             {
-                projectReference.Remove();
+                outputItemType.Value = "GsharpCodeAnalyzer";
             }
         }
     }

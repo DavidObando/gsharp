@@ -514,6 +514,11 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the qualifier identifier tokens that follow each <c>.</c> in source order (issue #526). Empty when the name is a single identifier.</summary>
     public ImmutableArray<SyntaxToken> QualifierIdentifierTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
 
+    /// <summary>Gets the final identifier of a named type clause, or <see langword="null"/> for a composite type.</summary>
+    [SyntaxChildIgnore]
+    public SyntaxToken? NameIdentifier =>
+        QualifierIdentifierTokens.IsDefaultOrEmpty ? Identifier : QualifierIdentifierTokens[^1];
+
     /// <summary>Gets a value indicating whether this clause uses a dotted-qualifier name <c>Outer.Inner</c> (issue #526).</summary>
     public bool HasQualifier => !QualifierIdentifierTokens.IsDefaultOrEmpty;
 

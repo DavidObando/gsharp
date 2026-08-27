@@ -327,6 +327,11 @@ public sealed class TranslateStage : IMigrationStage
             // is rewritten to the G# analyzer API instead of passing through.
             bool analyzerApiMode = Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
                 .IsAnalyzerProject(currentProject.Compilation);
+            if (!isReferencedProject)
+            {
+                context.IsAnalyzerProject = analyzerApiMode;
+            }
+
             var translator = new CSharpToGSharpTranslator(
                 preservePartialParts: true,
                 retainedFilePaths: retainedFilePaths,

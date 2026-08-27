@@ -110,7 +110,7 @@ public sealed class ReflectionTypeComparisonAnalyzer : DiagnosticAnalyzer
         return operation;
     }
 
-    private static bool IsInsideExemptType(ISymbol symbol)
+    private static bool IsInsideExemptType(ISymbol? symbol)
     {
         for (var type = symbol?.ContainingType; type != null; type = type.ContainingType)
         {

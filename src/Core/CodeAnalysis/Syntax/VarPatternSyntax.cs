@@ -32,4 +32,8 @@ public sealed class VarPatternSyntax : PatternSyntax
 
     /// <summary>Gets the binding identifier or discard.</summary>
     public SyntaxToken Designation { get; }
+
+    /// <inheritdoc/>
+    [SyntaxChildIgnore]
+    public override SyntaxToken? BindingIdentifier => Designation.Text == "_" ? null : Designation;
 }
