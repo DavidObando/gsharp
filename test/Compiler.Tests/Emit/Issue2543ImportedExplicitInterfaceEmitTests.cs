@@ -35,11 +35,23 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
             prop Value T { get; }
         }
 
+        interface INumericSlots {
+            prop Value int32 { get; }
+            prop this[index int32] int32 { get; }
+            event Changed Action
+        }
+
+        interface ITextSlots {
+            prop Value string { get; }
+            prop this[index string] string { get; }
+            event Changed Action[string]
+        }
+
         class Marker {}
         """;
 
     [Fact]
-    public void ImportedExplicitMembers_CompileEmitMethodImplsAndDispatch()
+    public void ImportedExplicitMembers_IncludingIssue3535Collisions_EmitAndDispatch()
     {
         const string source = """
             package Issue2543.App
@@ -52,8 +64,10 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
                 func Bump() { Hits = Hits + 1 }
             }
 
-            class Implementation : IContract, IGeneric[string] {
+            class Implementation : IContract, IGeneric[string], INumericSlots, ITextSlots {
                 private var _handler Action?
+                private var _numericHandler Action?
+                private var _textHandler Action[string]?
 
                 private func (IContract) Echo(value string) string -> "explicit:" + value
                 private prop (IContract) Name string -> "imported"
@@ -64,8 +78,22 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
                 }
                 private func (IGeneric[string]) Convert(value string) string -> value + ":generic"
                 private prop (IGeneric[string]) Value string -> "value"
+                private prop (INumericSlots) Value int32 -> 11
+                private prop (ITextSlots) Value string -> "text"
+                private prop (INumericSlots) this[index int32] int32 -> index + 20
+                private prop (ITextSlots) this[index string] string -> "key:" + index
+                private event (INumericSlots) Changed Action {
+                    add { _numericHandler = value }
+                    remove { _numericHandler = nil }
+                }
+                private event (ITextSlots) Changed Action[string] {
+                    add { _textHandler = value }
+                    remove { _textHandler = nil }
+                }
 
                 func Fire() { _handler?.Invoke() }
+                func FireNumeric() { _numericHandler?.Invoke() }
+                func FireText() { _textHandler?.Invoke("event") }
             }
 
             func Main() {
@@ -80,11 +108,25 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
                 Console.WriteLine(sink.Hits)
                 var generic IGeneric[string] = implementation
                 Console.WriteLine(generic.Convert(generic.Value))
+                var numeric INumericSlots = implementation
+                var text ITextSlots = implementation
+                numeric.Changed += func() { Console.WriteLine("numeric-event") }
+                text.Changed += func(value string) { Console.WriteLine(value) }
+                Console.WriteLine(numeric.Value)
+                Console.WriteLine(text.Value)
+                Console.WriteLine(numeric[2])
+                Console.WriteLine(text["x"])
+                implementation.FireNumeric()
+                implementation.FireText()
             }
             """;
 
         using var artifacts = Compile(source, "exe");
-        Assert.Equal($"explicit:ok{Environment.NewLine}imported{Environment.NewLine}12{Environment.NewLine}1{Environment.NewLine}value:generic{Environment.NewLine}", Run(artifacts.OutputPath));
+        Assert.Equal(
+            $"explicit:ok{Environment.NewLine}imported{Environment.NewLine}12{Environment.NewLine}1{Environment.NewLine}" +
+            $"value:generic{Environment.NewLine}11{Environment.NewLine}text{Environment.NewLine}22{Environment.NewLine}" +
+            $"key:x{Environment.NewLine}numeric-event{Environment.NewLine}event{Environment.NewLine}",
+            Run(artifacts.OutputPath));
         IlVerifier.Verify(artifacts.OutputPath, additionalReferences: new[] { artifacts.ContractsPath });
 
         using var stream = File.OpenRead(artifacts.OutputPath);
@@ -93,7 +135,7 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
         var implementation = reader.TypeDefinitions
             .Select(reader.GetTypeDefinition)
             .Single(type => reader.GetString(type.Name) == "Implementation");
-        Assert.Equal(7, implementation.GetMethodImplementations().Count);
+        Assert.Equal(15, implementation.GetMethodImplementations().Count);
     }
 
     [Theory]

@@ -32,14 +32,12 @@ namespace Cs2Gs.Tests;
 /// clause-based rewrite.
 /// </para>
 /// <para>
-/// A G# USER interface's explicit event implementation is emitted under its
+/// An explicit event implementation is emitted under its
 /// own plain source name carrying a <c>(InterfaceType)</c> clause
 /// immediately after the <c>event</c> keyword (e.g. <c>event (IObservable)
 /// Changed EventHandler</c>), disambiguated by the clause rather than by
-/// name. An EXTERNAL/BCL interface's explicit event implementation still
-/// uses the pre-existing #1911-style forced-public, collision-drop-with-
-/// diagnostic fallback (no G# interface exists there to name in a clause),
-/// exactly mirroring the property/indexer external-interface fallback.
+/// name. Issue #3535 extends the same clause and CLR-slot path to imported
+/// interfaces.
 /// </para>
 /// </summary>
 public class Issue2370ExplicitInterfaceEventTests
@@ -222,15 +220,11 @@ namespace Corpus.Issue2370
     }
 
     /// <summary>
-    /// An EXTERNAL/BCL interface (<see cref="System.ComponentModel.INotifyPropertyChanged"/>)
-    /// has no G# declaration to name in a clause, so its explicit event
-    /// implementation still uses the pre-existing #1911-style
-    /// collision-drop-with-diagnostic fallback when it collides with a
-    /// same-name/shape public event — exactly mirroring the property/indexer
-    /// external-interface fallback.
+    /// An EXTERNAL/BCL explicit event uses the ADR-0149 clause and coexists
+    /// with a same-named public event.
     /// </summary>
     [Fact]
-    public void ExternalInterfaceExplicitEventImplementation_CollidesWithPublicEvent_DropsWithDiagnostic()
+    public void ExternalInterfaceExplicitEventImplementation_CollidesWithPublicEvent_BothSurvive()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 using System.ComponentModel;
@@ -251,24 +245,22 @@ namespace Corpus.Issue2370
         TypeDeclaration model = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Model");
         var events = model.Members.OfType<EventDeclaration>().Where(e => e.Name == "PropertyChanged").ToList();
 
-        // Only the surviving (public, field-like) event remains — the
-        // explicit one was dropped, since the ADR-0149 clause never applies
-        // to an external interface.
-        Assert.Single(events);
+        Assert.Equal(2, events.Count);
+        Assert.Contains(events, e => e.ExplicitInterfaceType == null);
         Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("event", StringComparison.OrdinalIgnoreCase));
+            events,
+            e => e.ExplicitInterfaceType is NamedTypeReference n
+                && n.Name == "INotifyPropertyChanged"
+                && e.Visibility == Visibility.Private);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     /// <summary>
-    /// An explicit implementation of an EXTERNAL interface EVENT that has no
-    /// colliding public sibling survives, forced to G# public visibility
-    /// (<see cref="Visibility.Default"/>) — the pre-existing name-based
-    /// dispatch requires it, exactly like the method/property/indexer-level
-    /// #1911 fallback.
+    /// An explicit implementation of an EXTERNAL interface event with no
+    /// colliding sibling is clause-qualified and private.
     /// </summary>
     [Fact]
-    public void ExternalInterfaceEventImplementation_NoCollision_ForcedPublic()
+    public void ExternalInterfaceEventImplementation_NoCollision_ClauseQualifiedAndPrivate()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 using System.ComponentModel;
@@ -287,8 +279,8 @@ namespace Corpus.Issue2370
         TypeDeclaration model = unit.Members.OfType<TypeDeclaration>().Single(t => t.Name == "Model");
         EventDeclaration propertyChanged = model.Members.OfType<EventDeclaration>().Single(e => e.Name == "PropertyChanged");
 
-        Assert.Equal(Visibility.Default, propertyChanged.Visibility);
-        Assert.Null(propertyChanged.ExplicitInterfaceType);
+        Assert.Equal(Visibility.Private, propertyChanged.Visibility);
+        Assert.True(propertyChanged.ExplicitInterfaceType is NamedTypeReference n && n.Name == "INotifyPropertyChanged");
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
