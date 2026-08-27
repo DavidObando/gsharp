@@ -683,6 +683,21 @@ internal sealed partial class MethodBodyEmitter
         // both shapes via TypeParameterSymbol.IsMethodTypeParameter.
         var typeParamToken = this.outer.memberRefs.GetElementTypeToken(call.TypeParameter);
 
+        // Issue #3525: the constraint is an imported CLR interface (e.g.
+        // `T : IParsable[T]`) rather than a source G# interface — the slot
+        // is a reflected MethodInfo, referenced via a MemberRef parented at
+        // the (possibly constructed generic) interface TypeSpec, mirroring
+        // the imported-instance CLR constrained-call path (issue #943).
+        if (call.ClrMethod is { } clrMethod)
+        {
+            var clrSlotHandle = this.outer.memberRefs.GetMethodEntityHandle(clrMethod, call.ConstrainedInterfaceType);
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(typeParamToken);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(clrSlotHandle);
+            return;
+        }
+
         // Resolve the interface static-virtual member handle. The
         // BoundConstrainedStaticCallExpression carries the *interface
         // slot* FunctionSymbol; MethodHandles maps interface slots to
@@ -699,22 +714,25 @@ internal sealed partial class MethodBodyEmitter
         // same way constructed-generic instance interface calls are emitted
         // (ADR-0087 R5 / issue #765). Resolve back to the open definition
         // slot and parent the MemberRef at the constructed TypeSpec.
+        // call.ClrMethod was ruled out above, so this is the source-interface
+        // shape and InterfaceMethod is guaranteed non-null.
+        var interfaceMethod = call.InterfaceMethod!;
         var constraintIface = call.TypeParameter.InterfaceConstraint;
         EntityHandle slotHandle;
         if (constraintIface != null
             && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(constraintIface))
         {
-            var openSlot = ResolveOpenInterfaceMethod(constraintIface, call.InterfaceMethod);
+            var openSlot = ResolveOpenInterfaceMethod(constraintIface, interfaceMethod);
             slotHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(constraintIface, openSlot);
         }
-        else if (this.outer.cache.MethodHandles.TryGetValue(call.InterfaceMethod, out var slotDef))
+        else if (this.outer.cache.MethodHandles.TryGetValue(interfaceMethod, out var slotDef))
         {
             slotHandle = slotDef;
         }
         else
         {
             throw new InvalidOperationException(
-                $"Static-virtual interface method '{call.InterfaceMethod.Name}' has no emitted handle.");
+                $"Static-virtual interface method '{interfaceMethod.Name}' has no emitted handle.");
         }
 
         this.il.OpCode(ILOpCode.Constrained);

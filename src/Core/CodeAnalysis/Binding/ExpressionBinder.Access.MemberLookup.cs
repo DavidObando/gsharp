@@ -15,6 +15,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -3693,7 +3694,11 @@ internal sealed partial class ExpressionBinder
         NameExpressionSyntax leftName,
         ExpressionSyntax rightPart)
     {
-        if (tpSym.InterfaceConstraint == null)
+        // Issue #3525: a type parameter constrained to an imported CLR
+        // interface (e.g. `T : IParsable[T]`) has no InterfaceConstraint —
+        // its static-virtual members are reached through ClrInterfaceConstraint
+        // instead. Only bail out here when NEITHER constraint shape is present.
+        if (tpSym.InterfaceConstraint == null && tpSym.ClrInterfaceConstraint == null)
         {
             Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
                 leftName.Location, tpSym.Name, rightPart is CallExpressionSyntax ce0 ? ce0.Identifier.Text : (rightPart is NameExpressionSyntax ne0 ? ne0.IdentifierToken.Text : "?"));
@@ -3738,43 +3743,59 @@ internal sealed partial class ExpressionBinder
             case CallExpressionSyntax callSyntax:
                 {
                     var methodName = callSyntax.Identifier.Text;
-                    FunctionSymbol? slot = null;
-                    foreach (var candidate in TypeMemberModel.GetMethods(tpSym.InterfaceConstraint, methodName, MemberQuery.Static(MemberKinds.Method)))
+                    if (tpSym.InterfaceConstraint != null)
                     {
-                        if (candidate.Parameters.Length == callSyntax.Arguments.Count)
+                        FunctionSymbol? slot = null;
+                        foreach (var candidate in TypeMemberModel.GetMethods(tpSym.InterfaceConstraint, methodName, MemberQuery.Static(MemberKinds.Method)))
                         {
-                            slot = candidate;
-                            break;
+                            if (candidate.Parameters.Length == callSyntax.Arguments.Count)
+                            {
+                                slot = candidate;
+                                break;
+                            }
+                        }
+
+                        if (slot != null)
+                        {
+                            var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
+                            for (var i = 0; i < callSyntax.Arguments.Count; i++)
+                            {
+                                boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
+                            }
+
+                            // Substitute the slot's return type T → caller's T
+                            // (which is also the receiver tpSym). The slot was
+                            // bound on the open interface definition so its return
+                            // type might still mention the interface's own type
+                            // parameter symbol — translate it through the
+                            // constructed interface's TypeArguments.
+                            var returnType = SubstituteThroughConstructedInterface(slot.Type, tpSym.InterfaceConstraint);
+
+                            return new BoundConstrainedStaticCallExpression(
+                                callSyntax,
+                                tpSym,
+                                slot,
+                                boundArgs.MoveToImmutable(),
+                                returnType);
                         }
                     }
 
-                    if (slot == null)
+                    // Issue #3525: the constraint is (or also is) an imported CLR
+                    // interface declaring a static-virtual member — e.g.
+                    // `T : IParsable[T]` and `T.TryParse(...)`. Resolve the
+                    // static method via reflection rather than TypeMemberModel,
+                    // mirroring the imported-instance CLR path (issue #943).
+                    if (tpSym.ClrInterfaceConstraint is TypeSymbol clrConstraint
+                        && clrConstraint.ClrType is Type clrInterface
+                        && clrInterface.IsInterface
+                        && TryBindTypeParameterStaticClrCall(tpSym, clrConstraint, clrInterface, methodName, callSyntax, out var clrCall))
                     {
-                        Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
-                            leftName.Location, tpSym.Name, methodName);
-                        return new BoundErrorExpression(null);
+                        return clrCall;
                     }
 
-                    var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
-                    for (var i = 0; i < callSyntax.Arguments.Count; i++)
-                    {
-                        boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
-                    }
-
-                    // Substitute the slot's return type T → caller's T
-                    // (which is also the receiver tpSym). The slot was
-                    // bound on the open interface definition so its return
-                    // type might still mention the interface's own type
-                    // parameter symbol — translate it through the
-                    // constructed interface's TypeArguments.
-                    var returnType = SubstituteThroughConstructedInterface(slot.Type, tpSym.InterfaceConstraint);
-
-                    return new BoundConstrainedStaticCallExpression(
-                        callSyntax,
-                        tpSym,
-                        slot,
-                        boundArgs.MoveToImmutable(),
-                        returnType);
+                    Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                        leftName.Location, tpSym.Name, methodName);
+                    return new BoundErrorExpression(null);
                 }
 
             case NameExpressionSyntax ne:
@@ -3786,7 +3807,7 @@ internal sealed partial class ExpressionBinder
                     var propName = ne.IdentifierToken.Text;
                     PropertySymbol? slotProp = null;
                     InterfaceSymbol? slotIface = null;
-                    foreach (var iface in tpSym.InterfaceConstraint.SelfAndAllBaseInterfaces())
+                    foreach (var iface in tpSym.InterfaceConstraint?.SelfAndAllBaseInterfaces() ?? Enumerable.Empty<InterfaceSymbol>())
                     {
                         // Issue #1268: a constructed generic interface
                         // constraint (e.g. `T : IData[int32]` or the
@@ -3843,6 +3864,110 @@ internal sealed partial class ExpressionBinder
                     rightPart.Location, tpSym.Name, accessText);
                 return new BoundErrorExpression(null);
         }
+    }
+
+    /// <summary>
+    /// Issue #3525: resolves <c>T.Method(args)</c> against the static
+    /// members declared by <paramref name="tp"/>'s imported CLR interface
+    /// constraint (e.g. <c>T.TryParse(...)</c> with <c>T : IParsable[T]</c>).
+    /// Mirrors <see cref="TryBindConstrainedClrCall"/>'s instance-call
+    /// overload resolution, but against static candidates and without a
+    /// receiver expression.
+    /// </summary>
+    /// <param name="tp">The receiver type parameter, carrying the CLR interface constraint.</param>
+    /// <param name="constraintType">The symbolic (possibly constructed generic) interface constraint.</param>
+    /// <param name="clrInterface">The reflected interface type backing <paramref name="constraintType"/>.</param>
+    /// <param name="methodName">The invoked method name.</param>
+    /// <param name="callSyntax">The originating call-expression syntax.</param>
+    /// <param name="result">The bound constrained static call on success.</param>
+    /// <returns><see langword="true"/> when a matching static method was found and bound.</returns>
+    private bool TryBindTypeParameterStaticClrCall(
+        TypeParameterSymbol tp,
+        TypeSymbol constraintType,
+        Type clrInterface,
+        string methodName,
+        CallExpressionSyntax callSyntax,
+        [NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+
+        var candidates = new List<MethodInfo>();
+        foreach (var m in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(clrInterface, BindingFlags.Public | BindingFlags.Static))
+        {
+            if (m.IsStatic && ClrTypeUtilities.EmittedMemberNameMatches(m, methodName))
+            {
+                candidates.Add(m);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
+        for (var i = 0; i < callSyntax.Arguments.Count; i++)
+        {
+            boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
+        }
+
+        var arguments = boundArgs.MoveToImmutable();
+        var argTypes = new Type?[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
+            if (t == null && arguments[i].Type != TypeSymbol.Null)
+            {
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                {
+                    return false;
+                }
+            }
+
+            argTypes[i] = t;
+        }
+
+        var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(callSyntax.Arguments, arguments.Length);
+        var resolution = ClrOverloadResolution.Resolve(
+            candidates,
+            argTypes,
+            null,
+            scope.References.MapClrTypeToReferences,
+            interpolatedStringArgs,
+            null,
+            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
+            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+        if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
+            || resolution.Best is not { } method)
+        {
+            return false;
+        }
+
+        var parameters = method.GetParameters();
+
+        // Return type: a return that names the constraint type-variable is
+        // recovered by projecting through the constructed constraint,
+        // mirroring TryBindConstrainedClrCall's instance-call handling.
+        var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
+        var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(constraintType, method);
+
+        arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, resolution.ParameterMapping);
+
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        var refKinds = ComputeArgumentRefKinds(parameters);
+
+        result = new BoundConstrainedStaticCallExpression(
+            callSyntax,
+            tp,
+            method,
+            orderedArgs,
+            refKinds,
+            returnType,
+            declaringConstraint);
+        return true;
     }
 
     /// <summary>

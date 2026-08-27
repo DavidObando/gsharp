@@ -695,7 +695,18 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundConstrainedStaticCallExpression(node.Syntax, node.TypeParameter, node.InterfaceMethod, builder.MoveToImmutable(), node.ReturnType);
+        // Issue #3525: the imported-CLR-interface shape carries a MethodInfo
+        // (ClrMethod) instead of a FunctionSymbol (InterfaceMethod).
+        return node.InterfaceMethod != null
+            ? new BoundConstrainedStaticCallExpression(node.Syntax, node.TypeParameter, node.InterfaceMethod, builder.MoveToImmutable(), node.ReturnType)
+            : new BoundConstrainedStaticCallExpression(
+                node.Syntax,
+                node.TypeParameter,
+                node.ClrMethod!,
+                builder.MoveToImmutable(),
+                node.ArgumentRefKinds,
+                node.ReturnType,
+                node.ConstrainedInterfaceType!);
     }
 
     /// <summary>

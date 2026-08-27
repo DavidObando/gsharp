@@ -1002,7 +1002,17 @@ internal static class DefiniteAssignmentAnalyzer
                 ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundConstrainedStaticCallExpression call:
-                ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
+                if (call.InterfaceMethod != null)
+                {
+                    ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
+                }
+                else
+                {
+                    // Issue #3525: the imported-CLR-interface shape has no
+                    // ParameterSymbol list, only reflection ArgumentRefKinds.
+                    ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
+                }
+
                 break;
             case BoundConstructorCallExpression call:
                 var constructorParameters = call.SelectedConstructor != null
