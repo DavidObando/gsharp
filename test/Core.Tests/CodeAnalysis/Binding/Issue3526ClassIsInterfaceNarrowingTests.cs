@@ -9,13 +9,16 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #3526 — the concrete-class residual of #2165/#2171: an <c>is
-/// IInterface</c> test must smart-cast a receiver whose declared type is an
-/// UNSEALED (<c>open</c>) concrete class, even when the class does not
-/// statically implement the tested interface. A runtime value may be a
-/// subclass that does implement it, so <c>if x is IInterface</c> narrows
-/// <c>x</c> to <c>IInterface</c> (matching the pre-existing <c>object</c>
-/// operand behaviour) and its members resolve. A sealed (non-<c>open</c>)
-/// class has no such unknown subclass, so it must keep reporting GS0159.
+/// IInterface</c> test must smart-cast a receiver whose declared type is a
+/// concrete class that CAN have subclasses — <c>open</c> (subclassable
+/// anywhere) or <c>sealed</c> (ADR-0078 closed hierarchy, subclassable
+/// in-package) — even when the class itself does not statically implement
+/// the tested interface. A runtime value may be a subclass that does
+/// implement it, so <c>if x is IInterface</c> narrows <c>x</c> to
+/// <c>IInterface</c> (matching the pre-existing <c>object</c> operand
+/// behaviour) and its members resolve. A plain, default class (neither
+/// <c>open</c> nor <c>sealed</c>) is CLR-sealed and has no subclass at all,
+/// so it must keep reporting GS0159.
 /// </summary>
 public class Issue3526ClassIsInterfaceNarrowingTests
 {
@@ -62,11 +65,11 @@ func Run(value Resource) void {
     }
 
     [Fact]
-    public void If_IsInterface_OnSealedClassOperand_StillReportsGS0159()
+    public void If_IsInterface_OnDefaultClassOperand_StillReportsGS0159()
     {
-        // Control: a non-`open` (sealed-by-default) class has no unknown
-        // subclass that could implement the interface, so the member must
-        // remain unresolved.
+        // Control: a plain, non-`open`/non-`sealed` class (CLR-sealed, per
+        // TypeDefEmitter.ResolveStructTypeShape) has no subclass at all —
+        // known or unknown — so the member must remain unresolved.
         var result = EmittedOracle.Evaluate(@"
 import System
 class Resource {
@@ -81,6 +84,33 @@ func DisposeIfNeeded(value Resource) bool {
 ");
 
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("Dispose"));
+    }
+
+    [Fact]
+    public void If_IsInterface_OnSealedHierarchyClassOperand_NarrowsToTestedInterface()
+    {
+        // Regression for review feedback on #3526: `sealed class` (ADR-0078)
+        // is a CLOSED HIERARCHY, not a CLR-sealed type — same-package
+        // subclasses are legal (TypeDefEmitter deliberately omits
+        // TypeAttributes.Sealed for it) and here a known subclass DOES
+        // implement the tested interface. Narrowing must still apply.
+        var result = EmittedOracle.Evaluate(@"
+interface IInit {
+    func Init() void;
+}
+sealed class Resource {
+}
+class SpecialResource : Resource, IInit {
+    func Init() void {}
+}
+func Run(value Resource) void {
+    if value is IInit {
+        value.Init()
+    }
+}
+");
+
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]

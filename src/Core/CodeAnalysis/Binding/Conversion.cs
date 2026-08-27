@@ -1937,7 +1937,15 @@ public sealed class Conversion
     {
         if (type is StructSymbol { IsClass: true } userClass)
         {
-            return userClass.IsSealedHierarchy || !userClass.IsOpen;
+            // ADR-0078: `sealed class` denotes a CLOSED HIERARCHY, not a
+            // CLR-sealed type — same-package subclasses remain legal, and
+            // TypeDefEmitter.ResolveStructTypeShape deliberately omits
+            // TypeAttributes.Sealed for it (only a plain, non-open,
+            // non-sealed-hierarchy class gets the CLR flag). Mirror that
+            // exact condition here so a known subclass implementing the
+            // tested interface is neither rejected by a checked cast nor by
+            // smart-cast narrowing.
+            return !userClass.IsOpen && !userClass.IsSealedHierarchy;
         }
 
         return type.ClrType is { IsClass: true, IsSealed: true };

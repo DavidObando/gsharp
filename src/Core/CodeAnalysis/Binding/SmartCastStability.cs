@@ -320,14 +320,17 @@ internal static class SmartCastStability
         // wrapper does not change which interfaces the runtime value may
         // implement — so strip it before applying the type-parameter/interface
         // test.
-        // Issue #3526: an UNSEALED CONCRETE CLASS operand is the same story —
-        // a runtime value may be an as-yet-unknown subclass that implements an
-        // interface the declared class does not statically implement. `object`
-        // already narrowed via the candidate->declared branch above (every
-        // reference type converts to `object`); a non-`object` open class needs
-        // the same treatment here. A sealed class has no such unknown subclass,
-        // so it is intentionally excluded — matching the checked-cast
-        // eligibility rule in Conversion.HasCheckedReferenceConversion.
+        // Issue #3526: a CONCRETE CLASS operand that can have subclasses is
+        // the same story — a runtime value may be a subclass (known or not)
+        // that implements an interface the declared class does not statically
+        // implement. `object` already narrowed via the candidate->declared
+        // branch above (every reference type converts to `object`); an
+        // `open` class or an ADR-0078 `sealed` (closed-hierarchy) class needs
+        // the same treatment here — `Conversion.IsSealedReferenceType`
+        // mirrors TypeDefEmitter's actual CLR-sealing condition, so only a
+        // plain, non-`open`/non-`sealed` (truly CLR-sealed, no-subclass)
+        // class is excluded — matching the checked-cast eligibility rule in
+        // Conversion.HasCheckedReferenceConversion.
         var declaredCore = declared is NullableTypeSymbol declaredNullableCore
             ? declaredNullableCore.UnderlyingType
             : declared;
