@@ -3187,13 +3187,15 @@ internal sealed partial class ExpressionBinder
             var hasUserClassArg = false;
             for (var i = 0; i < arguments.Length; i++)
             {
-                if (TryProjectArgumentClrTypeFromSymbolicReceiver(
-                    candidates,
-                    i,
-                    ce,
-                    effectiveReceiverType,
-                    arguments[i].Type,
-                    out var receiverProjectedArgumentType))
+                if ((arguments[i].Type is TupleTypeSymbol
+                        || ContainsNestedNullType(arguments[i].Type))
+                    && TryProjectArgumentClrTypeFromSymbolicReceiver(
+                        candidates,
+                        i,
+                        ce,
+                        effectiveReceiverType,
+                        arguments[i].Type,
+                        out var receiverProjectedArgumentType))
                 {
                     argTypes[i] = receiverProjectedArgumentType;
                     continue;
@@ -3469,6 +3471,24 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    private static bool ContainsNestedNullType(TypeSymbol type)
+    {
+        if (type == TypeSymbol.Null)
+        {
+            return true;
+        }
+
+        foreach (var inner in TypeSymbol.GetWrappedTypes(type))
+        {
+            if (ContainsNestedNullType(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool TryProjectArgumentClrTypeFromSymbolicReceiver(
