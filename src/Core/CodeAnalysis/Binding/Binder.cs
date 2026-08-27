@@ -6295,9 +6295,29 @@ public sealed class Binder
 
         // Imported reference class: use CLR assignability when both project to a
         // CLR type.
-        if (classConstraint.ClrType is { } constraintClr && typeArgument.ClrType is { } argClr)
+        if (classConstraint.ClrType is { } constraintClr)
         {
-            return constraintClr.IsAssignableFrom(argClr);
+            if (typeArgument.ClrType is { } argClr)
+            {
+                return constraintClr.IsAssignableFrom(argClr);
+            }
+
+            // Issue #3501: a SOURCE class deriving (possibly through source
+            // bases) from an imported CLR base has no ClrType of its own —
+            // walk the source base chain to the first ImportedBaseType and
+            // check CLR assignability there (`class Derived : ImportedBase`
+            // must satisfy `[T ImportedBase]`).
+            if (typeArgument is StructSymbol sourceClass)
+            {
+                for (var current = sourceClass; current != null; current = current.BaseClass)
+                {
+                    if (current.ImportedBaseType?.ClrType is { } importedBaseClr
+                        && constraintClr.IsAssignableFrom(importedBaseClr))
+                    {
+                        return true;
+                    }
+                }
+            }
         }
 
         return false;
