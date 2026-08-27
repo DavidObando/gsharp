@@ -1047,13 +1047,19 @@ public static class GSharpPrinter
             sb.Append('\n');
             sb.Append(armPad);
             string marker;
-            if (arm.Pattern == null)
+            if (arm.Pattern == null && arm.Guard == null)
             {
                 marker = "default:";
             }
             else if (arm.Guard != null)
             {
-                marker = $"case {RenderPattern(arm.Pattern, indent + 1)} when {RenderExpression(arm.Guard, indent + 1)}:";
+                // A guarded discard (`_ when g =>`) must keep its guard: G#'s
+                // spelling is `case _ when g:` — rendering it as `default:`
+                // dropped the guard (a silent behavior change) AND collided
+                // with the synthesized total arm (GS0169, the GeneratorHost
+                // wall in #3501).
+                string guardedPattern = arm.Pattern == null ? "_" : RenderPattern(arm.Pattern, indent + 1);
+                marker = $"case {guardedPattern} when {RenderExpression(arm.Guard, indent + 1)}:";
             }
             else
             {
@@ -1442,13 +1448,17 @@ public static class GSharpPrinter
             sb.Append('\n');
             sb.Append(casePad);
             string head;
-            if (arm.Pattern == null)
+            if (arm.Pattern == null && arm.Guard == null)
             {
                 head = "default";
             }
             else if (arm.Guard != null)
             {
-                head = $"case {RenderPattern(arm.Pattern, indent + 1)} when {RenderExpression(arm.Guard, indent + 1)}";
+                // Same guarded-discard rule as RenderSwitchExpression: the
+                // guard must survive as `case _ when g`, never fold to
+                // `default`.
+                string guardedPattern = arm.Pattern == null ? "_" : RenderPattern(arm.Pattern, indent + 1);
+                head = $"case {guardedPattern} when {RenderExpression(arm.Guard, indent + 1)}";
             }
             else
             {
