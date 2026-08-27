@@ -1994,6 +1994,21 @@ public static class GSharpPrinter
 
         if (property.ExpressionBody != null)
         {
+            // A property type rendered with a leading '(' (a tuple type, or a
+            // function type) followed by ` -> expr` re-parses as a function-TYPE
+            // annotation (`(int64, int64) -> Expr`), swallowing the arrow body.
+            // Spell those with an ADR-0131 arrow get accessor inside a block,
+            // where the type ends unambiguously at the '{'.
+            if (RenderType(property.Type).StartsWith("(", StringComparison.Ordinal))
+            {
+                sb.Append(" {\n");
+                sb.Append($"{Indent(indent + 1)}get -> {RenderArrowInline(property.ExpressionBody, indent + 1)}");
+                sb.Append('\n');
+                sb.Append(pad);
+                sb.Append('}');
+                return sb.ToString();
+            }
+
             // Issue #1278 / ADR-0131: expression-bodied read-only property/indexer.
             sb.Append($" -> {RenderArrowInline(property.ExpressionBody, indent)}");
             return sb.ToString();
