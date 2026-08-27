@@ -1929,6 +1929,20 @@ public sealed class Conversion
         return true;
     }
 
+    internal static bool IsClassLikeReferenceType(TypeSymbol type)
+        => type is StructSymbol { IsClass: true }
+            || type.ClrType is { IsClass: true };
+
+    internal static bool IsSealedReferenceType(TypeSymbol type)
+    {
+        if (type is StructSymbol { IsClass: true } userClass)
+        {
+            return userClass.IsSealedHierarchy || !userClass.IsOpen;
+        }
+
+        return type.ClrType is { IsClass: true, IsSealed: true };
+    }
+
     private static TypeSymbol? UnwrapReferenceNullable(TypeSymbol? type)
     {
         while (type is NullabilityAnnotatedTypeSymbol annotated)
@@ -1943,20 +1957,6 @@ public sealed class Conversion
         }
 
         return type;
-    }
-
-    private static bool IsClassLikeReferenceType(TypeSymbol type)
-        => type is StructSymbol { IsClass: true }
-            || type.ClrType is { IsClass: true };
-
-    private static bool IsSealedReferenceType(TypeSymbol type)
-    {
-        if (type is StructSymbol { IsClass: true } userClass)
-        {
-            return userClass.IsSealedHierarchy || !userClass.IsOpen;
-        }
-
-        return type.ClrType is { IsClass: true, IsSealed: true };
     }
 
     /// <summary>
