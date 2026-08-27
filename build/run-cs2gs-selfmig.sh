@@ -50,6 +50,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --exclude samples/PropertyRef/CSharpApp \
   --exclude src/vs-gsharp/src/VsGsharp/VsGsharp.csproj \
   --exclude src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj \
+  --exclude tools/cs2gs/corpus/CompileGap-Library \
   | tee "$work_root/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
