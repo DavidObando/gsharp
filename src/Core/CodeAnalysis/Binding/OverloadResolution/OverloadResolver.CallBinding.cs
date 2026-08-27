@@ -735,7 +735,15 @@ internal sealed partial class OverloadResolver
         // unqualified call inside a `shared` method silently bound to a
         // same-named package function ahead of the type's own (possibly
         // private) `shared` method, with no diagnostic.
-        var resolvedIsShadowedByEnclosingMember = symbol is FunctionSymbol
+        // Restricted to `Package != null` so a GENERIC LOCAL FUNCTION —
+        // declared into this same scope table via `Scope.TryDeclareFunction`
+        // (LambdaBinder.BindGenericLocalFunctionDeclaration) but built with
+        // the no-package `FunctionSymbol` constructor — is never treated as
+        // a shadowable package function. Ordinary lexical shadowing must
+        // still let a local function of the same name win over a sibling
+        // member, exactly as it did before this fix.
+        var resolvedIsShadowedByEnclosingMember = symbol is FunctionSymbol shadowCandidateFunction
+            && shadowCandidateFunction.Package != null
             && !resolvedIsExtensionOnly
             && HasEnclosingMemberCallableCandidate(syntax.Identifier.Text);
         if (symbol == null || resolvedIsExtensionOnly || resolvedIsShadowedByEnclosingMember)

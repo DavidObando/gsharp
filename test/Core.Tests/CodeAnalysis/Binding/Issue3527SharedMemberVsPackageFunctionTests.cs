@@ -113,4 +113,93 @@ public class Issue3527SharedMemberVsPackageFunctionTests
 
         Assert.Same(checksStruct, call.Function.StaticOwnerType);
     }
+
+    [Fact]
+    public void InstanceMethodBareCall_LocalGenericFunctionCollidingWithSiblingMember_LexicalShadowingWins()
+    {
+        // Regression for a Copilot review comment on PR #3588: a GENERIC
+        // LOCAL function (`let Name[T] = func (...) ... { ... }`) is
+        // declared into the very same scope symbol table as a package
+        // function (LambdaBinder.BindGenericLocalFunctionDeclaration ->
+        // Scope.TryDeclareFunction), but — unlike a real package function —
+        // is built with the no-package FunctionSymbol constructor, so its
+        // Package is null. The #3527 fix must key off Package != null so it
+        // never redirects this call away from ordinary lexical shadowing: a
+        // local function of the same name must still win over a sibling
+        // instance member. If it didn't, `Helper(41)` below would silently
+        // rebind to the sibling `Helper(int32)` member and return 42.
+        var tree = SyntaxTree.Parse(SourceText.From("""
+            package LocalFunctionShadowsMember
+
+            class Widget {
+                private func Helper(v int32) int32 { return v + 1 }
+
+                func Run() int32 {
+                    let Helper[T] = func (v T) T { return v }
+                    return Helper(41)
+                }
+            }
+            """));
+
+        var compilation = new Compilation(tree);
+        var program = compilation.BoundProgram;
+        Assert.Empty(program.Diagnostics.Where(d => d.IsError));
+
+        var widgetStruct = program.Structs.Single(s => s.Name == "Widget");
+        var siblingHelper = widgetStruct.Methods.Single(m => m.Name == "Helper");
+        var runMethod = widgetStruct.Methods.Single(m => m.Name == "Run");
+        var body = program.Functions[runMethod];
+
+        // Bound as a free-function call (the local function, correct) if
+        // lexical shadowing wins, or as a `this.Helper(...)`
+        // BoundUserInstanceCallExpression (the sibling member, the bug) if
+        // it doesn't — resolve whichever shape was actually emitted so the
+        // assertion below catches either outcome.
+        var resolvedFunction = FindResolvedFunction(body, "Helper");
+        Assert.NotNull(resolvedFunction);
+
+        // The local function has no owning package/type at all, unlike the
+        // sibling `Helper(int32)` instance member.
+        Assert.Null(resolvedFunction.Package);
+        Assert.NotSame(siblingHelper, resolvedFunction);
+    }
+
+    private static FunctionSymbol FindResolvedFunction(BoundStatement body, string name)
+    {
+        var collector = new CallCollector(name);
+        collector.Visit(body);
+        return collector.Result;
+    }
+
+    private sealed class CallCollector : BoundTreeWalker
+    {
+        private readonly string name;
+
+        public CallCollector(string name)
+        {
+            this.name = name;
+        }
+
+        public FunctionSymbol Result { get; private set; }
+
+        protected override void VisitCallExpression(BoundCallExpression node)
+        {
+            if (node.Function.Name == name)
+            {
+                Result = node.Function;
+            }
+
+            base.VisitCallExpression(node);
+        }
+
+        protected override void VisitUserInstanceCallExpression(BoundUserInstanceCallExpression node)
+        {
+            if (node.Method.Name == name)
+            {
+                Result = node.Method;
+            }
+
+            base.VisitUserInstanceCallExpression(node);
+        }
+    }
 }
