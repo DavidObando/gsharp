@@ -365,9 +365,8 @@ public sealed partial class CSharpToGSharpTranslator
         // segment (`Dictionary<,>.Enumerator`, `Outer<>.Inner<>`). Each unbound
         // segment renders with its own `_` placeholder list — the older
         // `qualified.Left.ToString()` composition leaked the C# `<>` spelling
-        // verbatim into the emitted file (a round-trip GS0005). gsc binds only
-        // the terminal-segment form today; the nested spelling parses cleanly
-        // and starts binding when #3589 lands.
+        // verbatim into the emitted file (a round-trip GS0005). #3589 binds
+        // the nested spelling by composing its segment-wise reflection name.
         private GTypeReference MapTypeOfOperand(TypeSyntax type)
         {
             if (type is NameSyntax nameSyntax
