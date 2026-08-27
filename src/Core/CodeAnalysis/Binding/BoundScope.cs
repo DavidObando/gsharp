@@ -688,6 +688,21 @@ public sealed class BoundScope
             }
         }
 
+        // Issue #3595 (#3501): CLR namespaces merge across assemblies, and a
+        // G# package is the same construct — a file in `package X` sees a
+        // REFERENCED assembly's exported types in namespace X without
+        // spelling `import X` (the C#→G# migration splits one namespace
+        // across project boundaries). A fallback AFTER every explicit import
+        // has failed: it can resolve previously-unresolvable names but never
+        // introduces a new ambiguity or changes source-package
+        // disambiguation.
+        if (GetCurrentDeclaringPackage() is { Length: > 0 } declaringPackage
+            && References.TryResolveType(declaringPackage + "." + mangled, out var selfPackageType))
+        {
+            type = selfPackageType;
+            return true;
+        }
+
         return false;
     }
 
@@ -757,6 +772,21 @@ public sealed class BoundScope
                     references: References);
                 return true;
             }
+        }
+
+        // Issue #3595 (#3501): same self-package fallback as
+        // TryLookupImportedGenericClass — a file in `package X` sees a
+        // referenced assembly's namespace-X types after every explicit
+        // import has failed to resolve the name.
+        if (GetCurrentDeclaringPackage() is { Length: > 0 } declaringPackage
+            && References.TryResolveType(declaringPackage + "." + name, out var selfPackageType)
+            && !selfPackageType.IsGenericTypeDefinition)
+        {
+            importedClass = new ImportedClassSymbol(
+                selfPackageType,
+                declaration,
+                references: References);
+            return true;
         }
 
         importedClass = null;
