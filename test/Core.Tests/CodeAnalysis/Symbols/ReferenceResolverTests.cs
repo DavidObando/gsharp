@@ -64,6 +64,25 @@ public class ReferenceResolverTests
         Assert.Equal(typeof(ReferenceResolver).FullName, type.FullName);
     }
 
+    [Theory]
+    [InlineData("System.Object")]
+    [InlineData("System.IO.Stream")]
+    [InlineData("System.Text.Encoding")]
+    public void WithReferences_Resolves_NetStandard20_Core_Types(string fullName)
+    {
+        var referenceDirectory = typeof(ReferenceResolverTests).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value;
+        Assert.True(Directory.Exists(referenceDirectory));
+
+        using var resolver = ReferenceResolver.WithReferences(
+            Directory.EnumerateFiles(referenceDirectory, "*.dll"));
+
+        Assert.True(resolver.TryResolveType(fullName, out var type));
+        Assert.Equal("netstandard", type.Assembly.GetName().Name);
+    }
+
     /// <summary>
     /// An <c>internal</c> (non-externally-visible) type declared by a referenced
     /// assembly that does not grant this compilation friendship must not satisfy

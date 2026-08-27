@@ -10,11 +10,19 @@
   <ItemGroup>
     <PackageReference Include="FsCheck.Xunit" Version="3.0.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="NETStandard.Library" Version="2.0.3" ExcludeAssets="all" GeneratePathProperty="true" PrivateAssets="all" />
     <!-- Issue #2345 follow-up: real third-party "Microsoft.*"-named NuGet
          package, referenced test-only, to regression-test
          ReferenceResolver.IsBclOrRuntimeAssemblyPath against an actual
          non-BCL assembly rather than a synthetic stand-in. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NetStandard20ReferenceDirectory</_Parameter1>
+      <_Parameter2>$(PkgNETStandard_Library)/build/netstandard2.0/ref</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

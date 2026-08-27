@@ -1633,23 +1633,53 @@ public sealed class ReferenceResolver : IDisposable
     private static string? ChooseCoreAssemblyName(IReadOnlyList<string> paths)
     {
         // MetadataLoadContext needs a "core assembly" — the one declaring the
-        // primitive types (Object, String, etc.). For modern .NET reference
-        // packs this is System.Runtime.dll; older targets ship mscorlib.dll
-        // as the canonical home. Pick whichever we can see in the supplied
-        // reference set, falling back to letting MLC autodetect.
+        // primitive types (Object, String, etc.). Most modern reference packs
+        // define them in System.Runtime.dll, but netstandard2.0 defines them in
+        // netstandard.dll and makes System.Runtime/mscorlib facades that forward
+        // back to it. Inspect the candidates rather than guessing by filename.
         var hasMscorlib = false;
         foreach (var path in paths)
         {
             var fileName = Path.GetFileNameWithoutExtension(path);
-            if (string.Equals(fileName, "System.Runtime", StringComparison.OrdinalIgnoreCase))
+            if ((string.Equals(fileName, "System.Runtime", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fileName, "mscorlib", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fileName, "netstandard", StringComparison.OrdinalIgnoreCase))
+                && DeclaresSystemObject(path))
             {
-                return "System.Runtime";
+                return fileName;
             }
 
             hasMscorlib |= string.Equals(fileName, "mscorlib", StringComparison.OrdinalIgnoreCase);
         }
 
         return hasMscorlib ? "mscorlib" : null;
+    }
+
+    private static bool DeclaresSystemObject(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var peReader = new PEReader(stream);
+            var metadata = peReader.GetMetadataReader();
+            foreach (var handle in metadata.TypeDefinitions)
+            {
+                var definition = metadata.GetTypeDefinition(handle);
+                if (metadata.StringComparer.Equals(definition.Namespace, "System")
+                    && metadata.StringComparer.Equals(definition.Name, "Object"))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (
+            ex is IOException
+                or UnauthorizedAccessException
+                or BadImageFormatException)
+        {
+        }
+
+        return false;
     }
 
     /// <summary>

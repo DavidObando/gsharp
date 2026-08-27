@@ -63,6 +63,15 @@
         "resolved": "3.11.13-beta",
         "contentHash": "eQjDhod5E9dpL/UJ65c53VO2Cp1bXMzNRmrVwWt7ryAHltxotThkBDp8VdLjkJtMBnRrc6237vxKAbSpUcChMg=="
       },
+      "NETStandard.Library": {
+        "type": "Direct",
+        "requested": "[2.0.3, )",
+        "resolved": "2.0.3",
+        "contentHash": "st47PosZSHrjECdjeIzZQbzivYBJFv6P2nv4cj2ypdI204DO+vZ7l5raGMiX4eXMJ53RfOIg+/s4DHVZ54Nu2A==",
+        "dependencies": {
+          "Microsoft.NETCore.Platforms": "1.1.0"
+        }
+      },
       "xunit": {
         "type": "Direct",
         "requested": "[2.9.2, )",
@@ -204,6 +213,11 @@
         "type": "Transitive",
         "resolved": "10.0.0",
         "contentHash": "inRnbpCS0nwO/RuoZIAqxQUuyjaknOOnCEZB55KSMMjRhl0RQDttSmLSGsUJN3RQ3ocf5NDLFd2mOQViHqMK5w=="
+      },
+      "Microsoft.NETCore.Platforms": {
+        "type": "Transitive",
+        "resolved": "1.1.0",
+        "contentHash": "kz0PEW2lhqygehI/d6XsPCQzD7ff7gUJaVGPVETX611eadGsA3A877GdSlU0LRVMCTH/+P3o2iDTak+S08V2+A=="
       },
       "Microsoft.TestPlatform.ObjectModel": {
         "type": "Transitive",
