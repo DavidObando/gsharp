@@ -67,13 +67,12 @@ namespace Demo
     /// Issue #3589: an unbound generic in a NON-terminal segment renders each
     /// generic segment with its own <c>_</c> placeholder list instead of
     /// leaking the C# <c>&lt;,&gt;</c> spelling verbatim (which failed the
-    /// round-trip parse). gsc binds only the terminal-segment form today, so
-    /// validation is parse-only until #3589 lands.
+    /// round-trip parse).
     /// </summary>
     [Fact]
     public void UnboundNestedType_TypeOf_RendersPlaceholdersPerSegment()
     {
-        string printed = TranslateNestedUnit(@"
+        string printed = TranslateUnit(@"
 using System;
 using System.Collections.Generic;
 
@@ -114,9 +113,8 @@ namespace Demo
         Assert.DoesNotContain("<>", printed);
     }
 
-    // Same as TranslateUnit but parse-only: gsc cannot BIND a non-terminal
-    // `_` placeholder segment until #3589, while the emitted spelling must
-    // already round-trip-parse.
+    // Same as TranslateUnit but parse-only for source-defined open nested
+    // generics, which have no reflectable CLR type during binding.
     private static string TranslateNestedUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

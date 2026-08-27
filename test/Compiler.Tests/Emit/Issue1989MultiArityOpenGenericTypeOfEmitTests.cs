@@ -102,6 +102,21 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
     }
 
     [Fact]
+    public void EndToEnd_DictionaryEnumerator_TypeOf_ResolvesOpenNestedDefinition()
+    {
+        const string source = """
+            package i3589dictionaryenumerator
+            import System
+            import System.Collections.Generic
+
+            func Main() { Console.WriteLine(typeof(Dictionary[_, _].Enumerator).FullName) }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"System.Collections.Generic.Dictionary`2+Enumerator{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void EndToEnd_BareAction_TypeOf_StillResolvesNonGenericAction()
     {
         const string source = """

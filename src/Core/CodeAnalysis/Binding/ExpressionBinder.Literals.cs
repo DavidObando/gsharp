@@ -83,6 +83,31 @@ internal sealed partial class ExpressionBinder
             {
                 TryResolveOpenGenericImportedType(typeClauseIdentifier.Text, out typeSymbol);
             }
+            else if (TryGetNestedUnboundGenericReflectionName(typeClause, out var reflectionName))
+            {
+                bool resolved = scope.References.TryResolveType(reflectionName, out var qualifiedType);
+                bool isAmbiguous = false;
+                if (!resolved)
+                {
+                    resolved = TryResolveImportedReflectionType(reflectionName, out qualifiedType, out isAmbiguous);
+                }
+
+                if (!resolved)
+                {
+                    if (isAmbiguous)
+                    {
+                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, reflectionName);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportUndefinedType(typeClause.Location, reflectionName);
+                    }
+
+                    return new BoundErrorExpression(null);
+                }
+
+                typeSymbol = TypeSymbol.FromClrType(qualifiedType);
+            }
             else if (typeClause.HasTypeArguments
                 && TryGetUnboundGenericArity(typeClause, out var arity))
             {
@@ -201,6 +226,89 @@ internal sealed partial class ExpressionBinder
         }
 
         type = TypeSymbol.FromClrType(match);
+        return true;
+    }
+
+    private bool TryGetNestedUnboundGenericReflectionName(TypeClauseSyntax typeClause, out string reflectionName)
+    {
+        reflectionName = string.Empty;
+        if (!typeClause.HasQualifier || typeClause.IsArray || typeClause.IsNullable || lookupType("_") != null)
+        {
+            return false;
+        }
+
+        var segments = new string[typeClause.SegmentCount];
+        segments[0] = Invariant.Required(typeClause.Identifier, "a named type clause has an identifier").Text;
+        for (var i = 1; i < segments.Length; i++)
+        {
+            segments[i] = typeClause.QualifierIdentifierTokens[i - 1].Text;
+        }
+
+        var firstGenericSegment = -1;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var args = typeClause.GetSegmentTypeArguments(i);
+            if (args == null)
+            {
+                continue;
+            }
+
+            if (args.Count == 0 || args.Any(arg =>
+                    arg.Identifier?.Text != "_"
+                    || arg.HasQualifier
+                    || arg.HasTypeArguments
+                    || arg.IsArray
+                    || arg.IsNullable))
+            {
+                return false;
+            }
+
+            firstGenericSegment = firstGenericSegment < 0 ? i : firstGenericSegment;
+            segments[i] += "`" + args.Count;
+        }
+
+        if (firstGenericSegment < 0 || firstGenericSegment == segments.Length - 1)
+        {
+            return false;
+        }
+
+        var builder = new StringBuilder(segments[0]);
+        for (var i = 1; i < segments.Length; i++)
+        {
+            builder.Append(i > firstGenericSegment ? '+' : '.').Append(segments[i]);
+        }
+
+        reflectionName = builder.ToString();
+        return true;
+    }
+
+    private bool TryResolveImportedReflectionType(string reflectionName, out Type type, out bool isAmbiguous)
+    {
+        type = null!;
+        isAmbiguous = false;
+        Type? match = null;
+        foreach (var import in scope.GetDeclaredImports())
+        {
+            if (!scope.References.TryResolveType(import.Target + "." + reflectionName, out var candidate))
+            {
+                continue;
+            }
+
+            if (match != null && match != candidate)
+            {
+                isAmbiguous = true;
+                return false;
+            }
+
+            match = candidate;
+        }
+
+        if (match == null)
+        {
+            return false;
+        }
+
+        type = match;
         return true;
     }
 

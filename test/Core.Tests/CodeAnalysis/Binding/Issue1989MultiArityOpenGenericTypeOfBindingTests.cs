@@ -105,6 +105,36 @@ class C {
     }
 
     [Fact]
+    public void UnboundGenericQualifierNestedType_TypeOf_BindsToOpenNestedDefinition()
+    {
+        var source = @"
+import System.Collections.Generic
+
+class C {
+    func run() {
+        let t = typeof(Dictionary[_, _].Enumerator)
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void FullyQualifiedUnboundGenericQualifierNestedType_TypeOf_Binds()
+    {
+        var source = @"
+class C {
+    func run() {
+        let t = typeof(System.Collections.Generic.Dictionary[_, _].Enumerator)
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void BareAction_TypeOf_StillResolvesNonGenericAction()
     {
         var source = @"
