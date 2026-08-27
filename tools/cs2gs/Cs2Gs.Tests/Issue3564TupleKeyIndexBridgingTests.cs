@@ -92,6 +92,82 @@ namespace Demo
     }
 
     [Fact]
+    public void TupleValuedTryGetValueOut_DoesNotPromoteReceiverValueType()
+    {
+        string printed = TranslateOblivious(@"
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class Node
+    {
+        public string Label { get; set; } = """";
+    }
+
+    public interface ICache
+    {
+        Dictionary<(string, Node), (string, Node)> Store { get; }
+    }
+
+    public class Cache : ICache
+    {
+        public Dictionary<(string, Node), (string, Node)> Store { get; } = new();
+
+        private static string Resolve(Node node) => null;
+
+        public bool Lookup(Node scope)
+        {
+            var key = (scope.Label, scope);
+            (string, Node) value = (Resolve(scope), scope);
+            return this.Store.TryGetValue(key, out value);
+        }
+    }
+}");
+
+        Assert.Equal(
+            2,
+            printed.Split("prop Store Dictionary[(string, Node), (string, Node)]").Length - 1);
+        Assert.DoesNotContain("Dictionary[(string, Node), (string?, Node)]", printed);
+    }
+
+    [Fact]
+    public void ReorderedInheritedGeneric_UsesSubstitutedReceiverArgumentPath()
+    {
+        string printed = TranslateOblivious(@"
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class Node
+    {
+    }
+
+    public class Reordered<TValue, TKey> : Dictionary<TKey, TValue>
+    {
+    }
+
+    public class Cache
+    {
+        private readonly Reordered<bool, (string, Node)> store = new();
+
+        private static string Resolve(Node node) => null;
+
+        public bool Lookup(Node scope)
+        {
+            var key = (Resolve(scope), scope);
+            this.store[key] = true;
+            return this.store[key];
+        }
+    }
+}",
+            "G# does not currently bind inherited indexers on a source generic subclass.");
+
+        Assert.Contains("let store Reordered[bool, (string?, Node)]", printed);
+        Assert.Contains("this.store[key] = true", printed);
+        Assert.DoesNotContain("key.Item1!!", printed);
+    }
+
+    [Fact]
     public void UnpromotedTupleKey_StaysBare()
     {
         string printed = TranslateOblivious(@"
@@ -121,7 +197,7 @@ namespace Demo
         Assert.DoesNotContain("key.Item1!!", printed);
     }
 
-    private static string TranslateOblivious(string source)
+    private static string TranslateOblivious(string source, string roundTripOnlyReason = null)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -140,7 +216,9 @@ namespace Demo
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
 
         string printed = GSharpPrinter.Print(unit);
-        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
+        RoundTripResult result = roundTripOnlyReason == null
+            ? TranslationTestValidation.AssertBinds(printed)
+            : TranslationTestValidation.ValidateRoundTripOnly(printed, roundTripOnlyReason);
         Assert.True(
             result.Success,
             "Translated G# must round-trip. Errors:\n" +

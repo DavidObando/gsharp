@@ -1913,11 +1913,14 @@ public sealed partial class CSharpToGSharpTranslator
                 bool keyElementStaysNonNull = keyElement.Type is { IsReferenceType: true }
                     && keyElement.Type.NullableAnnotation != NullableAnnotation.Annotated;
                 if (keyElementStaysNonNull
-                    && this.TryGetIndexReceiverGenericTuple(argument, out ISymbol receiver, out int typeArgument)
+                    && this.TryGetIndexReceiverGenericTuple(
+                        argument,
+                        out ISymbol receiver,
+                        out IReadOnlyList<int> tuplePath)
                     && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                         this.context.Compilation,
                         receiver,
-                        new List<int> { typeArgument, i },
+                        tuplePath.Concat(new[] { i }).ToList(),
                         this.context.SiblingCompilations))
                 {
                     keyElementStaysNonNull = false;
@@ -1949,14 +1952,13 @@ public sealed partial class CSharpToGSharpTranslator
         private bool TryGetIndexReceiverGenericTuple(
             ArgumentSyntax argument,
             out ISymbol receiver,
-            out int typeArgument)
+            out IReadOnlyList<int> tuplePath)
         {
             receiver = null;
-            typeArgument = -1;
+            tuplePath = null;
             if (argument.Parent?.Parent is not ElementAccessExpressionSyntax elementAccess
                 || this.context.SemanticModel.GetOperation(argument) is not IArgumentOperation operation
-                || operation.Parameter?.OriginalDefinition.Type
-                    is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } parameter)
+                || operation.Parameter is not IParameterSymbol parameter)
             {
                 return false;
             }
@@ -1967,8 +1969,23 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            ITypeSymbol receiverType = receiverSymbol switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
+            if (receiverType is not INamedTypeSymbol namedReceiver
+                || !ObliviousNullabilityAnalyzer.TryGetGenericReceiverTuplePath(
+                    namedReceiver,
+                    parameter,
+                    out _,
+                    out tuplePath))
+            {
+                return false;
+            }
+
             receiver = receiverSymbol;
-            typeArgument = parameter.Ordinal;
             return true;
         }
 

@@ -272,6 +272,37 @@ internal static class ObliviousNullabilityAnalyzer
         return entities;
     }
 
+    internal static bool TryGetGenericReceiverTuplePath(
+        INamedTypeSymbol receiverType,
+        IParameterSymbol parameter,
+        out INamedTypeSymbol tupleType,
+        out IReadOnlyList<int> tuplePath)
+    {
+        tupleType = null;
+        tuplePath = null;
+        if (receiverType == null
+            || parameter?.OriginalDefinition.Type
+                is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } typeParameter
+            || typeParameter.ContainingType is not INamedTypeSymbol declaringType)
+        {
+            return false;
+        }
+
+        if (!TryResolveReceiverTypeParameterPath(
+                receiverType,
+                declaringType.OriginalDefinition,
+                typeParameter.Ordinal,
+                out INamedTypeSymbol actualTuple,
+                out IReadOnlyList<int> path))
+        {
+            return false;
+        }
+
+        tupleType = actualTuple;
+        tuplePath = path;
+        return true;
+    }
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -1278,13 +1309,17 @@ internal static class ObliviousNullabilityAnalyzer
             _ => null,
         };
 
+        // Scalar flow already treats out as callee-to-caller and deliberately
+        // excludes ref, so neither is receiver-directed here.
         if (target is not (IFieldSymbol or IPropertySymbol)
             || targetType is not INamedTypeSymbol receiverType
-            || argument.Parameter?.OriginalDefinition.Type
-                is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } typeParameter
-            || typeParameter.Ordinal >= receiverType.TypeArguments.Length
-            || receiverType.TypeArguments[typeParameter.Ordinal]
-                is not INamedTypeSymbol { IsTupleType: true } tupleType
+            || argument.Parameter is not IParameterSymbol parameter
+            || parameter.RefKind is RefKind.Out or RefKind.Ref
+            || !TryGetGenericReceiverTuplePath(
+                receiverType,
+                parameter,
+                out INamedTypeSymbol tupleType,
+                out IReadOnlyList<int> tuplePath)
             || argument.Value?.Syntax is not ExpressionSyntax value)
         {
             return;
@@ -1295,7 +1330,7 @@ internal static class ObliviousNullabilityAnalyzer
             tupleType,
             value,
             model,
-            typeParameter.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            EncodeTuplePath(tuplePath),
             tupleTainted,
             tupleEdges,
             tupleScalarEdges);
@@ -1801,6 +1836,99 @@ internal static class ObliviousNullabilityAnalyzer
 
         tupleType = type as INamedTypeSymbol;
         return tupleType is { IsTupleType: true };
+    }
+
+    private static bool TryResolveReceiverTypeParameterPath(
+        INamedTypeSymbol receiverType,
+        INamedTypeSymbol declaringType,
+        int ordinal,
+        out INamedTypeSymbol tupleType,
+        out IReadOnlyList<int> path)
+    {
+        tupleType = null;
+        path = null;
+        if (SymbolEqualityComparer.Default.Equals(receiverType.OriginalDefinition, declaringType))
+        {
+            if (ordinal >= receiverType.TypeArguments.Length
+                || receiverType.TypeArguments[ordinal]
+                    is not INamedTypeSymbol { IsTupleType: true } directTuple)
+            {
+                return false;
+            }
+
+            tupleType = directTuple;
+            path = new[] { ordinal };
+            return true;
+        }
+
+        foreach ((INamedTypeSymbol constructed, INamedTypeSymbol template) in
+            EnumerateDirectReceiverTypes(receiverType))
+        {
+            if (!TryResolveReceiverTypeParameterPath(
+                    constructed,
+                    declaringType,
+                    ordinal,
+                    out INamedTypeSymbol inheritedTuple,
+                    out IReadOnlyList<int> inheritedPath)
+                || !TryFollowTypeArgumentPath(template, inheritedPath, out ITypeSymbol source)
+                || source is not ITypeParameterSymbol sourceParameter
+                || sourceParameter.ContainingType is not INamedTypeSymbol sourceOwner
+                || !SymbolEqualityComparer.Default.Equals(
+                    sourceOwner.OriginalDefinition,
+                    receiverType.OriginalDefinition))
+            {
+                continue;
+            }
+
+            tupleType = inheritedTuple;
+            path = new[] { sourceParameter.Ordinal };
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<(INamedTypeSymbol Constructed, INamedTypeSymbol Template)>
+        EnumerateDirectReceiverTypes(INamedTypeSymbol receiverType)
+    {
+        INamedTypeSymbol original = receiverType.OriginalDefinition;
+        if (receiverType.BaseType is INamedTypeSymbol baseType
+            && original.BaseType is INamedTypeSymbol baseTemplate)
+        {
+            yield return (baseType, baseTemplate);
+        }
+
+        foreach (INamedTypeSymbol iface in receiverType.Interfaces)
+        {
+            INamedTypeSymbol template = original.Interfaces.FirstOrDefault(candidate =>
+                SymbolEqualityComparer.Default.Equals(
+                    candidate.OriginalDefinition,
+                    iface.OriginalDefinition));
+            if (template != null)
+            {
+                yield return (iface, template);
+            }
+        }
+    }
+
+    private static bool TryFollowTypeArgumentPath(
+        INamedTypeSymbol type,
+        IReadOnlyList<int> path,
+        out ITypeSymbol result)
+    {
+        result = type;
+        foreach (int index in path)
+        {
+            if (result is not INamedTypeSymbol named || index >= named.TypeArguments.Length)
+            {
+                result = null;
+                return false;
+            }
+
+            result = named.TypeArguments[index];
+        }
+
+        return true;
     }
 
     private static bool IsEligibleTupleLeaf(ITypeSymbol type) =>
