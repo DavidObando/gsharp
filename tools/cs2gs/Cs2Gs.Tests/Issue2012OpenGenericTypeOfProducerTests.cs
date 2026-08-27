@@ -113,6 +113,34 @@ namespace Demo
         Assert.DoesNotContain("<>", printed);
     }
 
+    [Fact]
+    public void NonGenericOuterGenericNestedQualifier_TypeOf_RendersPlaceholdersOnNestedSegment()
+    {
+        string printed = TranslateNestedUnit(@"
+using System;
+
+namespace Demo
+{
+    public class Outer
+    {
+        public class Nested<T>
+        {
+            public class Leaf
+            {
+            }
+        }
+    }
+
+    public class C
+    {
+        public Type Describe() => typeof(Outer.Nested<>.Leaf);
+    }
+}");
+
+        Assert.Contains("typeof(Outer.Nested[_].Leaf)", printed);
+        Assert.DoesNotContain("<>", printed);
+    }
+
     // Same as TranslateUnit but parse-only for source-defined open nested
     // generics, which have no reflectable CLR type during binding.
     private static string TranslateNestedUnit(string source)

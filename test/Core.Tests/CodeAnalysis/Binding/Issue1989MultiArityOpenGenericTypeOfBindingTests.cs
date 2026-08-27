@@ -135,6 +135,27 @@ class C {
     }
 
     [Fact]
+    public void NonGenericOuterGenericNestedQualifier_TypeOf_BindsWithNestedSeparators()
+    {
+        var source = @"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+class C {
+    func run() {
+        let t = typeof(Issue3589Outer.Nested[_].Leaf)
+    }
+}
+";
+        var result = EmittedOracle.Evaluate(
+    new[] { source },
+            new EmittedOracleOptions
+            {
+                References = new[] { typeof(Issue3589Outer).Assembly.Location },
+            });
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void BareAction_TypeOf_StillResolvesNonGenericAction()
     {
         var source = @"
@@ -196,5 +217,15 @@ class C {
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
+    }
+}
+
+public class Issue3589Outer
+{
+    public class Nested<T>
+    {
+        public class Leaf
+        {
+        }
     }
 }
