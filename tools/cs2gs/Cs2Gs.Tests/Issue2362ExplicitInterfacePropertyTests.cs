@@ -234,6 +234,7 @@ namespace Corpus.Issue2362
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace Corpus.Issue3535
@@ -246,8 +247,23 @@ namespace Corpus.Issue3535
         IEnumerable<string> IReadOnlyDictionary<string, string>.Values => throw new NotImplementedException();
         int ICollection<KeyValuePair<int, int>>.Count => 1;
         int IReadOnlyCollection<KeyValuePair<string, string>>.Count => 2;
+        bool ICollection<KeyValuePair<int, int>>.IsReadOnly => true;
         int IDictionary<int, int>.this[int key] { get => 3; set { } }
         string IReadOnlyDictionary<string, string>.this[string key] => ""four"";
+        void IDictionary<int, int>.Add(int key, int value) => throw new NotImplementedException();
+        void ICollection<KeyValuePair<int, int>>.Add(KeyValuePair<int, int> item) => throw new NotImplementedException();
+        void ICollection<KeyValuePair<int, int>>.Clear() => throw new NotImplementedException();
+        bool ICollection<KeyValuePair<int, int>>.Contains(KeyValuePair<int, int> item) => throw new NotImplementedException();
+        bool IDictionary<int, int>.ContainsKey(int key) => throw new NotImplementedException();
+        bool IReadOnlyDictionary<string, string>.ContainsKey(string key) => throw new NotImplementedException();
+        void ICollection<KeyValuePair<int, int>>.CopyTo(KeyValuePair<int, int>[] array, int arrayIndex) => throw new NotImplementedException();
+        bool IDictionary<int, int>.Remove(int key) => throw new NotImplementedException();
+        bool ICollection<KeyValuePair<int, int>>.Remove(KeyValuePair<int, int> item) => throw new NotImplementedException();
+        bool IDictionary<int, int>.TryGetValue(int key, out int value) => throw new NotImplementedException();
+        bool IReadOnlyDictionary<string, string>.TryGetValue(string key, out string value) => throw new NotImplementedException();
+        IEnumerator<KeyValuePair<int, int>> IEnumerable<KeyValuePair<int, int>>.GetEnumerator() => throw new NotImplementedException();
+        IEnumerator<KeyValuePair<string, string>> IEnumerable<KeyValuePair<string, string>>.GetEnumerator() => throw new NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => throw new NotImplementedException();
     }
 }");
         string printed = GSharpPrinter.Print(unit);
