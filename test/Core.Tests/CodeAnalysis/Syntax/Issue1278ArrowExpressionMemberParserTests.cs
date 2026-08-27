@@ -236,6 +236,7 @@ public class Issue1278ArrowExpressionMemberParserTests
     [Theory]
     [InlineData("deinit { }")]
     [InlineData("unsafe func M() { }")]
+    [InlineData("fixed data [8]int32")]
     public void Issue3587_FunctionTypedPropertyBeforeContextualMember_RemainsFunctionType(string followingMember)
     {
         var source =

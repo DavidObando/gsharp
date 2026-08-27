@@ -1393,6 +1393,11 @@ public partial class Parser
             return true;
         }
 
+        if (token.Text == "fixed")
+        {
+            return Peek(offset + 1).Kind == SyntaxKind.IdentifierToken;
+        }
+
         if (token.Text == "init")
         {
             return Peek(offset + 1).Kind == SyntaxKind.OpenParenthesisToken;
