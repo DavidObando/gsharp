@@ -37,6 +37,14 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // ADR-0172: a declared element name resolves to its position;
+        // `ItemN` and the zero-based `.N` selectors below stay valid on
+        // named tuples too.
+        if (tupleType.TryGetElementIndexByName(memberName, out zeroBased))
+        {
+            return true;
+        }
+
         if (int.TryParse(memberName, out var numericIndex)
             && numericIndex >= 0
             && numericIndex < tupleType.Arity)

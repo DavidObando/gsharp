@@ -1451,6 +1451,16 @@ public partial class Parser
     {
         var left = MatchToken(SyntaxKind.OpenParenthesisToken);
 
+        // ADR-0172: a leading `identifier :` commits to a labeled tuple
+        // literal — `(line: 1, column: 2)`. The only other colon directly
+        // inside plain parens is the ADR-0061 conditional-ref form
+        // `(cond ? a : b)`, whose colon never immediately follows the first
+        // identifier, so one token of lookahead disambiguates.
+        if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.ColonToken)
+        {
+            return ParseLabeledTupleLiteral(left);
+        }
+
         // Issue #522: a parenthesised expression is a fresh inner context —
         // even inside an `if (T() { X = 1 }) { body }` style header, the
         // inner call should still admit a trailing object initializer.
@@ -1500,7 +1510,7 @@ public partial class Parser
             while (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
-                nodesAndSeparators.Add(ParseExpression());
+                nodesAndSeparators.Add(ParseTupleLiteralElement());
             }
 
             var rightParen = MatchToken(SyntaxKind.CloseParenthesisToken);
@@ -1513,6 +1523,78 @@ public partial class Parser
 
         var right = MatchToken(SyntaxKind.CloseParenthesisToken);
         return new ParenthesizedExpressionSyntax(syntaxTree, left, expression, right);
+    }
+
+    /// <summary>
+    /// ADR-0172: parses one tuple-literal element — an optional
+    /// <c>name :</c> label followed by the element expression.
+    /// </summary>
+    private ExpressionSyntax ParseTupleLiteralElement()
+    {
+        if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.ColonToken)
+        {
+            var nameToken = MatchToken(SyntaxKind.IdentifierToken);
+            var colonToken = MatchToken(SyntaxKind.ColonToken);
+            var value = ParseExpression();
+            return new NamedTupleElementSyntax(syntaxTree, nameToken, colonToken, value);
+        }
+
+        return ParseExpression();
+    }
+
+    /// <summary>
+    /// ADR-0172: parses a tuple literal whose FIRST element is labeled —
+    /// `(line: 1, column: 2)` — reached when the token after the opening
+    /// paren is `identifier :`. A lone labeled element `(x: 1)` is an error
+    /// (grouping parens take no label, and there are no 1-tuples); it reports
+    /// GS0543 and recovers as a plain parenthesized expression.
+    /// </summary>
+    private ExpressionSyntax ParseLabeledTupleLiteral(SyntaxToken left)
+    {
+        // Same fresh inner context the plain parenthesized path establishes
+        // (issues #522/#1575/#1038).
+        var savedSuppress = suppressTrailingObjectInitializer;
+        var savedStructLiteral = suppressStructLiteral;
+        var savedRange = suppressRangeOperator;
+        suppressTrailingObjectInitializer = 0;
+        suppressStructLiteral = 0;
+        suppressRangeOperator = 0;
+        try
+        {
+            var firstElement = ParseTupleLiteralElement();
+            if (Current.Kind != SyntaxKind.CommaToken)
+            {
+                var right = MatchToken(SyntaxKind.CloseParenthesisToken);
+                if (firstElement is NamedTupleElementSyntax lonelyLabeled)
+                {
+                    Diagnostics.ReportTupleElementNameOutsideTuple(lonelyLabeled.NameToken.Location);
+                    return new ParenthesizedExpressionSyntax(syntaxTree, left, lonelyLabeled.Expression, right);
+                }
+
+                return new ParenthesizedExpressionSyntax(syntaxTree, left, firstElement, right);
+            }
+
+            var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+            nodesAndSeparators.Add(firstElement);
+            while (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                nodesAndSeparators.Add(ParseTupleLiteralElement());
+            }
+
+            var rightParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+            return new TupleLiteralExpressionSyntax(
+                syntaxTree,
+                left,
+                new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable()),
+                rightParen);
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer = savedSuppress;
+            suppressStructLiteral = savedStructLiteral;
+            suppressRangeOperator = savedRange;
+        }
     }
 
     private ExpressionSyntax ParseBooleanLiteral()

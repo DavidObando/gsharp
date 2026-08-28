@@ -793,6 +793,27 @@ internal sealed class ConversionClassifier
 
         if (conversion.IsIdentity)
         {
+            // ADR-0172: same-shape tuples differing only in element names are
+            // identity-convertible; warn (GS0541) where a source name
+            // disagrees with the name the target declares at that position.
+            if (expression.Type is TupleTypeSymbol identitySourceTuple
+                && type is TupleTypeSymbol identityTargetTuple
+                && !ReferenceEquals(identitySourceTuple, identityTargetTuple)
+                && identitySourceTuple.HasNames
+                && identityTargetTuple.HasNames)
+            {
+                for (var i = 0; i < identitySourceTuple.Arity; i++)
+                {
+                    var sourceName = identitySourceTuple.ElementNames[i];
+                    var targetName = identityTargetTuple.ElementNames[i];
+                    if (sourceName != null && targetName != null
+                        && !string.Equals(sourceName, targetName, StringComparison.Ordinal))
+                    {
+                        Diagnostics.ReportTupleElementNameMismatch(diagnosticLocation, sourceName, targetName);
+                    }
+                }
+            }
+
             return expression;
         }
 

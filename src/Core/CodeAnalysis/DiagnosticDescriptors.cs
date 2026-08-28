@@ -419,6 +419,12 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor GenericOperatorNotSupported = new("GS0537", DiagnosticSeverity.Error, "Operator '{0}' cannot declare method type parameters; put generic parameters on the containing type instead.");
     internal static readonly DiagnosticDescriptor ConstNativeIntegerNotSupported = new("GS0538", DiagnosticSeverity.Error, "Constant '{0}' cannot use native-width type '{1}' when emitted as a field because CLR constant metadata has no native-width representation; use 'int64'/'uint64' or an immutable runtime 'let' binding.");
     internal static readonly DiagnosticDescriptor TupleEqualityArityMismatch = new("GS0539", DiagnosticSeverity.Error, "Tuple equality requires operands of equal arity: '{0}' has arity {1} but '{2}' has arity {3}.");
+
+    // ADR-0172: named tuple elements.
+    internal static readonly DiagnosticDescriptor DuplicateTupleElementName = new("GS0540", DiagnosticSeverity.Error, "Tuple element name '{0}' is used more than once.");
+    internal static readonly DiagnosticDescriptor TupleElementNameMismatch = new("GS0541", DiagnosticSeverity.Warning, "Tuple element name '{0}' is ignored because the target type names this position '{1}'.");
+    internal static readonly DiagnosticDescriptor ReservedTupleElementName = new("GS0542", DiagnosticSeverity.Error, "Tuple element name '{0}' is reserved{1}.");
+    internal static readonly DiagnosticDescriptor TupleElementNameOutsideTuple = new("GS0543", DiagnosticSeverity.Error, "An element name is only valid inside a tuple of two or more elements; a parenthesized single element is grouping.");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

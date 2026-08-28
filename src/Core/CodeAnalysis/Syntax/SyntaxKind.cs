@@ -252,6 +252,9 @@ public enum SyntaxKind
     FieldAccessExpression,
     FieldAssignmentExpression,
     TupleLiteralExpression,
+
+    // ADR-0172: a labeled tuple-literal element `name: expr`.
+    NamedTupleElement,
     TupleDeconstructionStatement,
     NamedDeconstructionStatement,
     NamedDeconstructionField,

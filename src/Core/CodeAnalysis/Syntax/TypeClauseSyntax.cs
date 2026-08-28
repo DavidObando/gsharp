@@ -602,6 +602,16 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause carries a parenthesized whole-type <c>?</c> — <c>(chan T)?</c>, <c>([]T)?</c>, … (issue #3315).</summary>
     public bool IsParenthesizedNullable => ParenthesizedQuestionToken != null;
 
+    /// <summary>
+    /// Gets the element name declared before this clause when it is
+    /// a named element of a tuple type — <c>(line int32, column int32)</c> —
+    /// or <see langword="null"/>. Set by the parser via
+    /// <see cref="SetTupleElementNameToken"/> immediately after the element
+    /// clause is built (the sanctioned parser-time mutation pattern, see
+    /// <see cref="SetParenthesizedQuestionToken"/>).
+    /// </summary>
+    public SyntaxToken? TupleElementNameToken { get; private set; }
+
     /// <summary>Gets the opening <c>(</c> token for tuple types, or <c>null</c>.</summary>
     public SyntaxToken? OpenParenToken { get; }
 
@@ -1253,6 +1263,20 @@ public sealed class TypeClauseSyntax : SyntaxNode
     internal void SetParenthesizedQuestionToken(SyntaxToken? questionToken)
     {
         ParenthesizedQuestionToken = questionToken;
+        InvalidateCachedSpan();
+    }
+
+    /// <summary>
+    /// ADR-0172: records the element name parsed before this clause inside a
+    /// tuple type — <c>(line int32, column int32)</c>. Called by the parser
+    /// immediately after the element clause is built, before the node is read
+    /// by anyone else, so the parser-time mutation pattern applies; the cached
+    /// span is invalidated so it re-extends over the leading name token.
+    /// </summary>
+    /// <param name="nameToken">The element-name identifier token.</param>
+    internal void SetTupleElementNameToken(SyntaxToken nameToken)
+    {
+        TupleElementNameToken = nameToken;
         InvalidateCachedSpan();
     }
 }

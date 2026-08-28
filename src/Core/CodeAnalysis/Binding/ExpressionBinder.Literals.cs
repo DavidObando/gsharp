@@ -2199,10 +2199,28 @@ internal sealed partial class ExpressionBinder
     {
         // Phase 4.5: bind each element expression, derive the tuple type from
         // their static types, and produce a BoundTupleLiteralExpression.
+        // ADR-0172: a `name: expr` element contributes the label to the
+        // literal's tuple type; names are metadata over the positional shape.
         var bound = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
         var elementTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Elements.Count);
-        foreach (var e in syntax.Elements)
+        var elementNames = ImmutableArray.CreateBuilder<string?>(syntax.Elements.Count);
+        var anyName = false;
+        var nameTokens = new SyntaxToken?[syntax.Elements.Count];
+        for (var i = 0; i < syntax.Elements.Count; i++)
         {
+            var e = syntax.Elements[i];
+            if (e is NamedTupleElementSyntax named)
+            {
+                nameTokens[i] = named.NameToken;
+                elementNames.Add(named.NameToken.ValueText);
+                anyName = true;
+                e = named.Expression;
+            }
+            else
+            {
+                elementNames.Add(null);
+            }
+
             var be = BindExpression(e);
             if (be.Type == TypeSymbol.Error)
             {
@@ -2213,9 +2231,26 @@ internal sealed partial class ExpressionBinder
             elementTypes.Add(be.Type);
         }
 
-        var tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable());
+        var names = anyName ? elementNames.MoveToImmutable() : ImmutableArray<string?>.Empty;
+        if (anyName)
+        {
+            ValidateTupleElementNames(names, i => Invariant.Required(nameTokens[i], "a named element recorded its token").Location);
+        }
+
+        var tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable(), names);
         return new BoundTupleLiteralExpression(null, tupleType, bound.MoveToImmutable());
     }
+
+    /// <summary>
+    /// ADR-0172: validates declared tuple element names — duplicates
+    /// (GS0540) and reserved names (GS0542: <c>ItemN</c> anywhere but
+    /// position N, and <c>Rest</c>, which the CLR encoding uses for arity
+    /// ≥ 8). Shared by tuple literals and tuple type clauses.
+    /// </summary>
+    /// <param name="names">The declared names, <see langword="null"/> where unnamed.</param>
+    /// <param name="locationOf">Maps an element index to its name token's location.</param>
+    internal void ValidateTupleElementNames(ImmutableArray<string?> names, System.Func<int, TextLocation> locationOf)
+        => Binding.TupleElementNameValidation.Validate(Diagnostics, names, locationOf);
 
     /// <summary>ADR-0039: Computes per-argument <see cref="RefKind"/> from CLR parameter metadata.</summary>
     /// <summary>

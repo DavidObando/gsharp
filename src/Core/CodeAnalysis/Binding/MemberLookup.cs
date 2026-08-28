@@ -5849,7 +5849,23 @@ internal sealed class MemberLookup
                 merged.Add(item);
             }
 
-            return TupleTypeSymbol.Get(merged.MoveToImmutable());
+            // ADR-0172: keep element names the two sides agree on; drop the
+            // rest (the C# common-type rule for tuple names).
+            var mergedNames = ImmutableArray<string?>.Empty;
+            if (existingTuple.HasNames || incomingTuple.HasNames)
+            {
+                var namesBuilder = ImmutableArray.CreateBuilder<string?>(existingTuple.ElementTypes.Length);
+                for (var i = 0; i < existingTuple.ElementTypes.Length; i++)
+                {
+                    var existingName = existingTuple.HasNames ? existingTuple.ElementNames[i] : null;
+                    var incomingName = incomingTuple.HasNames ? incomingTuple.ElementNames[i] : null;
+                    namesBuilder.Add(string.Equals(existingName, incomingName, StringComparison.Ordinal) ? existingName : null);
+                }
+
+                mergedNames = namesBuilder.MoveToImmutable();
+            }
+
+            return TupleTypeSymbol.Get(merged.MoveToImmutable(), mergedNames);
         }
 
         return !TypeSymbol.ContainsReferenceNullableAnnotation(existing)

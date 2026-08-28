@@ -381,6 +381,20 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // ADR-0172: element names are metadata over the positional shape —
+        // two tuples whose shapes agree (recursively ignoring names) denote
+        // the SAME type, related by an identity conversion, exactly like C#.
+        // `WithoutNames()` returns the canonical unnamed interned symbol, so
+        // reference equality decides shape identity. The name-mismatch
+        // warning (GS0541) is reported at conversion-binding time, not here —
+        // classification is pure.
+        if (from is TupleTypeSymbol fromNamedTuple && to is TupleTypeSymbol toNamedTuple
+            && !ReferenceEquals(fromNamedTuple, toNamedTuple)
+            && ReferenceEquals(fromNamedTuple.WithoutNames(), toNamedTuple.WithoutNames()))
+        {
+            return Conversion.Identity;
+        }
+
         // Issue #1256: element-wise tuple conversion. A tuple `(T1, …, Tn)`
         // converts implicitly to `(U1, …, Un)` when both are tuple types of
         // the SAME arity and EACH element `Ti → Ui` has an implicit conversion

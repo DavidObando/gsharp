@@ -1170,7 +1170,7 @@ public class TypeSymbol : Symbol
                 }
 
                 result = tupleChanged
-                    ? TupleTypeSymbol.Get(tupleElements.MoveToImmutable())
+                    ? TupleTypeSymbol.Get(tupleElements.MoveToImmutable(), tuple.ElementNames)
                     : type;
                 return true;
             case ByRefTypeSymbol byRef:

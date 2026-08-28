@@ -3602,6 +3602,8 @@ public sealed class Binder
             }
 
             var elements = ImmutableArray.CreateBuilder<TypeSymbol>(tupleElements.Count);
+            var elementNames = ImmutableArray.CreateBuilder<string?>(tupleElements.Count);
+            var anyElementName = false;
             for (var i = 0; i < tupleElements.Count; i++)
             {
                 var elementType = BindTypeClause(tupleElements[i]);
@@ -3611,9 +3613,24 @@ public sealed class Binder
                 }
 
                 elements.Add(elementType);
+
+                // ADR-0172: `(line int32, column int32)` — the parser stored
+                // each element's optional name on the element clause.
+                var nameToken = tupleElements[i].TupleElementNameToken;
+                elementNames.Add(nameToken?.ValueText);
+                anyElementName |= nameToken != null;
             }
 
-            return TupleTypeSymbol.Get(elements.MoveToImmutable());
+            var names = anyElementName ? elementNames.MoveToImmutable() : ImmutableArray<string?>.Empty;
+            if (anyElementName)
+            {
+                TupleElementNameValidation.Validate(
+                    Diagnostics,
+                    names,
+                    i => Invariant.Required(tupleElements[i].TupleElementNameToken, "validation only visits named elements").Location);
+            }
+
+            return TupleTypeSymbol.Get(elements.MoveToImmutable(), names);
         }
 
         if (syntax.IsMap)

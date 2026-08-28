@@ -373,7 +373,25 @@ public partial class Parser
                Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParseTypeClause());
+            // ADR-0172: an element may declare a name before its type —
+            // `(line int32, column int32)` — mirroring the parameter form
+            // `identifier TypeClause`. Committed only when the identifier is
+            // followed by a token that can start a type clause, so plain
+            // element types (`(int32, string)`, qualified `(System.Int32, …)`,
+            // generic `(List[int32], …)`) parse exactly as before.
+            SyntaxToken? elementNameToken = null;
+            if (Current.Kind == SyntaxKind.IdentifierToken && LooksLikeTupleElementName())
+            {
+                elementNameToken = MatchToken(SyntaxKind.IdentifierToken);
+            }
+
+            var elementClause = ParseTypeClause();
+            if (elementNameToken != null)
+            {
+                elementClause.SetTupleElementNameToken(elementNameToken);
+            }
+
+            nodesAndSeparators.Add(elementClause);
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {
@@ -394,6 +412,13 @@ public partial class Parser
             // Grouping (issue #3315): `(T)` is `T`; `(T)?` is whole-`T`
             // nullable. The parens themselves are dropped, exactly like the
             // parenthesized arrow-function form's outer parens (#1399).
+            // ADR-0172: a name on the single element — `(line int32)` — is an
+            // error (there are no 1-tuples); recover as grouping.
+            if (parenthesizedInner.TupleElementNameToken is { } strayName)
+            {
+                Diagnostics.ReportTupleElementNameOutsideTuple(strayName.Location);
+            }
+
             if (question != null)
             {
                 parenthesizedInner.SetParenthesizedQuestionToken(question);
@@ -408,6 +433,52 @@ public partial class Parser
             new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
             closeParen,
             question);
+    }
+
+    /// <summary>
+    /// ADR-0172: decides whether the identifier at the current position is a
+    /// tuple-element NAME (followed by a token that can start a type clause)
+    /// rather than the element type itself. `identifier identifier` is always
+    /// name + type (two consecutive identifiers never form a type), and the
+    /// `[` case distinguishes an array/slice/rectangular element type
+    /// (`name []T`, `name [3]T`, `name [,]T`) from a generic type-argument
+    /// list on the identifier itself (`List[int32]`). The `unmanaged`
+    /// function-pointer head keeps its ADR-0095 meaning.
+    /// </summary>
+    private bool LooksLikeTupleElementName()
+    {
+        // `unmanaged[CC] (…) -> R` / `unmanaged (…) -> R` is a raw
+        // function-pointer TYPE head, never an element name.
+        if (Current.Text == "unmanaged"
+            && (Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
+                || Peek(1).Kind == SyntaxKind.OpenParenthesisToken))
+        {
+            return false;
+        }
+
+        switch (Peek(1).Kind)
+        {
+            case SyntaxKind.IdentifierToken:
+            case SyntaxKind.FuncKeyword:
+            case SyntaxKind.MapKeyword:
+            case SyntaxKind.ChanKeyword:
+            case SyntaxKind.SequenceKeyword:
+            case SyntaxKind.AsyncKeyword:
+            case SyntaxKind.StarToken:
+            case SyntaxKind.OpenParenthesisToken:
+                return true;
+
+            case SyntaxKind.OpenSquareBracketToken:
+                // `name []T` / `name [3]T` / `name [,]T` vs generic
+                // `Ident[TypeArgs]` — an array shape opens with `]`, a
+                // number, or a rank comma; a type-argument list never does.
+                return Peek(2).Kind is SyntaxKind.CloseSquareBracketToken
+                    or SyntaxKind.NumberToken
+                    or SyntaxKind.CommaToken;
+
+            default:
+                return false;
+        }
     }
 
     private TypeClauseSyntax ParseMapTypeClause()

@@ -183,6 +183,43 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.TupleEqualityArityMismatch, leftType, leftArity, rightType, rightArity);
 
     /// <summary>
+    /// ADR-0172: reports a tuple element name declared more than once on the
+    /// same tuple type or literal.
+    /// </summary>
+    /// <param name="location">The text location of the duplicate name.</param>
+    /// <param name="name">The duplicated element name.</param>
+    public void ReportDuplicateTupleElementName(TextLocation location, string name)
+    => Report(location, DiagnosticDescriptors.DuplicateTupleElementName, name);
+
+    /// <summary>
+    /// ADR-0172: reports (as a warning) an element name that disagrees with
+    /// the name the target tuple type declares at the same position.
+    /// </summary>
+    /// <param name="location">The text location of the conversion or label.</param>
+    /// <param name="name">The source element name being ignored.</param>
+    /// <param name="targetName">The target type's name at that position.</param>
+    public void ReportTupleElementNameMismatch(TextLocation location, string name, string targetName)
+    => Report(location, DiagnosticDescriptors.TupleElementNameMismatch, name, targetName);
+
+    /// <summary>
+    /// ADR-0172: reports a reserved tuple element name — <c>ItemN</c> at any
+    /// position other than N, or <c>Rest</c>.
+    /// </summary>
+    /// <param name="location">The text location of the name.</param>
+    /// <param name="name">The reserved name.</param>
+    /// <param name="detail">A clarifying suffix (e.g. " at this position; 'Item2' is only valid as the second element's name"), or an empty string.</param>
+    public void ReportReservedTupleElementName(TextLocation location, string name, string detail)
+    => Report(location, DiagnosticDescriptors.ReservedTupleElementName, name, detail);
+
+    /// <summary>
+    /// ADR-0172: reports an element name attached to a parenthesized single
+    /// element — grouping, not a tuple.
+    /// </summary>
+    /// <param name="location">The text location of the stray name.</param>
+    public void ReportTupleElementNameOutsideTuple(TextLocation location)
+    => Report(location, DiagnosticDescriptors.TupleElementNameOutsideTuple);
+
+    /// <summary>
     /// Issue #3317 / ADR-0159: reports that a nil comparison against a bare
     /// (non-<c>?</c>) magic collection type is statically constant — with
     /// sound empty-instance zero values such a value can never be nil, so
