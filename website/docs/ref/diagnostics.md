@@ -1593,9 +1593,9 @@ two complementary shapes:
 | ID | Severity | Description |
 |----|----------|-------------|
 | GS0353 | Error | Delegate-typed P/Invoke parameter `<name>` of type `<T>` requires the delegate declaration to be annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or a matching calling convention). |
-| GS0354 | Error | Unknown calling convention `<name>` on an `unmanaged` function-pointer type clause. Use one of: `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`. |
+| GS0354 | Error | Unknown calling convention `<name>` on an `unmanaged` function-pointer type clause: no `System.Runtime.CompilerServices.CallConv<name>` type is available in the compilation's references. Use one of the legacy conventions (`Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`) or a name with a matching CallConv type (ADR-0095 v2). |
 | GS0355 | Error | Returning a managed delegate `<T>` from a P/Invoke declaration is not supported. Declare the return as `unmanaged[CC] (...) -> R` (a raw function pointer) or `nint` and wrap manually with `Marshal.GetDelegateForFunctionPointer`. |
-| GS0356 | Error | Raw function-pointer type clause is missing its calling-convention slot. Expected `unmanaged[Cdecl | Stdcall | Thiscall | Fastcall] (...) -> R`. |
+| GS0356 | _Retired_ | Previously: raw function-pointer type clause is missing its calling-convention slot. ADR-0095 v2 (issue #3611) made the slot optional — bare `unmanaged (...) -> R` is the platform-default unmanaged calling convention; this diagnostic is no longer emitted. |
 
 Cause/fix:
 
@@ -1604,19 +1604,21 @@ Cause/fix:
   runtime-synthesized thunk that needs an explicit calling
   convention. Add `@UnmanagedFunctionPointer(CallingConvention.Cdecl)`
   on the `delegate Name(...) R` declaration.;
-- **GS0354 — unknown calling convention.** Only the four CLR-defined
-  unmanaged conventions are accepted. `Cdecl` is the right choice for
-  almost all libc-style APIs; pick `Stdcall` only for the legacy
+- **GS0354 — unknown calling convention.** A convention identifier
+  must be one of the four legacy names or resolve to a
+  `System.Runtime.CompilerServices.CallConv<Name>` type in the
+  compilation's references (ADR-0095 v2). `Cdecl` is the right choice
+  for almost all libc-style APIs; pick `Stdcall` only for the legacy
   Win32 ABI.
 - **GS0355 — delegate-typed return.** The runtime cannot conjure a
   managed wrapper for an arbitrary native function pointer because it
   has no contract for who owns the pointer's lifetime. Switch the
   return to `unmanaged[CC] (...) -> R` for a raw FNPTR, or to `nint`
   if the caller will wrap manually.
-- **GS0356 — missing `[CC]` slot.** The `unmanaged` contextual
-  keyword always requires an immediate `[Convention]` bracket list.
-  This makes the calling convention syntactically explicit at every
-  declaration site so the metadata FNPTR signature is unambiguous.
+- **GS0356 — retired (ADR-0095 v2 / issue #3611).** The `[CC]` slot
+  is now optional: bare `unmanaged (...) -> R` is the platform-default
+  unmanaged calling convention, encoded exactly as C#'s bare
+  `delegate* unmanaged<...>`.
 
 GC lifetime contract (Shape A): the CLR keeps the delegate rooted for
 the duration of `Marshal.GetFunctionPointerForDelegate` + the inner

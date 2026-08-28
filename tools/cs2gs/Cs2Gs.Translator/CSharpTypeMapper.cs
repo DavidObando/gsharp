@@ -1229,9 +1229,10 @@ public sealed class CSharpTypeMapper
     /// (the platform-default ABI, which is Winapi/StdCall on Windows x86 and
     /// Cdecl elsewhere — genuinely platform-dependent, unlike the other four
     /// fixed conventions) and a combined/custom convention (e.g.
-    /// <c>unmanaged[Cdecl, SuppressGCTransition]</c>) have no single fixed G#
-    /// <see cref="CallingConvention"/> to spell, so those two sub-cases stay a
-    /// deliberate by-design gap.
+    /// <c>unmanaged[Cdecl, SuppressGCTransition]</c>) map to G#'s open
+    /// calling-convention model (ADR-0095 v2 / issue #3611): bare
+    /// <c>unmanaged (T) -&gt; R</c> and <c>unmanaged[Name, ...] (T) -&gt; R</c>
+    /// respectively, with the <c>CallConv</c> short names in source order.
     /// </summary>
     /// <param name="type">The C# function-pointer type symbol.</param>
     /// <param name="context">The translation context that accumulates diagnostics.</param>
@@ -1263,13 +1264,26 @@ public sealed class CSharpTypeMapper
             return new FunctionPointerTypeReference(isManaged: false, resolved, parameterTypes, returnType);
         }
 
-        string reason = signature.CallingConvention == SignatureCallingConvention.Unmanaged
-            && signature.UnmanagedCallingConventionTypes.Length == 0
-            ? "the platform-default unmanaged convention ('delegate* unmanaged<...>' with no explicit '[CC]') is genuinely platform-dependent (Stdcall on Windows x86, Cdecl elsewhere) and has no single fixed G# CallingConvention to spell"
-            : "a combined or custom unmanaged calling convention has no single fixed G# CallingConvention equivalent — G#'s '[CC]' slot only accepts one of Cdecl/Stdcall/Thiscall/Fastcall";
+        // ADR-0095 v2 / issue #3611: the two formerly by-design-gapped
+        // shapes now map to G#'s open calling-convention model. A bare
+        // `delegate* unmanaged<...>` (platform-default ABI, empty modopt
+        // set) spells `unmanaged (T) -> R`; a combined or non-legacy
+        // convention set spells `unmanaged[Name, ...] (T) -> R` with the
+        // CallConv short names in source order — gsc encodes both
+        // byte-identically to csc.
+        if (signature.CallingConvention == SignatureCallingConvention.Unmanaged)
+        {
+            var conventionNames = signature.UnmanagedCallingConventionTypes
+                .Select(conventionType => conventionType.Name.StartsWith("CallConv", StringComparison.Ordinal)
+                    ? conventionType.Name.Substring("CallConv".Length)
+                    : conventionType.Name)
+                .ToList();
+            return new FunctionPointerTypeReference(conventionNames, parameterTypes, returnType);
+        }
+
         context.Report(new TranslationDiagnostic(
             "FunctionPointerType",
-            $"unsafe function-pointer type '{type.ToDisplayString()}' has no canonical G# form: {reason} (issue #1906).",
+            $"unsafe function-pointer type '{type.ToDisplayString()}' has no canonical G# form: its calling convention '{signature.CallingConvention}' has no G# spelling (issue #1906).",
             location,
             TranslationSeverity.Unsupported)
         {

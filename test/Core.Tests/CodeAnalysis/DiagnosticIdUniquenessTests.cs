@@ -182,6 +182,10 @@ public class DiagnosticIdUniquenessTests
             // Retired when non-loop labels became valid goto targets.
             ["GS0294"] = "Retired",
 
+            // Retired by ADR-0095 v2 / issue #3611: bare `unmanaged (T) -> R`
+            // is the platform-default unmanaged calling convention.
+            ["GS0356"] = "Retired",
+
             // Reserved after auto-properties became valid in data aggregates.
             ["GS0419"] = "Reserved",
 

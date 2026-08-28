@@ -28,6 +28,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
     private readonly ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?> outerSegmentTypeArgumentLists = ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?>.Empty;
     private readonly ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentCloseBracketTokens = ImmutableArray<SyntaxToken?>.Empty;
 
+    // ADR-0095 v2 / issue #3611: the calling-convention slot tokens after the
+    // first identifier (alternating `,` separators and identifiers).
+    private readonly ImmutableArray<SyntaxToken> callingConventionRestTokens = ImmutableArray<SyntaxToken>.Empty;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a simple type.
     /// </summary>
@@ -445,6 +449,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken unmanagedKeyword,
         SyntaxToken? callingConventionOpenBracketToken,
         SyntaxToken? callingConventionIdentifierToken,
+        ImmutableArray<SyntaxToken> callingConventionRestTokens,
         SyntaxToken? callingConventionCloseBracketToken,
         SyntaxToken? openParenToken,
         SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
@@ -457,6 +462,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
         UnmanagedKeyword = unmanagedKeyword;
         CallingConventionOpenBracketToken = callingConventionOpenBracketToken;
         CallingConventionIdentifierToken = callingConventionIdentifierToken;
+        this.callingConventionRestTokens = callingConventionRestTokens.IsDefault
+            ? ImmutableArray<SyntaxToken>.Empty
+            : callingConventionRestTokens;
         CallingConventionCloseBracketToken = callingConventionCloseBracketToken;
         OpenParenToken = openParenToken;
         FunctionParameterTypes = functionParameterTypes;
@@ -657,8 +665,21 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the opening <c>[</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
     public SyntaxToken? CallingConventionOpenBracketToken { get; }
 
-    /// <summary>Gets the calling-convention identifier inside the <c>[CC]</c> slot of a raw function-pointer type clause (e.g. <c>Cdecl</c>, <c>Stdcall</c>) (ADR-0095), or <c>null</c>.</summary>
+    /// <summary>Gets the first calling-convention identifier inside the <c>[CC]</c> slot of a raw function-pointer type clause (e.g. <c>Cdecl</c>, <c>Stdcall</c>) (ADR-0095), or <c>null</c> for the bare platform-default form <c>unmanaged (T) -&gt; R</c> (ADR-0095 v2 / issue #3611).</summary>
     public SyntaxToken? CallingConventionIdentifierToken { get; }
+
+    /// <summary>
+    /// Gets the tokens of the calling-convention slot after the first
+    /// identifier — alternating <c>,</c> separators and convention
+    /// identifiers, in source order (ADR-0095 v2 / issue #3611, e.g. the
+    /// <c>, SuppressGCTransition</c> tail of
+    /// <c>unmanaged[Cdecl, SuppressGCTransition] (T) -&gt; R</c>). Empty for
+    /// a single-convention or bare slot.
+    /// </summary>
+    public System.Collections.Generic.IEnumerable<SyntaxNode> CallingConventionRestTokens =>
+        callingConventionRestTokens.IsDefaultOrEmpty
+            ? System.Linq.Enumerable.Empty<SyntaxNode>()
+            : callingConventionRestTokens;
 
     /// <summary>Gets the closing <c>]</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
     public SyntaxToken? CallingConventionCloseBracketToken { get; }
@@ -1157,6 +1178,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="closeParenToken">The closing <c>)</c> of the parameter-type list.</param>
     /// <param name="arrowToken">The <c>-&gt;</c> token.</param>
     /// <param name="returnTypeClause">The return-type clause.</param>
+    /// <param name="callingConventionRestTokens">The slot tokens after the first convention identifier — alternating <c>,</c> separators and identifiers in source order (ADR-0095 v2 / issue #3611), or default for a single-convention or bare slot.</param>
     /// <returns>A raw function-pointer type clause.</returns>
     public static TypeClauseSyntax CreateFunctionPointer(
         SyntaxTree syntaxTree,
@@ -1168,13 +1190,15 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
         SyntaxToken? closeParenToken,
         SyntaxToken? arrowToken,
-        TypeClauseSyntax? returnTypeClause)
+        TypeClauseSyntax? returnTypeClause,
+        ImmutableArray<SyntaxToken> callingConventionRestTokens = default)
     {
         return new TypeClauseSyntax(
             syntaxTree,
             unmanagedKeyword,
             callingConventionOpenBracketToken,
             callingConventionIdentifierToken,
+            callingConventionRestTokens,
             callingConventionCloseBracketToken,
             openParenToken,
             functionParameterTypes,

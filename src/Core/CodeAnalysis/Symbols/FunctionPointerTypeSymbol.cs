@@ -27,12 +27,28 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<string, FunctionPointerTypeSymbol> Cache = new ConcurrentDictionary<string, FunctionPointerTypeSymbol>();
 
     private FunctionPointerTypeSymbol(string name, bool isManaged, CallingConvention callingConvention, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+        : this(name, isManaged, callingConvention, parameterTypes, returnType, isUnmanagedExtended: false, ImmutableArray<string>.Empty, ImmutableArray<Type>.Empty)
+    {
+    }
+
+    private FunctionPointerTypeSymbol(
+        string name,
+        bool isManaged,
+        CallingConvention callingConvention,
+        ImmutableArray<TypeSymbol> parameterTypes,
+        TypeSymbol returnType,
+        bool isUnmanagedExtended,
+        ImmutableArray<string> unmanagedConventions,
+        ImmutableArray<Type> unmanagedConventionClrTypes)
         : base(name, typeof(nint))
     {
         IsManaged = isManaged;
         CallingConvention = callingConvention;
         ParameterTypes = parameterTypes;
         ReturnType = returnType;
+        IsUnmanagedExtended = isUnmanagedExtended;
+        UnmanagedConventions = unmanagedConventions;
+        UnmanagedConventionClrTypes = unmanagedConventionClrTypes;
     }
 
     /// <summary>
@@ -46,8 +62,36 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     /// </summary>
     public bool IsManaged { get; }
 
-    /// <summary>Gets the unmanaged calling convention used to invoke through this pointer. Ignored when <see cref="IsManaged"/> is <see langword="true"/>.</summary>
+    /// <summary>Gets the unmanaged calling convention used to invoke through this pointer. Ignored when <see cref="IsManaged"/> is <see langword="true"/> and meaningless when <see cref="IsUnmanagedExtended"/> is <see langword="true"/>.</summary>
     public CallingConvention CallingConvention { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this unmanaged pointer uses the open
+    /// CLR calling-convention model (ADR-0095 v2 / issue #3611): the
+    /// signature encodes <c>SignatureCallingConvention.Unmanaged</c> and the
+    /// conventions (if any) ride as <c>CallConv*</c> modopts on the return
+    /// type. <see langword="true"/> for bare <c>unmanaged (T) -&gt; R</c>
+    /// (platform default, empty <see cref="UnmanagedConventions"/>) and for
+    /// every non-legacy or combined <c>[CC, ...]</c> list.
+    /// </summary>
+    public bool IsUnmanagedExtended { get; }
+
+    /// <summary>
+    /// Gets the open-model convention short names in source order (e.g.
+    /// <c>Cdecl</c>, <c>SuppressGCTransition</c> — without the
+    /// <c>CallConv</c> prefix). Empty for the bare platform-default form
+    /// and for legacy/managed pointers.
+    /// </summary>
+    public ImmutableArray<string> UnmanagedConventions { get; }
+
+    /// <summary>
+    /// Gets the resolved <c>System.Runtime.CompilerServices.CallConv{Name}</c>
+    /// types matching <see cref="UnmanagedConventions"/> pairwise; the
+    /// emitter writes these as return-type modopts. Same staleness contract
+    /// as <see cref="TypeSymbol.ClrType"/> (cleared with the cache when the
+    /// owning metadata load context is disposed).
+    /// </summary>
+    public ImmutableArray<Type> UnmanagedConventionClrTypes { get; }
 
     /// <summary>Gets the function pointer's parameter types.</summary>
     public ImmutableArray<TypeSymbol> ParameterTypes { get; }
@@ -74,6 +118,46 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
         return Cache.GetOrAdd(
             key,
             _ => new FunctionPointerTypeSymbol(displayName, isManaged: false, callingConvention, parameterTypes, returnType));
+    }
+
+    /// <summary>
+    /// Returns the cached open-model unmanaged
+    /// <see cref="FunctionPointerTypeSymbol"/> (ADR-0095 v2 / issue #3611):
+    /// bare <c>unmanaged (T) -&gt; R</c> when <paramref name="conventions"/>
+    /// is empty (the platform-default ABI), otherwise
+    /// <c>unmanaged[CC, ...] (T) -&gt; R</c> whose conventions encode as
+    /// <c>CallConv*</c> return-type modopts in source order.
+    /// </summary>
+    /// <param name="conventions">The convention short names in source order (may be empty).</param>
+    /// <param name="conventionClrTypes">The resolved <c>CallConv{Name}</c> types, pairwise with <paramref name="conventions"/>.</param>
+    /// <param name="parameterTypes">The parameter types.</param>
+    /// <param name="returnType">The return type (use <see cref="TypeSymbol.Void"/> for no return).</param>
+    /// <returns>A cached open-model <see cref="FunctionPointerTypeSymbol"/>.</returns>
+    public static FunctionPointerTypeSymbol GetUnmanagedExtended(
+        ImmutableArray<string> conventions,
+        ImmutableArray<Type> conventionClrTypes,
+        ImmutableArray<TypeSymbol> parameterTypes,
+        TypeSymbol returnType)
+    {
+        returnType ??= TypeSymbol.Void;
+        conventions = conventions.IsDefault ? ImmutableArray<string>.Empty : conventions;
+        conventionClrTypes = conventionClrTypes.IsDefault ? ImmutableArray<Type>.Empty : conventionClrTypes;
+        var displayName = BuildExtendedDisplayName(conventions, parameterTypes, returnType);
+
+        // Source order is identity (ADR-0095 v2 §Binding): the modopt blob
+        // is order-sensitive, so the key joins the names unsorted.
+        var key = BuildIdentityKey("ux", string.Join(",", conventions), parameterTypes, returnType);
+        return Cache.GetOrAdd(
+            key,
+            _ => new FunctionPointerTypeSymbol(
+                displayName,
+                isManaged: false,
+                CallingConvention.Winapi,
+                parameterTypes,
+                returnType,
+                isUnmanagedExtended: true,
+                conventions,
+                conventionClrTypes));
     }
 
     /// <summary>
@@ -119,8 +203,13 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
             return this;
         }
 
-        return IsManaged
-            ? GetManaged(parameters.MoveToImmutable(), returnType)
+        if (IsManaged)
+        {
+            return GetManaged(parameters.MoveToImmutable(), returnType);
+        }
+
+        return IsUnmanagedExtended
+            ? GetUnmanagedExtended(UnmanagedConventions, UnmanagedConventionClrTypes, parameters.MoveToImmutable(), returnType)
             : Get(CallingConvention, parameters.MoveToImmutable(), returnType);
     }
 
@@ -188,6 +277,34 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
             sb.Append(' ').Append(returnType?.Name ?? "?");
         }
 
+        return sb.ToString();
+    }
+
+    private static string BuildExtendedDisplayName(ImmutableArray<string> conventions, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+    {
+        // ADR-0095 v2: the canonical display form mirrors the source
+        // spelling — bare `unmanaged (T) -> R` for the platform default,
+        // `unmanaged[Cdecl, SuppressGCTransition] (T) -> R` for a list.
+        var sb = new System.Text.StringBuilder();
+        sb.Append("unmanaged");
+        if (!conventions.IsEmpty)
+        {
+            sb.Append('[').Append(string.Join(", ", conventions)).Append(']');
+        }
+
+        sb.Append(" (");
+        for (var i = 0; i < parameterTypes.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append(parameterTypes[i]?.Name ?? "?");
+        }
+
+        sb.Append(") -> ");
+        sb.Append(returnType == TypeSymbol.Void ? "void" : returnType?.Name ?? "?");
         return sb.ToString();
     }
 

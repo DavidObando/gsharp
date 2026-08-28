@@ -82,16 +82,50 @@ func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
     }
 
     [Fact]
-    public void FunctionPointer_MissingCallingConvention_ReportsGS0356()
+    public void FunctionPointer_BareUnmanaged_ParsesClean()
     {
+        // ADR-0095 v2 / issue #3611: the calling-convention slot is
+        // optional — bare `unmanaged (T) -> R` is the platform-default
+        // unmanaged convention (GS0356 is retired).
         const string source = @"
 package P
 
 @DllImport(""libc"")
-func bad(cb unmanaged () -> void) void;
+func bare(cb unmanaged () -> void) void;
 ";
         var tree = SyntaxTree.Parse(source);
-        Assert.Contains(tree.Diagnostics, d => d.Id == "GS0356");
+        Assert.Empty(tree.Diagnostics);
+
+        var fn = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        var cb = fn.Parameters.Single().Type;
+        Assert.True(cb.IsFunctionPointer);
+        Assert.Null(cb.CallingConventionIdentifierToken);
+        Assert.Null(cb.CallingConventionOpenBracketToken);
+    }
+
+    [Fact]
+    public void FunctionPointer_CombinedConventionList_ParsesInSourceOrder()
+    {
+        // ADR-0095 v2 / issue #3611: the slot accepts a comma-separated
+        // convention list; the first identifier stays on the dedicated
+        // token and the `, identifier` tail rides CallingConventionRestTokens.
+        const string source = @"
+package P
+
+@DllImport(""libc"")
+func combined(cb unmanaged[Cdecl, SuppressGCTransition] (int32) -> int32) void;
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var fn = tree.Root.Members.OfType<FunctionDeclarationSyntax>().Single();
+        var cb = fn.Parameters.Single().Type;
+        Assert.True(cb.IsFunctionPointer);
+        Assert.Equal("Cdecl", cb.CallingConventionIdentifierToken.Text);
+        var rest = cb.CallingConventionRestTokens.OfType<SyntaxToken>().ToArray();
+        Assert.Equal(2, rest.Length);
+        Assert.Equal(SyntaxKind.CommaToken, rest[0].Kind);
+        Assert.Equal("SuppressGCTransition", rest[1].Text);
     }
 
     [Fact]

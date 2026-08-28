@@ -763,12 +763,13 @@ public partial class Parser
 
     /// <summary>
     /// ADR-0095 / issue #761: parses the raw function-pointer type clause
-    /// <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c>. The leading
+    /// <c>unmanaged[CC, ...] (T1, T2, ...) -&gt; R</c>. The leading
     /// <c>unmanaged</c> identifier is the contextual keyword; the
-    /// <c>[CC]</c> slot is required (omitting it produces GS0356 and the
-    /// parser fabricates a missing identifier so recovery continues on
-    /// the inner signature). The parameter and return type-clause grammar
-    /// is the same as the arrow-form function type clause (ADR-0075).
+    /// <c>[CC]</c> slot is optional (ADR-0095 v2 / issue #3611 — bare
+    /// <c>unmanaged (T) -&gt; R</c> is the platform-default unmanaged
+    /// convention) and accepts a comma-separated convention list. The
+    /// parameter and return type-clause grammar is the same as the
+    /// arrow-form function type clause (ADR-0075).
     /// </summary>
     private TypeClauseSyntax ParseFunctionPointerTypeClause()
     {
@@ -778,21 +779,34 @@ public partial class Parser
         // UnmanagedKeyword property on TypeClauseSyntax.
         var unmanagedKeyword = MatchToken(SyntaxKind.IdentifierToken);
 
+        // ADR-0095 v2 / issue #3611: the calling-convention slot is
+        // optional (bare `unmanaged (T) -> R` is the platform-default
+        // unmanaged convention; GS0356 is retired) and accepts a
+        // comma-separated list of convention identifiers
+        // (`unmanaged[Cdecl, SuppressGCTransition] (T) -> R`). The first
+        // identifier stays on the dedicated token slot; the `, identifier`
+        // tail is collected in source order for the binder and printers.
         SyntaxToken? openBracket = null;
         SyntaxToken? callingConvention = null;
+        var callingConventionRest = ImmutableArray<SyntaxToken>.Empty;
         SyntaxToken? closeBracket = null;
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
             callingConvention = MatchToken(SyntaxKind.IdentifierToken);
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                var rest = ImmutableArray.CreateBuilder<SyntaxToken>();
+                while (Current.Kind == SyntaxKind.CommaToken)
+                {
+                    rest.Add(MatchToken(SyntaxKind.CommaToken));
+                    rest.Add(MatchToken(SyntaxKind.IdentifierToken));
+                }
+
+                callingConventionRest = rest.ToImmutable();
+            }
+
             closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
-        }
-        else
-        {
-            // ADR-0095 §5 — GS0356: the calling-convention slot is
-            // required. Report at the `unmanaged` keyword location so the
-            // user sees both the keyword and the proposed remediation.
-            Diagnostics.ReportFunctionPointerMissingCallingConvention(unmanagedKeyword.Location);
         }
 
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -825,7 +839,8 @@ public partial class Parser
             new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable()),
             closeParen,
             arrow,
-            returnTypeClause);
+            returnTypeClause,
+            callingConventionRest);
     }
 
     /// <summary>

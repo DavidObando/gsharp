@@ -3385,33 +3385,70 @@ public sealed class Binder
                 return FunctionPointerTypeSymbol.GetManaged(paramTypes.MoveToImmutable(), fpRet);
             }
 
-            var convention = System.Runtime.InteropServices.CallingConvention.Cdecl;
+            // ADR-0095 v2 / issue #3611 — the open CLR calling-convention
+            // model. Collect the slot's identifiers in source order: the
+            // first rides the dedicated token, the rest alternate with
+            // comma separators on CallingConventionRestTokens.
+            var conventionTokens = new List<SyntaxToken>();
             if (syntax.CallingConventionIdentifierToken != null)
             {
-                var ccName = syntax.CallingConventionIdentifierToken.Text;
-                switch (ccName)
+                conventionTokens.Add(syntax.CallingConventionIdentifierToken);
+                foreach (var rest in syntax.CallingConventionRestTokens)
                 {
-                    case "Cdecl":
-                        convention = System.Runtime.InteropServices.CallingConvention.Cdecl;
-                        break;
-                    case "Stdcall":
-                        convention = System.Runtime.InteropServices.CallingConvention.StdCall;
-                        break;
-                    case "Thiscall":
-                        convention = System.Runtime.InteropServices.CallingConvention.ThisCall;
-                        break;
-                    case "Fastcall":
-                        convention = System.Runtime.InteropServices.CallingConvention.FastCall;
-                        break;
-                    default:
-                        Diagnostics.ReportFunctionPointerUnknownCallingConvention(
-                            syntax.CallingConventionIdentifierToken.Location,
-                            ccName);
-                        return null;
+                    if (rest is SyntaxToken { Kind: SyntaxKind.IdentifierToken } restIdentifier)
+                    {
+                        conventionTokens.Add(restIdentifier);
+                    }
                 }
             }
 
-            return FunctionPointerTypeSymbol.Get(convention, paramTypes.MoveToImmutable(), fpRet);
+            // A single legacy name keeps the v1 closed-enum path — it
+            // encodes as the legacy SignatureCallingConvention literal with
+            // no modopts, byte-identical to what csc emits for
+            // `delegate* unmanaged[Cdecl]<...>`.
+            if (conventionTokens.Count == 1)
+            {
+                System.Runtime.InteropServices.CallingConvention? legacy = conventionTokens[0].Text switch
+                {
+                    "Cdecl" => System.Runtime.InteropServices.CallingConvention.Cdecl,
+                    "Stdcall" => System.Runtime.InteropServices.CallingConvention.StdCall,
+                    "Thiscall" => System.Runtime.InteropServices.CallingConvention.ThisCall,
+                    "Fastcall" => System.Runtime.InteropServices.CallingConvention.FastCall,
+                    _ => null,
+                };
+                if (legacy is { } legacyConvention)
+                {
+                    return FunctionPointerTypeSymbol.Get(legacyConvention, paramTypes.MoveToImmutable(), fpRet);
+                }
+            }
+
+            // Every other slot shape — empty (bare platform default), a
+            // single non-legacy name, or a combined list — resolves each
+            // name against `System.Runtime.CompilerServices.CallConv{Name}`
+            // (C#'s rule) and encodes as SignatureCallingConvention.Unmanaged
+            // with the resolved types as return-type modopts in source order.
+            var conventionNames = ImmutableArray.CreateBuilder<string>(conventionTokens.Count);
+            var conventionClrTypes = ImmutableArray.CreateBuilder<System.Type>(conventionTokens.Count);
+            foreach (var conventionToken in conventionTokens)
+            {
+                var metadataName = "System.Runtime.CompilerServices.CallConv" + conventionToken.Text;
+                if (!binderCtx.References.TryResolveType(metadataName, out var callConvType))
+                {
+                    Diagnostics.ReportFunctionPointerUnknownCallingConvention(
+                        conventionToken.Location,
+                        conventionToken.Text);
+                    return null;
+                }
+
+                conventionNames.Add(conventionToken.Text);
+                conventionClrTypes.Add(callConvType);
+            }
+
+            return FunctionPointerTypeSymbol.GetUnmanagedExtended(
+                conventionNames.MoveToImmutable(),
+                conventionClrTypes.MoveToImmutable(),
+                paramTypes.MoveToImmutable(),
+                fpRet);
         }
 
         if (syntax.IsFunction)
