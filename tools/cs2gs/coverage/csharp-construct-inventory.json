@@ -748,7 +748,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs",
+    "notes": "Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); C# element names are ignored, matching the positional G# lowering."
   },
   {
     "kind": "EqualsValueClause",
@@ -1498,7 +1499,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/NotEqualsExpression.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/NotEqualsExpression.cs",
+    "notes": "Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); C# element names are ignored, matching the positional G# lowering."
   },
   {
     "kind": "NotPattern",

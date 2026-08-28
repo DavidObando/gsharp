@@ -92,7 +92,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | EmptyStatement | EmptyStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/EmptyStatement.cs |  |  |
 | EnumDeclaration | EnumDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumDeclaration.cs |  | Member values (explicit or implicit) and [Flags] are preserved (issue #1912, fixed). |
 | EnumMemberDeclaration | EnumMemberDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/EnumMemberDeclaration.cs |  | Explicit/negative/[Flags] bit-shift-or/alias values resolve via the semantic model's IFieldSymbol.ConstantValue and are emitted as an explicit G# `= value` (new language feature, issue #1912, fixed). |
-| EqualsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs |  |  |
+| EqualsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs |  | Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); C# element names are ignored, matching the positional G# lowering. |
 | EqualsValueClause | EqualsValueClauseSyntax | ADR-0115 §B.3 |  |  |  |  |
 | EventDeclaration | EventDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventDeclaration.cs |  | Explicit add/remove accessor event maps to the G# event declaration's explicit-accessor form (ADR-0052 §2); a source-declared named delegate handler type keeps its name (issue #1960 item 3) instead of the anonymous arrow form. |
 | EventFieldDeclaration | EventFieldDeclarationSyntax | ADR-0052 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/EventFieldDeclaration.cs |  | Field-like event maps to the G# field-like event declaration (ADR-0052 §2); a source-declared named delegate handler type keeps its name (issue #1960 item 3) instead of the anonymous arrow form. |
@@ -159,7 +159,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | NameColon | NameColonSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/NameColon.cs |  | Named arguments use the G# name: value form (ADR-0080). |
 | NameEquals | NameEqualsSyntax | ADR-0115 §B.16 |  |  |  |  |
 | NamespaceDeclaration | NamespaceDeclarationSyntax | ADR-0115 §B.1 |  |  |  |  |
-| NotEqualsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/NotEqualsExpression.cs |  |  |
+| NotEqualsExpression | BinaryExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/NotEqualsExpression.cs |  | Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); C# element names are ignored, matching the positional G# lowering. |
 | NotPattern | UnaryPatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/NotPattern.cs |  |  |
 | NullLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/NullLiteralExpression.cs |  |  |
 | NullableType | NullableTypeSyntax | ADR-0115 §B.12 |  |  |  | T? maps to G# nullable spelling. |

@@ -14,7 +14,11 @@ namespace Corpus.Grid02
             bool diffInt = a != b;
             bool diffString = s != "a";
             bool notNull = t != null;
-            Console.WriteLine($"NotEqualsExpression: ints={diffInt} strings={diffString} notNull={notNull}");
+            // ADR-0171 / issue #3501: the self-migration wall shape — a fresh
+            // tuple literal `!=` a named-element tuple value.
+            (int Line, int Column) expected = (3, 5);
+            bool diffTuple = (a, b) != expected;
+            Console.WriteLine($"NotEqualsExpression: ints={diffInt} strings={diffString} notNull={notNull} tuples={diffTuple}");
         }
     }
 }
