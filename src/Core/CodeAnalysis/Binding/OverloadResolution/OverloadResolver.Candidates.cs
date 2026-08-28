@@ -1364,13 +1364,13 @@ internal sealed partial class OverloadResolver
             DoWhileStatementSyntax loop when IsConstantTrue(loop.Condition) =>
                 !ContainsPotentialLoopExit(loop.Body, loopLabel: null),
             LabeledStatementSyntax { Statement: ForInfiniteStatementSyntax loop } labeledLoop =>
-                !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+                !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.ValueText),
             LabeledStatementSyntax { Statement: WhileStatementSyntax loop } labeledLoop
                 when IsConstantTrue(loop.Condition) =>
-                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.ValueText),
             LabeledStatementSyntax { Statement: DoWhileStatementSyntax loop } labeledLoop
                 when IsConstantTrue(loop.Condition) =>
-                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.Text),
+                    !ContainsPotentialLoopExit(loop.Body, labeledLoop.LabelIdentifier.ValueText),
             _ => false,
         };
 
@@ -1386,7 +1386,7 @@ internal sealed partial class OverloadResolver
                 && ((breakStatement.LabelIdentifier == null && nestedLoopDepth == 0)
                     || (breakStatement.LabelIdentifier != null
                         && string.Equals(
-                            breakStatement.LabelIdentifier.Text,
+                            breakStatement.LabelIdentifier.ValueText,
                             loopLabel,
                             StringComparison.Ordinal))))
             {
@@ -1394,7 +1394,7 @@ internal sealed partial class OverloadResolver
             }
 
             if (node is GotoStatementSyntax gotoStatement
-                && !localGotoLabels.Contains(gotoStatement.LabelIdentifier.Text))
+                && !localGotoLabels.Contains(gotoStatement.LabelIdentifier.ValueText))
             {
                 return true;
             }
@@ -1436,7 +1436,7 @@ internal sealed partial class OverloadResolver
             if (node is LabeledStatementSyntax labeled
                 && !IsLoopSyntax(labeled.Statement))
             {
-                labels.Add(labeled.LabelIdentifier.Text);
+                labels.Add(labeled.LabelIdentifier.ValueText);
             }
 
             foreach (var child in node.GetChildren())

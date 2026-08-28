@@ -799,7 +799,7 @@ public static class BoundNodePrinter
                     writer.WriteKeyword(SyntaxKind.IsKeyword);
                     writer.WriteSpace();
                 }
-                else if (typePattern.Syntax is TypePatternSyntax { Identifier.Text: "_" })
+                else if (typePattern.Syntax is TypePatternSyntax { Identifier.ValueText: "_" })
                 {
                     writer.WriteIdentifier("_");
                     writer.WriteSpace();

@@ -23,7 +23,7 @@ internal sealed partial class DeclarationBinder
 {
     internal InterfaceSymbol? DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package, TypeSymbol? containingType = null)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var interfaceSymbol = new InterfaceSymbol(name, accessibility, syntax, package.Name);
         Binder.AttachDocumentation(interfaceSymbol, syntax);
@@ -116,7 +116,7 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         var baseInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
         var baseClrInterfaces = ImmutableArray.CreateBuilder<TypeSymbol>();
         for (var i = 0; i < syntax.BaseTypeClauses.Count; i++)
@@ -198,7 +198,7 @@ internal sealed partial class DeclarationBinder
         var staticPrivateMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
         foreach (var methodSyntax in syntax.Methods)
         {
-            var methodName = methodSyntax.Identifier.Text;
+            var methodName = methodSyntax.Identifier.ValueText;
 
             // ADR-0089 / issue #755: detect a `static` modifier early — the
             // method is a static-virtual interface member. Static methods do
@@ -260,7 +260,7 @@ internal sealed partial class DeclarationBinder
             var seenParameterNames = new HashSet<string>();
             foreach (var parameterSyntax in methodSyntax.Parameters)
             {
-                var parameterName = parameterSyntax.Identifier.Text;
+                var parameterName = parameterSyntax.Identifier.ValueText;
                 var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                     ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                     : TypeSymbol.Error;
@@ -473,7 +473,7 @@ internal sealed partial class DeclarationBinder
                     var seenIndexParamNames = new HashSet<string>();
                     foreach (var indexParamSyntax in propSyntax.Parameters)
                     {
-                        var indexParamName = indexParamSyntax.Identifier.Text;
+                        var indexParamName = indexParamSyntax.Identifier.ValueText;
                         var indexParamType = indexParamSyntax.Type is { } indexParamTypeSyntax
                             ? bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;
@@ -493,7 +493,7 @@ internal sealed partial class DeclarationBinder
                     indexerParameters = indexerParamBuilder.ToImmutable();
                 }
 
-                var propName = isIndexer ? "Item" : propSyntax.Identifier.Text;
+                var propName = isIndexer ? "Item" : propSyntax.Identifier.ValueText;
                 if (!seenNames.Add(propName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
@@ -697,7 +697,7 @@ internal sealed partial class DeclarationBinder
             var eventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
             foreach (var eventSyntax in syntax.Events)
             {
-                var eventName = eventSyntax.Identifier.Text;
+                var eventName = eventSyntax.Identifier.ValueText;
                 if (!seenNames.Add(eventName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);
@@ -811,7 +811,7 @@ internal sealed partial class DeclarationBinder
                 var initializersBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
                 foreach (var fieldSyntax in syntax.StaticFields)
                 {
-                    var fieldName = fieldSyntax.Identifier.Text;
+                    var fieldName = fieldSyntax.Identifier.ValueText;
                     if (!seenNames.Add(fieldName))
                     {
                         Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
@@ -1089,6 +1089,6 @@ internal sealed partial class DeclarationBinder
 
     private static bool HasAttributeTarget(AnnotationSyntax annotation, AttributeTargetKind target)
         => annotation.Target != null
-            && TryParseTargetKind(annotation.Target.KindIdentifier.Text, out var parsedTarget)
+            && TryParseTargetKind(annotation.Target.KindIdentifier.ValueText, out var parsedTarget)
             && parsedTarget == target;
 }

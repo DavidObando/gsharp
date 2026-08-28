@@ -55,6 +55,18 @@ public class SyntaxToken : SyntaxNode
     public object? Value { get; }
 
     /// <summary>
+    /// Gets the semantic name text of this token (ADR-0170 / issue #3610):
+    /// for an escaped identifier <c>$name</c> this is the unescaped
+    /// <c>name</c> the lexer stashed in <see cref="Value"/>; for every other
+    /// token it is <see cref="Text"/>. Semantic consumers (binder, symbols,
+    /// lowering, emit) read identifier names through this property so an
+    /// escaped spelling and its plain form denote the same name; syntactic
+    /// consumers (printers, formatters, contextual-keyword commitments) keep
+    /// using <see cref="Text"/> for source fidelity.
+    /// </summary>
+    public string ValueText => Value as string ?? Text;
+
+    /// <summary>
     /// Gets the text span associated to the token.
     /// </summary>
     public override TextSpan Span => new TextSpan(Position, Text?.Length ?? 0);

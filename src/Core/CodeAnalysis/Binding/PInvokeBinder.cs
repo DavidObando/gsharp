@@ -1111,7 +1111,7 @@ internal static class PInvokeBinder
                 {
                     diagnostics.ReportMarshalAsRejected(
                         ann.Location,
-                        ps.Identifier.Text,
+                        ps.Identifier.ValueText,
                         "the enclosing function is not a P/Invoke declaration (`@DllImport` or `@LibraryImport`)");
                 }
             }

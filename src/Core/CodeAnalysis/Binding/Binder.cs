@@ -891,7 +891,7 @@ public sealed class Binder
         {
             var packageSyntax = tree.Root.Members.OfType<PackageSyntax>().FirstOrDefault();
             var packageName = packageSyntax != null
-                ? string.Concat(packageSyntax.IdentifiersWithDots.Select(t => t.Text))
+                ? string.Concat(packageSyntax.IdentifiersWithDots.Select(t => t.ValueText))
                 : defaultPackageName;
             if (!packagesByName.TryGetValue(packageName, out var packageSymbol))
             {
@@ -1159,7 +1159,7 @@ public sealed class Binder
                 StringComparer.Ordinal);
             foreach (var nested in container.NestedTypes.OfType<StructDeclarationSyntax>())
             {
-                visibleNestedTypeNames.Add(nested.Identifier.Text);
+                visibleNestedTypeNames.Add(nested.Identifier.ValueText);
             }
 
             foreach (var nested in container.NestedTypes.OfType<StructDeclarationSyntax>())
@@ -2945,7 +2945,7 @@ public sealed class Binder
                         // The rich path materializes fields as ordinary class
                         // fields, which require an explicit type. Inferred-type
                         // fields are only supported on the field-only path.
-                        diagnostics.ReportInferredFieldTypeNotAllowedInRichAnonymousObject(field.Identifier.Location, field.Identifier.Text);
+                        diagnostics.ReportInferredFieldTypeNotAllowedInRichAnonymousObject(field.Identifier.Location, field.Identifier.ValueText);
                         continue;
                     }
 
@@ -3261,11 +3261,13 @@ public sealed class Binder
         var sb = new StringBuilder();
         foreach (var i in import.IdentifiersWithDots)
         {
-            sb.Append(i.Text);
+            // ADR-0170: escaped segments (`import $class`) contribute their
+            // unescaped name; dot separators pass through unchanged.
+            sb.Append(i.ValueText);
         }
 
         var targetPath = sb.ToString();
-        var localName = import.AliasIdentifier?.Text ?? targetPath;
+        var localName = import.AliasIdentifier?.ValueText ?? targetPath;
         var importSymbol = new ImportSymbol(localName, targetPath, import);
         AttachDocumentation(importSymbol, import);
         scope.TryImport(importSymbol);
@@ -3765,8 +3767,8 @@ public sealed class Binder
             : 0;
         if (!syntax.HasQualifier &&
             syntax.HasTypeArguments &&
-            scope.TryLookupImportedGenericClass(identifierToken.Text, topLevelTypeArgumentCount, out var clrOpenType) &&
-            ImportedGenericTypeHasPrecedence(identifierToken.Text, topLevelTypeArgumentCount, clrOpenType))
+            scope.TryLookupImportedGenericClass(identifierToken.ValueText, topLevelTypeArgumentCount, out var clrOpenType) &&
+            ImportedGenericTypeHasPrecedence(identifierToken.ValueText, topLevelTypeArgumentCount, clrOpenType))
         {
             var topLevelTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
             var clrArgs = new System.Type[topLevelTypeArguments.Count];
@@ -3839,7 +3841,7 @@ public sealed class Binder
             }
             catch (System.ArgumentException)
             {
-                Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
+                Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText);
                 return null;
             }
         }
@@ -3874,7 +3876,7 @@ public sealed class Binder
             // list, prefer the matching generic definition; without one, prefer
             // the arity-0 type.
             var requestedArity = syntax.HasTypeArguments ? Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count : 0;
-            element = LookupType(identifierToken.Text, requestedArity, out var ambiguousAcrossImportedPackages);
+            element = LookupType(identifierToken.ValueText, requestedArity, out var ambiguousAcrossImportedPackages);
             if (element == null)
             {
                 // Issue #2455: "ambiguous between imported packages" and "no
@@ -3884,11 +3886,11 @@ public sealed class Binder
                 // that the type is undefined.
                 if (ambiguousAcrossImportedPackages)
                 {
-                    Diagnostics.ReportAmbiguousSourceType(identifierToken.Location, identifierToken.Text);
+                    Diagnostics.ReportAmbiguousSourceType(identifierToken.Location, identifierToken.ValueText);
                 }
                 else
                 {
-                    Diagnostics.ReportUndefinedType(identifierToken.Location, identifierToken.Text);
+                    Diagnostics.ReportUndefinedType(identifierToken.Location, identifierToken.ValueText);
                 }
 
                 return null;
@@ -3938,13 +3940,13 @@ public sealed class Binder
                 {
                     if (!iface.IsGenericDefinition)
                     {
-                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
+                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText);
                         return null;
                     }
 
                     if (iface.TypeParameters.Length != typeArgs.Length)
                     {
-                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.Text, iface.TypeParameters.Length, typeArgs.Length);
+                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.ValueText, iface.TypeParameters.Length, typeArgs.Length);
                         return null;
                     }
 
@@ -3954,13 +3956,13 @@ public sealed class Binder
                 {
                     if (!genericStruct.IsGenericDefinition)
                     {
-                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
+                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText);
                         return null;
                     }
 
                     if (genericStruct.TypeParameters.Length != typeArgs.Length)
                     {
-                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.Text, genericStruct.TypeParameters.Length, typeArgs.Length);
+                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.ValueText, genericStruct.TypeParameters.Length, typeArgs.Length);
                         return null;
                     }
 
@@ -3974,13 +3976,13 @@ public sealed class Binder
                     // substituted with the supplied type arguments.
                     if (!genericDelegate.IsGenericDefinition)
                     {
-                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
+                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText);
                         return null;
                     }
 
                     if (genericDelegate.TypeParameters.Length != typeArgs.Length)
                     {
-                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.Text, genericDelegate.TypeParameters.Length, typeArgs.Length);
+                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.ValueText, genericDelegate.TypeParameters.Length, typeArgs.Length);
                         return null;
                     }
 
@@ -3988,7 +3990,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
+                    Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText);
                     return null;
                 }
             }
@@ -4234,7 +4236,7 @@ public sealed class Binder
             // This method resolves a dotted-qualifier chain, so its head
             // segment always has an Identifier token.
             var headIdentifier = Invariant.Required(syntax.Identifier, "a dotted-qualifier type-clause chain has a head Identifier");
-            var segmentName = i == 0 ? headIdentifier.Text : string.Join(".", segmentTexts, 0, i + 1);
+            var segmentName = i == 0 ? headIdentifier.ValueText : string.Join(".", segmentTexts, 0, i + 1);
             var segmentLocation = i == 0 ? headIdentifier.Location : syntax.QualifierIdentifierTokens[i - 1].Location;
             var constructed = BindAndConstructUserGenericSegment(syntax, ResolvedDefinition(i), SegmentTypeArguments(i), segmentLocation, segmentName);
             if (constructed == null)
@@ -4388,7 +4390,7 @@ public sealed class Binder
         var qualifiedIdentifier = Invariant.Required(syntax.Identifier, "a dotted-qualifier type clause has a head Identifier");
         var totalSegments = 1 + syntax.QualifierIdentifierTokens.Length;
         var segmentTexts = new string[totalSegments];
-        segmentTexts[0] = qualifiedIdentifier.Text;
+        segmentTexts[0] = qualifiedIdentifier.ValueText;
         for (var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++)
         {
             segmentTexts[1 + i] = syntax.QualifierIdentifierTokens[i].Text;
@@ -4486,7 +4488,7 @@ public sealed class Binder
         // a regular "undefined type". Otherwise walk from the outermost
         // resolvable segment and emit "Outer does not contain a nested type
         // 'X'" for the first failing segment.
-        var outermost = LookupType(qualifiedIdentifier.Text);
+        var outermost = LookupType(qualifiedIdentifier.ValueText);
         if (outermost == null)
         {
             Diagnostics.ReportUndefinedType(qualifiedIdentifier.Location, syntax.DottedName);
@@ -4502,7 +4504,7 @@ public sealed class Binder
             return null;
         }
 
-        var lastGoodName = qualifiedIdentifier.Text;
+        var lastGoodName = qualifiedIdentifier.ValueText;
         for (var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++)
         {
             var segmentText = syntax.QualifierIdentifierTokens[i].Text;
@@ -5283,7 +5285,7 @@ public sealed class Binder
     {
         return body.Statements.Length > 0
             && body.Statements[0] is ExpressionStatementSyntax { Expression: CallExpressionSyntax call }
-            && call.Identifier.Text == "init";
+            && call.Identifier.ValueText == "init";
     }
 
     private static bool IsConstructorChainingExpression(BoundExpression expression)
@@ -7458,7 +7460,7 @@ public sealed class Binder
                 {
                     var pkgSyntax = st.Root.Members.OfType<PackageSyntax>().FirstOrDefault();
                     return pkgSyntax != null
-                        ? string.Concat(pkgSyntax.IdentifiersWithDots.Select(t => t.Text))
+                        ? string.Concat(pkgSyntax.IdentifiersWithDots.Select(t => t.ValueText))
                         : "Default";
                 })
                 .Distinct(StringComparer.Ordinal)

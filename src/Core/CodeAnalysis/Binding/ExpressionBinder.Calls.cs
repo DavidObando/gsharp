@@ -79,7 +79,7 @@ internal sealed partial class ExpressionBinder
         var explicitValues = new Dictionary<string, (FieldSymbol? Field, PropertySymbol? Property, BoundExpression Value)>();
         foreach (var initSyntax in overrides)
         {
-            var memberName = initSyntax.FieldIdentifier.Text;
+            var memberName = initSyntax.FieldIdentifier.ValueText;
             if (!seen.Add(memberName))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName);
@@ -202,7 +202,7 @@ internal sealed partial class ExpressionBinder
         var seen = new HashSet<string>();
         foreach (var initSyntax in syntax.Initializers)
         {
-            var propertyName = initSyntax.PropertyIdentifier.Text;
+            var propertyName = initSyntax.PropertyIdentifier.ValueText;
             if (!seen.Add(propertyName))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.PropertyIdentifier.Location, propertyName);
@@ -1030,7 +1030,7 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         switch (name)
         {
             case "cast":
@@ -1233,7 +1233,7 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
 
         System.Type? clrType = null;
         System.Type? openGenericDefinition = null;
@@ -2767,7 +2767,7 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
-        var nestedName = syntax.Identifier.Text;
+        var nestedName = syntax.Identifier.ValueText;
         var arity = syntax.TypeArgumentList?.Arguments.Count ?? 0;
 
         System.Type? nestedType = null;

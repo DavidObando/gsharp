@@ -299,7 +299,7 @@ internal sealed partial class ExpressionBinder
         if (binderCtx.InUnsafeContext
             && syntax.Operand is CallExpressionSyntax voidCast
             && voidCast.Identifier.Kind == SyntaxKind.IdentifierToken
-            && voidCast.Identifier.Text == "void"
+            && voidCast.Identifier.ValueText == "void"
             && voidCast.TypeArgumentList == null
             && voidCast.NullableQuestionToken == null
             && voidCast.Arguments.Count == 1)
@@ -321,7 +321,7 @@ internal sealed partial class ExpressionBinder
             && structCast.TypeArgumentList == null
             && structCast.NullableQuestionToken == null
             && structCast.Arguments.Count == 1
-            && lookupType(structCast.Identifier.Text) is { } castTarget
+            && lookupType(structCast.Identifier.ValueText) is { } castTarget
             && BlittableDetector.IsBlittableValueStructPointee(castTarget))
         {
             var castArg = BindExpression(structCast.Arguments[0]);

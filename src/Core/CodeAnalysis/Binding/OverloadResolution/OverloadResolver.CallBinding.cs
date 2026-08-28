@@ -248,7 +248,7 @@ internal sealed partial class OverloadResolver
     /// </remarks>
     private bool HasNonConstructorCallableCandidate(CallExpressionSyntax syntax)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
 
         // A same-compilation free function or extension function (extension
         // functions are flattened into the global function table — issue
@@ -390,7 +390,7 @@ internal sealed partial class OverloadResolver
         // Issue #3421 review: `cast[T](value)` is the unambiguous,
         // constructor-independent explicit-conversion form. Bind it before
         // callable/type lookup so no symbol named `cast` can redirect it.
-        if (syntax.Identifier.Text == "cast"
+        if (syntax.Identifier.ValueText == "cast"
             && tryBindIntrinsicCall(syntax, out var checkedCast))
         {
             return checkedCast;
@@ -404,7 +404,7 @@ internal sealed partial class OverloadResolver
         // function" diagnostic.
         if (syntax.TypeArgumentList == null
             && syntax.Identifier.Kind == SyntaxKind.IdentifierToken
-            && syntax.Identifier.Text == "init")
+            && syntax.Identifier.ValueText == "init")
         {
             var inCtor = getCurrentFunction();
             if (inCtor != null
@@ -461,13 +461,13 @@ internal sealed partial class OverloadResolver
         // its containing lexical scope; outside it, an explicit alias or
         // same-named top-level import remains the visible constructor target.
         bool hasImportedType = Scope.TryLookupImportedClassByArity(
-                syntax.Identifier.Text,
+                syntax.Identifier.ValueText,
                 ctorPreferredArity,
                 declaration: null,
                 out var importedCtorCandidate);
         var hasSourceConstructibleType = binderCtx.TryLookupSourceType(
                 Scope,
-                syntax.Identifier.Text,
+                syntax.Identifier.ValueText,
                 ctorPreferredArity,
                 getCurrentFunction(),
                 out var sourceCtorCandidate,
@@ -476,7 +476,7 @@ internal sealed partial class OverloadResolver
             && !(hasImportedType
                 && binderCtx.ImportedTypeOverridesSourceType(
                     Scope,
-                    syntax.Identifier.Text,
+                    syntax.Identifier.ValueText,
                     sourceCtorStruct,
                     ctorPreferredArity,
                     getCurrentFunction(),
@@ -504,7 +504,7 @@ internal sealed partial class OverloadResolver
         }
 
         var conversionType = lookupTypeWithArity(
-            syntax.Identifier.Text,
+            syntax.Identifier.ValueText,
             ctorPreferredArity);
         var hasSingleInlineOutArgument = syntax.Arguments.Count == 1
             && UnwrapNamedArgumentValue(syntax.Arguments[0])
@@ -588,7 +588,7 @@ internal sealed partial class OverloadResolver
         // primary constructor is also positionally constructible —
         // `Entry(1, 2)` lowers to a struct literal initializing its fields.
         if (!hasNonConstructorCallable
-            && lookupTypeWithArity(syntax.Identifier.Text, ctorPreferredArity) is StructSymbol classType
+            && lookupTypeWithArity(syntax.Identifier.ValueText, ctorPreferredArity) is StructSymbol classType
             && (classType.IsClass
                 || classType.IsInline
                 || classType.HasPrimaryConstructor
@@ -606,7 +606,7 @@ internal sealed partial class OverloadResolver
         // report GS0389 pointing at the missing constraint.
         if (syntax.Arguments.Count == 0
             && syntax.TypeArgumentList == null
-            && lookupType(syntax.Identifier.Text) is TypeParameterSymbol typeParam)
+            && lookupType(syntax.Identifier.ValueText) is TypeParameterSymbol typeParam)
         {
             if (typeParam.HasDefaultConstructorConstraint)
             {
@@ -679,7 +679,7 @@ internal sealed partial class OverloadResolver
             boundArguments.Add(boundArgument);
         }
 
-        var symbol = Scope.TryLookupSymbol(syntax.Identifier.Text);
+        var symbol = Scope.TryLookupSymbol(syntax.Identifier.ValueText);
         if (symbol is VariableSymbol callTarget
             && AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
                 callTarget,
@@ -725,7 +725,7 @@ internal sealed partial class OverloadResolver
         // receiver-form `x.Ext(...)` and free-call extension usage, and calls
         // from types with no such member, are unaffected).
         var resolvedIsExtensionOnly = symbol is FunctionSymbol
-            && IsAllExtensionOverloadSet(syntax.Identifier.Text);
+            && IsAllExtensionOverloadSet(syntax.Identifier.ValueText);
 
         // Issue #3527: a same-named PACKAGE-level function is visible through
         // the same scope symbol table as any enclosing-type member (issue
@@ -745,7 +745,7 @@ internal sealed partial class OverloadResolver
         var resolvedIsShadowedByEnclosingMember = symbol is FunctionSymbol shadowCandidateFunction
             && shadowCandidateFunction.Package != null
             && !resolvedIsExtensionOnly
-            && HasEnclosingMemberCallableCandidate(syntax.Identifier.Text);
+            && HasEnclosingMemberCallableCandidate(syntax.Identifier.ValueText);
         if (symbol == null || resolvedIsExtensionOnly || resolvedIsShadowedByEnclosingMember)
         {
             if (binderCtx.InConstructorInitializer
@@ -753,7 +753,7 @@ internal sealed partial class OverloadResolver
             {
                 var staticMethods = TypeMemberModel.GetMethods(
                     initializerReceiverType,
-                    syntax.Identifier.Text,
+                    syntax.Identifier.ValueText,
                     MemberQuery.Static(MemberKinds.Method));
                 if (!staticMethods.IsDefaultOrEmpty)
                 {
@@ -766,7 +766,7 @@ internal sealed partial class OverloadResolver
                         staticMethods,
                         boundArguments.ToImmutable(),
                         syntax,
-                        syntax.Identifier.Text,
+                        syntax.Identifier.ValueText,
                         argumentNames);
                     if (staticMethod == null)
                     {
@@ -781,12 +781,12 @@ internal sealed partial class OverloadResolver
                 }
                 else if (!TypeMemberModel.GetMethods(
                         initializerReceiverType,
-                        syntax.Identifier.Text,
+                        syntax.Identifier.ValueText,
                         MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty)
                 {
                     Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
                         syntax.Identifier.Location,
-                        syntax.Identifier.Text);
+                        syntax.Identifier.ValueText);
                     return new BoundErrorExpression(syntax);
                 }
             }
@@ -809,7 +809,7 @@ internal sealed partial class OverloadResolver
                 // overloads. The selected method's IsStatic routes emission.
                 var implicitMethod = SelectUnifiedInstanceStaticOverload(
                     implicitReceiverStruct,
-                    syntax.Identifier.Text,
+                    syntax.Identifier.ValueText,
                     boundArguments.ToImmutable(),
                     syntax,
                     argumentNames,
@@ -863,7 +863,7 @@ internal sealed partial class OverloadResolver
                 var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
 
                 // The callback uses null to mean that no explicit type arguments were supplied.
-                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.ValueText, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
                 {
                     return implicitInheritedCall;
                 }
@@ -880,8 +880,8 @@ internal sealed partial class OverloadResolver
             if (effThis != null
                 && effThis.Type is InterfaceSymbol implicitReceiverIface)
             {
-                var implicitIfaceOverloads = TypeMemberModel.GetMethods(implicitReceiverIface, syntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Method));
-                var implicitPrivateIfaceOverloads = implicitReceiverIface.GetPrivateMethods(syntax.Identifier.Text);
+                var implicitIfaceOverloads = TypeMemberModel.GetMethods(implicitReceiverIface, syntax.Identifier.ValueText, MemberQuery.Instance(MemberKinds.Method));
+                var implicitPrivateIfaceOverloads = implicitReceiverIface.GetPrivateMethods(syntax.Identifier.ValueText);
                 if (implicitPrivateIfaceOverloads.Length > 0)
                 {
                     implicitIfaceOverloads = implicitIfaceOverloads.AddRange(implicitPrivateIfaceOverloads);
@@ -889,7 +889,7 @@ internal sealed partial class OverloadResolver
 
                 if (implicitIfaceOverloads.Length > 0)
                 {
-                    var implicitIfaceMethod = SelectInstanceOverloadOrReport(implicitIfaceOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    var implicitIfaceMethod = SelectInstanceOverloadOrReport(implicitIfaceOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.ValueText, argumentNames);
                     if (implicitIfaceMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -907,7 +907,7 @@ internal sealed partial class OverloadResolver
                 var implicitObjectReceiver = new BoundVariableExpression(null, effThis);
 
                 // The callback uses null to mean that no explicit type arguments were supplied.
-                if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null, default, argumentNames))
+                if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.ValueText, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null, default, argumentNames))
                 {
                     return implicitObjectCall;
                 }
@@ -921,8 +921,8 @@ internal sealed partial class OverloadResolver
             // (public + private) buckets.
             if (GetImplicitStaticSelfOwner() is InterfaceSymbol implicitStaticIface)
             {
-                var implicitStaticOverloads = TypeMemberModel.GetMethods(implicitStaticIface, syntax.Identifier.Text, MemberQuery.Static(MemberKinds.Method));
-                var implicitStaticPrivateOverloads = implicitStaticIface.GetStaticPrivateMethods(syntax.Identifier.Text);
+                var implicitStaticOverloads = TypeMemberModel.GetMethods(implicitStaticIface, syntax.Identifier.ValueText, MemberQuery.Static(MemberKinds.Method));
+                var implicitStaticPrivateOverloads = implicitStaticIface.GetStaticPrivateMethods(syntax.Identifier.ValueText);
                 if (implicitStaticPrivateOverloads.Length > 0)
                 {
                     implicitStaticOverloads = implicitStaticOverloads.AddRange(implicitStaticPrivateOverloads);
@@ -930,7 +930,7 @@ internal sealed partial class OverloadResolver
 
                 if (implicitStaticOverloads.Length > 0)
                 {
-                    var implicitStaticMethod = SelectInstanceOverloadOrReport(implicitStaticOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.Text, argumentNames);
+                    var implicitStaticMethod = SelectInstanceOverloadOrReport(implicitStaticOverloads, boundArguments.ToImmutable(), syntax, syntax.Identifier.ValueText, argumentNames);
                     if (implicitStaticMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -968,7 +968,7 @@ internal sealed partial class OverloadResolver
             {
                 var implicitStaticStructOverloads = TypeMemberModel.GetMethods(
                     implicitStaticStruct,
-                    syntax.Identifier.Text,
+                    syntax.Identifier.ValueText,
                     MemberQuery.Static(MemberKinds.Method));
                 if (!implicitStaticStructOverloads.IsDefaultOrEmpty)
                 {
@@ -1002,7 +1002,7 @@ internal sealed partial class OverloadResolver
                     {
                         var importedStatics = TypeMemberModel.GetMethods(
                             importedType,
-                            syntax.Identifier.Text,
+                            syntax.Identifier.ValueText,
                             MemberQuery.Static(MemberKinds.Method));
                         if (importedStatics.IsDefaultOrEmpty)
                         {
@@ -1022,7 +1022,7 @@ internal sealed partial class OverloadResolver
 
                     if (ambiguousStaticImport)
                     {
-                        Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.Text);
+                        Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.ValueText);
                         return new BoundErrorExpression(null);
                     }
 
@@ -1044,7 +1044,7 @@ internal sealed partial class OverloadResolver
                     var ambiguousClrStaticImport = false;
                     foreach (var clrType in Scope.EnumerateStaticImportClrTypes())
                     {
-                        if (!ClrTypeExposesStaticMethod(clrType, syntax.Identifier.Text))
+                        if (!ClrTypeExposesStaticMethod(clrType, syntax.Identifier.ValueText))
                         {
                             continue;
                         }
@@ -1062,7 +1062,7 @@ internal sealed partial class OverloadResolver
 
                     if (ambiguousClrStaticImport)
                     {
-                        Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.Text);
+                        Diagnostics.ReportAmbiguousImportedStaticMember(syntax.Identifier.Location, syntax.Identifier.ValueText);
                         return new BoundErrorExpression(null);
                     }
 
@@ -1081,7 +1081,7 @@ internal sealed partial class OverloadResolver
                 if (Scope.SubmissionImports is { } submissionImports)
                 {
                     if (bindImportedClrStaticCall != null
-                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.Text, out var submissionProgramType)
+                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.ValueText, out var submissionProgramType)
                         && submissionProgramType is not null)
                     {
                         return bindImportedClrStaticCall(submissionProgramType, syntax);
@@ -1097,7 +1097,7 @@ internal sealed partial class OverloadResolver
                     }
                 }
 
-                Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
+                Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.ValueText);
                 return new BoundErrorExpression(null);
             }
         }
@@ -1299,14 +1299,14 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.Text);
+            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
         var function = symbol as FunctionSymbol;
         if (function == null)
         {
-            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.Text);
+            Diagnostics.ReportNotAFunction(syntax.Identifier.Location, syntax.Identifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
@@ -1314,7 +1314,7 @@ internal sealed partial class OverloadResolver
         // perform overload selection over the supplied argument shape (count
         // and, where useful, types). The legacy `TryLookupSymbol` returned the
         // first declared overload; we now consult the overload-set store.
-        var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.Text);
+        var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.ValueText);
         var explicitOverloadTypeArguments = default(ImmutableArray<TypeSymbol>);
         if (overloadSet.Length > 1)
         {
@@ -1381,17 +1381,17 @@ internal sealed partial class OverloadResolver
                     {
                         Diagnostics.ReportUnconstrainedNullableIteratorCall(
                             syntax.Identifier.Location,
-                            syntax.Identifier.Text,
+                            syntax.Identifier.ValueText,
                             Invariant.Required(unconstrainedTypeParameter, "an unconstrained nullable iterator diagnostic has a type parameter").Name);
                     }
                     else
                     {
-                        Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, syntax.Identifier.Text);
+                        Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, syntax.Identifier.ValueText);
                     }
                 }
                 else
                 {
-                    Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, syntax.Identifier.Text);
+                    Diagnostics.ReportNoApplicableOverload(syntax.Identifier.Location, syntax.Identifier.ValueText);
                 }
 
                 return new BoundErrorExpression(null);
@@ -2477,7 +2477,7 @@ internal sealed partial class OverloadResolver
     private bool TryBindSubmissionDelegateGlobalCall(CallExpressionSyntax syntax, SubmissionImports submissionImports, out BoundExpression? result)
     {
         result = null;
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         if (!submissionImports.TryFindGlobalVariable(Scope.References, name, out var programType, out _))
         {
             return false;

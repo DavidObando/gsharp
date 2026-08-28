@@ -209,7 +209,7 @@ internal sealed partial class DeclarationBinder
     /// </param>
     internal void BindTypeAliasDeclaration(TypeAliasDeclarationSyntax syntax, PackageSymbol package)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
 
         // Reject shadowing of primitive type names.
         if (isPrimitiveTypeName(name))
@@ -249,7 +249,7 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     internal DelegateTypeSymbol? DeclareDelegateSymbol(DelegateDeclarationSyntax syntax, PackageSymbol package)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
 
         // Reject shadowing of primitive type names — same rule as struct/enum.
         if (isPrimitiveTypeName(name))
@@ -318,7 +318,7 @@ internal sealed partial class DeclarationBinder
         for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
         {
             var parameterSyntax = syntax.Parameters[pIndex];
-            var parameterName = parameterSyntax.Identifier.Text;
+            var parameterName = parameterSyntax.Identifier.ValueText;
             var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                 ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                 : TypeSymbol.Error;
@@ -385,7 +385,7 @@ internal sealed partial class DeclarationBinder
 
     internal EnumSymbol? BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package, TypeSymbol? containingType = null)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
 
         if (isPrimitiveTypeName(name))
         {
@@ -419,7 +419,7 @@ internal sealed partial class DeclarationBinder
         var nextValue = 0;
         foreach (var memberSyntax in syntax.Members)
         {
-            var memberName = memberSyntax.Identifier.Text;
+            var memberName = memberSyntax.Identifier.ValueText;
             if (!seenMemberNames.Add(memberName))
             {
                 Diagnostics.ReportDuplicateEnumMember(memberSyntax.Identifier.Location, memberName, name);
@@ -521,7 +521,7 @@ internal sealed partial class DeclarationBinder
                 }
 
             case NameExpressionSyntax name:
-                return declaredValues.TryGetValue(name.IdentifierToken.Text, out value);
+                return declaredValues.TryGetValue(name.IdentifierToken.ValueText, out value);
 
             case UnaryExpressionSyntax unary:
                 // Issue #1912 follow-up: the lexer types a decimal literal one past
@@ -733,7 +733,7 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     internal StructSymbol? DeclareStructShell(StructDeclarationSyntax syntax, PackageSymbol package, TypeSymbol? containingType = null)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
 
         if (isPrimitiveTypeName(name))
         {

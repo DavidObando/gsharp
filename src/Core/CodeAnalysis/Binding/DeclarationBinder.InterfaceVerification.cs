@@ -2028,10 +2028,10 @@ internal sealed partial class DeclarationBinder
         switch (node)
         {
             case NameExpressionSyntax nameExpr:
-                if (forbiddenNames.Contains(nameExpr.IdentifierToken.Text) &&
-                    !shadowedNames.Contains(nameExpr.IdentifierToken.Text))
+                if (forbiddenNames.Contains(nameExpr.IdentifierToken.ValueText) &&
+                    !shadowedNames.Contains(nameExpr.IdentifierToken.ValueText))
                 {
-                    offendingName = nameExpr.IdentifierToken.Text;
+                    offendingName = nameExpr.IdentifierToken.ValueText;
                     offendingLocation = nameExpr.IdentifierToken.Location;
                     return true;
                 }
@@ -2048,7 +2048,7 @@ internal sealed partial class DeclarationBinder
                 var lambdaParameterNames = new string[lambda.Parameters.Count];
                 for (var i = 0; i < lambda.Parameters.Count; i++)
                 {
-                    lambdaParameterNames[i] = lambda.Parameters[i].Identifier.Text;
+                    lambdaParameterNames[i] = lambda.Parameters[i].Identifier.ValueText;
                 }
 
                 return TryFindInstanceMemberReference(
@@ -2058,7 +2058,7 @@ internal sealed partial class DeclarationBinder
                 var functionParameterNames = new string[func.Parameters.Count];
                 for (var i = 0; i < func.Parameters.Count; i++)
                 {
-                    functionParameterNames[i] = func.Parameters[i].Identifier.Text;
+                    functionParameterNames[i] = func.Parameters[i].Identifier.ValueText;
                 }
 
                 return TryFindInstanceMemberReference(
@@ -2068,7 +2068,7 @@ internal sealed partial class DeclarationBinder
             // scrutinee/collection/bounds are evaluated in the outer scope.
             case CatchClauseSyntax catchClause when catchClause.Identifier != null:
                 return TryFindInstanceMemberReference(
-                    catchClause.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { catchClause.Identifier.Text }), out offendingName, out offendingLocation);
+                    catchClause.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { catchClause.Identifier.ValueText }), out offendingName, out offendingLocation);
 
             case ForRangeStatementSyntax forRange:
                 if (TryFindInstanceMemberReference(forRange.Collection, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
@@ -2077,8 +2077,8 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var forRangeNames = forRange.SecondIdentifier != null
-                    ? new[] { forRange.FirstIdentifier.Text, forRange.SecondIdentifier.Text }
-                    : new[] { forRange.FirstIdentifier.Text };
+                    ? new[] { forRange.FirstIdentifier.ValueText, forRange.SecondIdentifier.ValueText }
+                    : new[] { forRange.FirstIdentifier.ValueText };
                 return TryFindInstanceMemberReference(forRange.Body, forbiddenNames, WithShadowed(shadowedNames, forRangeNames), out offendingName, out offendingLocation);
 
             case ForTupleRangeStatementSyntax forTupleRange:
@@ -2103,7 +2103,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 return TryFindInstanceMemberReference(
-                    forEllipsis.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { forEllipsis.Identifier.Text }), out offendingName, out offendingLocation);
+                    forEllipsis.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { forEllipsis.Identifier.ValueText }), out offendingName, out offendingLocation);
 
             case AwaitForRangeStatementSyntax awaitForRange:
                 if (TryFindInstanceMemberReference(awaitForRange.Stream, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
@@ -2112,7 +2112,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 return TryFindInstanceMemberReference(
-                    awaitForRange.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { awaitForRange.Identifier.Text }), out offendingName, out offendingLocation);
+                    awaitForRange.Body, forbiddenNames, WithShadowed(shadowedNames, new[] { awaitForRange.Identifier.ValueText }), out offendingName, out offendingLocation);
 
             // `if let` bindings are visible only in the then/else clauses, not
             // to statements following the `if`.
@@ -2125,7 +2125,7 @@ internal sealed partial class DeclarationBinder
                         return true;
                     }
 
-                    ifLetNames.Add(binding.Identifier.Text);
+                    ifLetNames.Add(binding.Identifier.ValueText);
                 }
 
                 var ifLetShadowed = WithShadowed(shadowedNames, ifLetNames);
@@ -2147,7 +2147,7 @@ internal sealed partial class DeclarationBinder
                         return true;
                     }
 
-                    whileLetNames.Add(binding.Identifier.Text);
+                    whileLetNames.Add(binding.Identifier.ValueText);
                 }
 
                 return TryFindInstanceMemberReference(
@@ -2221,7 +2221,7 @@ internal sealed partial class DeclarationBinder
         switch (node)
         {
             case VariableDeclarationSyntax variableDeclaration:
-                return new[] { variableDeclaration.Identifier.Text };
+                return new[] { variableDeclaration.Identifier.ValueText };
 
             case TupleDeconstructionStatementSyntax tupleDeconstruction:
                 var tupleNames = new string[tupleDeconstruction.Identifiers.Count];
@@ -2236,7 +2236,7 @@ internal sealed partial class DeclarationBinder
                 var fieldNames = new string[namedDeconstruction.Fields.Count];
                 for (var i = 0; i < namedDeconstruction.Fields.Count; i++)
                 {
-                    fieldNames[i] = namedDeconstruction.Fields[i].LocalIdentifier.Text;
+                    fieldNames[i] = namedDeconstruction.Fields[i].LocalIdentifier.ValueText;
                 }
 
                 return fieldNames;
@@ -2245,7 +2245,7 @@ internal sealed partial class DeclarationBinder
                 var names = new string[guardLet.Bindings.Count];
                 for (var i = 0; i < guardLet.Bindings.Count; i++)
                 {
-                    names[i] = guardLet.Bindings[i].Identifier.Text;
+                    names[i] = guardLet.Bindings[i].Identifier.ValueText;
                 }
 
                 return names;
@@ -2266,7 +2266,7 @@ internal sealed partial class DeclarationBinder
         switch (node)
         {
             case TypePatternSyntax typePattern when typePattern.BindingIdentifier != null:
-                captures.Add(typePattern.BindingIdentifier.Text);
+                captures.Add(typePattern.BindingIdentifier.ValueText);
                 break;
             case PropertyPatternSyntax propertyPattern when propertyPattern.Designation != null:
                 captures.Add(propertyPattern.Designation.Text);
@@ -2276,7 +2276,7 @@ internal sealed partial class DeclarationBinder
                 break;
 
             case SlicePatternSyntax slicePattern when slicePattern.CaptureIdentifier != null:
-                captures.Add(slicePattern.CaptureIdentifier.Text);
+                captures.Add(slicePattern.CaptureIdentifier.ValueText);
                 break;
         }
 

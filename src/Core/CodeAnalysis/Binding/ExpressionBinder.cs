@@ -604,7 +604,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindNameExpression(NameExpressionSyntax syntax)
     {
-        var name = syntax.IdentifierToken.Text;
+        var name = syntax.IdentifierToken.ValueText;
         if (syntax.IdentifierToken.IsMissing)
         {
             // This means the token was inserted by the parser. We already
@@ -678,7 +678,7 @@ internal sealed partial class ExpressionBinder
             // resolve via the method-group path above; this mirrors that for
             // properties/fields so bare and `this.`-qualified access behave
             // identically for a metadata base, matching a user-defined base.
-            if (TryBindInheritedClrInstanceMemberByBareName(syntax.IdentifierToken.Text, out var inheritedClrMember))
+            if (TryBindInheritedClrInstanceMemberByBareName(syntax.IdentifierToken.ValueText, out var inheritedClrMember))
             {
                 return inheritedClrMember;
             }
@@ -1720,7 +1720,7 @@ internal sealed partial class ExpressionBinder
     private bool TryBindMethodGroup(NameExpressionSyntax syntax, [NotNullWhen(true)] out BoundExpression? methodGroup)
     {
         methodGroup = null;
-        var name = syntax.IdentifierToken.Text;
+        var name = syntax.IdentifierToken.ValueText;
 
         // ADR-0063 §9: a name may resolve to multiple user-function overloads.
         // Gather every candidate so BindConversion can pick the one matching the

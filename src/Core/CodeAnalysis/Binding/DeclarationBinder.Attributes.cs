@@ -222,7 +222,7 @@ internal sealed partial class DeclarationBinder
         var targetKind = defaultTarget;
         if (annotation.Target != null)
         {
-            if (TryParseTargetKind(annotation.Target.KindIdentifier.Text, out var parsedTarget))
+            if (TryParseTargetKind(annotation.Target.KindIdentifier.ValueText, out var parsedTarget))
             {
                 targetKind = parsedTarget;
             }
@@ -235,7 +235,7 @@ internal sealed partial class DeclarationBinder
             {
                 Diagnostics.ReportAttributeTargetInvalidForPosition(
                     annotation.Target.KindIdentifier.Location,
-                    annotation.Target.KindIdentifier.Text,
+                    annotation.Target.KindIdentifier.ValueText,
                     positionDescription);
             }
         }

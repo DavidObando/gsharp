@@ -57,7 +57,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var eventName = eventNameSyntax.IdentifierToken.Text;
+        var eventName = eventNameSyntax.IdentifierToken.ValueText;
         var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
 
         // Issue #2154: events only support `+=`/`-=` subscription semantics —
@@ -82,14 +82,14 @@ internal sealed partial class ExpressionBinder
         if (staticLeftName != null
             && binderCtx.TryLookupSourceType(
                 scope,
-                staticLeftName.IdentifierToken.Text,
+                staticLeftName.IdentifierToken.ValueText,
                 preferredArity: 0,
                 getCurrentFunction(),
                 out staticSourceType,
                 out _))
         {
             _ = TryResolveImportedTypeOverride(
-                staticLeftName.IdentifierToken.Text,
+                staticLeftName.IdentifierToken.ValueText,
                 staticSourceType,
                 requestedArity: 0,
                 staticLeftName,
@@ -159,7 +159,7 @@ internal sealed partial class ExpressionBinder
             && EventReceiverNameCanBindAsType(staticLeftName, eventNameSyntax)
             && (staticImportedOverride != null
                 || scope.TryLookupImportedClass(
-                    staticLeftName.IdentifierToken.Text,
+                    staticLeftName.IdentifierToken.ValueText,
                     staticLeftName,
                     out staticImportedOverride)))
         {
@@ -479,7 +479,7 @@ internal sealed partial class ExpressionBinder
         NameExpressionSyntax receiver,
         ExpressionSyntax rightPart)
     {
-        string name = receiver.IdentifierToken.Text;
+        string name = receiver.IdentifierToken.ValueText;
         if (scope.TryLookupSymbol(name) is not VariableSymbol)
         {
             return true;
@@ -534,7 +534,7 @@ internal sealed partial class ExpressionBinder
             && function?.ThisParameter != null
             && function.ReceiverType is StructSymbol implicitThisStruct)
         {
-            var methods = TypeMemberModel.GetMethods(implicitThisStruct, bareName.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
+            var methods = TypeMemberModel.GetMethods(implicitThisStruct, bareName.IdentifierToken.ValueText, MemberQuery.Instance(MemberKinds.Method));
             if (!methods.IsDefaultOrEmpty)
             {
                 var receiver = new BoundVariableExpression(null, function.ThisParameter);
@@ -562,7 +562,7 @@ internal sealed partial class ExpressionBinder
 
             if (boundReceiver.Type is StructSymbol receiverStruct)
             {
-                var methods = TypeMemberModel.GetMethods(receiverStruct, memberName.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
+                var methods = TypeMemberModel.GetMethods(receiverStruct, memberName.IdentifierToken.ValueText, MemberQuery.Instance(MemberKinds.Method));
                 if (!methods.IsDefaultOrEmpty)
                 {
                     var group = BuildInstanceMethodGroup(boundReceiver, methods);

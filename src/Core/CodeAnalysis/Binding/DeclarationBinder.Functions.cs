@@ -79,7 +79,7 @@ internal sealed partial class DeclarationBinder
         FunctionDeclarationSyntax syntax,
         PackageSymbol package)
     {
-        if (syntax.IsExtension && syntax.Identifier.Text.StartsWith("op_", StringComparison.Ordinal))
+        if (syntax.IsExtension && syntax.Identifier.ValueText.StartsWith("op_", StringComparison.Ordinal))
         {
             return syntax.Receiver is { Type: { } receiverType }
                 ? TryGetOpenSelfTypeParameters(receiverType, package)
@@ -121,7 +121,7 @@ internal sealed partial class DeclarationBinder
         var identifier = syntax.Identifier;
         if (identifier == null
             || syntax.TypeArguments is not { } typeArguments
-            || !scope.TryLookupTypeAlias(identifier.Text, typeArguments.Count, out var candidate)
+            || !scope.TryLookupTypeAlias(identifier.ValueText, typeArguments.Count, out var candidate)
             || candidate is not StructSymbol candidateStruct)
         {
             return ImmutableArray<TypeParameterSymbol>.Empty;
@@ -151,7 +151,7 @@ internal sealed partial class DeclarationBinder
                 || argument.IsChannel
                 || argument.IsPointer
                 || argument.IsSequence
-                || argument.Identifier.Text != owner.TypeParameters[i].Name)
+                || argument.Identifier.ValueText != owner.TypeParameters[i].Name)
             {
                 return ImmutableArray<TypeParameterSymbol>.Empty;
             }
@@ -190,11 +190,11 @@ internal sealed partial class DeclarationBinder
         // parameters come from GetGenericOperatorOwnerTypeParameters.
         if (!typeParameters.IsDefaultOrEmpty
             && (syntax.IsConversionOperator
-                || syntax.Identifier.Text.StartsWith("op_", StringComparison.Ordinal)))
+                || syntax.Identifier.ValueText.StartsWith("op_", StringComparison.Ordinal)))
         {
             Diagnostics.ReportGenericOperatorNotSupported(
                 syntax.TypeParameterList?.Location ?? syntax.Identifier.Location,
-                syntax.Identifier.Text);
+                syntax.Identifier.ValueText);
             return;
         }
 
@@ -214,7 +214,7 @@ internal sealed partial class DeclarationBinder
 
         if (methodReceiverStruct != null)
         {
-            var methodName = syntax.Identifier.Text;
+            var methodName = syntax.Identifier.ValueText;
 
             // ADR-0079 / issue #719: warn when a receiver-clause method
             // targets a same-package ("owned") struct or class. The
@@ -386,7 +386,7 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
-        function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
+        function = new FunctionSymbol(syntax.Identifier.ValueText, parameters.ToImmutable(), type, syntax, package, accessibility);
         function.TypeParameters = typeParameters;
         function.IsAsync = syntax.IsAsync
             || (isAsyncIteratorReturnType(type) && syntax.Body is { } body && IteratorDetection.ContainsYield(body));
@@ -684,7 +684,7 @@ internal sealed partial class DeclarationBinder
                 return new FunctionReceiverBindingResult(TypeSymbol.Error, null, null, false);
             }
 
-            var recvName = receiverSyntax.Identifier.Text;
+            var recvName = receiverSyntax.Identifier.ValueText;
             receiverType = receiverSyntax.Type is { } receiverTypeSyntax
                 ? bindTypeClause(receiverTypeSyntax)
                 : TypeSymbol.Error;
@@ -728,7 +728,7 @@ internal sealed partial class DeclarationBinder
         for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
         {
             var parameterSyntax = syntax.Parameters[pIndex];
-            var parameterName = parameterSyntax.Identifier.Text;
+            var parameterName = parameterSyntax.Identifier.ValueText;
             var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                 ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                 : TypeSymbol.Error;
@@ -840,7 +840,7 @@ internal sealed partial class DeclarationBinder
         // call site still elides; the diagnostic is per-declaration.
         if (KnownAttributes.HasConditional(functionAttributes) && type != TypeSymbol.Void)
         {
-            Diagnostics.ReportConditionalMethodMustReturnVoid(syntax.Identifier.Location, syntax.Identifier.Text);
+            Diagnostics.ReportConditionalMethodMustReturnVoid(syntax.Identifier.Location, syntax.Identifier.ValueText);
         }
 
         return functionAttributes;
@@ -1161,7 +1161,7 @@ internal sealed partial class DeclarationBinder
         for (var i = 0; i < count; i++)
         {
             var p = syntax.Parameters[i];
-            var name = p.Identifier.Text;
+            var name = p.Identifier.ValueText;
             if (!seen.Add(name))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(p.Identifier.Location, name);
@@ -2847,13 +2847,13 @@ internal sealed partial class DeclarationBinder
 
             if (firstVariadicSeen)
             {
-                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.Text);
+                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.ValueText);
             }
 
             firstVariadicSeen = true;
             if (i < parameters.Count - 1)
             {
-                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.Text);
+                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.ValueText);
             }
         }
     }
@@ -2906,7 +2906,7 @@ internal sealed partial class DeclarationBinder
 
     internal VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type, Accessibility accessibility)
     {
-        var name = identifier.Text ?? "?";
+        var name = identifier.ValueText ?? "?";
         if (name == "_")
         {
             // `_` is a discard declaration, not a lookup-visible binding.

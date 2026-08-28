@@ -258,7 +258,7 @@ internal sealed class LambdaBinder
         var seen = new HashSet<string>();
         foreach (var p in syntax.Parameters)
         {
-            var pname = p.Identifier.Text;
+            var pname = p.Identifier.ValueText;
 
             // The pre-migration code was `bindTypeClause(p.Type) ?? TypeSymbol.Error`.
             // Restored: a parameter whose type clause fails to bind should
@@ -530,7 +530,7 @@ internal sealed class LambdaBinder
     /// <returns>The bound statement (a no-op declaration; the underlying method is emitted independently).</returns>
     public BoundStatement BindGenericLocalFunctionDeclaration(VariableDeclarationSyntax syntax)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         if (syntax.Keyword?.Kind != SyntaxKind.LetKeyword || syntax.Initializer is not FunctionLiteralExpressionSyntax literalSyntax)
         {
             Diagnostics.ReportGenericLocalFunctionMustBeLetBoundLiteral(syntax.Identifier.Location, name);
@@ -693,7 +693,7 @@ internal sealed class LambdaBinder
         for (var i = 0; i < syntax.Parameters.Count; i++)
         {
             var p = syntax.Parameters[i];
-            var pname = p.Identifier.Text;
+            var pname = p.Identifier.ValueText;
             TypeSymbol ptype;
             if (p.Type != null)
             {
@@ -1860,13 +1860,13 @@ internal sealed class LambdaBinder
 
             if (firstVariadicSeen)
             {
-                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.Text);
+                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.ValueText);
             }
 
             firstVariadicSeen = true;
             if (i < parameters.Count - 1)
             {
-                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.Text);
+                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.ValueText);
             }
         }
     }

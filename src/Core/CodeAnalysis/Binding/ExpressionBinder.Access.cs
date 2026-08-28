@@ -213,7 +213,7 @@ internal sealed partial class ExpressionBinder
                     return false;
                 }
 
-                segments.Add(leftName.IdentifierToken.Text);
+                segments.Add(leftName.IdentifierToken.ValueText);
                 current = accessor.RightPart;
                 continue;
             }
@@ -241,7 +241,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var typeSimpleName = terminalCall.Identifier.Text;
+        var typeSimpleName = terminalCall.Identifier.ValueText;
         var namespacePrefix = string.Join(".", segments);
 
         if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalCall.TypeArgumentList, out var clrType, out var openGenericDef, out var symbolicArgs))
@@ -317,7 +317,7 @@ internal sealed partial class ExpressionBinder
                     return false;
                 }
 
-                segments.Add(leftName.IdentifierToken.Text);
+                segments.Add(leftName.IdentifierToken.ValueText);
                 current = accessor.RightPart;
                 continue;
             }
@@ -337,7 +337,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var typeSimpleName = terminalLiteral.TypeIdentifier.Text;
+        var typeSimpleName = terminalLiteral.TypeIdentifier.ValueText;
         var namespacePrefix = string.Join(".", segments);
 
         if (!TryResolveQualifiedClrType(namespacePrefix, typeSimpleName, terminalLiteral.TypeArgumentList, out var clrType, out _, out _))
@@ -351,7 +351,7 @@ internal sealed partial class ExpressionBinder
 
     private bool QualifiedAccessStartsWithValue(AccessorExpressionSyntax syntax) =>
         syntax.LeftPart is NameExpressionSyntax name
-        && scope.TryLookupSymbol(name.IdentifierToken.Text) is VariableSymbol;
+        && scope.TryLookupSymbol(name.IdentifierToken.ValueText) is VariableSymbol;
 
     /// <summary>
     /// Binds a same-compilation SOURCE type constructed or referenced through a
@@ -403,9 +403,9 @@ internal sealed partial class ExpressionBinder
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
                && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text, isLeadingSegment: !peeledAny))
+               && IsNamespacePrefixSegment(leftName.IdentifierToken.ValueText, isLeadingSegment: !peeledAny))
         {
-            peeledSegments.Add(leftName.IdentifierToken.Text);
+            peeledSegments.Add(leftName.IdentifierToken.ValueText);
             current = accessor.RightPart;
             peeledAny = true;
         }
@@ -465,19 +465,19 @@ internal sealed partial class ExpressionBinder
         switch (remainder)
         {
             case CallExpressionSyntax call when !call.Identifier.IsMissing:
-                simpleName = call.Identifier.Text;
+                simpleName = call.Identifier.ValueText;
                 arity = call.TypeArgumentList?.Arguments.Count ?? 0;
                 break;
             case StructLiteralExpressionSyntax literal when !literal.TypeIdentifier.IsMissing:
-                simpleName = literal.TypeIdentifier.Text;
+                simpleName = literal.TypeIdentifier.ValueText;
                 arity = literal.TypeArgumentList?.Arguments.Count ?? 0;
                 break;
             case AccessorExpressionSyntax { LeftPart: GenericNameExpressionSyntax genericHead }:
-                simpleName = genericHead.Identifier.Text;
+                simpleName = genericHead.Identifier.ValueText;
                 arity = genericHead.TypeArgumentList?.Arguments.Count ?? 0;
                 break;
             case AccessorExpressionSyntax { LeftPart: NameExpressionSyntax nameHead }:
-                simpleName = nameHead.IdentifierToken.Text;
+                simpleName = nameHead.IdentifierToken.ValueText;
                 arity = 0;
                 break;
             case AccessorExpressionSyntax accessor:
@@ -490,7 +490,7 @@ internal sealed partial class ExpressionBinder
                     return false;
                 }
 
-                simpleName = indexNameHead.IdentifierToken.Text;
+                simpleName = indexNameHead.IdentifierToken.ValueText;
                 arity = 0;
                 break;
             default:

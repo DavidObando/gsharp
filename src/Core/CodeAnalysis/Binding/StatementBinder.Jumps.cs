@@ -25,7 +25,7 @@ internal sealed partial class StatementBinder
 {
     private BoundStatement BindGotoStatement(GotoStatementSyntax syntax)
     {
-        var labelName = syntax.LabelIdentifier.Text;
+        var labelName = syntax.LabelIdentifier.ValueText;
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
         userGotoHandlerRegions.Add((
             labelName,
@@ -267,7 +267,7 @@ internal sealed partial class StatementBinder
 
         if (syntax.LabelIdentifier != null)
         {
-            var name = syntax.LabelIdentifier.Text;
+            var name = syntax.LabelIdentifier.ValueText;
             foreach (var frame in binderCtx.LoopStack)
             {
                 if (frame.LabelName == name)
@@ -325,7 +325,7 @@ internal sealed partial class StatementBinder
 
         if (syntax.LabelIdentifier != null)
         {
-            var name = syntax.LabelIdentifier.Text;
+            var name = syntax.LabelIdentifier.ValueText;
             foreach (var frame in binderCtx.LoopStack)
             {
                 if (frame.LabelName == name && frame.ContinueLabel is { } labeledContinue)

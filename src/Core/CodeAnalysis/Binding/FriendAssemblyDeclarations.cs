@@ -64,7 +64,7 @@ internal static class FriendAssemblyDeclarations
             foreach (var annotation in annotations)
             {
                 var name = annotation.GetNameText();
-                if (annotation.Target?.KindIdentifier.Text == "assembly"
+                if (annotation.Target?.KindIdentifier.ValueText == "assembly"
                     && (string.Equals(name, AnnotationName, StringComparison.Ordinal)
                         || string.Equals(name, AnnotationNameWithSuffix, StringComparison.Ordinal)))
                 {

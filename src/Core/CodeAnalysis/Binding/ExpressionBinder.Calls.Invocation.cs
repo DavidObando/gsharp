@@ -2333,7 +2333,7 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
     {
-        var methodName = ce.Identifier.Text;
+        var methodName = ce.Identifier.ValueText;
         if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
         {
             SyntaxNode? effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
