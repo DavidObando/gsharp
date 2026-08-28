@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
 
 namespace Cs2Gs.Translator.Analyzers;
 
@@ -279,6 +280,22 @@ internal static class RoslynAnalyzerApiMap
     /// <returns>True when mapped; false means CS2GS-GAP.</returns>
     public static bool TryMapType(string metadataName, out Entry entry)
         => TypeMap.TryGetValue(metadataName, out entry);
+
+    /// <summary>
+    /// True when <paramref name="type"/> is Roslyn's <c>INamespaceSymbol</c>,
+    /// which analyzer mode maps to G#'s namespace display string. The G#
+    /// surface is honestly nullable (<c>Symbol.ContainingNamespace</c> is
+    /// <c>string?</c>), while Roslyn annotates <c>INamespaceSymbol</c> members
+    /// and parameters non-nullable — so both the mapped type and every
+    /// nullability decision about a value of this type must treat the G#
+    /// counterpart as <c>string?</c> regardless of the C# annotation.
+    /// </summary>
+    /// <param name="type">The bound C# type.</param>
+    /// <returns>True for Microsoft.CodeAnalysis.INamespaceSymbol.</returns>
+    public static bool IsNamespaceSymbolType(ITypeSymbol type)
+        => type is INamedTypeSymbol named
+        && named.Name == "INamespaceSymbol"
+        && named.ContainingNamespace?.ToDisplayString() == "Microsoft.CodeAnalysis";
 
     /// <summary>Maps a Roslyn enum member to its G# spelling.</summary>
     /// <param name="enumMetadataName">The declaring enum's metadata name.</param>
