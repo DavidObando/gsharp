@@ -1399,6 +1399,37 @@ internal static class ObliviousNullabilityAnalyzer
                         {
                             foreach (ISymbol scalarSource in ResolveSources(elementValue, model))
                             {
+                                // Issue #3615 (2026-08-28 nightly, Cs2Gs.Translator
+                                // wall): only SOURCE-declared symbols propagate
+                                // into a declaration's tuple element. An imported
+                                // metadata member can enter the tainted set only
+                                // through the defensive-use seeds (`x?.M` /
+                                // `x == null` at some OTHER site) — its declared
+                                // annotation is the contract for the value
+                                // flowing HERE, and an annotated-nullable
+                                // imported read is already caught by
+                                // IsDirectlyNullable above. Letting the
+                                // defensive-use heuristic rewrite a source
+                                // field's element type widened
+                                // `HashSet[(SyntaxTree, ...)]` to
+                                // `(SyntaxTree?, ...)` and broke every
+                                // deconstructing reader. Source-declared is
+                                // tested via DeclaringSyntaxReferences (an
+                                // imported metadata symbol has none); the null
+                                // guard also keeps the self-migrated form of
+                                // this loop well-typed — ResolveSources'
+                                // iterator element is promoted to ISymbol? by
+                                // the same analysis this file implements.
+                                if (scalarSource == null)
+                                {
+                                    continue;
+                                }
+
+                                if (scalarSource.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                                {
+                                    continue;
+                                }
+
                                 tupleScalarEdges.Add((targetKey, scalarSource));
                             }
                         }
