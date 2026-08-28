@@ -281,9 +281,8 @@ internal static class DiagnosticDescriptors
 
     // GS0356 (raw function-pointer clause missing its calling-convention
     // slot) retired by ADR-0095 v2 / issue #3611: bare `unmanaged (T) -> R`
-    // is now the platform-default unmanaged convention. The id stays
-    // reserved here so it is never reused for an unrelated diagnostic.
-    internal static readonly DiagnosticDescriptor FunctionPointerMissingCallingConvention = new("GS0356", DiagnosticSeverity.Error, "RETIRED (ADR-0095 v2): bare 'unmanaged (...) -> R' is the platform-default unmanaged calling convention.");
+    // is now the platform-default unmanaged convention. The id is tracked as
+    // Retired in DiagnosticIdUniquenessTests so it is never reused.
     internal static readonly DiagnosticDescriptor MarshalAsUnsupportedUnmanagedType = new("GS0357", DiagnosticSeverity.Error, "'@MarshalAs' UnmanagedType '{0}' is not in the v1 supported set. Use one of: LPStr, LPWStr, LPUTF8Str, BStr, LPArray, SafeArray, I1, U1, I2, U2, I4, U4, I8, U8, Bool, VariantBool, SysInt, SysUInt, Struct, ByValTStr, ByValArray (ADR-0096).");
     internal static readonly DiagnosticDescriptor MarshalAsIncompatibleType = new("GS0358", DiagnosticSeverity.Error, "'@MarshalAs(UnmanagedType.{0})' is not valid on parameter '{1}' of type '{2}'. See ADR-0096 §3 for the parameter-type ↔ UnmanagedType compatibility table.");
     internal static readonly DiagnosticDescriptor MarshalAsMissingRequiredArgument = new("GS0359", DiagnosticSeverity.Error, "'@MarshalAs(UnmanagedType.{0})' on parameter '{1}' requires the '{2}' named argument (ADR-0096 §3).");
