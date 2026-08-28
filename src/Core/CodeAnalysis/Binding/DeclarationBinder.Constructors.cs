@@ -993,7 +993,7 @@ internal sealed partial class DeclarationBinder
         var seenParameterNames = new HashSet<string>();
         foreach (var parameterSyntax in ctorSyntax.Parameters)
         {
-            var parameterName = parameterSyntax.Identifier.Text;
+            var parameterName = parameterSyntax.Identifier.ValueText;
             var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                 ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                 : TypeSymbol.Error;

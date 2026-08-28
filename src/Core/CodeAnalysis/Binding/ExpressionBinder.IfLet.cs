@@ -192,7 +192,7 @@ internal sealed partial class ExpressionBinder
         // Defensive: an ExpressionBinder constructed without the declaration
         // callback (no production path does this) still produces a usable
         // symbol so binding can continue and report the real diagnostics.
-        var fallback = new LocalVariableSymbol(identifier.Text ?? "?", isReadOnly, type, declaringSyntax: identifier);
+        var fallback = new LocalVariableSymbol(identifier.ValueText ?? "?", isReadOnly, type, declaringSyntax: identifier);
         scope.TryDeclareVariable(fallback);
         return fallback;
     }

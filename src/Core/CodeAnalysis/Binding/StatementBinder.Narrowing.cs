@@ -360,14 +360,14 @@ internal sealed partial class StatementBinder
                 mayMutateMemberPaths = true;
                 break;
             case AssignmentExpressionSyntax a:
-                assigned.Add(a.IdentifierToken.Text);
+                assigned.Add(a.IdentifierToken.ValueText);
                 break;
             case MultiAssignmentStatementSyntax m:
                 foreach (var t in m.Targets)
                 {
                     if (t is NameExpressionSyntax ne)
                     {
-                        assigned.Add(ne.IdentifierToken.Text);
+                        assigned.Add(ne.IdentifierToken.ValueText);
                     }
                     else if (t is MultiAssignmentDeclarationExpressionSyntax)
                     {
@@ -590,7 +590,7 @@ internal sealed partial class StatementBinder
         foreach (var node in descendants)
         {
             if (node is VariableDeclarationSyntax variable
-                && string.Equals(variable.Identifier.Text, function.Type.Name, StringComparison.Ordinal))
+                && string.Equals(variable.Identifier.ValueText, function.Type.Name, StringComparison.Ordinal))
             {
                 return false;
             }
@@ -628,8 +628,8 @@ internal sealed partial class StatementBinder
         }
 
         return expectedType is StructSymbol
-            && string.Equals(call.Identifier.Text, expectedType.Name, StringComparison.Ordinal)
-            && scope.TryLookupFunctions(call.Identifier.Text).IsDefaultOrEmpty;
+            && string.Equals(call.Identifier.ValueText, expectedType.Name, StringComparison.Ordinal)
+            && scope.TryLookupFunctions(call.Identifier.ValueText).IsDefaultOrEmpty;
     }
 
     private static IEnumerable<SyntaxNode> DescendantsAndSelf(SyntaxNode node)
@@ -1475,7 +1475,7 @@ internal sealed partial class StatementBinder
                 if (initializer is BoundFunctionLiteralExpression functionLiteral
                     && checkNonGenericLocalFunctionEnclosingTypeParameterReference != null)
                 {
-                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(syntax.Identifier.Location, syntax.Identifier.Text, functionLiteral);
+                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(syntax.Identifier.Location, syntax.Identifier.ValueText, functionLiteral);
                 }
             }
         }
@@ -1493,7 +1493,7 @@ internal sealed partial class StatementBinder
         // model, and Go's declare-then-assign shape becomes legal.
         if (channelSlotWithoutInitializer && variable is not LocalVariableSymbol)
         {
-            Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.Text, variableType.Name);
+            Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.ValueText, variableType.Name);
         }
 
         // Issue #3324 (ADR-0008): a bare `var s string` / `let s string`
@@ -1602,7 +1602,7 @@ internal sealed partial class StatementBinder
             {
                 Diagnostics.ReportConstNativeIntegerNotSupported(
                     syntax.Identifier.Location,
-                    syntax.Identifier.Text,
+                    syntax.Identifier.ValueText,
                     Invariant.Required(nativeType, "a detected native integer has a type").Name);
             }
             else if (ConstantExpressionEvaluator.TryFold(convertedInitializer, declaredVariable.Type, out constValue))
@@ -1617,7 +1617,7 @@ internal sealed partial class StatementBinder
             {
                 Diagnostics.ReportConstFieldInitializerNotConstant(
                     syntax.Initializer?.Location ?? syntax.Identifier.Location,
-                    syntax.Identifier.Text);
+                    syntax.Identifier.ValueText);
             }
         }
 
@@ -1676,7 +1676,7 @@ internal sealed partial class StatementBinder
         // not a runtime storage slot, so there is no storage to alias.
         if (syntax.Keyword?.Kind == SyntaxKind.ConstKeyword)
         {
-            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, "a 'const' binding");
+            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, "a 'const' binding");
         }
 
         // An initializer is required: the local must alias an existing lvalue.
@@ -1737,13 +1737,13 @@ internal sealed partial class StatementBinder
         // field (`async`/iterator functions).
         if (function == null || function.IsTopLevelEntryPoint)
         {
-            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, "a top-level variable (it would be emitted as a heap-rooted static field)");
+            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, "a top-level variable (it would be emitted as a heap-rooted static field)");
             rhsValid = false;
         }
         else if (function.IsAsync || isIteratorReturnType(function.Type))
         {
             var context = function.IsAsync ? "a local in an async function" : "a local in an iterator";
-            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.Text, context + " (it would be hoisted into the state machine)");
+            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, context + " (it would be hoisted into the state machine)");
             rhsValid = false;
         }
 
@@ -2265,7 +2265,7 @@ internal sealed partial class StatementBinder
         statements.Add(new BoundVariableDeclaration(syntax, tempVar, initializer));
         foreach (var fieldSyntax in syntax.Fields)
         {
-            var fieldName = fieldSyntax.FieldIdentifier.Text;
+            var fieldName = fieldSyntax.FieldIdentifier.ValueText;
             if (!seen.Add(fieldName))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.FieldIdentifier.Location, fieldName);

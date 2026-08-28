@@ -878,10 +878,10 @@ internal sealed partial class StatementBinder
                 // the case body — matches `for v := range` lexical hygiene.
                 scope = new BoundScope(scope);
                 var identifier = Invariant.Required(caseSyntax.Identifier, "a receive-bind select case has an identifier");
-                variable = new LocalVariableSymbol(identifier.Text, isReadOnly: true, chan.ElementType, declaringSyntax: identifier);
+                variable = new LocalVariableSymbol(identifier.ValueText, isReadOnly: true, chan.ElementType, declaringSyntax: identifier);
                 if (!scope.TryDeclareVariable(variable))
                 {
-                    Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.Text);
+                    Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText);
                 }
 
                 body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-bind select case has a bound body");

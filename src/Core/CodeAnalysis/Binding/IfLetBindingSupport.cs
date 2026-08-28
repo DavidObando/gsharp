@@ -106,7 +106,7 @@ internal static class IfLetBindingSupport
             // the declared underlying type if available, otherwise error.
             if (declaredUnderlying == null)
             {
-                diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.Text, initializerType);
+                diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.ValueText, initializerType);
                 var errorVar = declareLocal(binding.Identifier, true, TypeSymbol.Error);
                 return new BoundIfLetBinding(errorVar, null, initializerExpr);
             }
@@ -116,7 +116,7 @@ internal static class IfLetBindingSupport
         }
         else
         {
-            diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.Text, initializerType);
+            diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.ValueText, initializerType);
             var errorVar = declareLocal(binding.Identifier, true, declaredUnderlying ?? initializerType);
             return new BoundIfLetBinding(errorVar, null, initializerExpr);
         }

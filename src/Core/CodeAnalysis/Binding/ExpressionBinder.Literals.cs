@@ -81,7 +81,7 @@ internal sealed partial class ExpressionBinder
         {
             if (!typeClause.HasQualifier && !typeClause.HasTypeArguments)
             {
-                TryResolveOpenGenericImportedType(typeClauseIdentifier.Text, out typeSymbol);
+                TryResolveOpenGenericImportedType(typeClauseIdentifier.ValueText, out typeSymbol);
             }
             else if (TryGetNestedUnboundGenericReflectionSegments(typeClause, out var reflectionSegments, out var firstGenericSegment))
             {
@@ -122,7 +122,7 @@ internal sealed partial class ExpressionBinder
                 else
                 {
                     resolved = TryResolveOpenGenericImportedTypeWithArity(
-                        typeClauseIdentifier.Text,
+                        typeClauseIdentifier.ValueText,
                         arity,
                         out typeSymbol,
                         out isAmbiguous);
@@ -136,7 +136,7 @@ internal sealed partial class ExpressionBinder
                     // candidates matched, not that the type is undefined.
                     if (isAmbiguous)
                     {
-                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, typeClauseIdentifier.Text + "`" + arity);
+                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, typeClauseIdentifier.ValueText + "`" + arity);
                     }
                     else
                     {
@@ -535,7 +535,7 @@ internal sealed partial class ExpressionBinder
         {
             case NameExpressionSyntax n:
                 {
-                    var ident = n.IdentifierToken.Text;
+                    var ident = n.IdentifierToken.ValueText;
                     if (string.IsNullOrEmpty(ident) || ident == "this" || ident == "it")
                     {
                         name = null;
@@ -553,7 +553,7 @@ internal sealed partial class ExpressionBinder
                 // Generic name like `List[int]` parsed as an empty-arg generic
                 // call site is treated as a type reference whose short name is
                 // the identifier (matches C# `nameof(List<int>)` -> "List").
-                name = call.Identifier.Text;
+                name = call.Identifier.ValueText;
                 return !string.IsNullOrEmpty(name);
 
             case GenericNameExpressionSyntax generic:
@@ -562,7 +562,7 @@ internal sealed partial class ExpressionBinder
                 // is parsed (issue #1323) as a GenericNameExpression. `nameof` of
                 // a generic type yields the unqualified type name with the type
                 // arguments dropped (matches C# `nameof(List<int>)` -> "List").
-                name = generic.Identifier.Text;
+                name = generic.Identifier.ValueText;
                 return !string.IsNullOrEmpty(name);
 
             case ParenthesizedExpressionSyntax p:
@@ -1106,7 +1106,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var name = member.Identifier.Text;
+            var name = member.Identifier.ValueText;
             if (!seenNames.Add(name))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(member.Identifier.Location, name);
@@ -1244,7 +1244,7 @@ internal sealed partial class ExpressionBinder
             return BindStructuralSpreadLiteral(syntax, resolvedDefinition, enclosingTypeArguments);
         }
 
-        var typeName = syntax.TypeIdentifier.Text;
+        var typeName = syntax.TypeIdentifier.ValueText;
 
         StructSymbol? structSymbol = null;
         if (resolvedDefinition != null)
@@ -1438,11 +1438,11 @@ internal sealed partial class ExpressionBinder
                 foreach (var initSyntax in syntax.Initializers)
                 {
                     TypeSymbol memberType;
-                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, initSyntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, initSyntax.FieldIdentifier.ValueText, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
                     {
                         memberType = field.Type;
                     }
-                    else if (TypeMemberModel.TryGetProperty(structSymbol, initSyntax.FieldIdentifier.Text, out var property))
+                    else if (TypeMemberModel.TryGetProperty(structSymbol, initSyntax.FieldIdentifier.ValueText, out var property))
                     {
                         memberType = property.Type;
                     }
@@ -1530,7 +1530,7 @@ internal sealed partial class ExpressionBinder
                 : null;
         foreach (var initSyntax in syntax.Initializers)
         {
-            var fieldName = initSyntax.FieldIdentifier.Text;
+            var fieldName = initSyntax.FieldIdentifier.ValueText;
 
             // Issue #1211: a composite literal targets `var` fields AND settable
             // `prop` auto-properties (a property with a `set` or `init`
@@ -1685,7 +1685,7 @@ internal sealed partial class ExpressionBinder
                 var litReceiver = new BoundVariableExpression(initializer.Syntax, litTemp);
                 if (!TryEmitMemberCollectionInitializer(
                     litReceiver,
-                    initializer.Syntax.FieldIdentifier.Text,
+                    initializer.Syntax.FieldIdentifier.ValueText,
                     initializer.Syntax.FieldIdentifier,
                     initializer.Braced,
                     bracedStatements))
@@ -1762,7 +1762,7 @@ internal sealed partial class ExpressionBinder
         var explicitNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var initializer in syntax.Initializers)
         {
-            explicitNames.Add(initializer.FieldIdentifier.Text);
+            explicitNames.Add(initializer.FieldIdentifier.ValueText);
         }
 
         if (!StructuralProjectionPlanner.TryCreate(
@@ -1778,8 +1778,8 @@ internal sealed partial class ExpressionBinder
             var failedOrder = ImmutableArray.CreateBuilder<string>(syntax.Initializers.Count);
             foreach (var initializer in syntax.Initializers)
             {
-                failedValues[initializer.FieldIdentifier.Text] = BindExpression(initializer.Value);
-                failedOrder.Add(initializer.FieldIdentifier.Text);
+                failedValues[initializer.FieldIdentifier.ValueText] = BindExpression(initializer.Value);
+                failedOrder.Add(initializer.FieldIdentifier.ValueText);
             }
 
             return conversions.BindStructuralProjection(
@@ -1802,7 +1802,7 @@ internal sealed partial class ExpressionBinder
         var order = ImmutableArray.CreateBuilder<string>(syntax.Initializers.Count);
         foreach (var initializer in syntax.Initializers)
         {
-            var name = initializer.FieldIdentifier.Text;
+            var name = initializer.FieldIdentifier.ValueText;
             if (values.ContainsKey(name))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(initializer.FieldIdentifier.Location, name);
@@ -1877,7 +1877,7 @@ internal sealed partial class ExpressionBinder
         var parameterlessCtor = FindPublicParameterlessConstructor(clrType);
         if (parameterlessCtor == null)
         {
-            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, syntax.TypeIdentifier.Text);
+            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, syntax.TypeIdentifier.ValueText);
             foreach (var initSyntax in syntax.Initializers)
             {
                 _ = BindExpression(initSyntax.Value);
@@ -1961,7 +1961,7 @@ internal sealed partial class ExpressionBinder
         var seen = new HashSet<string>();
         foreach (var initSyntax in syntax.Initializers)
         {
-            var memberName = initSyntax.FieldIdentifier.Text;
+            var memberName = initSyntax.FieldIdentifier.ValueText;
             if (!seen.Add(memberName))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName);
@@ -2093,7 +2093,7 @@ internal sealed partial class ExpressionBinder
         var seen = new HashSet<string>();
         foreach (var initSyntax in syntax.Initializers)
         {
-            var memberName = initSyntax.FieldIdentifier.Text;
+            var memberName = initSyntax.FieldIdentifier.ValueText;
             if (!seen.Add(memberName))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(initSyntax.FieldIdentifier.Location, memberName);
@@ -2477,10 +2477,10 @@ internal sealed partial class ExpressionBinder
             var elementTypeIdentifier = Invariant.Required(
                 syntax.ElementTypeIdentifier,
                 "a non-nested array literal has an element type identifier");
-            elementType = lookupType(elementTypeIdentifier.Text);
+            elementType = lookupType(elementTypeIdentifier.ValueText);
             if (elementType == null)
             {
-                Diagnostics.ReportUndefinedType(elementTypeIdentifier.Location, elementTypeIdentifier.Text);
+                Diagnostics.ReportUndefinedType(elementTypeIdentifier.Location, elementTypeIdentifier.ValueText);
                 return new BoundErrorExpression(null);
             }
         }
@@ -2713,10 +2713,10 @@ internal sealed partial class ExpressionBinder
     /// <returns>The bound stackalloc expression.</returns>
     internal BoundExpression BindStackAllocExpression(StackAllocExpressionSyntax syntax, TypeSymbol? targetType = null)
     {
-        var elementType = lookupType(syntax.ElementTypeIdentifier.Text);
+        var elementType = lookupType(syntax.ElementTypeIdentifier.ValueText);
         if (elementType == null)
         {
-            Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
+            Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 

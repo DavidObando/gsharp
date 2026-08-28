@@ -698,7 +698,7 @@ internal sealed class PatternBinder
         }
 
         var nameToken = identifier ?? designation;
-        var bindingIdentifier = nameToken != null && nameToken.Text != "_"
+        var bindingIdentifier = nameToken != null && nameToken.ValueText != "_"
             ? nameToken
             : null;
         var hasBinding = bindingIdentifier != null;
@@ -717,7 +717,7 @@ internal sealed class PatternBinder
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(
                         bindingIdentifier.Location,
-                        bindingIdentifier.Text);
+                        bindingIdentifier.ValueText);
                 }
             }
             else if (bindingContext == PatternBindingContext.OrOrNot)
@@ -727,7 +727,7 @@ internal sealed class PatternBinder
                 // definitely assigned. The discard identifier `_` is permitted.
                 Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(
                     bindingIdentifier.Location,
-                    bindingIdentifier.Text);
+                    bindingIdentifier.ValueText);
             }
             else if (identifier != null)
             {
@@ -736,7 +736,7 @@ internal sealed class PatternBinder
                 // reading as an incoherent double test.
                 Diagnostics.ReportPatternBindingNotAllowedInIsExpression(
                     bindingIdentifier.Location,
-                    bindingIdentifier.Text);
+                    bindingIdentifier.ValueText);
             }
 
             // ADR-0166: a designation in a boolean `is` is declared by the
@@ -825,13 +825,13 @@ internal sealed class PatternBinder
         {
             foreach (var tupleFieldSyntax in syntax.Fields)
             {
-                if (!TryGetTupleField(tupleType, tupleFieldSyntax.Identifier.Text, out var tupleField)
+                if (!TryGetTupleField(tupleType, tupleFieldSyntax.Identifier.ValueText, out var tupleField)
                     || tupleField is null)
                 {
-                    Diagnostics.ReportUndefinedFieldOnType(tupleFieldSyntax.Identifier.Location, tupleFieldSyntax.Identifier.Text, discriminantType);
+                    Diagnostics.ReportUndefinedFieldOnType(tupleFieldSyntax.Identifier.Location, tupleFieldSyntax.Identifier.ValueText, discriminantType);
                     fields.Add(new BoundPropertyPatternField(
                         syntax,
-                        new FieldSymbol(tupleFieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public),
+                        new FieldSymbol(tupleFieldSyntax.Identifier.ValueText, TypeSymbol.Error, Accessibility.Public),
                         BindPattern(
                             tupleFieldSyntax.Pattern,
                             TypeSymbol.Error,
@@ -872,10 +872,10 @@ internal sealed class PatternBinder
                     out var field)
                 || field is null)
             {
-                Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
+                Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.ValueText, discriminantType);
                 fields.Add(new BoundPropertyPatternField(
                     syntax,
-                    new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public),
+                    new FieldSymbol(fieldSyntax.Identifier.ValueText, TypeSymbol.Error, Accessibility.Public),
                     BindPattern(
                         fieldSyntax.Pattern,
                         TypeSymbol.Error,
@@ -898,7 +898,7 @@ internal sealed class PatternBinder
         out BoundPropertyPatternField? boundField)
     {
         boundField = null;
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         if (lookupType is StructSymbol structType)
         {
             StructSymbol? current = structType;
@@ -1044,7 +1044,7 @@ internal sealed class PatternBinder
         bool preferTypeNames,
         out BoundPropertyPatternField? boundField)
     {
-        var name = syntax.Identifier.Text;
+        var name = syntax.Identifier.ValueText;
         var property = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
             clrType,
             name,
@@ -1289,7 +1289,7 @@ internal sealed class PatternBinder
         if (syntax.CaptureIdentifier != null)
         {
             variable = CreatePatternVariable(
-                syntax.CaptureIdentifier.Text,
+                syntax.CaptureIdentifier.ValueText,
                 sliceType,
                 syntax.CaptureIdentifier,
                 isExpressionBinding: bindingContext == PatternBindingContext.IsExpression);
@@ -1297,14 +1297,14 @@ internal sealed class PatternBinder
             {
                 if (!Scope.TryDeclareVariable(variable))
                 {
-                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.CaptureIdentifier.Location, syntax.CaptureIdentifier.Text);
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.CaptureIdentifier.Location, syntax.CaptureIdentifier.ValueText);
                 }
             }
             else if (bindingContext == PatternBindingContext.OrOrNot)
             {
                 Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(
                     syntax.CaptureIdentifier.Location,
-                    syntax.CaptureIdentifier.Text);
+                    syntax.CaptureIdentifier.ValueText);
             }
 
             // ADR-0166: a slice capture in a boolean `is` is scoped by the

@@ -105,9 +105,9 @@ internal sealed partial class ExpressionBinder
         // type receiver below), so it cannot shadow ordinary static-member access.
         if (syntax.LeftPart is NameExpressionSyntax enclosingNameSyntax
             && syntax.RightPart is not NameExpressionSyntax
-            && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.Text) is not VariableSymbol
+            && scope.TryLookupSymbol(enclosingNameSyntax.IdentifierToken.ValueText) is not VariableSymbol
             && TryLookupSourceTypeWithImportPrecedence(
-                enclosingNameSyntax.IdentifierToken.Text,
+                enclosingNameSyntax.IdentifierToken.ValueText,
                 preferredArity: -1,
                 enclosingNameSyntax,
                 out var enclosingAliasType)
@@ -179,7 +179,7 @@ internal sealed partial class ExpressionBinder
             // scope regardless), so peel it off the same way as the
             // nested-type case above whenever the qualifier names the type's own
             // simple name AND that name is also the tail of its package.
-            if (headIdentifier == enclosingNameSyntax.IdentifierToken.Text
+            if (headIdentifier == enclosingNameSyntax.IdentifierToken.ValueText
                 && GetSymbolPackageName(enclosingAliasType) is string ownPackageName
                 && (ownPackageName == headIdentifier || ownPackageName.EndsWith("." + headIdentifier, StringComparison.Ordinal)))
             {
@@ -243,7 +243,7 @@ internal sealed partial class ExpressionBinder
 
         if (leftName is not null)
         {
-            var name = leftName.IdentifierToken.Text;
+            var name = leftName.IdentifierToken.ValueText;
             var variableHit = scope.TryLookupSymbol(name) as VariableSymbol;
 
             // Issue #1104: `base.Prop` — a non-virtual read of the nearest base
@@ -783,7 +783,7 @@ internal sealed partial class ExpressionBinder
         StructSymbol? sourceType = null;
         if (syntax.LeftPart is NameExpressionSyntax sourceName
             && TryLookupSourceTypeWithImportPrecedence(
-                sourceName.IdentifierToken.Text,
+                sourceName.IdentifierToken.ValueText,
                 preferredArity: -1,
                 sourceName,
                 out var sourceAlias)
@@ -954,17 +954,17 @@ internal sealed partial class ExpressionBinder
         switch (expression)
         {
             case NameExpressionSyntax name:
-                identifier = name.IdentifierToken.Text;
+                identifier = name.IdentifierToken.ValueText;
                 return true;
             case CallExpressionSyntax call:
-                identifier = call.Identifier.Text;
+                identifier = call.Identifier.ValueText;
                 return true;
             case AccessorExpressionSyntax accessor:
                 return TryGetHeadIdentifier(accessor.LeftPart, out identifier);
             case IndexExpressionSyntax index:
                 return TryGetHeadIdentifier(index.Target, out identifier);
             case StructLiteralExpressionSyntax structLiteral:
-                identifier = structLiteral.TypeIdentifier.Text;
+                identifier = structLiteral.TypeIdentifier.ValueText;
                 return true;
             case ObjectCreationExpressionSyntax objectCreation:
                 return TryGetHeadIdentifier(objectCreation.Target, out identifier);
@@ -1010,17 +1010,17 @@ internal sealed partial class ExpressionBinder
         switch (expr)
         {
             case NameExpressionSyntax name:
-                headName = name.IdentifierToken.Text;
+                headName = name.IdentifierToken.ValueText;
                 headArity = -1;
                 return true;
             case GenericNameExpressionSyntax generic:
-                headName = generic.Identifier.Text;
+                headName = generic.Identifier.ValueText;
                 headArity = generic.TypeArgumentList.Arguments.Count;
                 return true;
             case IndexExpressionSyntax index
                 when !index.IsNullConditional
                     && index.Target is NameExpressionSyntax indexName:
-                headName = indexName.IdentifierToken.Text;
+                headName = indexName.IdentifierToken.ValueText;
                 headArity = index.Indices.Count;
                 return true;
             case IndexExpressionSyntax index when !index.IsNullConditional:
@@ -1265,7 +1265,7 @@ internal sealed partial class ExpressionBinder
         switch (expr)
         {
             case NameExpressionSyntax name:
-                segments.Add((name.IdentifierToken.Text, default));
+                segments.Add((name.IdentifierToken.ValueText, default));
                 return true;
 
             case GenericNameExpressionSyntax generic:
@@ -1274,7 +1274,7 @@ internal sealed partial class ExpressionBinder
                     return false;
                 }
 
-                segments.Add((generic.Identifier.Text, genericArgs));
+                segments.Add((generic.Identifier.ValueText, genericArgs));
                 return true;
 
             case IndexExpressionSyntax index when !index.IsNullConditional:
@@ -1285,7 +1285,7 @@ internal sealed partial class ExpressionBinder
                         return false;
                     }
 
-                    segments.Add((indexTargetName.IdentifierToken.Text, rootArgs));
+                    segments.Add((indexTargetName.IdentifierToken.ValueText, rootArgs));
                     return true;
                 }
 
@@ -1317,11 +1317,11 @@ internal sealed partial class ExpressionBinder
                 switch (accessor.RightPart)
                 {
                     case NameExpressionSyntax rightName:
-                        segments.Add((rightName.IdentifierToken.Text, default));
+                        segments.Add((rightName.IdentifierToken.ValueText, default));
                         return true;
                     case GenericNameExpressionSyntax rightGeneric
                         when TryBindGenericSegmentArguments(rightGeneric, out var rightArgs):
-                        segments.Add((rightGeneric.Identifier.Text, rightArgs));
+                        segments.Add((rightGeneric.Identifier.ValueText, rightArgs));
                         return true;
                     default:
                         return false;
@@ -1584,7 +1584,7 @@ internal sealed partial class ExpressionBinder
         NameExpressionSyntax leftName,
         ref ExpressionSyntax rightPart,
         [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
-        => TryWalkQualifiedClrTypePath(leftName.IdentifierToken.Text, ref rightPart, out importedClass);
+        => TryWalkQualifiedClrTypePath(leftName.IdentifierToken.ValueText, ref rightPart, out importedClass);
 
     /// <summary>
     /// Walks a dotted accessor chain, extending a namespace prefix segment by
@@ -1665,7 +1665,7 @@ internal sealed partial class ExpressionBinder
                     return false;
             }
 
-            var fullTypeName = currentPath + "." + typeNameSyntax.IdentifierToken.Text;
+            var fullTypeName = currentPath + "." + typeNameSyntax.IdentifierToken.ValueText;
             if (scope.References.TryResolveType(fullTypeName, out var type))
             {
                 importedClass = new ImportedClassSymbol(type, typeNameSyntax, references: scope.References);
@@ -1709,12 +1709,12 @@ internal sealed partial class ExpressionBinder
                     return false;
                 }
 
-                name = indexName.IdentifierToken.Text;
+                name = indexName.IdentifierToken.ValueText;
                 arity = index.Indices.Count;
                 return true;
 
             case GenericNameExpressionSyntax generic:
-                name = generic.Identifier.Text;
+                name = generic.Identifier.ValueText;
                 arity = generic.TypeArgumentList.Arguments.Count;
                 return true;
 
@@ -1910,7 +1910,7 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
-        var methodName = ce.Identifier.Text;
+        var methodName = ce.Identifier.ValueText;
 
         var instanceGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Instance(MemberKinds.Method));
         var staticGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
@@ -2022,12 +2022,12 @@ internal sealed partial class ExpressionBinder
         switch (rightPart)
         {
             case CallExpressionSyntax ce when !ce.Identifier.IsMissing:
-                headName = ce.Identifier.Text;
+                headName = ce.Identifier.ValueText;
                 isCall = true;
                 return !string.IsNullOrEmpty(headName);
 
             case NameExpressionSyntax ne when !ne.IdentifierToken.IsMissing:
-                headName = ne.IdentifierToken.Text;
+                headName = ne.IdentifierToken.ValueText;
                 isCall = false;
                 return !string.IsNullOrEmpty(headName);
 
@@ -2165,7 +2165,7 @@ internal sealed partial class ExpressionBinder
                 return BindAccessorStep(head, null, nested.RightPart);
 
             case NameExpressionSyntax ne:
-                var memberName = ne.IdentifierToken.Text;
+                var memberName = ne.IdentifierToken.ValueText;
                 if (enumSymbol.TryGetMember(memberName, out var member))
                 {
                     // Issue #188 / #175: every read of an `@Obsolete` enum
@@ -2312,21 +2312,21 @@ internal sealed partial class ExpressionBinder
         var literalArity = structLiteral.TypeArgumentList != null ? structLiteral.TypeArgumentList.Arguments.Count : -1;
         TypeSymbol? nestedType;
         StructSymbol? declaringContainer = outerConstructed;
-        if (!scope.TryLookupNestedTypeAlias(container, structLiteral.TypeIdentifier.Text, literalArity, out nestedType)
+        if (!scope.TryLookupNestedTypeAlias(container, structLiteral.TypeIdentifier.ValueText, literalArity, out nestedType)
             && !scope.TryLookupNestedTypeAliasIncludingInherited(
                 outerConstructed,
-                structLiteral.TypeIdentifier.Text,
+                structLiteral.TypeIdentifier.ValueText,
                 literalArity,
                 out nestedType,
                 out declaringContainer))
         {
-            Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.Text);
+            Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
         if (nestedType is not StructSymbol nestedStructDef)
         {
-            Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.Text);
+            Diagnostics.ReportUnableToFindType(structLiteral.TypeIdentifier.Location, structLiteral.TypeIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
@@ -2544,7 +2544,7 @@ internal sealed partial class ExpressionBinder
     /// <returns>The bound access, or a bound error expression.</returns>
     private BoundExpression BindInterfaceStaticMemberAccess(InterfaceSymbol interfaceSym, InterfaceSymbol fieldOwner, NameExpressionSyntax ne)
     {
-        var memberName = ne.IdentifierToken.Text;
+        var memberName = ne.IdentifierToken.ValueText;
 
         var field = fieldOwner.GetStaticField(memberName);
         if (field != null)
@@ -2640,7 +2640,7 @@ internal sealed partial class ExpressionBinder
 
         if (!binderCtx.TryLookupSourceType(
                 scope,
-                targetName.IdentifierToken.Text,
+                targetName.IdentifierToken.ValueText,
                 index.Indices.Count,
                 getCurrentFunction(),
                 out var alias,
@@ -2699,7 +2699,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var name = targetName.IdentifierToken.Text;
+        var name = targetName.IdentifierToken.ValueText;
 
         // Genuine indexing (`arr[i]`, `dict[key]`) requires the target to name a
         // value. Only when the name is NOT a value do we consider the
@@ -2798,7 +2798,7 @@ internal sealed partial class ExpressionBinder
         constructedInterface = null;
         constructedImported = null;
 
-        var name = generic.Identifier.Text;
+        var name = generic.Identifier.ValueText;
 
         // A value-named receiver is genuine element access, never a type.
         if (scope.TryLookupSymbol(name) is VariableSymbol)
@@ -2991,7 +2991,7 @@ internal sealed partial class ExpressionBinder
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
                && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.Text, isLeadingSegment: !peeledAny))
+               && IsNamespacePrefixSegment(leftName.IdentifierToken.ValueText, isLeadingSegment: !peeledAny))
         {
             current = accessor.RightPart;
             peeledAny = true;
@@ -3175,7 +3175,7 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
-        var name = syntax.IdentifierToken.Text;
+        var name = syntax.IdentifierToken.ValueText;
 
         StructSymbol? match = null;
         var ambiguous = false;
@@ -3273,7 +3273,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var name = syntax.IdentifierToken.Text;
+        var name = syntax.IdentifierToken.ValueText;
         if (!submissionImports.TryFindMemberContainer(scope.References, name, out var programType))
         {
             return false;
@@ -3385,7 +3385,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)
     {
-        var memberName = ne.IdentifierToken.Text;
+        var memberName = ne.IdentifierToken.ValueText;
 
         // ADR-0112: static field/property lookups go through the canonical layer.
         if (TypeMemberModel.TryGetStaticFieldIncludingInherited(structSym, memberName, out var field, out var fieldOwner))
@@ -3457,7 +3457,7 @@ internal sealed partial class ExpressionBinder
         var structSym = ownerType as StructSymbol;
         var ifaceSym = ownerType as InterfaceSymbol;
 
-        var methodName = ce.Identifier.Text;
+        var methodName = ce.Identifier.ValueText;
 
         if (!overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames))
         {

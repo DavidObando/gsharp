@@ -1037,7 +1037,7 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindLabeledStatement(LabeledStatementSyntax syntax)
     {
-        var labelName = syntax.LabelIdentifier.Text;
+        var labelName = syntax.LabelIdentifier.ValueText;
         var inner = syntax.Statement;
 
         // Issue #1884: a label on any non-loop statement is a `goto` target

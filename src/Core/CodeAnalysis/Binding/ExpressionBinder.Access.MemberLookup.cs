@@ -166,7 +166,7 @@ internal sealed partial class ExpressionBinder
                 // projection cannot expose the stored function as a delegate.
                 if (ce.NullableQuestionToken == null
                     && receiver?.Type is TupleTypeSymbol tupleType
-                    && TryGetTupleElementIndex(ce.Identifier.Text, tupleType, out var tupleIndex)
+                    && TryGetTupleElementIndex(ce.Identifier.ValueText, tupleType, out var tupleIndex)
                     && RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex))
                 {
                     var tupleElement = new BoundTupleElementAccessExpression(
@@ -177,7 +177,7 @@ internal sealed partial class ExpressionBinder
                     return overloads.BindIndirectCallExpression(
                         ce,
                         tupleElement,
-                        ce.Identifier.Text,
+                        ce.Identifier.ValueText,
                         ce.Identifier.Location,
                         nullSafeInvocation: "?(...)");
                 }
@@ -248,7 +248,7 @@ internal sealed partial class ExpressionBinder
 
                 if (classSymbol != null)
                 {
-                    var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out var staticMember);
+                    var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.ValueText, ne, out var staticMember);
                     if (!foundMember || staticMember is null)
                     {
                         // Issue #337: a static member name that resolves to a
@@ -256,14 +256,14 @@ internal sealed partial class ExpressionBinder
                         // delegate-conversion context it materializes as a
                         // delegate over the selected overload; the conversion
                         // classifier decides which overload (if any) applies.
-                        var staticMethods = classSymbol.GetStaticMethodGroup(ne.IdentifierToken.Text);
+                        var staticMethods = classSymbol.GetStaticMethodGroup(ne.IdentifierToken.ValueText);
                         if (!staticMethods.IsEmpty)
                         {
                             return new BoundClrMethodGroupExpression(
                                 null,
                                 receiver: null,
                                 classSymbol.ClassType,
-                                ne.IdentifierToken.Text,
+                                ne.IdentifierToken.ValueText,
                                 staticMethods);
                         }
 
@@ -320,7 +320,7 @@ internal sealed partial class ExpressionBinder
                     // ADR-0112 A3: this-first base-chain instance field walk via
                     // the canonical member-resolution layer, surfacing the
                     // declaring struct so the emitted field token names the right owner.
-                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, ne.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
+                    if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, ne.IdentifierToken.ValueText, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
                     {
                         // Issue #186 / #175: dotted field read fires
                         // GS0204 if the field carries `@Obsolete`.
@@ -350,11 +350,11 @@ internal sealed partial class ExpressionBinder
                     }
 
                     // ADR-0051: check properties before reporting "unable to find member".
-                    if (TypeMemberModel.TryGetProperty(structSym, ne.IdentifierToken.Text, out var prop, out var propDeclaringType))
+                    if (TypeMemberModel.TryGetProperty(structSym, ne.IdentifierToken.ValueText, out var prop, out var propDeclaringType))
                     {
                         if (!prop.HasGetter)
                         {
-                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.Text);
+                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.ValueText);
                             return new BoundErrorExpression(null);
                         }
 
@@ -389,7 +389,7 @@ internal sealed partial class ExpressionBinder
                         while (evtDeclType != null)
                         {
                             var evt = evtDeclType.Events.FirstOrDefault(e =>
-                                e.Name == ne.IdentifierToken.Text && e.IsFieldLike && e.BackingField != null);
+                                e.Name == ne.IdentifierToken.ValueText && e.IsFieldLike && e.BackingField != null);
                             if (evt != null)
                             {
                                 return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, evtDeclType, evt.BackingField!));
@@ -407,7 +407,7 @@ internal sealed partial class ExpressionBinder
                     // then reflect the member (reflection walks the CLR chain).
                     if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
                     {
-                        var memberName = ne.IdentifierToken.Text;
+                        var memberName = ne.IdentifierToken.ValueText;
                         var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
                         if (clrProp != null && clrProp.CanRead)
                         {
@@ -426,7 +426,7 @@ internal sealed partial class ExpressionBinder
                     // conversion classifier selects the overload (if any) from the
                     // target delegate signature; the emitter binds the delegate's
                     // Target to this receiver (boxing value-type receivers).
-                    var instanceMethods = TypeMemberModel.GetMethods(structSym, ne.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
+                    var instanceMethods = TypeMemberModel.GetMethods(structSym, ne.IdentifierToken.ValueText, MemberQuery.Instance(MemberKinds.Method));
                     if (TryBuildUserMethodGroup(receiver, instanceMethods, out var instanceUserGroup))
                     {
                         return instanceUserGroup;
@@ -438,7 +438,7 @@ internal sealed partial class ExpressionBinder
                     // base, fall back to typeof(object) so the member is captured
                     // as a CLR method group resolvable against a target delegate.
                     var inheritedMgClr = structSym.ImportedBaseType?.ClrType ?? typeof(object);
-                    if (TryBindClrMethodGroup(receiver, inheritedMgClr, wantStatic: false, ne.IdentifierToken.Text, out var inheritedClrGroup))
+                    if (TryBindClrMethodGroup(receiver, inheritedMgClr, wantStatic: false, ne.IdentifierToken.ValueText, out var inheritedClrGroup))
                     {
                         return inheritedClrGroup;
                     }
@@ -453,7 +453,7 @@ internal sealed partial class ExpressionBinder
                     // as a CLR method group over typeof(System.Enum) so it resolves
                     // against a target delegate signature; the emitter boxes the
                     // value-type receiver into the delegate Target.
-                    if (TryBindClrMethodGroup(receiver, typeof(System.Enum), wantStatic: false, ne.IdentifierToken.Text, out var enumClrGroup))
+                    if (TryBindClrMethodGroup(receiver, typeof(System.Enum), wantStatic: false, ne.IdentifierToken.ValueText, out var enumClrGroup))
                     {
                         return enumClrGroup;
                     }
@@ -473,13 +473,13 @@ internal sealed partial class ExpressionBinder
                     // TypeMemberModel.TryGetProperty walks SelfAndAllBaseInterfaces.
                     if (TypeMemberModel.TryGetPropertyWithOwner(
                         ifaceSym,
-                        ne.IdentifierToken.Text,
+                        ne.IdentifierToken.ValueText,
                         out var ifaceProp,
                         out var ifacePropertyOwner))
                     {
                         if (!ifaceProp.HasGetter)
                         {
-                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.Text);
+                            Diagnostics.ReportCannotAssign(ne.Location, ne.IdentifierToken.ValueText);
                             return new BoundErrorExpression(null);
                         }
 
@@ -522,7 +522,7 @@ internal sealed partial class ExpressionBinder
                     // the concrete implementation through interface dispatch.
                     // TypeMemberModel.GetMethods walks SelfAndAllBaseInterfaces
                     // so an inherited base-interface method binds too.
-                    var ifaceInstanceMethods = TypeMemberModel.GetMethods(ifaceSym, ne.IdentifierToken.Text, MemberQuery.Instance(MemberKinds.Method));
+                    var ifaceInstanceMethods = TypeMemberModel.GetMethods(ifaceSym, ne.IdentifierToken.ValueText, MemberQuery.Instance(MemberKinds.Method));
                     if (TryBuildUserMethodGroup(receiver, ifaceInstanceMethods, out var ifaceUserGroup))
                     {
                         return ifaceUserGroup;
@@ -537,7 +537,7 @@ internal sealed partial class ExpressionBinder
                     // `callvirt get_Count`. The receiver carries an
                     // InterfaceImpl row to each imported base interface, so a
                     // CLR member access on it is verifiable.
-                    var ifaceMemberName = ne.IdentifierToken.Text;
+                    var ifaceMemberName = ne.IdentifierToken.ValueText;
                     foreach (var clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym))
                     {
                         var clrProp = ClrTypeUtilities.SafeGetProperty(clrBaseIface, ifaceMemberName, BindingFlags.Public | BindingFlags.Instance);
@@ -570,7 +570,7 @@ internal sealed partial class ExpressionBinder
                 {
                     // Phase 4.5 / issue #2924: tuple element access via
                     // one-based Item1..ItemN or zero-based .0...N selectors.
-                    var memberName = ne.IdentifierToken.Text;
+                    var memberName = ne.IdentifierToken.ValueText;
                     if (TryGetTupleElementIndex(memberName, tupleSym, out var zeroBased))
                     {
                         return new BoundTupleElementAccessExpression(null, receiver, tupleSym, zeroBased);
@@ -597,7 +597,7 @@ internal sealed partial class ExpressionBinder
                     // over the erased closed shape with symbolic [K, V]
                     // re-projection, exactly as on `Dictionary[K, V]`.
                     var clrReceiverType = Invariant.Required(clrInstanceReceiverType.ClrType, "a CLR member receiver has a CLR type");
-                    var memberName = ne.IdentifierToken.Text;
+                    var memberName = ne.IdentifierToken.ValueText;
 
                     // Issue #529: use interface-aware lookup so that members
                     // declared on a base interface (e.g. IReadOnlyCollection<T>.Count
@@ -702,7 +702,7 @@ internal sealed partial class ExpressionBinder
                     // against `typeof(System.Array)` and bind it as an
                     // ordinary CLR property read; the IL is correct
                     // because the array genuinely exposes the member.
-                    var arrayMemberName = ne.IdentifierToken.Text;
+                    var arrayMemberName = ne.IdentifierToken.ValueText;
                     var arrayProp = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(typeof(System.Array), arrayMemberName, BindingFlags.Public | BindingFlags.Instance);
                     if (arrayProp != null && arrayProp.GetIndexParameters().Length == 0 && arrayProp.CanRead)
                     {
@@ -760,7 +760,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var memberName = name.IdentifierToken.Text;
+        var memberName = name.IdentifierToken.ValueText;
         var nullableInnerClr = nullableType.UnderlyingType?.ClrType;
         if (nullableInnerClr?.IsValueType == true
             && this.memberLookup.TryGetNullableConstructedType(nullableInnerClr, out var nullableClr))
@@ -899,7 +899,7 @@ internal sealed partial class ExpressionBinder
 
         if (receiver != null)
         {
-            var userCandidates = scope.TryLookupExtensionFunctions(receiver.Type, name.IdentifierToken.Text);
+            var userCandidates = scope.TryLookupExtensionFunctions(receiver.Type, name.IdentifierToken.ValueText);
             if (!userCandidates.IsDefaultOrEmpty)
             {
                 if (userCandidates.Length == 1
@@ -921,19 +921,19 @@ internal sealed partial class ExpressionBinder
                 return new BoundMethodGroupExpression(name, receiver, userCandidates);
             }
 
-            var importedCandidates = this.memberLookup.CollectImportedExtensionMethods(name.IdentifierToken.Text);
+            var importedCandidates = this.memberLookup.CollectImportedExtensionMethods(name.IdentifierToken.ValueText);
             if (importedCandidates.Count > 0)
             {
                 return new BoundClrMethodGroupExpression(
                     name,
                     receiver,
                     declaringType: null,
-                    name.IdentifierToken.Text,
+                    name.IdentifierToken.ValueText,
                     importedCandidates.ToImmutableArray());
             }
         }
 
-        Diagnostics.ReportUnableToFindMember(name.Location, name.IdentifierToken.Text);
+        Diagnostics.ReportUnableToFindMember(name.Location, name.IdentifierToken.ValueText);
         return new BoundErrorExpression(null);
     }
 
@@ -954,7 +954,7 @@ internal sealed partial class ExpressionBinder
 
         if (leftPart is NameExpressionSyntax nameExpr)
         {
-            var name = nameExpr.IdentifierToken.Text;
+            var name = nameExpr.IdentifierToken.ValueText;
 
             // Only resolve as a nested type when the name is NOT a static
             // field/property or method group — those take precedence.
@@ -993,7 +993,7 @@ internal sealed partial class ExpressionBinder
 
             if (accessor.RightPart is NameExpressionSyntax innerName)
             {
-                var innerNameText = innerName.IdentifierToken.Text;
+                var innerNameText = innerName.IdentifierToken.ValueText;
                 if (scope.References.TryResolveNestedType(intermediateSymbol.ClassType, innerNameText, out var deepNested))
                 {
                     nestedClassSymbol = new ImportedClassSymbol(deepNested, innerName, references: scope.References);
@@ -3593,7 +3593,7 @@ internal sealed partial class ExpressionBinder
         BoundExpression receiver,
         NameExpressionSyntax ne)
     {
-        var memberName = ne.IdentifierToken.Text;
+        var memberName = ne.IdentifierToken.ValueText;
 
         // Class constraint (issue #1056 surfaced methods; this adds the rest):
         // fields and properties, walking the base chain of the constraint class.
@@ -3733,7 +3733,7 @@ internal sealed partial class ExpressionBinder
         if (tpSym.InterfaceConstraint == null && tpSym.ClrInterfaceConstraint == null)
         {
             Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
-                leftName.Location, tpSym.Name, rightPart is CallExpressionSyntax ce0 ? ce0.Identifier.Text : (rightPart is NameExpressionSyntax ne0 ? ne0.IdentifierToken.Text : "?"));
+                leftName.Location, tpSym.Name, rightPart is CallExpressionSyntax ce0 ? ce0.Identifier.ValueText : (rightPart is NameExpressionSyntax ne0 ? ne0.IdentifierToken.ValueText : "?"));
             return new BoundErrorExpression(null);
         }
 
@@ -3774,7 +3774,7 @@ internal sealed partial class ExpressionBinder
 
             case CallExpressionSyntax callSyntax:
                 {
-                    var methodName = callSyntax.Identifier.Text;
+                    var methodName = callSyntax.Identifier.ValueText;
                     if (tpSym.InterfaceConstraint != null)
                     {
                         FunctionSymbol? slot = null;
@@ -3836,7 +3836,7 @@ internal sealed partial class ExpressionBinder
                     // *property* read `T.Prop` dispatches through the
                     // property's getter accessor (a static-virtual slot),
                     // emitted as `constrained. !!T  call I::get_Prop()`.
-                    var propName = ne.IdentifierToken.Text;
+                    var propName = ne.IdentifierToken.ValueText;
                     PropertySymbol? slotProp = null;
                     InterfaceSymbol? slotIface = null;
                     foreach (var iface in tpSym.InterfaceConstraint?.SelfAndAllBaseInterfaces() ?? Enumerable.Empty<InterfaceSymbol>())

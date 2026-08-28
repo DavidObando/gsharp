@@ -291,7 +291,7 @@ internal sealed partial class DeclarationBinder
             var ctorBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>();
             foreach (var paramSyntax in primaryConstructorParameters)
             {
-                var paramName = paramSyntax.Identifier.Text;
+                var paramName = paramSyntax.Identifier.ValueText;
                 var paramType = paramSyntax.Type is { } paramTypeSyntax
                     ? bindTypeClause(paramTypeSyntax)
                     : TypeSymbol.Error;
@@ -407,7 +407,7 @@ internal sealed partial class DeclarationBinder
 
         foreach (var fieldSyntax in syntax.Fields)
         {
-            var fieldName = fieldSyntax.Identifier.Text;
+            var fieldName = fieldSyntax.Identifier.ValueText;
             if (!seenFieldNames.Add(fieldName))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
@@ -945,7 +945,7 @@ internal sealed partial class DeclarationBinder
             var methodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
             foreach (var methodSyntax in syntax.Methods)
             {
-                var methodName = methodSyntax.Identifier.Text;
+                var methodName = methodSyntax.Identifier.ValueText;
 
                 // Issue #938 / ADR-0029: inline and data structs synthesize a
                 // fixed set of members (Equals, GetHashCode, ToString,
@@ -1017,7 +1017,7 @@ internal sealed partial class DeclarationBinder
                     for (var pIndex = 0; pIndex < methodSyntax.Parameters.Count; pIndex++)
                     {
                         var parameterSyntax = methodSyntax.Parameters[pIndex];
-                        var parameterName = parameterSyntax.Identifier.Text;
+                        var parameterName = parameterSyntax.Identifier.ValueText;
                         var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                             ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;
@@ -1460,7 +1460,7 @@ internal sealed partial class DeclarationBinder
                     ParameterSyntax? parameterSyntax = null;
                     foreach (var candidate in primaryConstructorParameters)
                     {
-                        if (candidate.Identifier.Text == parameter.Name)
+                        if (candidate.Identifier.ValueText == parameter.Name)
                         {
                             parameterSyntax = candidate;
                             break;
@@ -1500,7 +1500,7 @@ internal sealed partial class DeclarationBinder
                     var seenIndexParamNames = new HashSet<string>();
                     foreach (var indexParamSyntax in propSyntax.Parameters)
                     {
-                        var indexParamName = indexParamSyntax.Identifier.Text;
+                        var indexParamName = indexParamSyntax.Identifier.ValueText;
                         var indexParamType = indexParamSyntax.Type is { } indexParamTypeSyntax
                             ? bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;
@@ -1520,7 +1520,7 @@ internal sealed partial class DeclarationBinder
                     indexerParameters = indexerParamBuilder.ToImmutable();
                 }
 
-                var propName = isIndexer ? "Item" : propSyntax.Identifier.Text;
+                var propName = isIndexer ? "Item" : propSyntax.Identifier.ValueText;
 
                 // Check for duplicate names (fields + methods + other properties).
                 // ADR-0149: exempt when either the new property, or ANY
@@ -1608,7 +1608,7 @@ internal sealed partial class DeclarationBinder
 
                     if (writeAccessor != null && writeAccessor.ParameterIdentifier != null)
                     {
-                        setterParamName = writeAccessor.ParameterIdentifier.Text;
+                        setterParamName = writeAccessor.ParameterIdentifier.ValueText;
                     }
 
                     // Auto-property if accessors have no bodies
@@ -1835,7 +1835,7 @@ internal sealed partial class DeclarationBinder
             var eventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
             foreach (var eventSyntax in syntax.Events)
             {
-                var eventName = eventSyntax.Identifier.Text;
+                var eventName = eventSyntax.Identifier.ValueText;
 
                 // Check for duplicate names.
                 // ADR-0149: mirrors the property collision exemption above —
@@ -2198,7 +2198,7 @@ internal sealed partial class DeclarationBinder
             var sharedConstFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
             foreach (var fieldSyntax in syntax.SharedBlock.Fields)
             {
-                var fieldName = fieldSyntax.Identifier.Text;
+                var fieldName = fieldSyntax.Identifier.ValueText;
                 if (methodNames.Contains(fieldName) || !existingNames.Add(fieldName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName);
@@ -2337,7 +2337,7 @@ internal sealed partial class DeclarationBinder
             var staticMethodsBuilder = ImmutableArray.CreateBuilder<FunctionSymbol>();
             foreach (var methodSyntax in syntax.SharedBlock.Methods)
             {
-                var methodName = methodSyntax.Identifier.Text;
+                var methodName = methodSyntax.Identifier.ValueText;
 
                 // ADR-0063: allow same-name overloads in a shared block; only reject
                 // collision with a non-method member of the same name (field/property/event).
@@ -2387,7 +2387,7 @@ internal sealed partial class DeclarationBinder
                     var seenParameterNames = new HashSet<string>();
                     foreach (var parameterSyntax in methodSyntax.Parameters)
                     {
-                        var parameterName = parameterSyntax.Identifier.Text;
+                        var parameterName = parameterSyntax.Identifier.ValueText;
                         var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                             ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;
@@ -2588,7 +2588,7 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var propName = propSyntax.Identifier.Text;
+                var propName = propSyntax.Identifier.ValueText;
 
                 // ADR-0149 follow-up (issue #2370): mirrors the instance-
                 // property exemption above (`propExemptCollision`) — a static
@@ -2664,7 +2664,7 @@ internal sealed partial class DeclarationBinder
 
                     if (setAccessor != null && setAccessor.ParameterIdentifier != null)
                     {
-                        setterParamName = setAccessor.ParameterIdentifier.Text;
+                        setterParamName = setAccessor.ParameterIdentifier.ValueText;
                     }
 
                     isAutoProperty = (getAccessor == null || getAccessor.Body == null)
@@ -2772,7 +2772,7 @@ internal sealed partial class DeclarationBinder
             var staticEventsBuilder = ImmutableArray.CreateBuilder<EventSymbol>();
             foreach (var eventSyntax in syntax.SharedBlock.Events)
             {
-                var eventName = eventSyntax.Identifier.Text;
+                var eventName = eventSyntax.Identifier.ValueText;
                 if (methodNames.Contains(eventName) || !existingNames.Add(eventName))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName);

@@ -2284,7 +2284,7 @@ internal sealed partial class ExpressionBinder
 
                 var boundValue = BindExpression(valueSyntax);
                 return BindBaseClassPropertyWrite(
-                    syntax.MethodIdentifier.Text,
+                    syntax.MethodIdentifier.ValueText,
                     syntax.MethodIdentifier.Location,
                     syntax.BaseKeyword.Location,
                     boundValue,
@@ -2373,11 +2373,11 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportBaseInterfaceCallMemberNotFound(
                 syntax.MethodIdentifier.Location,
                 ifaceSym.Name,
-                syntax.MethodIdentifier.Text + "[…]");
+                syntax.MethodIdentifier.ValueText + "[…]");
             return new BoundErrorExpression(null);
         }
 
-        var methodName = syntax.MethodIdentifier.Text;
+        var methodName = syntax.MethodIdentifier.ValueText;
 
         // Private helpers (ADR-0090) are intentionally invisible to
         // implementers; calling one through base[IFoo] would defeat that
@@ -2572,7 +2572,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var methodName = ce.Identifier.Text;
+        var methodName = ce.Identifier.ValueText;
 
         // Resolve the overload set on the user base chain (this-first from the
         // search base), which walks grandparents — so the nearest user base
@@ -2879,7 +2879,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var memberName = member.IdentifierToken.Text;
+        var memberName = member.IdentifierToken.ValueText;
         if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
         {
             // Issue #3501: `base.M` used as a method GROUP (an argument, a
@@ -3075,7 +3075,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var memberName = member.IdentifierToken.Text;
+        var memberName = member.IdentifierToken.ValueText;
         var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
         if (clrProp == null || clrProp.GetIndexParameters().Length != 0 || !clrProp.CanRead)
         {

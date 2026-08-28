@@ -27,7 +27,7 @@ internal sealed partial class ExpressionBinder
 {
     private BoundExpression BindAssignmentExpression(AssignmentExpressionSyntax syntax)
     {
-        var name = syntax.IdentifierToken.Text;
+        var name = syntax.IdentifierToken.ValueText;
 
         // Issue #1316: resolve the assignment target before binding the RHS so the
         // target's declared type can be threaded into the RHS binder as the
@@ -491,7 +491,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression? BindObjectInitializerAssignment(LocalVariableSymbol receiverLocal, TypeSymbol receiverType, PropertyInitializerSyntax initSyntax)
     {
-        var propertyName = initSyntax.PropertyIdentifier.Text;
+        var propertyName = initSyntax.PropertyIdentifier.ValueText;
 
         // Receiver-side type discriminator mirrors the receiver dispatch in
         // BindFieldAssignmentExpression: pure CLR types go through reflection;
@@ -608,7 +608,7 @@ internal sealed partial class ExpressionBinder
         {
             var baseValue = BindExpression(syntax.Value);
             return BindBaseClassPropertyWrite(
-                syntax.FieldIdentifier.Text,
+                syntax.FieldIdentifier.ValueText,
                 syntax.FieldIdentifier.Location,
                 syntax.Receiver.Location,
                 baseValue,
@@ -640,7 +640,7 @@ internal sealed partial class ExpressionBinder
         if (importedTypeOverride == null
             && sourceTypeAlias is StructSymbol userStruct)
         {
-            var fieldName = syntax.FieldIdentifier.Text;
+            var fieldName = syntax.FieldIdentifier.ValueText;
             if (TypeMemberModel.TryGetStaticFieldIncludingInherited(userStruct, fieldName, out var staticField, out var fieldOwner))
             {
                 if (!AccessibilityChecker.IsAccessible(staticField.Accessibility, fieldOwner, function))
@@ -701,7 +701,7 @@ internal sealed partial class ExpressionBinder
         if (importedTypeOverride == null
             && sourceTypeAlias is InterfaceSymbol userInterface)
         {
-            var fieldName = syntax.FieldIdentifier.Text;
+            var fieldName = syntax.FieldIdentifier.ValueText;
             var staticField = userInterface.GetStaticField(fieldName);
             if (staticField != null)
             {
@@ -746,15 +746,15 @@ internal sealed partial class ExpressionBinder
         if (importedClass != null
             || scope.TryLookupImportedClass(receiverName, declaration: null, out importedClass))
         {
-            if (!importedClass.TryLookupMember(syntax.FieldIdentifier.Text, ne: null, out var staticMember))
+            if (!importedClass.TryLookupMember(syntax.FieldIdentifier.ValueText, ne: null, out var staticMember))
             {
-                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
                 return new BoundErrorExpression(null);
             }
 
             if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticTargetSymbol, out var staticWritable))
             {
-                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                 return new BoundErrorExpression(null);
             }
 
@@ -859,7 +859,7 @@ internal sealed partial class ExpressionBinder
             && assignmentReceiverType?.ClrType != null)
         {
             var clrReceiverType = assignmentReceiverType.ClrType;
-            var fieldName = syntax.FieldIdentifier.Text;
+            var fieldName = syntax.FieldIdentifier.ValueText;
             MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0)
             {
@@ -893,13 +893,13 @@ internal sealed partial class ExpressionBinder
         {
             if (TypeMemberModel.TryGetPropertyWithOwner(
                 ifaceVarType,
-                syntax.FieldIdentifier.Text,
+                syntax.FieldIdentifier.ValueText,
                 out var ifaceProp,
                 out var ifaceOwner))
             {
                 if (!ifaceProp.HasSetter)
                 {
-                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                     return new BoundErrorExpression(null);
                 }
 
@@ -934,7 +934,7 @@ internal sealed partial class ExpressionBinder
                     effectiveInterface);
             }
 
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
@@ -951,17 +951,17 @@ internal sealed partial class ExpressionBinder
         {
             if (tpVarType.ClassConstraint is StructSymbol tpClassConstraint)
             {
-                if (TypeMemberModel.TryGetFieldIncludingInherited(tpClassConstraint, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var tpField, out var tpFieldDeclaringType))
+                if (TypeMemberModel.TryGetFieldIncludingInherited(tpClassConstraint, syntax.FieldIdentifier.ValueText, MemberQuery.Instance(MemberKinds.Field), out var tpField, out var tpFieldDeclaringType))
                 {
                     var tpFieldConverted = conversions.BindConversion(syntax.Value.Location, BindValue(tpField.Type), tpField.Type);
                     return new BoundFieldAssignmentExpression(null, variable, tpFieldDeclaringType, tpField, tpFieldConverted);
                 }
 
-                if (TypeMemberModel.TryGetProperty(tpClassConstraint, syntax.FieldIdentifier.Text, out var tpProp, out var tpPropDeclaringType))
+                if (TypeMemberModel.TryGetProperty(tpClassConstraint, syntax.FieldIdentifier.ValueText, out var tpProp, out var tpPropDeclaringType))
                 {
                     if (!tpProp.HasSetter)
                     {
-                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                         return new BoundErrorExpression(null);
                     }
 
@@ -974,11 +974,11 @@ internal sealed partial class ExpressionBinder
             if (tpVarType.InterfaceConstraint is InterfaceSymbol tpIfaceConstraint
                 && !tpIfaceConstraint.IsGenericDefinition
                 && tpIfaceConstraint.TypeArguments.IsDefaultOrEmpty
-                && TypeMemberModel.TryGetProperty(tpIfaceConstraint, syntax.FieldIdentifier.Text, out var tpIfaceProp, out _))
+                && TypeMemberModel.TryGetProperty(tpIfaceConstraint, syntax.FieldIdentifier.ValueText, out var tpIfaceProp, out _))
             {
                 if (!tpIfaceProp.HasSetter)
                 {
-                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                     return new BoundErrorExpression(null);
                 }
 
@@ -993,13 +993,13 @@ internal sealed partial class ExpressionBinder
             {
                 var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
                     clrInterface,
-                    syntax.FieldIdentifier.Text,
+                    syntax.FieldIdentifier.ValueText,
                     BindingFlags.Public | BindingFlags.Instance);
                 if (clrProperty != null && clrProperty.GetIndexParameters().Length == 0)
                 {
                     if (clrProperty.GetSetMethod(nonPublic: false) == null)
                     {
-                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                         return new BoundErrorExpression(null);
                     }
 
@@ -1023,25 +1023,25 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
         if (!(assignmentReceiverType is StructSymbol structSymbol))
         {
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
-        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
+        if (!TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, syntax.FieldIdentifier.ValueText, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType))
         {
             // ADR-0051: check if it's a property.
-            if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop, out var propDeclaringType))
+            if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.ValueText, out var prop, out var propDeclaringType))
             {
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
-                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+                    Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                     return new BoundErrorExpression(null);
                 }
 
@@ -1074,7 +1074,7 @@ internal sealed partial class ExpressionBinder
             // = 42` and protected-field writes work the same as the read fallback.
             if (GetInheritedClrBaseType(structSymbol) is System.Type inheritedBaseClr)
             {
-                var memberName = syntax.FieldIdentifier.Text;
+                var memberName = syntax.FieldIdentifier.ValueText;
                 MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                 if (clrMember != null)
@@ -1092,7 +1092,7 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.Text);
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
             return new BoundErrorExpression(null);
         }
 
@@ -1122,7 +1122,7 @@ internal sealed partial class ExpressionBinder
         if (field.IsReadOnly
             && !IsReadOnlyFieldAssignmentAllowed(field, fieldDeclaringType, receiverIsThisField))
         {
-            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
+            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
         }
 
         // Issue #186 / #175: dotted field write fires GS0204 if the field
@@ -1229,7 +1229,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression? BindBareEventOrCompoundAssignment(NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax)
     {
-        var name = bareName.IdentifierToken.Text;
+        var name = bareName.IdentifierToken.ValueText;
         var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
         var isEventOperator = isAdd || syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken;
 
@@ -1428,7 +1428,7 @@ internal sealed partial class ExpressionBinder
         SyntaxKind baseOpSyntaxKind,
         out BoundExpression? result)
     {
-        var memberName = memberNameSyntax.IdentifierToken.Text;
+        var memberName = memberNameSyntax.IdentifierToken.ValueText;
         var boundRhs = BindExpression(syntax.Value);
 
         if (TypeMemberModel.TryGetStaticFieldIncludingInherited(staticStruct, memberName, out var staticField, out var fieldOwner))
@@ -1541,7 +1541,7 @@ internal sealed partial class ExpressionBinder
         SyntaxKind baseOpSyntaxKind,
         out BoundExpression? result)
     {
-        var memberName = memberNameSyntax.IdentifierToken.Text;
+        var memberName = memberNameSyntax.IdentifierToken.ValueText;
         var fieldOwner = interfaceSym.Definition ?? interfaceSym;
         var staticField = fieldOwner.GetStaticField(memberName);
         if (staticField == null)
@@ -2302,7 +2302,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIndexAssignmentExpression(IndexAssignmentExpressionSyntax syntax)
     {
-        var name = syntax.TargetIdentifier.Text;
+        var name = syntax.TargetIdentifier.ValueText;
         if (scope.TryLookupSymbol(name) is not VariableSymbol variable)
         {
             // ADR-0156 Phase 2 (issue #3251): a bare indexed write
@@ -2631,8 +2631,8 @@ internal sealed partial class ExpressionBinder
 
         var receiverType = receiver.Type;
         var fieldName = receiverType is TupleTypeSymbol tupleType
-            ? GetTupleFieldName(syntax.FieldIdentifier.Text, tupleType)
-            : syntax.FieldIdentifier.Text;
+            ? GetTupleFieldName(syntax.FieldIdentifier.ValueText, tupleType)
+            : syntax.FieldIdentifier.ValueText;
         BoundExpression? value = null;
         BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
@@ -2880,7 +2880,7 @@ internal sealed partial class ExpressionBinder
         InterfaceSymbol? constructedInterface,
         ImportedClassSymbol? constructedImported)
     {
-        var fieldName = syntax.FieldIdentifier.Text;
+        var fieldName = syntax.FieldIdentifier.ValueText;
         BoundExpression? value = null;
         BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
@@ -3216,7 +3216,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
         var submissionImports = scope.SubmissionImports;
-        var name = syntax.TargetIdentifier.Text;
+        var name = syntax.TargetIdentifier.ValueText;
         if (submissionImports is null
             || !submissionImports.TryFindGlobalVariable(scope.References, name, out _, out _))
         {
@@ -3312,7 +3312,7 @@ internal sealed partial class ExpressionBinder
             isReadOnlySubmissionGlobal: resolvedDeclared.IsReadOnly);
 
         var clrReceiverType = globalType.ClrType;
-        var memberName = syntax.FieldIdentifier.Text;
+        var memberName = syntax.FieldIdentifier.ValueText;
         MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
         if (instanceMember is PropertyInfo indexedProperty && indexedProperty.GetIndexParameters().Length != 0)
         {

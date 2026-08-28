@@ -1219,7 +1219,7 @@ public static class SymbolDisplay
                     if (ReferenceEquals(declaration.Identifier, identifier)
                         || (declaration.Identifier.Span.Start == identifier.Span.Start
                             && declaration.Identifier.Span.Length == identifier.Span.Length
-                            && declaration.Identifier.Text == identifier.Text))
+                            && declaration.Identifier.ValueText == identifier.ValueText))
                     {
                         var keyword = declaration.Keyword?.Text;
                         if (!string.IsNullOrEmpty(keyword))

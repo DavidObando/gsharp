@@ -511,6 +511,37 @@ public sealed class Lexer
                 kind = SyntaxKind.AtToken;
                 position++;
                 break;
+            case '$':
+                // ADR-0170 / issue #3610: `$` immediately followed by an
+                // identifier-start spells an ESCAPED IDENTIFIER — an ordinary
+                // IdentifierToken whose semantic name is the characters after
+                // the `$` (carried via Value/ValueText) and whose Text keeps
+                // the full source spelling for fidelity. Never
+                // keyword-classified, so `class $defer {}` declares a type
+                // whose metadata name is `defer`. A `$` not followed by an
+                // identifier-start keeps the prior bad-character behavior
+                // (room for future grammar; `$` inside string literals keeps
+                // its interpolation meaning, handled by ReadString).
+                if (char.IsLetter(Lookahead) || Lookahead == '_')
+                {
+                    position++; // consume '$'
+                    var nameStart = position;
+                    while (char.IsLetterOrDigit(Current) || Current == '_')
+                    {
+                        position++;
+                    }
+
+                    kind = SyntaxKind.IdentifierToken;
+                    value = this.text.ToString(nameStart, position - nameStart);
+                }
+                else
+                {
+                    var badDollarLocation = new TextLocation(this.text, new TextSpan(position, 1));
+                    Diagnostics.ReportBadCharacter(badDollarLocation, Current);
+                    position++;
+                }
+
+                break;
             case '0':
             case '1':
             case '2':
