@@ -749,7 +749,7 @@
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/EqualsExpression.cs",
-    "notes": "Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); C# element names are ignored, matching the positional G# lowering."
+    "notes": "Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); element names never affect equality."
   },
   {
     "kind": "EqualsValueClause",
@@ -1500,7 +1500,7 @@
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G02-Operators-Console/Constructs/NotEqualsExpression.cs",
-    "notes": "Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); C# element names are ignored, matching the positional G# lowering."
+    "notes": "Tuple operands compare element-wise via gsc tuple equality (ADR-0171, issue #3501); element names never affect equality."
   },
   {
     "kind": "NotPattern",
@@ -2213,7 +2213,7 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.12",
     "rationale": "None",
-    "notes": "G# tuple types (T1, T2)."
+    "notes": "G# tuple types; ADR-0172: C# element names are preserved name-first ((Line int32, Column int32)), and named access stays by-name."
   },
   {
     "kind": "TupleExpression",
@@ -2221,7 +2221,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/TupleExpression.cs",
+    "notes": "ADR-0172: C# element labels ((Line: 1, \u2026)) are preserved as G# labeled elements."
   },
   {
     "kind": "TupleType",
@@ -2229,7 +2230,7 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.12",
     "rationale": "None",
-    "notes": "G# tuple types (T1, T2)."
+    "notes": "G# tuple types; ADR-0172: element names preserved (was: dropped with an Info diagnostic)."
   },
   {
     "kind": "TypeArgumentList",

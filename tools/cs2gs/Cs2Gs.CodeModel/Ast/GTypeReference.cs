@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Cs2Gs.CodeModel.Ast;
@@ -79,11 +80,11 @@ public sealed class ArrayTypeReference : GTypeReference
 }
 
 /// <summary>
-/// A positional tuple type rendered as <c>(T1, T2, …)</c> (spec §Type syntax,
-/// the <c>"(" TypeClause { "," TypeClause } ")"</c> production). C# value tuples
-/// (named or unnamed) map to this form; G# tuples are positional, so C# element
-/// names are dropped and named element access lowers to <c>.Item1</c>/<c>.Item2</c>
-/// (ADR-0115 §B.4). At least two element types are required for a tuple type.
+/// A tuple type rendered as <c>(T1, T2, …)</c> — or, when element names are
+/// present, the ADR-0172 name-first form <c>(line int32, column int32)</c>.
+/// C# value tuples (named or unnamed) map to this form with their element
+/// names preserved; access by name stays by-name in the output (ADR-0115
+/// §B.4 as amended by ADR-0172). At least two element types are required.
 /// </summary>
 public sealed class TupleTypeReference : GTypeReference
 {
@@ -91,13 +92,18 @@ public sealed class TupleTypeReference : GTypeReference
     /// Initializes a new instance of the <see cref="TupleTypeReference"/> class.
     /// </summary>
     /// <param name="elementTypes">The ordered element types.</param>
-    public TupleTypeReference(IReadOnlyList<GTypeReference> elementTypes)
+    /// <param name="elementNames">Optional element names parallel to <paramref name="elementTypes"/>, null where unnamed; pass null for a fully unnamed tuple.</param>
+    public TupleTypeReference(IReadOnlyList<GTypeReference> elementTypes, IReadOnlyList<string> elementNames = null)
     {
         ElementTypes = elementTypes ?? new List<GTypeReference>();
+        ElementNames = elementNames != null && elementNames.Any(n => n != null) ? elementNames : null;
     }
 
     /// <summary>Gets the ordered element types.</summary>
     public IReadOnlyList<GTypeReference> ElementTypes { get; }
+
+    /// <summary>Gets the element names parallel to <see cref="ElementTypes"/> (<see langword="null"/> entries for unnamed positions), or <see langword="null"/> when fully unnamed (ADR-0172).</summary>
+    public IReadOnlyList<string> ElementNames { get; }
 }
 
 /// <summary>

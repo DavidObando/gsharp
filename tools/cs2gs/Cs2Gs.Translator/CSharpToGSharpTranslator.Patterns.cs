@@ -162,8 +162,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslateInterpolatedString(interpolated);
 
                 case TupleExpressionSyntax tuple:
+                    // ADR-0172: preserve C# element labels (`(Line: 1, …)`)
+                    // as G# labeled tuple-literal elements.
                     return new TupleLiteralExpression(
-                        tuple.Arguments.Select(a => this.TranslateValueWithNullForgiveness(a.Expression)).ToList());
+                        tuple.Arguments.Select(a => this.TranslateValueWithNullForgiveness(a.Expression)).ToList(),
+                        tuple.Arguments.Select(a => a.NameColon?.Name.Identifier.ValueText).ToList());
 
                 case AnonymousObjectCreationExpressionSyntax anonymous:
                     return this.TranslateAnonymousObjectCreation(anonymous);
