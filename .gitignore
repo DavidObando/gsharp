@@ -343,3 +343,4 @@ package-lock.json
 
 # cs2gs migration run output (generated, do not commit)
 cs2gs-runs/
+test/Core.Tests/Baselines/*.actual
