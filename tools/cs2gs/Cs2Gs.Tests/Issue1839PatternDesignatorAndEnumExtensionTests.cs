@@ -209,8 +209,8 @@ namespace Corpus.Issue1839
 }
 ");
 
-        Assert.Contains("func extension (color Color) defer_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("color?.defer_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func extension (color Color) $defer()", rendered, StringComparison.Ordinal);
+        Assert.Contains("color?.$defer()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("select_", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }

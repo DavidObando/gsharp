@@ -404,9 +404,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.DoesNotContain(
             unit.Members.OfType<MethodDeclaration>(),
             method => method.Name == "func__");
+        // ADR-0170: the metadata-visible `@func` extensions keep their CLR
+        // name via the escape; the legal func_ members keep their own names.
         Assert.Equal(
             2,
-            shared.Members.OfType<MethodDeclaration>().Count(method => method.Name == "func_"));
+            shared.Members.OfType<MethodDeclaration>().Count(method => method.Name == "$func"));
         Assert.DoesNotContain(
             shared.Members.OfType<MethodDeclaration>(),
             method => method.Name == "func__");

@@ -53,8 +53,10 @@ namespace Corpus.Issue1528
     {
         string rendered = Render();
 
-        // The declaration and every reference use the sanitized `default_` name.
-        Assert.Contains("default_", rendered, StringComparison.Ordinal);
+        // ADR-0170: the metadata-visible static field keeps its CLR name via
+        // the escape at the declaration and every reference.
+        Assert.Contains("$default", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("default_", rendered, StringComparison.Ordinal);
 
         // The unparsable verbatim/keyword forms never leak into the output.
         Assert.DoesNotContain("@default", rendered, StringComparison.Ordinal);

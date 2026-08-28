@@ -48,7 +48,9 @@ namespace Corpus.LockSanitize
     {
         string rendered = Render();
 
-        Assert.Contains("lock_", rendered, StringComparison.Ordinal);
+        // ADR-0170: the metadata-visible field keeps its CLR name via the escape.
+        Assert.Contains("$lock", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("lock_", rendered, StringComparison.Ordinal);
 
         // The bare `lock` keyword must never appear as an identifier: neither the
         // field declaration nor the lock-statement operand may leak it.
