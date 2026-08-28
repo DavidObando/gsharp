@@ -82,7 +82,8 @@ public static class GSharpAnalyzerHost
             CheckCoreVersion(assembly, fullPath, hostDiagnostics);
 
             var found = 0;
-            foreach (var type in assembly.GetExportedTypes())
+            var exportedTypes = assembly.GetExportedTypes();
+            foreach (var type in exportedTypes)
             {
                 if (type.IsAbstract
                     || !typeof(GSharpDiagnosticAnalyzer).IsAssignableFrom(type)
@@ -100,11 +101,21 @@ public static class GSharpAnalyzerHost
 
             if (found == 0)
             {
+                // Issue #3617: a zero-discovery result has three very
+                // different causes — wrong bytes at the path (e.g. a stale
+                // Roslyn-era assembly), a type-identity split (the analyzer's
+                // GSharpDiagnosticAnalyzer base bound to a DIFFERENT
+                // GSharp.Core instance than the host's), or a genuinely empty
+                // assembly. Emit enough forensic detail that one CI log
+                // distinguishes them.
+                string zeroDiscovery =
+                    "the assembly contains no [GSharpDiagnosticAnalyzer] types deriving from GSharpDiagnosticAnalyzer. "
+                    + DescribeZeroDiscovery(assembly, fullPath, exportedTypes);
                 hostDiagnostics.Add(Diagnostic.Create(
                     DiagnosticDescriptors.AnalyzerAssemblyLoadFailure,
                     default,
                     path,
-                    "the assembly contains no [GSharpDiagnosticAnalyzer] types deriving from GSharpDiagnosticAnalyzer."));
+                    zeroDiscovery));
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -113,8 +124,113 @@ public static class GSharpAnalyzerHost
                 DiagnosticDescriptors.AnalyzerAssemblyLoadFailure,
                 default,
                 path,
-                ex.Message));
+                DescribeLoadException(ex)));
         }
+    }
+
+    /// <summary>
+    /// Issue #3617: builds the forensic tail of the zero-discovery GS9301 —
+    /// the exported-type census, per-candidate filter verdicts with the
+    /// identity/location/MVID of each candidate's resolved analyzer base
+    /// assembly versus the host's own, and the analyzer file's size and MVID.
+    /// </summary>
+    private static string DescribeZeroDiscovery(Assembly assembly, string fullPath, Type[] exportedTypes)
+    {
+        var sb = new System.Text.StringBuilder();
+        try
+        {
+            var hostBase = typeof(GSharpDiagnosticAnalyzer);
+            sb.Append("Forensics: exportedTypes=").Append(exportedTypes.Length);
+
+            var fileInfo = new FileInfo(fullPath);
+            sb.Append("; file(size=").Append(fileInfo.Exists ? fileInfo.Length : -1)
+                .Append(", mvid=").Append(assembly.ManifestModule.ModuleVersionId)
+                .Append(')');
+
+            var referencedCore = assembly.GetReferencedAssemblies()
+                .FirstOrDefault(name => string.Equals(name.Name, hostBase.Assembly.GetName().Name, StringComparison.OrdinalIgnoreCase));
+            sb.Append("; referencedCore=").Append(referencedCore?.Version?.ToString() ?? "<none>")
+                .Append("; hostCore(version=").Append(hostBase.Assembly.GetName().Version)
+                .Append(", location=").Append(hostBase.Assembly.Location)
+                .Append(", mvid=").Append(hostBase.Assembly.ManifestModule.ModuleVersionId)
+                .Append(')');
+
+            // Candidates that carry the attribute BY NAME but failed a filter:
+            // the smoking gun for identity splits is a base assembly whose
+            // location/MVID differs from the host's.
+            foreach (var type in exportedTypes)
+            {
+                bool namedAttribute = type.GetCustomAttributesData()
+                    .Any(attribute => attribute.AttributeType.Name == nameof(GSharpDiagnosticAnalyzerAttribute));
+                var analyzerBase = FindAnalyzerBase(type, hostBase.FullName);
+                if (!namedAttribute && analyzerBase == null)
+                {
+                    continue;
+                }
+
+                sb.Append("; candidate ").Append(type.FullName)
+                    .Append("(abstract=").Append(type.IsAbstract)
+                    .Append(", namedAttr=").Append(namedAttribute)
+                    .Append(", assignable=").Append(hostBase.IsAssignableFrom(type));
+                if (analyzerBase != null)
+                {
+                    sb.Append(", baseAssembly=").Append(analyzerBase.Assembly.GetName().Version)
+                        .Append('@').Append(analyzerBase.Assembly.Location)
+                        .Append(", baseMvid=").Append(analyzerBase.Assembly.ManifestModule.ModuleVersionId)
+                        .Append(", baseIsHost=").Append(ReferenceEquals(analyzerBase.Assembly, hostBase.Assembly));
+                }
+
+                sb.Append(')');
+            }
+        }
+        catch (Exception forensics) when (forensics is not OutOfMemoryException and not StackOverflowException)
+        {
+            sb.Append("; forensics-failed: ").Append(forensics.GetType().Name).Append(": ").Append(forensics.Message);
+        }
+
+        return sb.ToString();
+    }
+
+    private static Type? FindAnalyzerBase(Type type, string? analyzerBaseFullName)
+    {
+        for (var current = type.BaseType; current != null; current = current.BaseType)
+        {
+            if (current.FullName == analyzerBaseFullName)
+            {
+                return current;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #3617: a load exception's Message alone hid every actionable
+    /// detail (two CI runs produced no data). Surface the exception chain and
+    /// any per-type loader failures.
+    /// </summary>
+    private static string DescribeLoadException(Exception ex)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(ex.GetType().Name).Append(": ").Append(ex.Message);
+        if (ex is ReflectionTypeLoadException typeLoad)
+        {
+            foreach (var loaderException in typeLoad.LoaderExceptions.Take(5))
+            {
+                if (loaderException != null)
+                {
+                    sb.Append(" | loader: ").Append(loaderException.GetType().Name)
+                        .Append(": ").Append(loaderException.Message);
+                }
+            }
+        }
+
+        for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+        {
+            sb.Append(" | inner: ").Append(inner.GetType().Name).Append(": ").Append(inner.Message);
+        }
+
+        return sb.ToString();
     }
 
     private static void CheckCoreVersion(
@@ -156,11 +272,39 @@ public static class GSharpAnalyzerHost
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
-            foreach (var loaded in Default.Assemblies)
+            // Issue #3617: resolve HOST-OWNED assemblies to the host's own
+            // instances FIRST — typeof(GSharpDiagnosticAnalyzer)'s assembly
+            // and everything loaded beside it in the host's own context. The
+            // analyzer's base type must be identity-equal to the driver's or
+            // discovery reports "no analyzer types"; scanning Default first
+            // left a hole whenever the host itself runs outside the default
+            // context (in-proc hosts, test harnesses, future embeddings).
+            var hostAssembly = typeof(GSharpDiagnosticAnalyzer).Assembly;
+            if (string.Equals(hostAssembly.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))
             {
-                if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))
+                return hostAssembly;
+            }
+
+            var hostContext = GetLoadContext(hostAssembly);
+            if (hostContext != null && hostContext != this)
+            {
+                foreach (var loaded in hostContext.Assemblies)
                 {
-                    return loaded;
+                    if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return loaded;
+                    }
+                }
+            }
+
+            if (hostContext != Default)
+            {
+                foreach (var loaded in Default.Assemblies)
+                {
+                    if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return loaded;
+                    }
                 }
             }
 

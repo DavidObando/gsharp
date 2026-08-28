@@ -377,11 +377,23 @@ public sealed class MigrationPipeline
                 await Cs2Gs.Translator.Loading.CSharpProjectLoader
                     .LoadProjectWithReferencesAsync(app.ProjectPath, cancellationToken)
                     .ConfigureAwait(false);
+
+            // Issue #3617: the Roslyn loader follows compile references only,
+            // so an analyzer-shaped reference (`OutputItemType="Analyzer"
+            // ReferenceOutputAssembly="false"`, e.g. Core → InternalAnalyzers)
+            // never becomes an ordering edge. Union in the XML-declared
+            // ProjectReference paths so a dependent app cannot build before
+            // its analyzer dependency has translated its sources — building
+            // the dependency from a source-less mirror directory produces a
+            // two-file husk assembly that later fails analyzer discovery
+            // (GS9301).
             references[Path.GetFullPath(app.ProjectPath)] = loaded
                 .Skip(1)
                 .Select(project => project.ProjectPath)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .Select(Path.GetFullPath)
+                .Concat(DeclaredProjectItems.ProjectReferencePaths(app.ProjectPath))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
