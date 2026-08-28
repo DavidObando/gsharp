@@ -15,6 +15,14 @@ namespace Cs2Gs.Pipeline;
 /// <summary>Transforms a C# project document for use by the G# SDK.</summary>
 internal static class GSharpProjectTransformer
 {
+    // ADR-0169: the MSBuild expression that anchors a compiler-hosted
+    // reference (an assembly supplied at runtime by the gsc host, never copied
+    // to the app's own output) at the compiler's directory. Kept as the single
+    // source of truth for both the injection (RewriteAnalyzerProject) and the
+    // stage-3 resolution (ResolveCompilerHostedReferences, issue #3608).
+    private const string CompilerDirectoryExpression =
+        "$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))";
+
     private static readonly Regex CSharpSpecSuffix = new Regex(
         "\\.cs(?=\\s*(?:;|$))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -77,6 +85,58 @@ internal static class GSharpProjectTransformer
         RewriteAnalyzerConsumerReferences(document);
 
         return document;
+    }
+
+    /// <summary>
+    /// Resolves a transformed project's compiler-hosted <c>Reference</c>
+    /// entries — those whose <c>HintPath</c> is anchored at the compiler's
+    /// directory via <see cref="CompilerDirectoryExpression"/> (e.g. the
+    /// G# analyzer API assembly injected by <c>RewriteAnalyzerProject</c>) —
+    /// against a concrete <c>gsc</c> path. Issue #3608: these assemblies are
+    /// supplied at runtime by the gsc host with <c>Private=false</c>, so they
+    /// appear in neither the app's build output nor the C# source project's
+    /// own reference closure; stage 3 must add them to ilverify's reference
+    /// set explicitly or the verifier cannot resolve them.
+    /// </summary>
+    /// <param name="projectPath">The transformed <c>.gsproj</c> path.</param>
+    /// <param name="gscPath">The <c>gsc.dll</c> path whose directory hosts the referenced assemblies.</param>
+    /// <returns>The resolved absolute paths of existing compiler-hosted reference assemblies.</returns>
+    internal static IReadOnlyList<string> ResolveCompilerHostedReferences(string projectPath, string gscPath)
+    {
+        if (string.IsNullOrEmpty(projectPath)
+            || string.IsNullOrEmpty(gscPath)
+            || !File.Exists(projectPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        string compilerDirectory = Path.GetDirectoryName(Path.GetFullPath(gscPath));
+        if (string.IsNullOrEmpty(compilerDirectory))
+        {
+            return Array.Empty<string>();
+        }
+
+        XDocument document = XDocument.Load(projectPath);
+        var resolved = new List<string>();
+        foreach (XElement hintPath in ElementsNamed(document, "HintPath"))
+        {
+            string value = hintPath.Value.Trim();
+            if (!value.StartsWith(CompilerDirectoryExpression, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string relative = value
+                .Substring(CompilerDirectoryExpression.Length)
+                .TrimStart('/', '\\');
+            string candidate = Path.GetFullPath(Path.Combine(compilerDirectory, relative));
+            if (File.Exists(candidate))
+            {
+                resolved.Add(candidate);
+            }
+        }
+
+        return resolved;
     }
 
     private static void AddSourceSdkDefaults(XDocument document, string sourceSdk)
@@ -263,7 +323,7 @@ internal static class GSharpProjectTransformer
                 new XAttribute("Include", "GSharp.Core"),
                 new XElement(
                     "HintPath",
-                    "$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))/GSharp.Core.dll"),
+                    CompilerDirectoryExpression + "/GSharp.Core.dll"),
                 new XElement("Private", "false")));
         document.Root.Add(itemGroup);
     }

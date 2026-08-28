@@ -68,6 +68,19 @@ public sealed class IlVerifyStage : IMigrationStage
         IReadOnlyList<string> verifyReferences = context.App.ReferencedAssemblies is { Count: > 0 } appRefs
             ? appRefs.Concat(context.ExternalReferencePaths).ToList()
             : context.ExternalReferencePaths;
+
+        // Issue #3608: a transformed analyzer project references the G#
+        // analyzer API assembly from the compiler host's own directory with
+        // Private=false, so it is in neither the build output nor the C#
+        // project's reference closure — resolve those compiler-hosted
+        // references here or ilverify fails with FileLoadErrorGeneric on
+        // e.g. 'GSharp.Core'.
+        IReadOnlyList<string> hostedReferences = ResolveCompilerHostedReferences(context);
+        if (hostedReferences.Count > 0)
+        {
+            verifyReferences = verifyReferences.Concat(hostedReferences).ToList();
+        }
+
         IlVerifyResult result = this.runner.Verify(
             context.EmittedAssemblyPath,
             verifyReferences);
@@ -146,6 +159,31 @@ public sealed class IlVerifyStage : IMigrationStage
         }
 
         return Task.FromResult(StageOutcome.Failed(artifacts));
+    }
+
+    // The transformed project is written into the migrated project directory
+    // by both layouts (MigrationPipeline for the repository mirror,
+    // SdkCompileRunner for diagnostic runs); there is exactly one .gsproj.
+    private static IReadOnlyList<string> ResolveCompilerHostedReferences(StageExecutionContext context)
+    {
+        if (string.IsNullOrEmpty(context.ProjectOutputDir)
+            || !Directory.Exists(context.ProjectOutputDir))
+        {
+            return Array.Empty<string>();
+        }
+
+        var resolved = new List<string>();
+        foreach (string projectPath in Directory.EnumerateFiles(
+            context.ProjectOutputDir,
+            "*.gsproj",
+            SearchOption.TopDirectoryOnly))
+        {
+            resolved.AddRange(GSharpProjectTransformer.ResolveCompilerHostedReferences(
+                projectPath,
+                context.Gsc.GscPath));
+        }
+
+        return resolved;
     }
 
     private static string Truncate(string value)
