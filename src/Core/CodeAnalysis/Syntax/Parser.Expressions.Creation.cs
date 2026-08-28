@@ -882,6 +882,43 @@ public partial class Parser
 
     private bool TryScanTypeClause(ref int pos) => TryScanTypeClause(ref pos, out _);
 
+    /// <summary>
+    /// ADR-0172: speculative-cursor twin of the committed parser's
+    /// <c>LooksLikeTupleElementName</c> — decides whether the identifier at
+    /// <paramref name="pos"/> is a tuple-element NAME (followed by a token
+    /// that can start a type clause) rather than the element type itself.
+    /// </summary>
+    private bool ScanLooksLikeTupleElementNameAt(int pos)
+    {
+        if (Peek(pos).Text == "unmanaged"
+            && (Peek(pos + 1).Kind == SyntaxKind.OpenSquareBracketToken
+                || Peek(pos + 1).Kind == SyntaxKind.OpenParenthesisToken))
+        {
+            return false;
+        }
+
+        switch (Peek(pos + 1).Kind)
+        {
+            case SyntaxKind.IdentifierToken:
+            case SyntaxKind.FuncKeyword:
+            case SyntaxKind.MapKeyword:
+            case SyntaxKind.ChanKeyword:
+            case SyntaxKind.SequenceKeyword:
+            case SyntaxKind.AsyncKeyword:
+            case SyntaxKind.StarToken:
+            case SyntaxKind.OpenParenthesisToken:
+                return true;
+
+            case SyntaxKind.OpenSquareBracketToken:
+                return Peek(pos + 2).Kind is SyntaxKind.CloseSquareBracketToken
+                    or SyntaxKind.NumberToken
+                    or SyntaxKind.CommaToken;
+
+            default:
+                return false;
+        }
+    }
+
     // Issue #1602: depth-guarded wrapper — TryScanTypeClause and
     // TryScanOptionalTypeArgumentList are mutually recursive during
     // speculative lookahead (`a[a[a[…` scans as a candidate type-argument
@@ -1051,6 +1088,15 @@ public partial class Parser
                     if (Peek(pos).Kind == SyntaxKind.EllipsisToken)
                     {
                         sawEllipsis = true;
+                        pos++;
+                    }
+
+                    // ADR-0172: an optional element NAME before the type —
+                    // `(line int32, column int32)` — mirrors
+                    // LooksLikeTupleElementName on the speculative cursor.
+                    if (Peek(pos).Kind == SyntaxKind.IdentifierToken
+                        && ScanLooksLikeTupleElementNameAt(pos))
+                    {
                         pos++;
                     }
 

@@ -95,7 +95,12 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             || TypeSymbol.RequiresSymbolicProjection(a)
             || (a is ImportedTypeSymbol nested
                 && nested.OpenDefinition != null
-                && !nested.TypeArguments.IsDefaultOrEmpty));
+                && !nested.TypeArguments.IsDefaultOrEmpty)
+
+            // ADR-0172: a named tuple argument shares its CLR backing with
+            // the unnamed shape, so only symbolic substitution preserves the
+            // element names on projected members (`list[i].line`).
+            || a is TupleTypeSymbol { HasNames: true });
 
     /// <summary>
     /// Gets or creates the imported type symbol for the given CLR type.

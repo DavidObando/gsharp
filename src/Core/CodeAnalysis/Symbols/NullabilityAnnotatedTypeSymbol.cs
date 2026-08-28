@@ -76,7 +76,18 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             offset += ClrNullability.CountNullabilityBytes(args[i]);
         }
 
-        return ClrNullability.SymbolFromFlagsOffset(args[argIndex], NullableFlags, offset);
+        var derived = ClrNullability.SymbolFromFlagsOffset(args[argIndex], NullableFlags, offset);
+
+        // ADR-0172: the flags-derived argument is rebuilt from the CLR shape,
+        // which cannot carry tuple element names. When the wrapped symbolic
+        // base holds a named tuple at this position, transfer its names.
+        if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
+            && (uint)argIndex < (uint)symbolicBase.TypeArguments.Length)
+        {
+            derived = TransferTupleNames(symbolicBase.TypeArguments[argIndex], derived);
+        }
+
+        return derived;
     }
 
     /// <summary>
@@ -126,7 +137,18 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             // Compare by FullName so MetadataLoadContext types match runtime types.
             if (arg == targetClrType || (!arg.IsGenericParameter && arg.FullName == targetClrType.FullName))
             {
-                return ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, offset);
+                var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, offset);
+
+                // ADR-0172: transfer tuple element names from the wrapped
+                // symbolic base's matching argument (the flags-derived symbol
+                // is rebuilt from the CLR shape and cannot carry them).
+                if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
+                    && (uint)i < (uint)symbolicBase.TypeArguments.Length)
+                {
+                    flagged = TransferTupleNames(symbolicBase.TypeArguments[i], flagged);
+                }
+
+                return flagged;
             }
 
             offset += ClrNullability.CountNullabilityBytes(arg);
@@ -134,4 +156,15 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
 
         return TypeSymbol.FromClrType(targetClrType);
     }
+
+    private static TypeSymbol TransferTupleNames(TypeSymbol source, TypeSymbol target) => (source, target) switch
+    {
+        (TupleTypeSymbol { HasNames: true } namedSource, TupleTypeSymbol unnamedTarget)
+            when namedSource.Arity == unnamedTarget.Arity && !unnamedTarget.HasNames
+            => TupleTypeSymbol.Get(unnamedTarget.ElementTypes, namedSource.ElementNames),
+        (NullableTypeSymbol { UnderlyingType: TupleTypeSymbol { HasNames: true } namedSource }, NullableTypeSymbol { UnderlyingType: TupleTypeSymbol unnamedTarget })
+            when namedSource.Arity == unnamedTarget.Arity && !unnamedTarget.HasNames
+            => NullableTypeSymbol.Get(TupleTypeSymbol.Get(unnamedTarget.ElementTypes, namedSource.ElementNames)),
+        _ => target,
+    };
 }

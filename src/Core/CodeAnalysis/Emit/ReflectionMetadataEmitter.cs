@@ -1135,6 +1135,7 @@ internal sealed class ReflectionMetadataEmitter
             handle => this.customAttrEncoder.EmitNullableContextAttributeOnType(handle, NullableFlagsBuilder.NotAnnotated),
             this.customAttrEncoder.EmitNullableAttributeOnField,
             this.customAttrEncoder.EmitNullableAttributeOnParameter,
+            (paramHandle, paramType) => this.customAttrEncoder.EmitTupleElementNamesAttribute(paramHandle, paramType),
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
             this.customAttrEncoder.EmitParamArrayAttributeOnParameter,
             this.memberRefs.GetCtorReference,

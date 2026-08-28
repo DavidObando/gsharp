@@ -1321,6 +1321,19 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
+    /// ADR-0172 Phase B: internal surface of the #1922 CLR-tuple recognizer
+    /// for <see cref="TupleElementNamesReader"/> — an imported generic type
+    /// argument surfaces as an imported <c>System.ValueTuple&lt;…&gt;</c>
+    /// rather than a <see cref="TupleTypeSymbol"/>, and must be flattened
+    /// before element names can be applied to it.
+    /// </summary>
+    /// <param name="clrType">The candidate CLR type.</param>
+    /// <param name="tupleTypeSymbol">The resulting tuple symbol, if matched.</param>
+    /// <returns><see langword="true"/> if <paramref name="clrType"/> is a supported tuple shape.</returns>
+    internal static bool TryGetTupleTypeSymbolFromClr(Type clrType, [NotNullWhen(true)] out TupleTypeSymbol? tupleTypeSymbol)
+        => TryGetTupleTypeSymbol(clrType, out tupleTypeSymbol);
+
+    /// <summary>
     /// Issue #1922: recognizes a closed generic <c>System.ValueTuple&lt;...&gt;</c>
     /// or <c>System.Tuple&lt;...&gt;</c> CLR type and maps it onto the equivalent
     /// flat <see cref="TupleTypeSymbol"/>, including canonical arity-8+
