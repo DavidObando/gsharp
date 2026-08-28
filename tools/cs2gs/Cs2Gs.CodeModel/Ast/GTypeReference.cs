@@ -189,10 +189,38 @@ public sealed class FunctionPointerTypeReference : GTypeReference
         ReturnType = returnType;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FunctionPointerTypeReference"/> class
+    /// for the open CLR calling-convention model (ADR-0095 v2 / issue #3611):
+    /// bare <c>unmanaged (T) -&gt; R</c> when <paramref name="unmanagedConventions"/>
+    /// is empty, otherwise <c>unmanaged[CC, ...] (T) -&gt; R</c> with the
+    /// convention short names in source order.
+    /// </summary>
+    /// <param name="unmanagedConventions">The convention short names in source order (may be empty for the platform default).</param>
+    /// <param name="parameterTypes">The function pointer's parameter types.</param>
+    /// <param name="returnType">The return type, or <see langword="null"/> for a void-returning pointer.</param>
+    public FunctionPointerTypeReference(
+        IReadOnlyList<string> unmanagedConventions,
+        IReadOnlyList<GTypeReference> parameterTypes,
+        GTypeReference returnType)
+    {
+        IsManaged = false;
+        IsUnmanagedExtended = true;
+        UnmanagedConventions = unmanagedConventions ?? new List<string>();
+        ParameterTypes = parameterTypes ?? new List<GTypeReference>();
+        ReturnType = returnType;
+    }
+
     /// <summary>Gets a value indicating whether this is the managed <c>*func(T) R</c> form.</summary>
     public bool IsManaged { get; }
 
-    /// <summary>Gets the unmanaged calling convention. Ignored when <see cref="IsManaged"/> is <see langword="true"/>.</summary>
+    /// <summary>Gets a value indicating whether this is the open-model unmanaged form (ADR-0095 v2 / issue #3611): bare platform-default or a <c>CallConv*</c> convention list.</summary>
+    public bool IsUnmanagedExtended { get; }
+
+    /// <summary>Gets the open-model convention short names in source order; empty for the bare platform-default form. Meaningful only when <see cref="IsUnmanagedExtended"/> is <see langword="true"/>.</summary>
+    public IReadOnlyList<string> UnmanagedConventions { get; } = new List<string>();
+
+    /// <summary>Gets the unmanaged calling convention. Ignored when <see cref="IsManaged"/> or <see cref="IsUnmanagedExtended"/> is <see langword="true"/>.</summary>
     public CallingConvention CallingConvention { get; }
 
     /// <summary>Gets the function pointer's parameter types.</summary>

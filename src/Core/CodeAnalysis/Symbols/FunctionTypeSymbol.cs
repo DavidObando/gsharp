@@ -439,6 +439,14 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 {
                     builder.Append("!fnptr:m(");
                 }
+                else if (functionPointer.IsUnmanagedExtended)
+                {
+                    // ADR-0095 v2 / issue #3611: open-model conventions are
+                    // identity in source order (the modopt blob is ordered).
+                    builder.Append("!fnptr:ux[")
+                        .Append(string.Join(",", functionPointer.UnmanagedConventions))
+                        .Append("](");
+                }
                 else
                 {
                     builder.Append("!fnptr:u[")

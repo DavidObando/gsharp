@@ -563,9 +563,16 @@ internal sealed class SignatureEncoder
             // GS-level type is an address-sized integer at runtime, but
             // the metadata blob is rendered as FNPTR for type fidelity
             // so disassemblers and the verifier see the precise shape.
-            var fnPtrConvention = MapToSignatureCallingConvention(fnPtr.CallingConvention);
+            // ADR-0095 v2 / issue #3611: the open model encodes
+            // SignatureCallingConvention.Unmanaged (0x09) with the
+            // CallConv{Name} types as return-type modopts in source order —
+            // byte-identical to csc's `delegate* unmanaged[...]<...>`.
+            var fnPtrConvention = fnPtr.IsUnmanagedExtended
+                ? SignatureCallingConvention.Unmanaged
+                : MapToSignatureCallingConvention(fnPtr.CallingConvention);
             var fnPtrSig = encoder.FunctionPointer(fnPtrConvention, FunctionPointerAttributes.None, 0);
             fnPtrSig.Parameters(fnPtr.ParameterTypes.Length, out var fnRetEnc, out var fnParamsEnc);
+            this.EncodeCallConvModifiers(fnRetEnc, fnPtr);
             this.EncodeReturnSymbol(fnRetEnc, fnPtr.ReturnType);
             for (var i = 0; i < fnPtr.ParameterTypes.Length; i++)
             {
@@ -651,10 +658,13 @@ internal sealed class SignatureEncoder
     {
         var convention = fnPtr.IsManaged
             ? System.Reflection.Metadata.SignatureCallingConvention.Default
-            : MapToSignatureCallingConvention(fnPtr.CallingConvention);
+            : fnPtr.IsUnmanagedExtended
+                ? System.Reflection.Metadata.SignatureCallingConvention.Unmanaged
+                : MapToSignatureCallingConvention(fnPtr.CallingConvention);
         var sigBlob = new BlobBuilder();
         var sig = new BlobEncoder(sigBlob).MethodSignature(convention, 0, isInstanceMethod: false);
         sig.Parameters(fnPtr.ParameterTypes.Length, out var retEnc, out var paramsEnc);
+        this.EncodeCallConvModifiers(retEnc, fnPtr);
         this.EncodeReturnSymbol(retEnc, fnPtr.ReturnType);
         for (var i = 0; i < fnPtr.ParameterTypes.Length; i++)
         {
@@ -673,6 +683,32 @@ internal sealed class SignatureEncoder
     /// <see cref="System.Reflection.Metadata.SignatureCallingConvention"/>
     /// enum used when encoding an ELEMENT_TYPE_FNPTR signature blob.
     /// </summary>
+    /// <summary>
+    /// ADR-0095 v2 / issue #3611: writes an open-model function pointer's
+    /// <c>System.Runtime.CompilerServices.CallConv{Name}</c> types as
+    /// optional custom modifiers on the return type, in source order — the
+    /// blob position and order csc uses, so roundtripped signatures are
+    /// byte-identical. No-op for managed, legacy, and bare
+    /// (platform-default) pointers.
+    /// </summary>
+    /// <param name="returnTypeEncoder">The FNPTR signature's return-type encoder.</param>
+    /// <param name="fnPtr">The function-pointer type being encoded.</param>
+    private void EncodeCallConvModifiers(ReturnTypeEncoder returnTypeEncoder, FunctionPointerTypeSymbol fnPtr)
+    {
+        if (!fnPtr.IsUnmanagedExtended || fnPtr.UnmanagedConventionClrTypes.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var modifiers = returnTypeEncoder.CustomModifiers();
+        foreach (var callConvType in fnPtr.UnmanagedConventionClrTypes)
+        {
+            modifiers = modifiers.AddModifier(
+                this.outer.memberRefs.GetTypeReference(callConvType),
+                isOptional: true);
+        }
+    }
+
     private static System.Reflection.Metadata.SignatureCallingConvention MapToSignatureCallingConvention(System.Runtime.InteropServices.CallingConvention convention)
     {
         return convention switch

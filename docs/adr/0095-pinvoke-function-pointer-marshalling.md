@@ -238,3 +238,103 @@ See §5. ADR-0086 §1 GS0323 continues to fire for every other unsupported funct
 - **Encode Shape A delegates as raw FNPTR even without `[UnmanagedFunctionPointer]`.** Rejected — the runtime marshaller needs the attribute to synthesise the thunk; without it the runtime throws `MarshalDirectiveException` at the call site. Emitting an FNPTR signature for a delegate parameter would also be a lie at the metadata level — the runtime view of a delegate parameter is a managed `MulticastDelegate` reference, not an unmanaged address. GS0353 makes the gap a *compile-time* error so the user catches it before publishing.
 - **Add `[UnmanagedCallersOnly]` support for the called *target* (callee) side.** Deferred — `[UnmanagedCallersOnly]` is a callee-side annotation on a `static` method that exposes it to the unmanaged ABI. It is orthogonal to the caller-side concern of ADR-0095 (which describes how *callers* of native APIs pass / receive function pointers). The two cleanly compose, but the callee-side surface is a future ADR.
 - **Reject Shape-A delegate returns outright (no GS0355, treat them like every other rejection through GS0323).** Rejected — the tailored diagnostic is more actionable; users encountering this case almost always wanted Shape B (`unmanaged[CC] () -> R`) or a `nint` return with a deferred `Marshal.GetDelegateForFunctionPointer` conversion. GS0355 explicitly coaches both remediations.
+
+## Amendment (2026-08-27, issue #3611): the open CLR calling-convention model
+
+v1's `[CC]` slot was a closed enum of the four legacy P/Invoke conventions,
+and the slot was required (GS0356 rejected `unmanaged (T) -> R`). The CLR
+itself moved past that model: modern signatures encode
+`SignatureCallingConvention.Unmanaged` (`0x09`) plus an **extensible,
+composable** set of `System.Runtime.CompilerServices.CallConv*` modifier
+types carried as `modopt`s. Two C# shapes were therefore unspellable in G#
+and blocked the #3501 self-migration (cs2gs's `MapFunctionPointer` carried
+both as by-design gaps, ex-#1906):
+
+- `delegate* unmanaged<int, int>` — **bare unmanaged**, the platform-default
+  ABI (empty modifier set);
+- `delegate* unmanaged[Cdecl, SuppressGCTransition]<…>` — **combined or
+  non-legacy** convention sets (`SuppressGCTransition`, `MemberFunction`,
+  and any future `CallConv{Name}` type).
+
+v2 adopts the CLR model. It is additive to the v1 grammar and matches the
+project's CLR/C#-roundtripping positioning.
+
+### Grammar (v2)
+
+```
+function-pointer-type-clause:
+    'unmanaged' calling-convention-slot? '(' parameter-type-list? ')' '->' return-type-clause
+
+calling-convention-slot:
+    '[' calling-convention-identifier (',' calling-convention-identifier)* ']'
+
+calling-convention-identifier:
+    identifier   // resolved per §Binding below
+```
+
+The slot is now **optional**: bare `unmanaged (T) -> R` is the
+platform-default unmanaged convention. **GS0356 is retired** (the diagnostic
+id stays reserved; it no longer fires). The parser change is confined to
+`ParseFunctionPointerTypeClause`: no GS0356 report on a missing slot, and
+the slot accepts a comma-separated identifier list.
+
+### Binding (v2)
+
+- A **single identifier naming one of the four legacy conventions**
+  (`Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`) binds exactly as in v1 —
+  the closed-enum path is preserved byte-for-byte.
+- **Every other slot shape** — empty (bare), a single non-legacy name, or a
+  list of two or more names (legacy names included) — takes the open path:
+  each identifier `Name` must resolve to a type
+  `System.Runtime.CompilerServices.CallConv{Name}` in the compilation's
+  references (C#'s exact rule). An identifier that resolves to no such type
+  reports the existing GS0354 unknown-convention diagnostic, extended to
+  name the probed `CallConv{Name}` metadata type.
+- Convention identity is **ordered by source order** (see §Encoding): two
+  function-pointer types with the same conventions in a different order are
+  distinct types, exactly as their metadata signatures are distinct blobs.
+  This matches the blob-identity rule rather than C#'s consumer-side
+  unordered comparison; roundtrip fidelity wins, and cs2gs emits source
+  order, so C#-originated code never observes the difference.
+
+### Encoding (v2) — verified against csc (.NET 10 SDK)
+
+Empirically pinned by compiling the six probe shapes with csc and decoding
+the raw field-signature blobs:
+
+| Source | Blob (after `ELEMENT_TYPE_FNPTR 0x1B`) |
+|---|---|
+| `unmanaged[Cdecl] (int32) -> int32` | `0x01` (legacy `C`), no modopts |
+| `unmanaged (int32) -> int32` | `0x09` (`Unmanaged`), no modopts |
+| `unmanaged[SuppressGCTransition] (…)` | `0x09`, `modopt(CallConvSuppressGCTransition)` on the return type |
+| `unmanaged[Cdecl, SuppressGCTransition] (…)` | `0x09`, `modopt(CallConvCdecl) modopt(CallConvSuppressGCTransition)` — **source order** |
+| `unmanaged[SuppressGCTransition, Cdecl] (…)` | `0x09`, modopts reversed — order is significant and preserved |
+
+The emitter (`EncodeTypeSymbol` / `GetFunctionPointerCallSiteSignature`)
+encodes the open path as `SignatureCallingConvention.Unmanaged` with the
+`CallConv{Name}` typeref modopts written on the **return type** in source
+order. Legacy single conventions keep their v1 `SignatureCallingConvention`
+literals with no modopts. Roundtripped signatures are byte-identical to
+csc's, which the #3501 self-migration gate verifies continuously.
+
+### Display
+
+- Bare: `unmanaged (T1, T2) -> R`.
+- Open list: `unmanaged[Cdecl, SuppressGCTransition] (T1, T2) -> R` —
+  the source spelling, short names without the `CallConv` prefix.
+
+### Supersedes within this ADR
+
+- §5's GS0356 entry and the "Allow `unmanaged (T) -> R` without `[CC]`,
+  defaulting to `Cdecl`" rejected alternative. v2 does **not** default to a
+  fixed convention — bare `unmanaged` *is* the platform-default convention,
+  the same semantics C# assigns it, encoded as `0x09` and resolved by the
+  runtime per platform. The v1 objection (an arbitrary fixed default would
+  surprise on Windows) does not apply to the runtime-resolved encoding.
+- §2's "four CLR-supported calling conventions" table remains correct for
+  the legacy fast path but is no longer exhaustive.
+
+`@UnmanagedFunctionPointer` (Shape A) is unchanged — its positional argument
+remains the `System.Runtime.InteropServices.CallingConvention` enum, whose
+shape is fixed by the runtime attribute. `[UnmanagedCallersOnly]` callee-side
+support remains deferred to a future ADR (re-noted on #3611).

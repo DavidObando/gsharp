@@ -672,16 +672,9 @@ public sealed partial class DiagnosticBag
     public void ReportPInvokeDelegateReturnNotSupported(TextLocation location, string delegateTypeName)
     => Report(location, DiagnosticDescriptors.PInvokeDelegateReturnNotSupported, delegateTypeName);
 
-    /// <summary>
-    /// ADR-0095 / issue #761: GS0356 — a raw function-pointer type clause
-    /// is missing its required calling-convention slot. The syntax is
-    /// <c>unmanaged[CC] (T1, T2, ...) -&gt; R</c>; the <c>[CC]</c> bracket
-    /// list is mandatory and the convention must be one of <c>Cdecl</c>,
-    /// <c>Stdcall</c>, <c>Thiscall</c>, <c>Fastcall</c>.
-    /// </summary>
-    /// <param name="location">The offending location (typically the <c>unmanaged</c> keyword).</param>
-    public void ReportFunctionPointerMissingCallingConvention(TextLocation location)
-    => Report(location, DiagnosticDescriptors.FunctionPointerMissingCallingConvention);
+    // GS0356 (missing calling-convention slot) retired by ADR-0095 v2 /
+    // issue #3611: bare `unmanaged (T) -> R` is now the platform-default
+    // unmanaged convention. The id stays reserved in DiagnosticDescriptors.
 
     /// <summary>
     /// ADR-0096 / issue #762: GS0357 — the <c>UnmanagedType</c> value

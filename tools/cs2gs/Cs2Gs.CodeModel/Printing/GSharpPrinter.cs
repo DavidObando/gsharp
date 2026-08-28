@@ -207,6 +207,18 @@ public static class GSharpPrinter
         // ADR-0095 §2: the unmanaged raw form always spells the return type
         // explicitly, using `void` for a void-returning pointer.
         var returnText = functionPointer.ReturnType is null ? "void" : RenderType(functionPointer.ReturnType);
+
+        // ADR-0095 v2 / issue #3611: the open model renders the source
+        // spelling — bare `unmanaged (…)` for the platform default,
+        // `unmanaged[A, B] (…)` for a convention list.
+        if (functionPointer.IsUnmanagedExtended)
+        {
+            var slot = functionPointer.UnmanagedConventions.Count == 0
+                ? string.Empty
+                : $"[{string.Join(", ", functionPointer.UnmanagedConventions)}]";
+            return $"unmanaged{slot} ({parameters}) -> {returnText}";
+        }
+
         return $"unmanaged[{RenderCallingConvention(functionPointer.CallingConvention)}] ({parameters}) -> {returnText}";
     }
 

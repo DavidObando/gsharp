@@ -877,6 +877,17 @@ public static class SymbolDisplay
         var returnType = FormatGenericTypeArgument(functionPointer.ReturnType);
         if (!functionPointer.IsManaged)
         {
+            // ADR-0095 v2 / issue #3611: the open model renders the source
+            // spelling — bare `unmanaged (…)` for the platform default,
+            // `unmanaged[A, B] (…)` for a convention list.
+            if (functionPointer.IsUnmanagedExtended)
+            {
+                var slot = functionPointer.UnmanagedConventions.IsDefaultOrEmpty
+                    ? string.Empty
+                    : $"[{string.Join(", ", functionPointer.UnmanagedConventions)}]";
+                return $"unmanaged{slot} ({parameters}) -> {returnType}";
+            }
+
             return $"unmanaged[{functionPointer.CallingConvention}] ({parameters}) -> {returnType}";
         }
 

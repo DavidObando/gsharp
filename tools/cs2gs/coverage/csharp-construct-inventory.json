@@ -948,7 +948,7 @@
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/FunctionPointerType.cs",
     "issue": "https://github.com/DavidObando/gsharp/issues/1906",
-    "notes": "managed/\u0060managed\u0060/\u0060unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]\u0060 translate; bare \u0060unmanaged\u0060 (platform-default ABI) and combined/custom conventions stay an Unsupported/ByDesign sub-case (no fixed G# CallingConvention equivalent)."
+    "notes": "managed/\u0060managed\u0060/\u0060unmanaged[Cdecl|Stdcall|Thiscall|Fastcall]\u0060 translate; ADR-0095 v2 (issue #3611) adds the open CLR model \u2014 bare \u0060unmanaged\u0060 (platform-default ABI) spells \u0060unmanaged (T) -\u003E R\u0060 and combined/non-legacy CallConv sets spell \u0060unmanaged[Name, ...] (T) -\u003E R\u0060 in source order."
   },
   {
     "kind": "FunctionPointerParameter",
