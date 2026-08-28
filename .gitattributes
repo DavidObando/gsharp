@@ -1,0 +1,2 @@
+# G# is not yet recognized by Linguist; classify .gs files as C# instead of JavaScript.
+*.gs linguist-language=C#
