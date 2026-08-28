@@ -105,12 +105,17 @@ public sealed class AnnotationSyntax : SyntaxNode
     public bool HasTypeArgumentList => TypeArgumentOpenBracketToken != null;
 
     /// <summary>Gets the dotted attribute name as a string (e.g. <c>"System.Diagnostics.Conditional"</c>).</summary>
+    /// <remarks>
+    /// ADR-0170 / issue #3610: segments use <see cref="SyntaxToken.ValueText"/>
+    /// so an escaped spelling (<c>@$class(...)</c> naming an attribute class
+    /// declared <c>class $class</c>) resolves by its semantic name.
+    /// </remarks>
     /// <returns>The flattened dotted name; segments are joined with <c>.</c>.</returns>
     public string GetNameText()
     {
         if (NameSegments.Length == 1)
         {
-            return NameSegments[0].Text;
+            return NameSegments[0].ValueText;
         }
 
         var sb = new System.Text.StringBuilder();
@@ -121,7 +126,7 @@ public sealed class AnnotationSyntax : SyntaxNode
                 sb.Append('.');
             }
 
-            sb.Append(NameSegments[i].Text);
+            sb.Append(NameSegments[i].ValueText);
         }
 
         return sb.ToString();

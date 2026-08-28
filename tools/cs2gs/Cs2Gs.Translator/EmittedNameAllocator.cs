@@ -75,8 +75,29 @@ internal sealed class EmittedNameAllocator
                 context |= this.GetContext(member) | precomputed;
             }
 
+            // ADR-0170 / issue #3610: a METADATA-VISIBLE symbol whose name is
+            // a G# reserved spelling keeps its exact CLR name via the `$name`
+            // escape instead of the lossy `name_` rename — the rename changes
+            // the emitted metadata (reflection, InternalsVisibleTo,
+            // cross-assembly consumers) and can collide with a legal `name_`
+            // neighbor. Locals, parameters, and other non-metadata names keep
+            // the #3461 rename below, where readability wins and metadata
+            // does not care.
+            string sourceName = SourceName(symbol);
+            if (contract.Any(IsMetadataVisible)
+                && GSharpSyntaxFacts.IsReservedIdentifier(sourceName, context))
+            {
+                string escaped = "$" + sourceName;
+                foreach (ISymbol member in contract)
+                {
+                    this.emittedNames[member] = escaped;
+                }
+
+                return escaped;
+            }
+
             string emitted = GSharpSyntaxFacts.GetEmittedIdentifier(
-                SourceName(symbol),
+                sourceName,
                 context,
                 contract.SelectMany(this.GetScopeNames).Distinct(StringComparer.Ordinal));
             foreach (ISymbol member in contract)
@@ -111,6 +132,24 @@ internal sealed class EmittedNameAllocator
 
         return string.Join(".", parts);
     }
+
+    // ADR-0170: symbols whose emitted names ARE their CLR metadata names —
+    // namespaces, named types, and type members. Everything scoped to a body
+    // (locals, parameters, type parameters, range variables, local/anonymous
+    // functions) and synthesized shapes (anonymous-type members, aliases,
+    // discards) stay on the rename path.
+    private static bool IsMetadataVisible(ISymbol symbol) =>
+        symbol switch
+        {
+            INamespaceSymbol => true,
+            INamedTypeSymbol { IsAnonymousType: false } => true,
+            IMethodSymbol { MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction } => false,
+            IMethodSymbol method => method.ContainingType?.IsAnonymousType == false,
+            IPropertySymbol property => property.ContainingType?.IsAnonymousType == false,
+            IFieldSymbol field => field.ContainingType?.IsAnonymousType == false,
+            IEventSymbol => true,
+            _ => false,
+        };
 
     private static ISymbol Canonical(ISymbol symbol) =>
         symbol switch

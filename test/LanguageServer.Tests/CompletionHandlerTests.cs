@@ -362,6 +362,20 @@ public class CompletionHandlerTests
         Assert.Equal(caret.Character, toString.TextEdit.Range.End.Character);
     }
 
+    [Fact]
+    public void ComputeCompletions_KeywordNamedMember_OffersEscapedSpelling()
+    {
+        // ADR-0170 / issue #3610: a member whose CLR name is a G# reserved
+        // spelling completes as `$name` so the inserted text parses.
+        const string source = "class Bag {\nfunc $defer() int32 {\nreturn 1\n}\n}\nvar b = Bag{}\nb.\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "b."));
+
+        Assert.Contains(items, i => i.Label == "$defer" && i.Kind == CompletionItemKind.Method);
+        Assert.DoesNotContain(items, i => i.Label == "defer");
+    }
+
     private static Position After(string source, string marker)
     {
         var start = LanguageServerTestHelpers.PositionOf(source, marker);
