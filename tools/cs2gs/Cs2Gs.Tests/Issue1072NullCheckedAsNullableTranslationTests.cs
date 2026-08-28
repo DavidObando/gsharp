@@ -318,7 +318,7 @@ namespace Demo
             .ToArray();
 
         Assert.Contains("References Resolver?", printed[0], StringComparison.Ordinal);
-        Assert.Contains("scope_.References!!.Run()", printed[1], StringComparison.Ordinal);
+        Assert.Contains("$scope.References!!.Run()", printed[1], StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 

@@ -152,6 +152,50 @@ Console.WriteLine(""value=${$defer + 1}"")
         Assert.Equal("value=42", output.Trim());
     }
 
+    [Fact]
+    public void EscapedSpelling_CannotMintADistinctName()
+    {
+        // `$foo` and `foo` declare the SAME name (C#'s @foo rule): the second
+        // declaration collides, and the escape never reaches metadata.
+        const string source = @"
+package P
+
+var $foo = 1
+var foo = 2
+";
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(new MemoryStream());
+        Assert.Contains(
+            result.Diagnostics,
+            d => d.Message.Contains("foo", StringComparison.Ordinal)
+                && d.Message.Contains("already declared", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void NameOf_EscapedIdentifier_YieldsUnescapedName()
+    {
+        // Matches C#: `nameof(@class)` is "class" — the escape is a spelling,
+        // not part of the name. Covers the type, member, and local forms.
+        const string source = @"
+package P
+import System
+
+class $class {
+    prop $defer int32 -> 1
+}
+
+let $type = 5
+Console.WriteLine(nameof($class))
+Console.WriteLine(nameof($class.$defer))
+Console.WriteLine(nameof($type))
+";
+        var (output, _) = CompileLoadRun(source, "Adr0170-NameOf");
+        Assert.Equal(
+            string.Join(Environment.NewLine, "class", "defer", "type"),
+            output.Trim());
+    }
+
     private static (string Output, string[] TypeNames) CompileLoadRun(string source, string contextName)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

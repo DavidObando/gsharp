@@ -52,7 +52,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("default_", printed);
+        Assert.Contains("$default", printed);
 
         // Issue #3510: `type` left the reserved keyword set, so the C#
         // parameter keeps its spelling instead of the `type_` suffix.

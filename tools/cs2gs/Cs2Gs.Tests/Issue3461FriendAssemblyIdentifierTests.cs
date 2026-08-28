@@ -94,8 +94,10 @@ public sealed class Issue3461FriendAssemblyIdentifierTests
             document.FilePath);
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.Contains("func defer__()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func Run() int32 -> defer__()", rendered, StringComparison.Ordinal);
+        // ADR-0170: the derived keyword-named method keeps its CLR name via
+        // the escape; no allocation around the friend-internal defer_ needed.
+        Assert.Contains("func $defer()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func Run() int32 -> $defer()", rendered, StringComparison.Ordinal);
 
         using var resolver = GSharpReferenceResolver.WithReferences(
             new[] { libraryPath });

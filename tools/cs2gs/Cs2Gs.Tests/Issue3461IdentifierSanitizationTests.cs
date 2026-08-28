@@ -108,10 +108,15 @@ public sealed class Issue3461IdentifierSanitizationTests
 
         Assert.Contains("import import_ = System.Text.StringBuilder", rendered, StringComparison.Ordinal);
         Assert.Contains("import import__ = System.Text.StringBuilder", rendered, StringComparison.Ordinal);
+
+        // ADR-0170: the metadata-visible keyword-named class keeps its CLR
+        // name via the escape; the legal `defer_` neighbor keeps its own name
+        // — the #3461 collision is gone rather than allocated around.
+        Assert.Contains("class $defer", rendered, StringComparison.Ordinal);
         Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
-        Assert.Contains("class defer__", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("defer__", rendered, StringComparison.Ordinal);
+        Assert.Contains("$select(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
         Assert.Contains("select_(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
-        Assert.Contains("select__(params__ int32, params_ int32", rendered, StringComparison.Ordinal);
         Assert.Contains("range_", rendered, StringComparison.Ordinal);
         Assert.Contains("range__", rendered, StringComparison.Ordinal);
         Assert.Contains("guard_", rendered, StringComparison.Ordinal);
@@ -168,7 +173,10 @@ public sealed class Issue3461IdentifierSanitizationTests
 
         foreach (string word in reserved)
         {
-            Assert.Contains(word + "_", rendered, StringComparison.Ordinal);
+            // ADR-0170: fields are metadata-visible, so every reserved name
+            // keeps its CLR spelling via the `$` escape instead of a rename.
+            Assert.Contains("$" + word, rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain(word + "_", rendered, StringComparison.Ordinal);
             Assert.DoesNotContain($"var {word} ", rendered, StringComparison.Ordinal);
             Assert.DoesNotMatch(
                 $@"\.{Regex.Escape(word)}(?![A-Za-z0-9_])",
@@ -234,7 +242,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("class event_", rendered, StringComparison.Ordinal);
+        Assert.Contains("class $event", rendered, StringComparison.Ordinal);
         Assert.Contains("class Holder[in_, out_]", rendered, StringComparison.Ordinal);
         Assert.Contains(
             "Run(params_ int32, scoped_ int32, ref_ int32, out_ int32, in_ int32)",
@@ -243,11 +251,11 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.True(
             rendered.Split("params_ int32", StringSplitOptions.None).Length >= 3,
             rendered);
-        Assert.Contains("func checked_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func typeof_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func sizeof_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func unchecked_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func init_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $checked()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $typeof()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $sizeof()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $unchecked()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $init()", rendered, StringComparison.Ordinal);
         Assert.Contains("func make()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.nameof()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.checked()", rendered, StringComparison.Ordinal);
@@ -255,8 +263,7 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.Contains("names.sizeof()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.unchecked()", rendered, StringComparison.Ordinal);
         Assert.Contains("names.make()", rendered, StringComparison.Ordinal);
-        Assert.Contains("names.init_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("func init_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("names.$init()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("func nameof_()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
@@ -288,9 +295,11 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
+        // ADR-0170: both contract endpoints keep the CLR name via the
+        // escape; the legal defer_ sibling keeps its own name.
         Assert.Equal(
             2,
-            rendered.Split("func defer__()", StringSplitOptions.None).Length - 1);
+            rendered.Split("func $defer()", StringSplitOptions.None).Length - 1);
         Assert.Contains("func defer_()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -327,9 +336,11 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
+        // ADR-0170: base virtual and override keep the CLR name via the
+        // escape; the legal defer_ sibling keeps its own name.
         Assert.Equal(
             2,
-            rendered.Split("func defer__()", StringSplitOptions.None).Length - 1);
+            rendered.Split("func $defer()", StringSplitOptions.None).Length - 1);
         Assert.Contains("func defer_()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
@@ -364,9 +375,12 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("func defer__()", rendered, StringComparison.Ordinal);
+        // ADR-0170: the derived keyword-named method escapes to keep its CLR
+        // name; no allocation around the inherited legal defer_ is needed.
+        Assert.Contains("func $defer()", rendered, StringComparison.Ordinal);
         Assert.Contains("func defer_()", rendered, StringComparison.Ordinal);
-        Assert.Contains("value.defer__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("value.$defer()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("defer__", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -395,9 +409,11 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("data class R(params__ int32)", rendered, StringComparison.Ordinal);
+        // ADR-0170: the positional property is metadata-visible, so the whole
+        // parameter/property contract group keeps the CLR name via the escape.
+        Assert.Contains("data class R($params int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("prop params_", rendered, StringComparison.Ordinal);
-        Assert.Contains("value.params__", rendered, StringComparison.Ordinal);
+        Assert.Contains("value.$params", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
 
         var result = EmittedOracle.Evaluate(
@@ -650,8 +666,8 @@ public sealed class Issue3461IdentifierSanitizationTests
                 }
                 """));
 
-        Assert.Contains(".params_", rendered["Consumer.cs"], StringComparison.Ordinal);
-        Assert.Contains("data class R(params_", rendered["Record.cs"], StringComparison.Ordinal);
+        Assert.Contains(".$params", rendered["Consumer.cs"], StringComparison.Ordinal);
+        Assert.Contains("data class R($params", rendered["Record.cs"], StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered.Values.ToArray());
     }
 
@@ -684,12 +700,12 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("class base_", rendered, StringComparison.Ordinal);
-        Assert.Contains("class stackalloc_", rendered, StringComparison.Ordinal);
-        Assert.Contains("func base_[T]", rendered, StringComparison.Ordinal);
-        Assert.Contains("func stackalloc_[T]", rendered, StringComparison.Ordinal);
-        Assert.Contains("base_[int32](1)", rendered, StringComparison.Ordinal);
-        Assert.Contains("stackalloc_[int32](2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("class $base", rendered, StringComparison.Ordinal);
+        Assert.Contains("class $stackalloc", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $base[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("func $stackalloc[T]", rendered, StringComparison.Ordinal);
+        Assert.Contains("$base[int32](1)", rendered, StringComparison.Ordinal);
+        Assert.Contains("$stackalloc[int32](2)", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
@@ -715,8 +731,8 @@ public sealed class Issue3461IdentifierSanitizationTests
                 }
                 """));
 
-        Assert.Contains("package class_", rendered["Extensions.cs"], StringComparison.Ordinal);
-        Assert.Contains("import class_", rendered["Consumer.cs"], StringComparison.Ordinal);
+        Assert.Contains("package $class", rendered["Extensions.cs"], StringComparison.Ordinal);
+        Assert.Contains("import $class", rendered["Consumer.cs"], StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered.Values.ToArray());
     }
 
@@ -746,12 +762,13 @@ public sealed class Issue3461IdentifierSanitizationTests
             """,
             references);
 
-        Assert.Contains("fields.defer__", rendered, StringComparison.Ordinal);
+        Assert.Contains("fields.$defer", rendered, StringComparison.Ordinal);
         Assert.Contains("fields.defer_", rendered, StringComparison.Ordinal);
-        Assert.Contains("properties.defer__", rendered, StringComparison.Ordinal);
-        Assert.Contains("methods.defer__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("properties.$defer", rendered, StringComparison.Ordinal);
+        Assert.Contains("methods.$defer()", rendered, StringComparison.Ordinal);
         Assert.Contains("methods.make()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("methods.make_()", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("defer__", rendered, StringComparison.Ordinal);
 
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
         TranslationTestValidation.AssertBinds(resolver, rendered);
@@ -881,8 +898,8 @@ public sealed class Issue3461IdentifierSanitizationTests
             """,
             references);
 
-        Assert.Contains("import class__", rendered, StringComparison.Ordinal);
-        Assert.Contains("defer__()", rendered, StringComparison.Ordinal);
+        Assert.Contains("import $class", rendered, StringComparison.Ordinal);
+        Assert.Contains("$defer()", rendered, StringComparison.Ordinal);
         Assert.Contains("defer_()", rendered, StringComparison.Ordinal);
 
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
@@ -970,13 +987,13 @@ public sealed class Issue3461IdentifierSanitizationTests
 
         foreach ((string method, string name) in new[]
                  {
-                     ("Event", "event_"),
-                     ("Prop", "prop_"),
-                     ("Init", "init_"),
-                     ("Convenience", "convenience_"),
-                     ("Shared", "shared_"),
-                     ("Delegate", "delegate_"),
-                     ("Unmanaged", "unmanaged_"),
+                     ("Event", "$event"),
+                     ("Prop", "$prop"),
+                     ("Init", "$init"),
+                     ("Convenience", "$convenience"),
+                     ("Shared", "$shared"),
+                     ("Delegate", "$delegate"),
+                     ("Unmanaged", "$unmanaged"),
                  })
         {
             Assert.Contains($"class {name}", rendered, StringComparison.Ordinal);
@@ -1049,7 +1066,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             }
             """);
 
-        Assert.Contains("class class_", rendered, StringComparison.Ordinal);
+        Assert.Contains("class $class", rendered, StringComparison.Ordinal);
         Assert.Contains("var params int32", rendered, StringComparison.Ordinal);
         Assert.Contains("Read(params_ int32)", rendered, StringComparison.Ordinal);
         Assert.Contains("let ordinary", rendered, StringComparison.Ordinal);
@@ -1102,9 +1119,9 @@ public sealed class Issue3461IdentifierSanitizationTests
                 }
                 """));
 
-        Assert.Contains("package class_", rendered["Producer.cs"], StringComparison.Ordinal);
+        Assert.Contains("package $class", rendered["Producer.cs"], StringComparison.Ordinal);
         Assert.Contains(
-            "import import_ = class_.Widget",
+            "import import_ = $class.Widget",
             rendered["Consumer.cs"],
             StringComparison.Ordinal);
         Assert.DoesNotContain("@class", rendered["Consumer.cs"], StringComparison.Ordinal);
@@ -1129,7 +1146,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             references);
 
         Assert.Contains(
-            "@ReservedNamed(\"a\", \"b\", defer__: \"c\", defer_: \"d\")",
+            "@ReservedNamed(\"a\", \"b\", $defer: \"c\", defer_: \"d\")",
             rendered,
             StringComparison.Ordinal);
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });
@@ -1152,8 +1169,8 @@ public sealed class Issue3461IdentifierSanitizationTests
             public sealed class Holder { }
             """);
 
-        Assert.Contains("class class_", rendered, StringComparison.Ordinal);
-        Assert.Contains("@class_(\"ok\")", rendered, StringComparison.Ordinal);
+        Assert.Contains("class $class", rendered, StringComparison.Ordinal);
+        Assert.Contains("@$class(\"ok\")", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 

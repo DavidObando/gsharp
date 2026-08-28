@@ -93,7 +93,7 @@ internal sealed partial class DeclarationBinder
             // Also accept the fully qualified name.
             if (annotation.NameSegments.Length >= 2)
             {
-                var fullName = string.Concat(annotation.NameSegments.Select(s => s.Text));
+                var fullName = string.Concat(annotation.NameSegments.Select(s => s.ValueText));
                 if (fullName == "UnscopedRef" || fullName == "UnscopedRefAttribute"
                     || fullName == "System.Diagnostics.CodeAnalysis.UnscopedRef"
                     || fullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute")
@@ -319,7 +319,7 @@ internal sealed partial class DeclarationBinder
                         Diagnostics.ReportNamedArgumentsNotSupportedOnUserAttribute(
                             namedArg.NameToken.Location,
                             nameIsExact ? nameText : (nameText + "Attribute"),
-                            namedArg.NameToken.Text);
+                            namedArg.NameToken.ValueText);
                         continue;
                     }
 
@@ -329,7 +329,7 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    named.Add(new BoundAttributeArgument(namedArg.NameToken.Text, value, valueType));
+                    named.Add(new BoundAttributeArgument(namedArg.NameToken.ValueText, value, valueType));
                 }
                 else
                 {

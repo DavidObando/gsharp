@@ -50,9 +50,9 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("class defer_", rendered, StringComparison.Ordinal);
-        Assert.Contains("Make() defer_", rendered, StringComparison.Ordinal);
-        Assert.Contains("return defer_()", rendered, StringComparison.Ordinal);
+        Assert.Contains("class $defer", rendered, StringComparison.Ordinal);
+        Assert.Contains("Make() $defer", rendered, StringComparison.Ordinal);
+        Assert.Contains("return $defer()", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
@@ -80,7 +80,7 @@ namespace Corpus.Issue1734
         // The lifted primary-constructor parameter and the member it feeds must
         // agree on the sanitized spelling everywhere: the parameter list, the
         // parameter-field read inside 'Read', and (if retained) the field itself.
-        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$defer", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
@@ -257,7 +257,7 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$defer", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
@@ -283,7 +283,7 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$defer", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
@@ -303,7 +303,7 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("defer_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$defer", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "defer");
         AssertRoundTripParses(rendered);
     }
@@ -326,7 +326,7 @@ namespace Corpus.Issue1734
 }
 ");
 
-        Assert.Contains("select_", rendered, StringComparison.Ordinal);
+        Assert.Contains("$select", rendered, StringComparison.Ordinal);
         AssertNoRawKeywordCollision(rendered, "select");
         AssertRoundTripParses(rendered);
     }
@@ -409,7 +409,7 @@ namespace Corpus.Issue3510
     private static void AssertNoRawKeywordCollision(string rendered, string keyword)
     {
         var regex = new System.Text.RegularExpressions.Regex(
-            $@"(?<![A-Za-z0-9_]){System.Text.RegularExpressions.Regex.Escape(keyword)}(?![A-Za-z0-9_])");
+            $@"(?<![A-Za-z0-9_$]){System.Text.RegularExpressions.Regex.Escape(keyword)}(?![A-Za-z0-9_])");
         System.Text.RegularExpressions.Match match = regex.Match(rendered);
         Assert.False(
             match.Success,

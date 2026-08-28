@@ -2327,6 +2327,16 @@ public static class CompletionComputer
             return;
         }
 
+        // ADR-0170 / issue #3610: a member whose CLR name is a G# reserved
+        // spelling completes as its escaped form so the inserted text parses
+        // (`x.$defer()` for an imported member named `defer`). The escape is
+        // the label too — what you see is what inserts, mirroring how C#
+        // completion shows `@params`.
+        if (GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(label))
+        {
+            label = "$" + label;
+        }
+
         items.Add(new CompletionItem { Label = label, Kind = kind, Detail = detail });
     }
 
