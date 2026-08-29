@@ -1580,6 +1580,20 @@ internal sealed partial class ExpressionBinder
     {
         element = null;
 
+        // ADR-0172: an imported awaitable whose signature carries reference-
+        // nullability metadata arrives wrapped in a
+        // NullabilityAnnotatedTypeSymbol, hiding the symbolic constructed
+        // base from the fast path below — and the CLR fallback would erase a
+        // named-tuple element's names (they share the unnamed CLR backing).
+        // Unwrap to the symbolic base exactly when names are at stake; the
+        // base's arguments already carry their element nullability.
+        if (type is NullabilityAnnotatedTypeSymbol annotatedAwaitable
+            && annotatedAwaitable.BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicAwaitable
+            && symbolicAwaitable.TypeArguments.Any(TypeSymbol.ContainsNamedTupleElements))
+        {
+            type = symbolicAwaitable;
+        }
+
         // Issue #2195: for an imported generic awaitable (e.g. `Task[T]`,
         // `ValueTask[T]`) recover the awaited ELEMENT type from the SYMBOLIC
         // type argument rather than the awaiter's CLR `GetResult()` return
