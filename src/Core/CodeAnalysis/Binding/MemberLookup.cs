@@ -6017,7 +6017,12 @@ internal sealed class MemberLookup
             paramClr[i] = parameterClr;
         }
 
-        var isVoid = FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType);
+        // Issue #3646: a throw-expression lambda's natural return is the bottom
+        // (`never`) type, which has no CLR erasure but satisfies every result
+        // slot (issue #2716) — erase it like `void` so the Action<...> shape
+        // gates applicability; conversion re-shapes the literal downstream.
+        var isVoid = FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType)
+            || functionType.ReturnType == TypeSymbol.Never;
         Type? returnClr = null;
         if (!isVoid && !TryEraseDelegateComponentClrType(functionType.ReturnType, out returnClr))
         {
