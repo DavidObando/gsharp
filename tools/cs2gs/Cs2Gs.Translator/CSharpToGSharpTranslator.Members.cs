@@ -2604,6 +2604,23 @@ public sealed partial class CSharpToGSharpTranslator
                     node.Initializer.Value,
                     this.TranslateNullSeamExpression(node.Initializer.Value))
                 : null;
+
+            // Issue #3635: an initializer reading a member of a nullability-
+            // OBLIVIOUS assembly (e.g. netstandard2.0's `bool.TrueString` or
+            // `Array.Empty<T>()`) is imported by gsc as `T?` (#1354), while the
+            // backing field itself stays the declared non-null `T`. Bridge with
+            // `!!` exactly as the static auto-property and plain-field
+            // initializer paths already do (GS0155/GS0156 otherwise). A backing
+            // type already rendered nullable needs no bridge.
+            if (backingInitializer != null && backingType is { IsNullable: false })
+            {
+                backingInitializer = this.ForgiveNullableReferenceValue(
+                    node.Initializer.Value,
+                    backingInitializer,
+                    symbol?.Type,
+                    symbol);
+            }
+
             GMember backingField = fieldKeywordBackingName != null
                 ? new FieldDeclaration(BindingKind.Var, fieldKeywordBackingName, backingType, initializer: backingInitializer, visibility: Visibility.Private)
                 : null;

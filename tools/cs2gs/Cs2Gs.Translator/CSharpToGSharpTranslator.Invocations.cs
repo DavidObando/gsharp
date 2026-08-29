@@ -3814,8 +3814,16 @@ public sealed partial class CSharpToGSharpTranslator
                     ITypeSymbol holeType = this.context.GetTypeInfo(holeSyntax.Expression).Type;
                     if (holeType?.SpecialType != SpecialType.System_String)
                     {
+                        // Issue #3638: a non-atomic hole expression (`{i + 1}`)
+                        // must be parenthesized before the synthetic `.ToString()`
+                        // is appended, or `+` binds looser than `.` and the call
+                        // lands on the last operand (`i + 1.ToString()`) — which
+                        // does not even parse when that operand is a numeric
+                        // literal (ADR-0054, GS0005 on the DotToken).
                         segment = new InvocationExpression(
-                            new MemberAccessExpression(segment, "ToString"),
+                            new MemberAccessExpression(
+                                ParenthesizeForSyntheticMemberAccess(segment),
+                                "ToString"),
                             Array.Empty<GExpression>());
                     }
                 }

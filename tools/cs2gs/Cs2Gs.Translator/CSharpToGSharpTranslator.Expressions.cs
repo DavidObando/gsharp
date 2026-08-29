@@ -902,6 +902,18 @@ public sealed partial class CSharpToGSharpTranslator
         private static GExpression ParenthesizeIfBareNumericLiteral(GExpression expr) =>
             IsBareNumericLiteral(expr) ? new ParenthesizedExpression(expr) : expr;
 
+        // Issue #3638: a synthetic member access (e.g. an appended `.ToString()`)
+        // binds tighter than any binary/unary/if operator, so a non-atomic
+        // receiver must be parenthesized or the access silently lands on the
+        // receiver's last operand (`i + 1.ToString()` instead of
+        // `(i + 1).ToString()`). Same predicate as CoerceConcatOperand's
+        // receiver guard, plus prefix unaries (whose numeric-tail case
+        // IsBareNumericLiteral already covered).
+        private static GExpression ParenthesizeForSyntheticMemberAccess(GExpression expr) =>
+            expr is BinaryExpression or IfExpression or UnaryExpression || IsBareNumericLiteral(expr)
+                ? new ParenthesizedExpression(expr)
+                : expr;
+
         /// <summary>
         /// True when a member-/element-access <paramref name="recv"/> receiver is a
         /// nullable-reference <em>field</em> or <em>property</em> (declared <c>T?</c>
