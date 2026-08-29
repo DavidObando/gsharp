@@ -1764,6 +1764,18 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #3501 / ADR-0171: tuple `==` / `!=` desugars to element-wise
+        // comparison. Tuples never match the built-in table or a user
+        // `operator` (the structural tuple type cannot declare one), so this
+        // arm short-circuits the whole chain. One tuple against a non-tuple
+        // deliberately falls through (→ GS0129).
+        if ((syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken)
+            && boundLeft.Type is TupleTypeSymbol
+            && boundRight.Type is TupleTypeSymbol)
+        {
+            return BindTupleEquality(syntax, boundLeft, boundRight);
+        }
+
         var boundOperator = BindBinaryOperatorWithNumericAdaptation(
             syntax.OperatorToken.Kind,
             ref boundLeft,

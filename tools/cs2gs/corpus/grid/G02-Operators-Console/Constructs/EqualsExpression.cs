@@ -14,7 +14,11 @@ namespace Corpus.Grid02
             bool sameInt = a == b;
             bool sameString = s == "hi";
             bool isNull = t == null;
-            Console.WriteLine($"EqualsExpression: ints={sameInt} strings={sameString} nullCheck={isNull}");
+            // ADR-0171 / issue #3501: tuple equality — element-wise, names ignored.
+            (int Line, int Column) pos = (3, 5);
+            bool sameTuple = pos == (3, 5);
+            bool nestedTuple = ((1, 2), "x") == ((1, 2), "x");
+            Console.WriteLine($"EqualsExpression: ints={sameInt} strings={sameString} nullCheck={isNull} tuples={sameTuple} nested={nestedTuple}");
         }
     }
 }

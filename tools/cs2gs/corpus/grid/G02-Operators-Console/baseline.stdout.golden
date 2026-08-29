@@ -18,7 +18,7 @@ DefaultExpression: int=0 bool=False double=0 stringIsNull=True
 DivideAssignmentExpression: int=7 double=2.25
 DivideExpression: int=3 negInt=-3 double=3.5
 ElementBindingExpression: first=10 missing=-1
-EqualsExpression: ints=True strings=True nullCheck=True
+EqualsExpression: ints=True strings=True nullCheck=True tuples=True nested=True
 ExclusiveOrAssignmentExpression: bits=6 flag=False
 ExclusiveOrExpression: int=6 bool=True
 GreaterThanExpression: gt=True notGt=False
@@ -37,7 +37,7 @@ ModuloExpression: int=1 negInt=-1 double=1.5
 MultiplyAssignmentExpression: int=42 double=6
 MultiplyExpression: int=42 double=6 negative=-12
 NameOfExpression: local=counter type=Console method=Run value=3
-NotEqualsExpression: ints=True strings=False notNull=False
+NotEqualsExpression: ints=True strings=False notNull=False tuples=True
 OrAssignmentExpression: bits=7 flag=True
 PostDecrementExpression: observed=5 after=4
 PostIncrementExpression: observed=5 after=6

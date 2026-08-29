@@ -32,7 +32,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Nullable `T?`, `nil`, `!!`, `??`, `?.`, `?[i]` | Supported | Supported | The evaluator threw on a nil `!!`; `?[i]` short-circuited indexing to `nil` when the receiver was nil. |
 | Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. `len` / `cap` / `append` require `import Gsharp.Extensions.Go` (GS0317); the .NET-idiomatic alternative is `.Length` and (for mutable lists) `List[T].Add`. |
 | Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. Both require `import Gsharp.Extensions.Go` (GS0317); .NET-idiomatic alternatives are `.Remove(k)` and `.Count`. Iterable with range `for`: `for k, v in m` destructures entries, `for kv in m` yields `KeyValuePair[K,V]`; order unspecified. |
-| Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. |
+| Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. Tuple `==` / `!=` compare element-wise with short-circuit, single-evaluation semantics (ADR-0171). |
 | Struct literals | Supported | Supported | Field initialization and field access are implemented. |
 | Data classes, data structs, `with`/copy | Supported | Supported | `data class` (reference) and `data struct` (value) synthesise equality, `with`-copy, and deconstruction. The `record` keyword is not supported; migrate to `data struct` (preserves value semantics) or `data class` (reference semantics). |
 | Inline structs | Supported | Supported | Exactly one field; participates in structural equality. |

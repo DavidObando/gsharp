@@ -171,6 +171,18 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.UndefinedBinaryOperator, operatorText, leftType, rightType);
 
     /// <summary>
+    /// Issue #3501: reports that tuple equality (<c>==</c> / <c>!=</c>) was
+    /// applied to tuple operands of different arities.
+    /// </summary>
+    /// <param name="location">The text location of the operator token.</param>
+    /// <param name="leftType">The left tuple operand type.</param>
+    /// <param name="leftArity">The left tuple's arity.</param>
+    /// <param name="rightType">The right tuple operand type.</param>
+    /// <param name="rightArity">The right tuple's arity.</param>
+    public void ReportTupleEqualityArityMismatch(TextLocation location, TypeSymbol leftType, int leftArity, TypeSymbol rightType, int rightArity)
+    => Report(location, DiagnosticDescriptors.TupleEqualityArityMismatch, leftType, leftArity, rightType, rightArity);
+
+    /// <summary>
     /// Issue #3317 / ADR-0159: reports that a nil comparison against a bare
     /// (non-<c>?</c>) magic collection type is statically constant — with
     /// sound empty-instance zero values such a value can never be nil, so

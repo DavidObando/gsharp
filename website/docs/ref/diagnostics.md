@@ -860,6 +860,17 @@ representation. Use `int64`/`uint64` for a compile-time package constant, or
 |---|---|---|---|
 | GS0538 | Error | `Constant '<name>' cannot use native-width type '<type>' when emitted as a field because CLR constant metadata has no native-width representation; use 'int64'/'uint64' or an immutable runtime 'let' binding.` | `const PageSize nint = 4096` |
 
+## Tuple equality arity mismatch (GS0539)
+
+ADR-0171 / issue #3501: tuple
+`==` / `!=` compares element-wise and is only defined between tuple operands
+of the same arity. Comparing tuples of different arities is an error rather
+than a constant `false`, matching C#.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0539 | Error | `Tuple equality requires operands of equal arity: '<left>' has arity <n> but '<right>' has arity <m>.` | `(1, 2) == (1, 2, 3)` |
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 ADR-0166: a designation in a boolean `is`
