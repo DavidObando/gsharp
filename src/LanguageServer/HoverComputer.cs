@@ -2187,6 +2187,40 @@ public static class CompletionComputer
 
     private static void AddInstanceTypeMembers(List<CompletionItem> items, HashSet<string> seen, TypeSymbol type)
     {
+        // ADR-0172: a tuple receiver offers its declared element names first,
+        // then the positional ItemN spellings (both resolve).
+        if (type is TupleTypeSymbol tupleType)
+        {
+            for (var i = 0; i < tupleType.Arity; i++)
+            {
+                var elementDetail = SymbolDisplay.ToTypeDisplayString(tupleType.ElementTypes[i]);
+                if (tupleType.HasNames
+                    && tupleType.ElementNames[i] is { } elementName
+                    && seen.Add(elementName))
+                {
+                    items.Add(new CompletionItem
+                    {
+                        Label = elementName,
+                        Kind = CompletionItemKind.Field,
+                        Detail = elementDetail,
+                    });
+                }
+
+                var positional = "Item" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (seen.Add(positional))
+                {
+                    items.Add(new CompletionItem
+                    {
+                        Label = positional,
+                        Kind = CompletionItemKind.Field,
+                        Detail = elementDetail,
+                    });
+                }
+            }
+
+            return;
+        }
+
         if (type is StructSymbol structType)
         {
             AddStructInstanceMembers(items, seen, structType);

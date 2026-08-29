@@ -43,9 +43,9 @@ public static class Parser
 }");
 
         Assert.Contains(
-            "func Parse(text string) (string?, string?, Dictionary[string, string]?)",
+            "func Parse(text string) (Action string?, Method string?, Inputs Dictionary[string, string]?)",
             printed);
-        Assert.Contains("let method string? = parsed.Item2", printed);
+        Assert.Contains("let method string? = parsed.Method", printed);
         Assert.DoesNotContain("nil!!", printed);
     }
 
@@ -70,7 +70,7 @@ public static class Parser
 }");
 
         Assert.Contains(
-            "func Pick(flag bool, value int32) ((string?, string?), int32, string, int32?)",
+            "func Pick(flag bool, value int32) (Names (Left string?, Right string?), Count int32, Keep string, Maybe int32?)",
             printed);
     }
 
@@ -103,10 +103,10 @@ public sealed class Parser : ParserBase, IParser
     }
 }");
 
-        Assert.Contains("func ParseAsync() Task[(string?, string)];", printed);
-        Assert.Contains("async func ParseAsync() (string?, string)", printed);
-        Assert.Contains("open func Parse() (string?, string);", printed);
-        Assert.Contains("override func Parse() (string?, string)", printed);
+        Assert.Contains("func ParseAsync() Task[(Action string?, Method string)];", printed);
+        Assert.Contains("async func ParseAsync() (Action string?, Method string)", printed);
+        Assert.Contains("open func Parse() (Action string?, Method string);", printed);
+        Assert.Contains("override func Parse() (Action string?, Method string)", printed);
     }
 
     [Fact]
@@ -132,8 +132,8 @@ public static class Parser
     }
 }");
 
-        Assert.Contains("func Generic[T class]() (T?, int32, int32?)", printed);
-        Assert.Contains("func Get() (string?, string)", printed);
+        Assert.Contains("func Generic[T class]() (Value T?, Count int32, Maybe int32?)", printed);
+        Assert.Contains("func Get() (First string?, Second string)", printed);
         Assert.Contains("func Forward() string?", printed);
     }
 
@@ -151,8 +151,8 @@ public static class Parser
     }
 }");
 
-        Assert.Contains("func Parse() (string, string?, int32, int32?)", printed);
-        Assert.DoesNotContain("(string?, string?, int32, int32?)", printed);
+        Assert.Contains("func Parse() (Required string, Optional string?, Count int32, Maybe int32?)", printed);
+        Assert.DoesNotContain("Required string?", printed);
     }
 
     [Fact]
@@ -196,8 +196,8 @@ namespace LibA
             siblings,
             "Consumer fixture omits the sibling Parser declaration from its emitted G# binding input.");
 
-        Assert.Contains("func Parse() (string?, string)", printedB);
-        Assert.Contains("func Parse() (string?, string)", printedA);
+        Assert.Contains("func Parse() (Action string?, Method string)", printedB);
+        Assert.Contains("func Parse() (Action string?, Method string)", printedA);
     }
 
     private static string TranslateOblivious(string source)

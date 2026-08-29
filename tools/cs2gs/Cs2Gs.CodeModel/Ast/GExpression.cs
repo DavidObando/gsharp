@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Cs2Gs.CodeModel.Ast;
 
@@ -669,7 +670,8 @@ public sealed class WithExpression : GExpression
 }
 
 /// <summary>
-/// A tuple literal <c>(a, b, c)</c> (spec §Primary expressions, <c>TupleLiteral</c>).
+/// A tuple literal <c>(a, b, c)</c> (spec §Primary expressions,
+/// <c>TupleLiteral</c>) — or, with ADR-0172 labels, <c>(line: 1, column: 2)</c>.
 /// A tuple literal always has at least two elements.
 /// </summary>
 public sealed class TupleLiteralExpression : GExpression
@@ -678,13 +680,18 @@ public sealed class TupleLiteralExpression : GExpression
     /// Initializes a new instance of the <see cref="TupleLiteralExpression"/> class.
     /// </summary>
     /// <param name="elements">The tuple element expressions.</param>
-    public TupleLiteralExpression(IReadOnlyList<GExpression> elements)
+    /// <param name="elementNames">Optional per-element labels parallel to <paramref name="elements"/>, null where unlabeled; pass null for a fully unlabeled literal.</param>
+    public TupleLiteralExpression(IReadOnlyList<GExpression> elements, IReadOnlyList<string> elementNames = null)
     {
         Elements = elements ?? new List<GExpression>();
+        ElementNames = elementNames != null && elementNames.Any(n => n != null) ? elementNames : null;
     }
 
     /// <summary>Gets the tuple element expressions.</summary>
     public IReadOnlyList<GExpression> Elements { get; }
+
+    /// <summary>Gets the per-element labels parallel to <see cref="Elements"/> (<see langword="null"/> entries where unlabeled), or <see langword="null"/> when fully unlabeled (ADR-0172).</summary>
+    public IReadOnlyList<string> ElementNames { get; }
 }
 
 /// <summary>

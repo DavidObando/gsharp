@@ -121,7 +121,7 @@ namespace Demo
         Assert.Contains("Field:", printed);
         Assert.Contains("default(string?)", printed);
         Assert.Contains(
-            "Parse(text string) (string?, string?, Dictionary[string, string]?)",
+            "Parse(text string) (Action string?, Method string?, Inputs Dictionary[string, string]?)",
             printed);
         CompileWithGsc(printed);
     }

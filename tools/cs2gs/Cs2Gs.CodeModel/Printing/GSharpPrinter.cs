@@ -176,7 +176,11 @@ public static class GSharpPrinter
                 return $"*{RenderType(pointer.ElementType)}";
 
             case TupleTypeReference tuple:
-                return $"({string.Join(", ", tuple.ElementTypes.Select(RenderType))})";
+                // ADR-0172: element names render name-first — `(line int32, column int32)`.
+                return "(" + string.Join(", ", tuple.ElementTypes.Select((t, i) =>
+                    tuple.ElementNames?[i] is { } elementName
+                        ? $"{elementName} {RenderType(t)}"
+                        : RenderType(t))) + ")";
 
             case ArrowTypeReference arrow:
                 var prefix = arrow.IsAsync ? "async " : string.Empty;
@@ -685,7 +689,11 @@ public static class GSharpPrinter
                     : $"{allocation}{{{string.Join(", ", arrayAllocation.Elements.Select(e => RenderExpression(e, indent)))}}}";
 
             case TupleLiteralExpression tuple:
-                var tupleElements = string.Join(", ", tuple.Elements.Select(e => RenderExpression(e, indent)));
+                // ADR-0172: labeled elements render as `label: value`.
+                var tupleElements = string.Join(", ", tuple.Elements.Select((e, i) =>
+                    tuple.ElementNames?[i] is { } label
+                        ? $"{label}: {RenderExpression(e, indent)}"
+                        : RenderExpression(e, indent)));
                 return $"({tupleElements})";
 
             case UnaryExpression unary:
