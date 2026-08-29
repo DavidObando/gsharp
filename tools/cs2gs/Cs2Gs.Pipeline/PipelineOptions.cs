@@ -117,4 +117,15 @@ public sealed class PipelineOptions
 
     /// <summary>Gets or sets extra G# files required when one C# file declares multiple namespaces.</summary>
     internal ISet<string> RepositoryAdditionalFiles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the absolute project paths that another app in this run
+    /// declares a compile <c>ProjectReference</c> to (issue #3645). An
+    /// executable app in this set keeps its entry-point class as a real G#
+    /// class instead of flattening it to top-level statements — a referencing
+    /// project consumes the entry class as an ordinary CLR type, and
+    /// flattening would erase it from the migrated assembly (GS0157 at every
+    /// cross-project use site).
+    /// </summary>
+    internal IReadOnlyCollection<string> ProjectsReferencedByOtherApps { get; set; }
 }

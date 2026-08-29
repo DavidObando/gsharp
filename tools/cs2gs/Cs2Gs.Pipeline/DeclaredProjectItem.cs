@@ -99,6 +99,46 @@ internal static class DeclaredProjectItems
             .ToList();
 
     /// <summary>
+    /// Collects the absolute project paths that any of the given projects
+    /// declares a compile <c>ProjectReference</c> to (issue #3645). A
+    /// <c>ReferenceOutputAssembly="false"</c> reference contributes no
+    /// compile-time type surface (the referencing project cannot consume the
+    /// target's types), so it is excluded.
+    /// </summary>
+    /// <param name="projectPaths">The referencing projects' <c>.csproj</c> paths.</param>
+    /// <returns>The referenced projects' absolute paths (case-insensitive set).</returns>
+    internal static IReadOnlyCollection<string> CollectCompileReferencedProjectPaths(
+        IEnumerable<string> projectPaths)
+    {
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string projectPath in projectPaths ?? Array.Empty<string>())
+        {
+            foreach (DeclaredProjectItem item in Read(projectPath, "ProjectReference"))
+            {
+                if (string.IsNullOrEmpty(item.SourceInclude))
+                {
+                    continue;
+                }
+
+                string referenceOutputAssembly =
+                    item.Element.Attribute("ReferenceOutputAssembly")?.Value
+                    ?? item.Element.Elements()
+                        .FirstOrDefault(e => e.Name.LocalName.Equals(
+                            "ReferenceOutputAssembly", StringComparison.OrdinalIgnoreCase))?.Value;
+                if (string.Equals(
+                    referenceOutputAssembly?.Trim(), "false", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                referenced.Add(item.SourceInclude);
+            }
+        }
+
+        return referenced;
+    }
+
+    /// <summary>
     /// Bumps a below-floor literal <c>Version</c> attribute on a declared
     /// <c>Nerdbank.GitVersioning</c> <c>PackageReference</c> item (issue #2319,
     /// following #2225/#2267). When the source project's own <c>.csproj</c>
