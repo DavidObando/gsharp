@@ -458,7 +458,7 @@ public class XunitAssertOverloadResolutionTests
     /// names than the host's runtime types.
     /// </summary>
     /// <param name="source">G# source to compile.</param>
-    private static void AssertGsCompilesCleanlyAgainstRefPack(string source)
+    internal static void AssertGsCompilesCleanlyAgainstRefPack(string source)
         => CompileGsAgainstReferences(source, ReferenceModeRefPack);
 
     private const int ReferenceModeTpa = 0;

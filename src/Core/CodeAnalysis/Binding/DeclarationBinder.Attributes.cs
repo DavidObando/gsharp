@@ -958,7 +958,18 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
-        var result = Array.CreateInstance(elementClrType, elements.Count);
+        // Array.CreateInstance / Convert.ChangeType demand RUNTIME types, but
+        // when the compile carries a /r: reference set the element type may be
+        // a MetadataLoadContext type (e.g. an imported enum in
+        // `@Days([]DayOfWeek{...})`), which threw ArgumentException "Type must
+        // be a type provided by the runtime" and aborted the compilation
+        // (GS9998; GS9200 through gsgen — issue #3633). The array built here
+        // is only a CONTAINER for the constant values — the custom-attribute
+        // encoder writes the blob from the SIGNATURE's element type and reads
+        // values via Array.GetValue — so a runtime-equivalent container
+        // element type is exact.
+        var containerElementType = ResolveRuntimeContainerElementType(elementClrType);
+        var result = Array.CreateInstance(containerElementType, elements.Count);
         for (int i = 0; i < elements.Count; i++)
         {
             if (!TryBindAttributeArgument(elements[i], out var elementValue, out _))
@@ -968,7 +979,7 @@ internal sealed partial class DeclarationBinder
 
             try
             {
-                result.SetValue(CoerceAttributeElement(elementValue, elementClrType), i);
+                result.SetValue(CoerceAttributeElement(elementValue, containerElementType), i);
             }
             catch
             {
@@ -1034,6 +1045,35 @@ internal sealed partial class DeclarationBinder
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Maps a possibly-MetadataLoadContext array element type onto the
+    /// runtime type used for the constant-container array: MLC-loaded enums
+    /// map to their (runtime) underlying integral, other MLC types map to
+    /// their runtime twin by full name, and anything unmappable falls back to
+    /// <see cref="object"/> (always a valid container element).
+    /// </summary>
+    /// <param name="elementClrType">The signature's array element type.</param>
+    /// <returns>A runtime-provided element type for the container array.</returns>
+    private static Type ResolveRuntimeContainerElementType(Type elementClrType)
+    {
+        if (!elementClrType.Assembly.ReflectionOnly)
+        {
+            return elementClrType;
+        }
+
+        try
+        {
+            var lookupType = elementClrType.IsEnum
+                ? Enum.GetUnderlyingType(elementClrType)
+                : elementClrType;
+            return Type.GetType(lookupType.FullName ?? string.Empty) ?? typeof(object);
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return typeof(object);
         }
     }
 
