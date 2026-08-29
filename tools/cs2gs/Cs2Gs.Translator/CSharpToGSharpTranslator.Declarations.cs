@@ -770,9 +770,18 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                // Issue #3635: the lifted constructor assignment targets the
+                // property's declared non-null `T`, but an initializer reading a
+                // member of a nullability-OBLIVIOUS assembly is imported by gsc
+                // as `T?` (#1354) — bridge with `!!` like the field-initializer
+                // paths do.
                 result.Add((
                     this.EmittedName(symbol, prop.Identifier.ValueText),
-                    this.TranslateNullSeamExpression(prop.Initializer.Value)));
+                    this.ForgiveNullableReferenceValue(
+                        prop.Initializer.Value,
+                        this.TranslateNullSeamExpression(prop.Initializer.Value),
+                        symbol?.Type,
+                        symbol)));
             }
 
             return result;
