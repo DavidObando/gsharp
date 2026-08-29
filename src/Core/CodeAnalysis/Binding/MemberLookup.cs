@@ -1193,7 +1193,12 @@ internal sealed class MemberLookup
                 // receiver keep the `Check` element identity instead of
                 // collapsing to the type-erased `IEnumerable<object>` (which
                 // for a value-type element is not even a legal up-cast).
+                // ADR-0172: a named-tuple-bearing argument (at any nesting
+                // depth — `List[(a int32, b string)]` as the argument of an
+                // outer generic) shares its CLR backing with the unnamed
+                // shape, so collapsing to FromClrType would erase the names.
                 if (TypeSymbol.RequiresSymbolicProjection(mapped)
+                    || TypeSymbol.ContainsNamedTupleElements(mapped)
                     || (a.ContainsGenericParameters
                         && mapped.ClrType?.ContainsGenericParameters == false))
                 {
@@ -3797,7 +3802,8 @@ internal sealed class MemberLookup
                 if (!projectOnlyWhenSymbolicallyRequired
                     || openProperty.PropertyType.IsGenericParameter
                     || (openProperty.PropertyType.ContainsGenericParameters
-                        && TypeSymbol.RequiresSymbolicProjection(mapped)))
+                        && (TypeSymbol.RequiresSymbolicProjection(mapped)
+                            || TypeSymbol.ContainsNamedTupleElements(mapped))))
                 {
                     return mapped;
                 }

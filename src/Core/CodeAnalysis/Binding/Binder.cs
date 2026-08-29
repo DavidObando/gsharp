@@ -4988,9 +4988,14 @@ public sealed class Binder
     {
         // #313 / #671 / #3560: preserve symbolic type parameters, user types,
         // and tuple conversion semantics beside their CLR form.
+        // ADR-0172: a named-tuple-bearing argument at ANY nesting depth
+        // (`List[(a int32, b string)]`, `[](a int32, b string)`) shares its
+        // CLR backing with the unnamed shape — only the symbolic argument
+        // preserves the names on projected members.
         if (TypeSymbol.RequiresSymbolicProjection(type)
             || type.ClrType == null
-            || type is TupleTypeSymbol)
+            || type is TupleTypeSymbol
+            || TypeSymbol.ContainsNamedTupleElements(type))
         {
             hasSymbolicArgument = true;
 
