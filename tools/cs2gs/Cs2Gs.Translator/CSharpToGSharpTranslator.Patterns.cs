@@ -2210,6 +2210,23 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateCoalescingAssignmentAsExpression(assignment);
             }
 
+            // Issue #3640: a true-discard assignment (`_ = e`) in VALUE position —
+            // e.g. an expression-lambda body `t => _ = t.Exception`, which binds
+            // to a value-returning delegate, so it reaches here rather than the
+            // statement-level discard lowering in TranslateExpressionStatements.
+            // G# has no discard assignment target (`_` would be an undeclared
+            // identifier, GS0125). C# defines the value of `_ = e` as the value
+            // of `e` and the write itself is a no-op, so the faithful translation
+            // is the RHS alone; a nested discard (`_ = (_ = e)`) unwinds through
+            // the same branch recursively. Only a simple assignment can target a
+            // discard (C# rejects compound forms like `_ += e`).
+            if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                assignment.Left is IdentifierNameSyntax { Identifier.ValueText: "_" } discardTarget &&
+                this.IsTrueDiscard(discardTarget))
+            {
+                return this.TranslateExpression(assignment.Right);
+            }
+
             GExpression result = new AssignmentExpression(
                 this.TranslateAssignmentTarget(assignment.Left),
                 this.TranslateAssignmentValue(assignment),
