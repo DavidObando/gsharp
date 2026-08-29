@@ -29,9 +29,32 @@ The type written after `...` is now interpreted like C#'s params type:
   - `...Span[T]` / `...ReadOnlySpan[T]` ≡ `params (ReadOnly)Span<T>`
 - **Otherwise it stays the ADR-0101 ELEMENT type** with an implicit slice
   carrier: `...int32` ≡ `params int[]`, and `...HashSet[int32]` remains a
-  params array OF `HashSet<int32>` elements (HashSet is not a supported
-  carrier — C#'s broader "any collection-expression target" rule is out of
-  scope).
+  params array OF `HashSet<int32>` elements.
+
+  The carrier set is a deliberately CLOSED allowlist, unlike C#13's
+  open-ended rule (any collection-expression target — anything with an
+  accessible `Add` + `IEnumerable`, or a `[CollectionBuilder]` factory —
+  qualifies, so `params HashSet<int>` is legal C#). Two reasons:
+
+  1. **The spelling is already taken.** Under ADR-0101 every `...X` means
+     "params array of `X` elements", and passing whole collections AS
+     elements is legitimate (`countSets(a, b)` over `...HashSet[int32]`).
+     The allowlisted shapes were safe to reinterpret precisely because
+     nobody plausibly passes a bare `List[T]`/span/IEnumerable-interface
+     value as ONE element of a params list; adopting C#'s open rule would
+     make every collection-ish type ambiguous between carrier and
+     element.
+  2. **No general packing recipe.** Each allowlisted carrier has a known
+     construction form gsc can emit at the call site (array as-is,
+     interface upcast, `new List<T>(T[])`, span `T[]` ctor). Arbitrary
+     collection targets need C#'s full collection-expression lowering
+     (create empty, loop `Add`), which gsc does not have — that machinery
+     is the prerequisite for ever widening the allowlist (see out of
+     scope).
+
+  Consequently a C# `params X<T>` whose `X` is outside the allowlist has
+  NO G# spelling; cs2gs reports a translation gap rather than silently
+  changing the declaration's meaning.
 
 Call-site semantics mirror C# exactly: expanded trailing arguments are
 coerced to the element type (the #1493 rules) and packed into the carrier;
@@ -84,3 +107,7 @@ unchanged.
   Includes C#13 span-preferred betterness ordering.
 - A first-class `span` magic type (`span T` / read-only modifier) — design
   discussion lives in #3627.
+- Widening the carrier allowlist toward C#'s open collection-expression
+  rule: requires collection-expression lowering in gsc plus either an
+  explicit carrier sigil or a per-type no-element-usage audit (see the
+  closed-allowlist rationale above).

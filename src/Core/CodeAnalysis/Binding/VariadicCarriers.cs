@@ -179,6 +179,25 @@ internal static class VariadicCarriers
         return elementClr.MakeArrayType();
     }
 
+    private static Type? ResolveElementInCarrierContext(Type carrierClr, Type? elementClr)
+    {
+        // The carrier's own generic argument is the element type ALREADY in
+        // the carrier's load context — under the SDK compile path the carrier
+        // comes from a MetadataLoadContext, and passing a runtime typeof into
+        // its GetConstructor throws ArgumentException ("Type must be a type
+        // provided by the MetadataLoadContext").
+        if (carrierClr.IsGenericType && !carrierClr.IsGenericTypeDefinition)
+        {
+            var arguments = carrierClr.GetGenericArguments();
+            if (arguments.Length == 1)
+            {
+                return arguments[0];
+            }
+        }
+
+        return elementClr;
+    }
+
     private static BoundExpression WrapViaCarrierConstructor(
         DiagnosticBag diagnostics,
         SyntaxNode callSyntax,
@@ -188,7 +207,9 @@ internal static class VariadicCarriers
     {
         var carrierClr = carrierType.ClrType;
         var elementType = GetElementType(carrierType);
-        var elementClr = NullableTypeSymbol.GetEffectiveClrType(elementType);
+        var elementClr = carrierClr == null
+            ? null
+            : ResolveElementInCarrierContext(carrierClr, NullableTypeSymbol.GetEffectiveClrType(elementType));
         if (carrierClr == null
             || elementClr == null
             || TypeSymbol.RequiresSymbolicProjection(elementType))
