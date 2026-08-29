@@ -793,10 +793,15 @@ internal sealed class ConversionClassifier
 
         if (conversion.IsIdentity)
         {
-            // ADR-0172: same-shape tuples differing only in element names are
-            // identity-convertible; warn (GS0541) where a source name
-            // disagrees with the name the target declares at that position.
-            if (expression.Type is TupleTypeSymbol identitySourceTuple
+            // ADR-0172 (as amended by issue #3643): same-shape tuples
+            // differing only in element names are identity-convertible.
+            // Warn (GS0541) only when the source is a tuple LITERAL whose
+            // explicit `name:` label disagrees with the name the target
+            // declares at that position — mirroring C#'s CS8123. Converting
+            // a named-tuple-typed VALUE to a differently-named target is
+            // silent: names are metadata over the positional shape.
+            if (expression is BoundTupleLiteralExpression
+                && expression.Type is TupleTypeSymbol identitySourceTuple
                 && type is TupleTypeSymbol identityTargetTuple
                 && !ReferenceEquals(identitySourceTuple, identityTargetTuple)
                 && identitySourceTuple.HasNames

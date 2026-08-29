@@ -59,8 +59,13 @@ positional-only premise**; an amendment note there points here.
   sharing the same CLR backing**, related by an **identity conversion**
   (`WithoutNames()` computes the canonical unnamed shape, recursively).
   Assignment, argument passing, and returns cross name boundaries freely;
-  a position where both sides declare *different* names warns **GS0541**
-  (the C# CS8123 analog).
+  an explicit tuple-literal label that the target type renames warns
+  **GS0541** (the C# CS8123 analog). *Amended by issue #3643:* GS0541
+  originally fired on any position-wise name disagreement, including
+  named-value-to-differently-named-target conversions where C#'s CS8123
+  stays silent; it is now literal-label-only — converting a named-tuple
+  VALUE to a differently-named same-shape target never warns, because
+  names are metadata over the positional shape.
 - Member access resolves a declared name to its position; `ItemN` and the
   numeric `.N` selectors remain valid on named tuples. Emit is unchanged —
   access lowers to the positional `ItemN` field either way.
