@@ -1166,15 +1166,22 @@ r
     public void BareStaticField_InInstanceMethod_InsideGoScope_Works()
     {
         // Static access in a body launched via `go` (inside a `scope`)
-        // needs no receiver capture, so it should compile and run.
+        // needs no receiver capture, so it should compile and run. The
+        // increment uses Interlocked so the fixture is race-free: three
+        // goroutines racing a plain `count += 1` read-modify-write can
+        // legitimately observe a final count under 3 (issue #3612). The
+        // point under test is bare static field access from a `go` body,
+        // not increment atomicity, so make the arithmetic atomic instead
+        // of asserting a racy outcome.
         var source = @"package BareStaticInGo
 import System
+import System.Threading
 import Gsharp.Extensions.Go
 
 class Bus {
     shared { var count int32 }
     func bump() int32 {
-        count += 1
+        Interlocked.Increment(ref count)
         return count
     }
 }
