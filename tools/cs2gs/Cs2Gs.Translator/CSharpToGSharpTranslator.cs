@@ -107,6 +107,16 @@ public sealed partial class CSharpToGSharpTranslator
     private readonly bool includeFileAttributes;
     private readonly bool analyzerApiMode;
 
+    // Issue #3645: when true, the C# entry-point class is always preserved as
+    // a G# class (with a class-scoped static `Main`, issue #1996) instead of
+    // being flattened to top-level statements (ADR-0115 §B.11 T3). Set by the
+    // pipeline for an executable project that is itself referenced by another
+    // project in the same migration run — its entry class is consumable API
+    // surface (e.g. `GsgenProgram.Run(...)` from a test project), and
+    // flattening it erases the type from the migrated assembly (GS0157 at
+    // every cross-project use site).
+    private readonly bool preserveEntryType;
+
     // One registry per resolved G# package deduplicates declarations across
     // documents (#2292). Synthetic names themselves are derived from the full
     // ordered shape (#2598), so distinct shapes cannot reuse a simple name
@@ -161,6 +171,13 @@ public sealed partial class CSharpToGSharpTranslator
     /// Enabled by the pipeline when <see cref="Analyzers.AnalyzerProjectDetector"/>
     /// recognizes an analyzer project.
     /// </param>
+    /// <param name="preserveEntryType">
+    /// When <see langword="true"/>, the C# entry-point class is preserved as a
+    /// G# class with a class-scoped static <c>Main</c> instead of being
+    /// flattened to top-level statements (issue #3645). Set by the pipeline for
+    /// an executable project referenced by another project in the same run,
+    /// whose entry class is consumable API surface.
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = true,
         bool markMergedTypePartial = false,
@@ -168,9 +185,11 @@ public sealed partial class CSharpToGSharpTranslator
         string packageFilter = null,
         bool includeFileAttributes = true,
         bool widenObliviousReferenceFields = false,
-        bool analyzerApiMode = false)
+        bool analyzerApiMode = false,
+        bool preserveEntryType = false)
     {
         this.analyzerApiMode = analyzerApiMode;
+        this.preserveEntryType = preserveEntryType;
         this.preservePartialParts = preservePartialParts;
         this.markMergedTypePartial = markMergedTypePartial;
         this.widenObliviousReferenceFields = widenObliviousReferenceFields;
@@ -226,11 +245,19 @@ public sealed partial class CSharpToGSharpTranslator
 
         // T3 (ADR-0115 §B.1/§B.11): the C# program entry point and its enclosing
         // static class normally become top-level G#. When the entry class owns a
-        // nested aggregate type, keep the class intact instead.
+        // nested aggregate type, keep the class intact instead. Issue #3645: the
+        // caller can also force preservation — a sibling project that references
+        // this executable consumes the entry class as an ordinary CLR type
+        // (e.g. `GsgenProgram.Run(...)` from a test project), so flattening it
+        // would erase the type from the migrated assembly and break every
+        // cross-project use site (GS0157). G# supports a class-scoped static
+        // `Main` (issue #1996), so the preserved form still runs as the entry
+        // point.
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
-        bool preserveEntryType = entryType?.GetTypeMembers()
-            .Any(type => type.TypeKind != TypeKind.Delegate) == true;
+        bool preserveEntryType = entryType is not null
+            && (this.preserveEntryType
+                || entryType.GetTypeMembers().Any(type => type.TypeKind != TypeKind.Delegate));
 
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's

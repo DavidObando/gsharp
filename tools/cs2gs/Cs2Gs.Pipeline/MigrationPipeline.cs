@@ -155,6 +155,14 @@ public sealed class MigrationPipeline
         }
 
         Directory.CreateDirectory(runDir);
+
+        // Issue #3645: an executable app that another app in this run compiles
+        // against must keep its entry-point class as a real G# class (see
+        // PipelineOptions.ProjectsReferencedByOtherApps).
+        this.options.ProjectsReferencedByOtherApps =
+            DeclaredProjectItems.CollectCompileReferencedProjectPaths(
+                apps.Select(app => app.ProjectPath));
+
         this.options.GeneratedProjectPaths = apps.ToDictionary(
             app => Path.GetFullPath(app.ProjectPath),
             app => repositoryLayout

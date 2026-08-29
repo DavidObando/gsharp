@@ -332,10 +332,19 @@ public sealed class TranslateStage : IMigrationStage
                 context.IsAnalyzerProject = analyzerApiMode;
             }
 
+            // Issue #3645: an executable another app compiles against keeps its
+            // entry-point class (see PipelineOptions.ProjectsReferencedByOtherApps);
+            // flattening it to top-level statements would erase the type from
+            // the migrated assembly and break cross-project use sites (GS0157).
+            bool preserveEntryType =
+                context.Options.ProjectsReferencedByOtherApps?.Contains(
+                    Path.GetFullPath(currentProject.ProjectPath ?? context.App.ProjectPath)) == true;
+
             var translator = new CSharpToGSharpTranslator(
                 preservePartialParts: true,
                 retainedFilePaths: retainedFilePaths,
-                analyzerApiMode: analyzerApiMode);
+                analyzerApiMode: analyzerApiMode,
+                preserveEntryType: preserveEntryType);
 
             PreserveGeneratedFriendAssemblyAnnotations(
                 context,
@@ -375,7 +384,8 @@ public sealed class TranslateStage : IMigrationStage
                             retainedFilePaths: retainedFilePaths,
                             packageFilter: package,
                             includeFileAttributes: unitIndex == 0,
-                            analyzerApiMode: analyzerApiMode);
+                            analyzerApiMode: analyzerApiMode,
+                            preserveEntryType: preserveEntryType);
                     string printed = GSharpPrinter.Print(
                         unitTranslator.TranslateDocument(document, translationContext));
 
