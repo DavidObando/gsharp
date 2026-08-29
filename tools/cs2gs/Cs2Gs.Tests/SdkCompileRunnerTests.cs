@@ -476,6 +476,98 @@ public class SdkCompileRunnerTests
         }
     }
 
+    [Fact]
+    public void ParseRelayedGsErrors_ParsesTargetsRelayedError_WithTrailingProjectSuffix()
+    {
+        const string Output =
+            "Determining projects to restore...\n" +
+            "/Users/dev/.nuget-packages/gsharp.net.sdk/1.2.3/build/Gsharp.NET.Core.Sdk.targets(505,5): " +
+            "error GS9998: TypeLoadException: Could not load type 'X'. [/Users/dev/out/App.gsproj]\n" +
+            "Build FAILED.\n";
+
+        var diagnostics = SdkCompileRunner.ParseRelayedGsErrors(Output);
+
+        GscDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS9998", diagnostic.Id);
+        Assert.Equal(
+            "TypeLoadException: Could not load type 'X'. [/Users/dev/out/App.gsproj]",
+            diagnostic.Message);
+        Assert.Equal("error", diagnostic.Severity);
+        Assert.Equal(
+            "/Users/dev/.nuget-packages/gsharp.net.sdk/1.2.3/build/Gsharp.NET.Core.Sdk.targets",
+            diagnostic.File);
+        Assert.Equal(505, diagnostic.Line);
+        Assert.Equal(5, diagnostic.Column);
+    }
+
+    [Fact]
+    public void ParseRelayedGsErrors_ParsesGsgenAnchoredError()
+    {
+        const string Output =
+            "gsgen(1,1): error GS9200: Type must be a type provided by the runtime. (Parameter 'elementType')\n";
+
+        var diagnostics = SdkCompileRunner.ParseRelayedGsErrors(Output);
+
+        GscDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS9200", diagnostic.Id);
+        Assert.Equal(
+            "Type must be a type provided by the runtime. (Parameter 'elementType')",
+            diagnostic.Message);
+        Assert.Equal("gsgen", diagnostic.File);
+        Assert.Equal(1, diagnostic.Line);
+        Assert.Equal(1, diagnostic.Column);
+    }
+
+    [Fact]
+    public void ParseRelayedGsErrors_DeduplicatesIdenticalRepeatedLines()
+    {
+        // MSBuild prints each error once inline and again in the final
+        // "Build FAILED" summary — the harness must not double-report it.
+        const string ErrorLine =
+            "/sdk/build/Gsharp.NET.Core.Sdk.targets(505,5): error GS9998: TypeLoadException: boom. [/out/App.gsproj]";
+        const string Output =
+            ErrorLine + "\n" +
+            "gsgen(1,1): error GS9200: Type must be a type provided by the runtime.\n" +
+            "Build FAILED.\n" +
+            "    " + ErrorLine + "\n" +
+            "gsgen(1,1): error GS9200: Type must be a type provided by the runtime.\n";
+
+        var diagnostics = SdkCompileRunner.ParseRelayedGsErrors(Output);
+
+        Assert.Equal(2, diagnostics.Count);
+        Assert.Equal("GS9998", diagnostics[0].Id);
+        Assert.Equal("GS9200", diagnostics[1].Id);
+    }
+
+    [Fact]
+    public void ParseRelayedGsErrors_ParsesLocationlessErrorLine_WithBestEffortLocation()
+    {
+        var diagnostics = SdkCompileRunner.ParseRelayedGsErrors("error GS9200: something went wrong\n");
+
+        GscDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS9200", diagnostic.Id);
+        Assert.Equal("something went wrong", diagnostic.Message);
+        Assert.Equal("unknown", diagnostic.File);
+        Assert.Equal(1, diagnostic.Line);
+        Assert.Equal(1, diagnostic.Column);
+    }
+
+    [Fact]
+    public void ParseRelayedGsErrors_ReturnsEmpty_ForGenuinelyUnparseableOutput()
+    {
+        // No GSxxxx error line at all: the caller keeps the synthetic GS9999
+        // fallback as the true last resort.
+        const string Output =
+            "MSBUILD : error MSB1009: Project file does not exist.\n" +
+            "/src/App.cs(3,1): error CS0246: The type or namespace name 'Foo' could not be found\n" +
+            "/src/App.gs(3,1,3,4): warning GS0100: not an error\n" +
+            "Build FAILED.\n";
+
+        Assert.Empty(SdkCompileRunner.ParseRelayedGsErrors(Output));
+        Assert.Empty(SdkCompileRunner.ParseRelayedGsErrors(string.Empty));
+        Assert.Empty(SdkCompileRunner.ParseRelayedGsErrors(null));
+    }
+
     /// <summary>
     /// A scratch directory populated with one fake shared-framework assembly
     /// file, so <see cref="SdkCompileRunner.PartitionReferences"/>'s runtime-dir
