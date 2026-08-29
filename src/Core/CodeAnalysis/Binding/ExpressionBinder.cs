@@ -2605,8 +2605,19 @@ internal sealed partial class ExpressionBinder
         }
 
         TypeSymbol erasedReturn;
-        if (FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType))
+        if (FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType)
+            || functionType.ReturnType == TypeSymbol.Never)
         {
+            // Issue #3646: a throw-expression lambda's natural return is the
+            // bottom (`never`) type, which has no CLR erasure. It satisfies
+            // every result slot (issue #2716), so erase it like `void` — the
+            // Action<...> shape — for applicability; the winning candidate's
+            // conversion re-shapes the literal to the real delegate target
+            // (ConversionClassifier's never-candidate arm). Without this the
+            // lambda produced no effective CLR type at all, so an imported
+            // generic call taking a delegate (e.g. Roslyn's
+            // `RegisterSourceOutput(provider, (spc, x) -> throw ...)`) never
+            // ran overload resolution and dead-ended with GS0159.
             erasedReturn = TypeSymbol.Void;
         }
         else
