@@ -20,7 +20,10 @@
 # extension stays in TypeScript), so all three vs-gsharp apps are excluded:
 # VsGsharp and VsGsharp.CodeLens build only under the Windows-only VSSDK
 # toolchain (VSCT compile, pkgdef), and VsGsharp.UnitTests tests the
-# permanently-C# extension via linked sources.
+# permanently-C# extension via linked sources. Gsharp.Extensions is excluded
+# because it is ALREADY G# (all-.gs sources bootstrapped by the latest
+# compiler without a gsproj) — there is nothing to migrate, and feeding its
+# .gs sources through the C# parser only produces phantom gaps.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -62,6 +65,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --exclude src/vs-gsharp/src/VsGsharp/VsGsharp.csproj \
   --exclude src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj \
   --exclude src/vs-gsharp/test/VsGsharp.UnitTests \
+  --exclude src/Sdk/Gsharp.Extensions \
   --exclude tools/cs2gs/corpus/CompileGap-Library \
   | tee "$work_root/migrate.log"
 migrate_exit=${PIPESTATUS[0]}

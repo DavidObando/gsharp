@@ -3645,7 +3645,24 @@ internal sealed class MemberLookup
                         continue;
                     }
 
-                    if (!IsStaticClass(type) || !HasExtensionAttribute(type) || !IsVisibleImportedType(type))
+                    // The probes below walk base types and attributes, which
+                    // under MetadataLoadContext can throw for types whose
+                    // dependency closure is unresolvable in the compile's
+                    // reference set — e.g. a HOST-fallback net10 BCL assembly
+                    // scanned during a netstandard2.0 compile, whose typerefs
+                    // target assembly versions the netstandard facade set
+                    // cannot satisfy. Such a type can never be a usable
+                    // extension holder here; skip it instead of failing the
+                    // whole compilation (the GS9998 TypeLoadException wall on
+                    // the migrated netstandard2.0 Gsharp.NET.Sdk, #3501).
+                    try
+                    {
+                        if (!IsStaticClass(type) || !HasExtensionAttribute(type) || !IsVisibleImportedType(type))
+                        {
+                            continue;
+                        }
+                    }
+                    catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
                     {
                         continue;
                     }
