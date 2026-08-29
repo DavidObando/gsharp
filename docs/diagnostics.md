@@ -735,8 +735,10 @@ than a constant `false`, matching C#.
 [ADR-0172](adr/0172-named-tuple-elements.md): tuple types may name elements
 name-first — `(line int32, column int32)` — and tuple literals may label
 them — `(line: 1, column: 2)`. Names are metadata over the positional shape:
-same-shape tuples differing only in names are identity-convertible, with a
-warning where names disagree position-wise. `ItemN` at the wrong position and
+same-shape tuples differing only in names are identity-convertible. GS0541
+warns only when an explicit tuple-literal label is renamed by the target
+type (the C# CS8123 analog, issue #3643); converting a named-tuple-typed
+value to a differently-named same-shape target is silent. `ItemN` at the wrong position and
 `Rest` (used by the CLR ValueTuple encoding) are reserved; a name on a
 parenthesized single element is an error because `(T)` is grouping, not a
 1-tuple (issue #3315).
@@ -744,7 +746,7 @@ parenthesized single element is an error because `(T)` is grouping, not a
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0540 | Error | `Tuple element name '<name>' is used more than once.` | `(line int32, line int32)` |
-| GS0541 | Warning | `Tuple element name '<name>' is ignored because the target type names this position '<target>'.` | `let r (row int32, col int32) = pos` where `pos` is `(line int32, column int32)` |
+| GS0541 | Warning | `Tuple element name '<name>' is ignored because the target type names this position '<target>'.` | `let r (row int32, col int32) = (line: 1, column: 2)` (literal labels only; a named-value conversion is silent) |
 | GS0542 | Error | `Tuple element name '<name>' is reserved<detail>.` | `(Item2 int32, x int32)`; `(Rest: 1, x: 2)` |
 | GS0543 | Error | `An element name is only valid inside a tuple of two or more elements; a parenthesized single element is grouping.` | `(line: 1)`; `let x (line int32) = 1` |
 

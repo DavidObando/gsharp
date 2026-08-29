@@ -20,8 +20,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <c>(line int32, column int32)</c> — literals label with a colon —
 /// <c>(line: 1, column: 2)</c> — and access resolves the name positionally
 /// while <c>ItemN</c>/<c>.N</c> stay valid. Names are metadata: same-shape
-/// tuples differing only in names are identity-convertible (GS0541 warning on
-/// a position-wise disagreement). Witness of discrimination: before ADR-0172
+/// tuples differing only in names are identity-convertible. GS0541 warns only
+/// when an explicit literal label is renamed/ignored by the target (issue
+/// #3643, the CS8123 analog); value-to-value conversions between
+/// differently-named shapes are silent. Witness of discrimination: before ADR-0172
 /// every named spelling below was a parse error (GS0113/GS0005 cascade) and
 /// every name access was GS0158.
 /// </summary>
@@ -74,16 +76,74 @@ back.line + unnamed.Item2
     }
 
     [Fact]
-    public void RenamedAssignment_WarnsGS0541_StillCompiles()
+    public void RenamedLiteralLabels_WarnGS0541_StillCompiles()
     {
+        // Issue #3643 (CS8123 analog): explicit literal labels the target
+        // renames are the ONLY GS0541 trigger.
         var result = EmittedOracle.Evaluate(@"
-let pos (line int32, column int32) = (3, 5)
-let renamed (row int32, col int32) = pos
+let renamed (row int32, col int32) = (line: 3, column: 5)
 renamed.row
 ");
         Assert.Equal(2, result.Diagnostics.Count(d => d.Id == "GS0541"));
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
         Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void RenamedValueConversion_Assignment_NoGS0541()
+    {
+        // Issue #3643: converting a named-tuple-typed VALUE to a
+        // differently-named same-shape target is silent, as in C# —
+        // element names are metadata, not part of the value.
+        var result = EmittedOracle.Evaluate(@"
+let pos (line int32, column int32) = (3, 5)
+let renamed (row int32, col int32) = pos
+renamed.row
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void RenamedValueConversion_FunctionReturnIntoLocal_NoGS0541()
+    {
+        // Issue #3643 repro shape: a function's named return converts to a
+        // differently-named declared local without warning.
+        var result = EmittedOracle.Evaluate(@"
+func divmod(a int32, b int32) (quotient int32, remainder int32) {
+    return a / b, a % b
+}
+let r (q int32, rem int32) = divmod(10, 3)
+r.q * 10 + r.rem
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(31, result.Value);
+    }
+
+    [Fact]
+    public void RenamedValueConversion_ArgumentPassing_NoGS0541()
+    {
+        var result = EmittedOracle.Evaluate(@"
+func firstOf(pair (a int32, b int32)) int32 {
+    return pair.a
+}
+let pos (line int32, column int32) = (7, 9)
+firstOf(pos)
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(7, result.Value);
+    }
+
+    [Fact]
+    public void UnnamedValueConversion_ToNamedTarget_NoGS0541()
+    {
+        var result = EmittedOracle.Evaluate(@"
+let plain (int32, int32) = (3, 5)
+let named (row int32, col int32) = plain
+named.row + named.col
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(8, result.Value);
     }
 
     [Fact]
