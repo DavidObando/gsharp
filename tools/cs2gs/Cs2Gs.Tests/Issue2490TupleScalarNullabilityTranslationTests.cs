@@ -60,7 +60,7 @@ public static class Repro
     }
 }");
 
-        Assert.Contains("func Gather(ok bool) (List[string]?, int32)", printed);
+        Assert.Contains("func Gather(ok bool) (Items List[string]?, Value int32)", printed);
         Assert.Contains("func Count(items List[string]?) int32", printed);
         Assert.Contains("func CountCore(items List[string]?) int32", printed);
         Assert.Contains("func Read(ok bool) List[string]?", printed);
@@ -112,12 +112,12 @@ public static class Repro
     private static string Echo(string value) => value;
 }");
 
-        Assert.Contains("func Gather(missing bool) ((string, string?), int32)", printed);
+        Assert.Contains("func Gather(missing bool) (Names (Keep string, Maybe string?), Count int32)", printed);
         Assert.Contains("var assigned string? =", printed);
         Assert.Contains("init(value string?)", printed);
         Assert.Contains("prop this[key string?] string", printed);
         Assert.Contains("func Echo(value string?) string?", printed);
-        Assert.DoesNotContain("((string?, string?), int32)", printed);
+        Assert.DoesNotContain("Keep string?", printed);
     }
 
     [Fact]
@@ -145,11 +145,11 @@ public static class Repro
     }
 }");
 
-        Assert.Contains("prop Source (string?, string)", printed);
+        Assert.Contains("prop Source (Maybe string?, Keep string)", printed);
         Assert.Contains("var Field string?", printed);
         Assert.Contains("var _property string?", printed);
         Assert.Contains("prop Property string?", printed);
-        Assert.DoesNotContain("prop Source (string?, string?)", printed);
+        Assert.DoesNotContain("Keep string?)", printed);
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public static class Repro
         Assert.Contains("func Forward[T class](value T?) T?", printed);
         Assert.Contains("let Core = func (item T?) T?", printed);
         Assert.Contains("async func RunAsync(missing bool) string?", printed);
-        Assert.Contains("async func GatherAsync(missing bool) (string?, int32)", printed);
+        Assert.Contains("async func GatherAsync(missing bool) (Item string?, Keep int32)", printed);
     }
 
     [Fact]
@@ -291,7 +291,7 @@ namespace LibA
             siblings,
             "Consumer fixture omits the sibling Provider declaration from its emitted G# binding input.");
 
-        Assert.Contains("func Gather(missing bool) (string?, int32)", printedB);
+        Assert.Contains("func Gather(missing bool) (Item string?, Keep int32)", printedB);
         Assert.Contains("func Count(value string?) int32", printedA);
     }
 
@@ -327,7 +327,7 @@ public static class Repro
     }
 }");
 
-        Assert.Contains("func Gather(missing bool) (string, string?)", printed);
+        Assert.Contains("func Gather(missing bool) (Required string, Maybe string?)", printed);
         Assert.Contains("func Accept(value string?)", printed);
         Assert.Contains("func Keep(value string)", printed);
         Assert.DoesNotContain("func Keep(value string?)", printed);

@@ -685,8 +685,16 @@ internal sealed class FunctionEmitter
             !returnFlags.IsDefaultOrEmpty
             && !(returnFlags.Length == 1 && returnFlags[0] == effectiveDefault);
 
+        // ADR-0172 Phase B: a tuple-typed return with declared element names
+        // also needs the sequence-0 Param row to carry
+        // [TupleElementNamesAttribute]. The flattened array for an async
+        // kickoff's `Task<(a, b)>` equals the tuple's own array (only tuples
+        // contribute entries; wrappers are traversed transparently), so
+        // `function.Type` is the right input in both cases.
+        var returnTupleNames = TupleElementNamesBuilder.Build(function.Type);
+
         ParameterHandle? returnParamHandle = null;
-        if (hasReturnAttributes || returnNeedsNullableAttribute)
+        if (hasReturnAttributes || returnNeedsNullableAttribute || !returnTupleNames.IsDefaultOrEmpty)
         {
             returnParamHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: ParameterAttributes.None,
@@ -879,6 +887,19 @@ internal sealed class FunctionEmitter
             }
 
             this.outer.customAttrEncoder.EmitNullableAttributeOnParameter(paramHandle, paramFlags);
+        }
+
+        // ADR-0172 Phase B: stamp [TupleElementNamesAttribute] on the return
+        // row and on every parameter whose declared type carries tuple
+        // element names, so C# consumers (and re-imports) see `r.line`.
+        if (parameterMetadata.ReturnParameterHandle is { } returnHandleForTupleNames)
+        {
+            this.outer.customAttrEncoder.EmitTupleElementNamesAttribute(returnHandleForTupleNames, function.Type);
+        }
+
+        foreach (var (paramSym, paramHandle, _) in parameterMetadata.ParameterHandles)
+        {
+            this.outer.customAttrEncoder.EmitTupleElementNamesAttribute(paramHandle, paramSym.Type);
         }
 
         // Issue #792 / ADR-0084. Stamp [ExtensionAttribute] on every G#-

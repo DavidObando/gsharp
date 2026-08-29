@@ -116,6 +116,35 @@ public class CompletionHandlerTests
     }
 
     [Fact]
+    public void ComputeCompletions_AfterDotOnNamedTuple_OffersElementNamesAndItemN()
+    {
+        // ADR-0172: a named-tuple receiver offers its declared element names
+        // plus the positional ItemN spellings, and suppresses the global soup.
+        const string source = "let pos (line int32, column int32) = (3, 5)\npos.\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "pos."));
+
+        Assert.Contains(items, i => i.Label == "line" && i.Kind == CompletionItemKind.Field);
+        Assert.Contains(items, i => i.Label == "column" && i.Kind == CompletionItemKind.Field);
+        Assert.Contains(items, i => i.Label == "Item1" && i.Kind == CompletionItemKind.Field);
+        Assert.Contains(items, i => i.Label == "Item2" && i.Kind == CompletionItemKind.Field);
+        Assert.DoesNotContain(items, i => i.Kind == CompletionItemKind.Keyword);
+    }
+
+    [Fact]
+    public void ComputeCompletions_AfterDotOnUnnamedTuple_OffersItemN()
+    {
+        const string source = "let pair = (1, \"x\")\npair.\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var items = CompletionComputer.ComputeCompletions(content, After(source, "pair."));
+
+        Assert.Contains(items, i => i.Label == "Item1" && i.Kind == CompletionItemKind.Field);
+        Assert.Contains(items, i => i.Label == "Item2" && i.Kind == CompletionItemKind.Field);
+    }
+
+    [Fact]
     public void ComputeCompletions_AfterDotOnConsole_OffersStaticMembers()
     {
         const string source = "import System\nfunc main() {\nConsole.\n}\n";

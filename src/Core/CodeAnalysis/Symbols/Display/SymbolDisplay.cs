@@ -726,7 +726,12 @@ public static class SymbolDisplay
             case PinnedTypeSymbol pinned:
                 return $"pinned {FormatType(pinned.UnderlyingType)}";
             case TupleTypeSymbol tuple:
-                return $"({string.Join(", ", tuple.ElementTypes.Select(FormatType))})";
+                // ADR-0172: render declared element names name-first,
+                // matching the source spelling `(line int32, column int32)`.
+                return "(" + string.Join(", ", tuple.ElementTypes.Select((t, i) =>
+                    tuple.HasNames && tuple.ElementNames[i] is { } elementName
+                        ? $"{elementName} {FormatType(t)}"
+                        : FormatType(t))) + ")";
             case StructSymbol aggregate when IsAnonymousClassType(aggregate):
                 // Issue #2224: an anonymous-class literal's synthesized type has
                 // no separate declaration a user could hover to see its shape

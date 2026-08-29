@@ -48,7 +48,10 @@ public static class ClrNullability
         // declaring type to pick up any `[NullableContextAttribute]`
         // fallback (matches the C# emit shape used by csc for
         // e.g. `DirectoryInfo.Parent`).
-        return ApplyReferenceNullabilityFull(baseSymbol, property.PropertyType, property, property.DeclaringType);
+        // ADR-0172 Phase B: surface imported tuple element names.
+        return TupleElementNamesReader.ApplyNames(
+            ApplyReferenceNullabilityFull(baseSymbol, property.PropertyType, property, property.DeclaringType),
+            property);
     }
 
     /// <summary>
@@ -66,7 +69,9 @@ public static class ClrNullability
     public static TypeSymbol GetPropertyElementTypeSymbol(PropertyInfo property, Type elementType)
     {
         var baseSymbol = TypeSymbol.FromClrType(elementType);
-        return ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType);
+        return TupleElementNamesReader.ApplyNames(
+            ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType),
+            property);
     }
 
     /// <summary>
@@ -78,7 +83,11 @@ public static class ClrNullability
     public static TypeSymbol GetFieldTypeSymbol(FieldInfo field)
     {
         var baseSymbol = TypeSymbol.FromClrType(field.FieldType);
-        return ApplyReferenceNullabilityFull(baseSymbol, field.FieldType, field, field.DeclaringType);
+
+        // ADR-0172 Phase B: surface imported tuple element names.
+        return TupleElementNamesReader.ApplyNames(
+            ApplyReferenceNullabilityFull(baseSymbol, field.FieldType, field, field.DeclaringType),
+            field);
     }
 
     /// <summary>
@@ -96,12 +105,16 @@ public static class ClrNullability
     {
         var baseSymbol = TypeSymbol.FromClrType(method.ReturnType);
         var definition = GetMetadataDefinition(method) as MethodInfo;
-        return ApplyReferenceNullabilityFull(
-            baseSymbol,
-            method.ReturnType,
-            method.ReturnParameter,
-            method,
-            definition?.ReturnType);
+
+        // ADR-0172 Phase B: surface imported tuple element names.
+        return TupleElementNamesReader.ApplyNames(
+            ApplyReferenceNullabilityFull(
+                baseSymbol,
+                method.ReturnType,
+                method.ReturnParameter,
+                method,
+                definition?.ReturnType),
+            method.ReturnParameter);
     }
 
     /// <summary>
@@ -136,6 +149,9 @@ public static class ClrNullability
             parameter,
             parameter.Member,
             layoutType);
+
+        // ADR-0172 Phase B: surface imported tuple element names.
+        mapped = TupleElementNamesReader.ApplyNames(mapped, parameter);
         var rawDefault = parameter.HasDefaultValue || parameter.IsOptional
             ? parameter.RawDefaultValue
             : null;

@@ -87,7 +87,7 @@ public sealed class Registry
 ";
         string printed = Render(source);
         Assert.DoesNotContain("(SyntaxTree?", printed, StringComparison.Ordinal);
-        Assert.Contains("HashSet[(SyntaxTree, int32, int32)]", printed, StringComparison.Ordinal);
+        Assert.Contains("HashSet[(Tree SyntaxTree, Start int32, Length int32)]", printed, StringComparison.Ordinal);
         AssertRoundTripParses(printed);
     }
 

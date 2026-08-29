@@ -226,6 +226,51 @@ internal sealed class CustomAttributeEncoder
         {
             this.EmitNullableAttributeOnEntity(fieldHandle, flags);
         }
+
+        // ADR-0172 Phase B: every per-field slot-metadata pass also carries
+        // tuple element names when the declared type has any.
+        this.EmitTupleElementNamesAttribute(fieldHandle, type);
+    }
+
+    /// <summary>
+    /// ADR-0172 Phase B: emits
+    /// <c>System.Runtime.CompilerServices.TupleElementNamesAttribute(string[])</c>
+    /// on a Param / Field / Property row when <paramref name="type"/> declares
+    /// at least one tuple element name anywhere in its tree (flattened DFS
+    /// pre-order, null entries for unnamed positions — the C# encoding).
+    /// Silently no-ops when no name exists or the attribute type can't be
+    /// resolved (very old TFMs).
+    /// </summary>
+    /// <param name="parent">The metadata row to attach the attribute to.</param>
+    /// <param name="type">The declared parameter / return / field / property type.</param>
+    public void EmitTupleElementNamesAttribute(EntityHandle parent, TypeSymbol type)
+    {
+        var names = TupleElementNamesBuilder.Build(type);
+        if (names.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var ctorRef = this.wellKnown.GetTupleElementNamesAttributeCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteInt32(names.Length);
+        foreach (var name in names)
+        {
+            valueBlob.WriteSerializedString(name);
+        }
+
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
@@ -245,6 +290,9 @@ internal sealed class CustomAttributeEncoder
         {
             this.EmitNullableAttributeOnEntity(propertyHandle, flags);
         }
+
+        // ADR-0172 Phase B: see EmitNullableAttributeOnField.
+        this.EmitTupleElementNamesAttribute(propertyHandle, type);
     }
 
     /// <summary>

@@ -55,6 +55,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // issue #3096: native array spread element
         "package p\nfunc F(a []int32) {\n  let b = []int32{0, ...a, 9}\n}\n",
 
+        // ADR-0172: named tuple elements — labeled literal + named type clause
+        "package p\nfunc F() {\n  let pos (line int32, column int32) = (line: 3, column: 5)\n  let l = pos.line\n}\n",
+
         // generic static receiver
         "package p\nstruct Box[T] { shared { func Make(x int32) int32 { return x } } }\nclass C { func F() int32 { return Box[int32?].Make(5) } }\n",
 

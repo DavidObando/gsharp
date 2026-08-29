@@ -44,17 +44,19 @@ public class L1MigrationEndToEndTests
             "Canonical L1 must round-trip-parse. Errors:\n" +
                 string.Join("\n", roundTrip.Errors) + "\n\nPrinted:\n" + printed);
 
-        // T1: the named C# tuple type maps to a native G# positional tuple, and
-        // named element access lowered to positional `.ItemN`.
-        Assert.Contains("List[(string, int32, int32)]", printed);
-        Assert.Contains("item.Item2 * item.Item3", printed);
+        // T1 (ADR-0172): the named C# tuple type keeps its element names
+        // name-first, and named element access stays by-name.
+        Assert.Contains("List[(Name string, Price int32, Quantity int32)]", printed);
+        Assert.Contains("item.Price * item.Quantity", printed);
 
         // T2: the explicit constructor keeps its source parameter name and both
         // readonly fields remain private instead of becoming primary fields.
         Assert.Contains("class Cart {", printed);
         Assert.Contains("private let _customer string", printed);
-        Assert.Contains("private let _items List[(string, int32, int32)]", printed);
+        Assert.Contains("private let _items List[(Name string, Price int32, Quantity int32)]", printed);
         Assert.Contains("init(customer string)", printed);
+        // The C# ctor spells the unnamed shape (`new List<(string, int, int)>()`)
+        // — the translation is faithful to each spelling.
         Assert.Contains("_items = List[(string, int32, int32)]()", printed);
 
         // T3: the entry class became top-level — a top-level func and the entry

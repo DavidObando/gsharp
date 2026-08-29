@@ -690,17 +690,21 @@ public sealed partial class CSharpToGSharpTranslator
             // avoids entirely.)
             bool isArrow = member.IsKind(SyntaxKind.PointerMemberAccessExpression);
 
-            // A C# tuple element access (`item.Name`, `item.Price`) lowers to the
-            // positional G# tuple field `.Item1`/`.Item2`, because G# tuples are
-            // positional and carry no element names (ADR-0115 §B.4). The default
-            // `.ItemN` access already resolves; only named-element access needs the
-            // rewrite, detected via the bound tuple-element field symbol.
+            // ADR-0172 (amending ADR-0115 §B.4): G# now has named tuple
+            // elements, so an explicitly named C# element access (`item.Price`)
+            // KEEPS its name in the output — the translated tuple type carries
+            // the same names. The symbol still normalizes to the positional
+            // field for downstream taint/typing; only the printed name differs.
             if (memberSymbol is IFieldSymbol field &&
                 field.ContainingType is { IsTupleType: true })
             {
                 IFieldSymbol positional = field.CorrespondingTupleField ?? field;
-                memberName = positional.Name;
-                memberSymbol = positional;
+                if (SymbolEqualityComparer.Default.Equals(positional, field))
+                {
+                    // Default positional access (`item.Item2`) stays positional.
+                    memberName = positional.Name;
+                    memberSymbol = positional;
+                }
             }
 
             // Issue #2282 (was #2224): an anonymous-typed value (`new { A = 1,

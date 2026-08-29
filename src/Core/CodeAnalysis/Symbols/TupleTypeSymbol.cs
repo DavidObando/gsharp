@@ -23,17 +23,32 @@ public sealed class TupleTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<string, TupleTypeSymbol> Cache = new();
 
-    private TupleTypeSymbol(ImmutableArray<TypeSymbol> elementTypes)
+    private TupleTypeSymbol(ImmutableArray<TypeSymbol> elementTypes, ImmutableArray<string?> elementNames)
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
-        // same-compilation element types.
-        : base(BuildName(elementTypes), BuildClrType(elementTypes))
+        // same-compilation element types. Element names never affect the CLR
+        // backing (ADR-0172: names are metadata over the positional shape).
+        : base(BuildName(elementTypes, elementNames), BuildClrType(elementTypes))
     {
         ElementTypes = elementTypes;
+        ElementNames = elementNames;
     }
 
     /// <summary>Gets the tuple element types in declaration order.</summary>
     public ImmutableArray<TypeSymbol> ElementTypes { get; }
+
+    /// <summary>
+    /// Gets the declared element names, parallel to
+    /// <see cref="ElementTypes"/> with <see langword="null"/> at unnamed
+    /// positions — or an empty array for a fully unnamed tuple (ADR-0172).
+    /// Names are metadata: they never affect the CLR backing, conversions,
+    /// or equality; same-shape tuples differing only in names are related by
+    /// an identity conversion.
+    /// </summary>
+    public ImmutableArray<string?> ElementNames { get; }
+
+    /// <summary>Gets a value indicating whether any element declares a name.</summary>
+    public bool HasNames => !ElementNames.IsDefaultOrEmpty;
 
     /// <summary>Gets the arity of the tuple.</summary>
     public int Arity => ElementTypes.Length;
@@ -42,10 +57,36 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// <param name="elementTypes">The element types in order.</param>
     /// <returns>The (cached) tuple type symbol.</returns>
     public static TupleTypeSymbol Get(ImmutableArray<TypeSymbol> elementTypes)
+        => Get(elementTypes, elementNames: default);
+
+    /// <summary>
+    /// Returns the cached <see cref="TupleTypeSymbol"/> for the given element
+    /// types and names (ADR-0172). A default/empty or all-<see langword="null"/>
+    /// name array yields the canonical unnamed tuple.
+    /// </summary>
+    /// <param name="elementTypes">The element types in order.</param>
+    /// <param name="elementNames">The element names, parallel to <paramref name="elementTypes"/>, <see langword="null"/> where unnamed.</param>
+    /// <returns>The (cached) tuple type symbol.</returns>
+    public static TupleTypeSymbol Get(ImmutableArray<TypeSymbol> elementTypes, ImmutableArray<string?> elementNames)
     {
         if (elementTypes.IsDefaultOrEmpty || elementTypes.Length < 2)
         {
             throw new ArgumentException("Tuples must have at least two element types.", nameof(elementTypes));
+        }
+
+        if (!elementNames.IsDefaultOrEmpty && elementNames.Length != elementTypes.Length)
+        {
+            throw new ArgumentException("Element names must parallel element types.", nameof(elementNames));
+        }
+
+        if (!elementNames.IsDefaultOrEmpty && elementNames.All(n => n == null))
+        {
+            elementNames = ImmutableArray<string?>.Empty;
+        }
+
+        if (elementNames.IsDefault)
+        {
+            elementNames = ImmutableArray<string?>.Empty;
         }
 
         // Issue #1624: key on element-type *identity* (via FunctionTypeSymbol's
@@ -67,8 +108,72 @@ public sealed class TupleTypeSymbol : TypeSymbol
             FunctionTypeSymbol.AppendIdentityKey(keyBuilder, elementTypes[i]);
         }
 
+        // ADR-0172: names participate in the cache key (a named and an
+        // unnamed same-shape tuple are distinct interned symbols related by
+        // an identity conversion), with an empty suffix for the canonical
+        // unnamed tuple so pre-existing keys are unchanged.
+        if (elementNames.Length > 0)
+        {
+            keyBuilder.Append('|');
+            for (var i = 0; i < elementNames.Length; i++)
+            {
+                if (i > 0)
+                {
+                    keyBuilder.Append(',');
+                }
+
+                keyBuilder.Append(elementNames[i]);
+            }
+        }
+
         var key = keyBuilder.ToString();
-        return Cache.GetOrAdd(key, _ => new TupleTypeSymbol(elementTypes));
+        return Cache.GetOrAdd(key, _ => new TupleTypeSymbol(elementTypes, elementNames));
+    }
+
+    /// <summary>
+    /// Returns the canonical fully unnamed tuple of this tuple's shape,
+    /// recursively stripping names from nested tuple elements (ADR-0172).
+    /// Two tuples denote the same type exactly when their
+    /// <see cref="WithoutNames"/> results are reference-equal.
+    /// </summary>
+    /// <returns>The (cached) unnamed same-shape tuple symbol.</returns>
+    public TupleTypeSymbol WithoutNames()
+    {
+        var stripped = ImmutableArray.CreateBuilder<TypeSymbol>(ElementTypes.Length);
+        var changed = HasNames;
+        foreach (var elementType in ElementTypes)
+        {
+            var strippedElement = StripNames(elementType);
+            stripped.Add(strippedElement);
+            changed |= !ReferenceEquals(strippedElement, elementType);
+        }
+
+        return changed ? Get(stripped.MoveToImmutable()) : this;
+    }
+
+    /// <summary>
+    /// Finds the zero-based position of a declared element name (ordinal,
+    /// case-sensitive), or returns <see langword="false"/>.
+    /// </summary>
+    /// <param name="name">The element name to find.</param>
+    /// <param name="index">The zero-based element index when found.</param>
+    /// <returns>Whether the name is declared on this tuple.</returns>
+    public bool TryGetElementIndexByName(string name, out int index)
+    {
+        if (HasNames)
+        {
+            for (var i = 0; i < ElementNames.Length; i++)
+            {
+                if (string.Equals(ElementNames[i], name, StringComparison.Ordinal))
+                {
+                    index = i;
+                    return true;
+                }
+            }
+        }
+
+        index = -1;
+        return false;
     }
 
     /// <summary>
@@ -96,7 +201,14 @@ public sealed class TupleTypeSymbol : TypeSymbol
     internal static Type? BuildClrType(Type[] elementTypes)
         => BuildClrType(elementTypes, 0, elementTypes.Length);
 
-    private static string BuildName(ImmutableArray<TypeSymbol> elementTypes)
+    private static TypeSymbol StripNames(TypeSymbol type) => type switch
+    {
+        TupleTypeSymbol tuple => tuple.WithoutNames(),
+        NullableTypeSymbol { UnderlyingType: TupleTypeSymbol nested } => NullableTypeSymbol.Get(nested.WithoutNames()),
+        _ => type,
+    };
+
+    private static string BuildName(ImmutableArray<TypeSymbol> elementTypes, ImmutableArray<string?> elementNames)
     {
         var sb = new StringBuilder("(");
         for (var i = 0; i < elementTypes.Length; i++)
@@ -104,6 +216,12 @@ public sealed class TupleTypeSymbol : TypeSymbol
             if (i > 0)
             {
                 sb.Append(", ");
+            }
+
+            if (!elementNames.IsDefaultOrEmpty && elementNames[i] != null)
+            {
+                sb.Append(elementNames[i]);
+                sb.Append(' ');
             }
 
             sb.Append(elementTypes[i].Name);

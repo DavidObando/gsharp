@@ -100,6 +100,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<TypeDefinitionHandle> emitNullableContextOnType;
     private readonly Action<FieldDefinitionHandle, TypeSymbol> emitNullableAttributeOnField;
     private readonly Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter;
+    private readonly Action<ParameterHandle, TypeSymbol> emitTupleElementNamesOnParameter;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
@@ -128,6 +129,7 @@ internal sealed class TypeDefEmitter
         Action<TypeDefinitionHandle> emitNullableContextOnType,
         Action<FieldDefinitionHandle, TypeSymbol> emitNullableAttributeOnField,
         Action<ParameterHandle, ImmutableArray<byte>> emitNullableAttributeOnParameter,
+        Action<ParameterHandle, TypeSymbol> emitTupleElementNamesOnParameter,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
@@ -155,6 +157,7 @@ internal sealed class TypeDefEmitter
         this.emitNullableContextOnType = emitNullableContextOnType ?? throw new ArgumentNullException(nameof(emitNullableContextOnType));
         this.emitNullableAttributeOnField = emitNullableAttributeOnField ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnField));
         this.emitNullableAttributeOnParameter = emitNullableAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnParameter));
+        this.emitTupleElementNamesOnParameter = emitTupleElementNamesOnParameter ?? throw new ArgumentNullException(nameof(emitTupleElementNamesOnParameter));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
         this.emitParamArrayAttributeOnParameter = emitParamArrayAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamArrayAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
@@ -1371,6 +1374,9 @@ internal sealed class TypeDefEmitter
         {
             this.emitNullableAttributeOnParameter(paramHandle, nullableFlags);
         }
+
+        // ADR-0172 Phase B: parameter rows also carry tuple element names.
+        this.emitTupleElementNamesOnParameter(paramHandle, parameter.Type);
     }
 
     /// <summary>

@@ -1532,7 +1532,7 @@ public sealed partial class CSharpToGSharpTranslator
                 PointerTypeReference pointer =>
                     new PointerTypeReference(pointer.ElementType) { IsNullable = true },
                 TupleTypeReference tuple =>
-                    new TupleTypeReference(tuple.ElementTypes) { IsNullable = true },
+                    new TupleTypeReference(tuple.ElementTypes, tuple.ElementNames) { IsNullable = true },
                 ArrowTypeReference arrow =>
                     new ArrowTypeReference(arrow.ParameterTypes, arrow.ReturnTypes, arrow.IsAsync)
                     {

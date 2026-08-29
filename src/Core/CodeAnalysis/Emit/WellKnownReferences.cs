@@ -103,6 +103,7 @@ internal sealed class WellKnownReferences
     // MethodDef itself so C# nullable-flow analysis treats `T?` reference
     // parameters as annotated instead of inferring the assembly default.
     private MemberReferenceHandle? nullableAttributeByteCtorRef;
+    private MemberReferenceHandle? tupleElementNamesAttributeCtorRef;
     private MemberReferenceHandle? nullableAttributeByteArrayCtorRef;
     private MemberReferenceHandle? nullableContextAttributeByteCtorRef;
 
@@ -651,6 +652,42 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.nullableAttributeByteArrayCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0172 Phase B: returns the cached MemberRef for
+    /// <c>System.Runtime.CompilerServices.TupleElementNamesAttribute(string[])</c>
+    /// — the C#-compatible carrier of tuple element names on tuple-typed
+    /// parameters, returns, fields, and properties.
+    /// </summary>
+    /// <returns>
+    /// The cached <see cref="MemberReferenceHandle"/>, or
+    /// <see langword="default"/> when the attribute can't be resolved from
+    /// the reference closure (very old TFMs).
+    /// </returns>
+    public MemberReferenceHandle GetTupleElementNamesAttributeCtorRef()
+    {
+        if (this.tupleElementNamesAttributeCtorRef.HasValue)
+        {
+            return this.tupleElementNamesAttributeCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.TupleElementNamesAttribute", requireExternalVisibility: false, out var attrType))
+        {
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().SZArray().String());
+
+        this.tupleElementNamesAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.tupleElementNamesAttributeCtorRef.Value;
     }
 
     /// <summary>

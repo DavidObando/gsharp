@@ -486,6 +486,13 @@ internal sealed partial class ExpressionBinder
                 return BindAnonymousClassExpression((AnonymousClassExpressionSyntax)syntax);
             case SyntaxKind.TupleLiteralExpression:
                 return BindTupleLiteralExpression((TupleLiteralExpressionSyntax)syntax);
+            case SyntaxKind.NamedTupleElement:
+                // ADR-0172: a labeled element is only meaningful as a direct
+                // tuple-literal child (unwrapped there); anywhere else the
+                // label is stray — report and bind the value.
+                var strayNamed = (NamedTupleElementSyntax)syntax;
+                Diagnostics.ReportTupleElementNameOutsideTuple(strayNamed.NameToken.Location);
+                return BindExpression(strayNamed.Expression);
             case SyntaxKind.FunctionLiteralExpression:
                 return lambdas.BindFunctionLiteralExpression((FunctionLiteralExpressionSyntax)syntax);
             case SyntaxKind.LambdaExpression:

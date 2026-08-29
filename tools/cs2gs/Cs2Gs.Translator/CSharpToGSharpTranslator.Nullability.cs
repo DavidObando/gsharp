@@ -335,7 +335,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return changed
-                ? new TupleTypeReference(elements) { IsNullable = tuple.IsNullable }
+                ? new TupleTypeReference(elements, tuple.ElementNames) { IsNullable = tuple.IsNullable }
                 : tuple;
         }
 

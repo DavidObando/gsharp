@@ -810,11 +810,12 @@ public static class User
         string user = Compact(printed["User.cs"]);
 
         Assert.Equal(3, CountOccurrences(user, ".Describe()"));
-        Assert.Contains(".Pair.Item1.Describe()", user);
+        // ADR-0172: the named element access stays by-name.
+        Assert.Contains(".Pair.Node.Describe()", user);
         Assert.Contains(".Maybe!!.Describe()", user);
         Assert.Contains(".Holder.Current().Describe()", user);
         Assert.DoesNotContain("FirstExtensions.Describe", user);
-        Assert.DoesNotContain(".Pair.Node", user);
+        Assert.DoesNotContain(".Pair.Item1", user);
         Assert.DoesNotContain(".Maybe.Value", user);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =

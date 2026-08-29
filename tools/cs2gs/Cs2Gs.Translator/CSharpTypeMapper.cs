@@ -1333,7 +1333,7 @@ public sealed class CSharpTypeMapper
             case PointerTypeReference pointer:
                 return new PointerTypeReference(pointer.ElementType) { IsNullable = isNullable };
             case TupleTypeReference tuple:
-                return new TupleTypeReference(tuple.ElementTypes) { IsNullable = isNullable };
+                return new TupleTypeReference(tuple.ElementTypes, tuple.ElementNames) { IsNullable = isNullable };
             case ArrowTypeReference arrow:
                 return new ArrowTypeReference(arrow.ParameterTypes, arrow.ReturnTypes, arrow.IsAsync)
                 {
@@ -1408,21 +1408,23 @@ public sealed class CSharpTypeMapper
 
         if (type is INamedTypeSymbol named)
         {
-            // Value tuples / named tuples map to the canonical G# positional
-            // tuple type `(T1, T2, …)` (spec §Type syntax). G# tuples are
-            // positional, so C# element names are dropped here and named element
-            // access lowers to `.Item1`/`.Item2` at the use site (ADR-0115 §B.4).
+            // Value tuples map to the native G# tuple type. ADR-0172: G#
+            // now has named tuple elements, so C# element names are
+            // PRESERVED name-first — `(int Line, int Column)` becomes
+            // `(Line int32, Column int32)` — and named access stays by-name
+            // at the use site (ADR-0115 §B.4 as amended). A default
+            // positional name (`Item1` at position 1, …) counts as unnamed.
             if (named.IsTupleType)
             {
                 List<GTypeReference> elementTypes = named.TupleElements
                     .Select(e => this.Map(e.Type, context, location))
                     .ToList();
-                context.Report(new TranslationDiagnostic(
-                    named.ToDisplayString(),
-                    "C# value-tuple / named-tuple type mapped to the canonical G# positional tuple type; element names are dropped and named access lowers to '.ItemN' (ADR-0115 §B.4).",
-                    location,
-                    TranslationSeverity.Info));
-                return new TupleTypeReference(elementTypes);
+                List<string> elementNames = named.TupleElements
+                    .Select((e, i) => e.IsImplicitlyDeclared || e.Name == "Item" + (i + 1)
+                        ? null
+                        : e.Name)
+                    .ToList();
+                return new TupleTypeReference(elementTypes, elementNames);
             }
 
             // Issue #2282 (was #1934): an anonymous type (`new { A = 1, B = 2 }`)
@@ -2258,7 +2260,7 @@ public sealed class CSharpTypeMapper
             }
 
             return changed
-                ? new TupleTypeReference(elements) { IsNullable = mappedTuple.IsNullable }
+                ? new TupleTypeReference(elements, mappedTuple.ElementNames) { IsNullable = mappedTuple.IsNullable }
                 : mapped;
         }
 

@@ -169,6 +169,7 @@ NameOfExpression
 NamedArgumentExpression
 NamedDeconstructionField
 NamedDeconstructionStatement
+NamedTupleElement
 NilKeyword
 NotPattern
 NullCoalescingAssignmentStatement

@@ -45,7 +45,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let pair (int32, string) = (1, \"a\")", printed);
+        // ADR-0172: the alias's element names are preserved name-first.
+        Assert.Contains("let pair (Number int32, Word string) = (1, \"a\")", printed);
     }
 
     [Fact]
@@ -65,7 +66,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func Make(seed (int32, string)) (int32, string)", printed);
+        // ADR-0172: the alias's element names are preserved name-first.
+        Assert.Contains("func Make(seed (Number int32, Word string)) (Number int32, Word string)", printed);
     }
 
     private static string TranslateUnit(string source)

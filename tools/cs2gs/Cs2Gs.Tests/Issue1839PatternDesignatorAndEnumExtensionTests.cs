@@ -99,9 +99,12 @@ namespace Corpus.Issue1839
     [Fact]
     public void RecursivePatternSynthesizedDesignator_TupleTypePattern_ReportsDiagnosticInsteadOfGarbage()
     {
-        // A tuple defer has no single simple name to derive a faithful
-        // designator from; a diagnostic must be reported rather than emitting
-        // the invalid `Type.ToString()` text `(int, int)`.
+        // A tuple type has no single simple name to derive a faithful
+        // designator from; the pattern must not emit the invalid
+        // `Type.ToString()` text `(int, int)`. (Historically the NotEmpty
+        // oracle rode on ADR-0115 §B.4's name-drop Info diagnostic; ADR-0172
+        // retired that diagnostic, so the contract is now asserted directly
+        // on the rendered pattern shape.)
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
             ("Source.cs", @"
@@ -134,8 +137,8 @@ namespace Corpus.Issue1839
         Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string rendered = GSharpPrinter.Print(unit);
 
-        Assert.NotEmpty(context.Diagnostics);
         Assert.DoesNotContain("(int, int)", rendered, StringComparison.Ordinal);
+        Assert.Contains("Item1: var a", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
