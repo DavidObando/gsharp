@@ -36,6 +36,19 @@ public sealed class SdkCompileRunner
         @":\s+error\s+(?<code>[A-Za-z]+\d+):\s*(?<msg>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Matches an MSBuild-relayed GSxxxx error line (issue #3634). Unlike gsc's
+    // own four-coordinate `<file>(l,c,el,ec):` shape that
+    // GscInvoker.ParseDiagnostics recognizes, MSBuild task/target errors carry
+    // a two-coordinate location whose path is not a .gs source at all — e.g.
+    // `.../build/Gsharp.NET.Core.Sdk.targets(505,5): error GS9998: ... [App.gsproj]`
+    // or `gsgen(1,1): error GS9200: ...` — and may append a `[project]` suffix.
+    // The location prefix is optional so a bare `error GSxxxx: message` line
+    // still surfaces with a best-effort location.
+    private static readonly Regex RelayedGsErrorPattern = new Regex(
+        @"^(?:(?<file>.+?)\((?<line>\d+),(?<col>\d+)(?:,(?<eline>\d+),(?<ecol>\d+))?\)\s*:\s*)?" +
+        @"error\s+(?<id>GS\d{4}):\s*(?<msg>.*)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     // The well-known NuGet package-asset directories that follow an
     // `{id}/{version}/` pair under a packages cache root (generic detector,
     // not specific to any single package).
@@ -115,6 +128,14 @@ public sealed class SdkCompileRunner
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty);
 
             IReadOnlyList<GscDiagnostic> diagnostics = GscInvoker.ParseDiagnostics(result.Output);
+            if (result.ExitCode != 0 && !diagnostics.Any(d => d.IsError))
+            {
+                // Issue #3634: surface MSBuild-relayed GSxxxx errors (.targets-
+                // or gsgen-anchored lines the source-anchored parser misses)
+                // instead of letting the caller synthesize an opaque GS9999.
+                diagnostics = diagnostics.Concat(ParseRelayedGsErrors(result.Output)).ToList();
+            }
+
             string assemblyPath = result.ExitCode == 0
                 ? ResolveTargetPath(
                     generatedProjectPath,
@@ -352,10 +373,21 @@ public sealed class SdkCompileRunner
         IReadOnlyList<GscDiagnostic> diagnostics = GscInvoker.ParseDiagnostics(result.Output);
         if (result.ExitCode != 0 && diagnostics.Count(d => d.IsError) == 0)
         {
-            GscDiagnostic synthetic = SynthesizeFallbackDiagnostic(result, gsFilePaths);
-            if (synthetic is not null)
+            // Issue #3634: before synthesizing an opaque fallback, surface any
+            // MSBuild-relayed GSxxxx errors (.targets- or gsgen-anchored) that
+            // the source-anchored parser cannot see.
+            IReadOnlyList<GscDiagnostic> relayed = ParseRelayedGsErrors(result.Output);
+            if (relayed.Count > 0)
             {
-                diagnostics = diagnostics.Append(synthetic).ToList();
+                diagnostics = diagnostics.Concat(relayed).ToList();
+            }
+            else
+            {
+                GscDiagnostic synthetic = SynthesizeFallbackDiagnostic(result, gsFilePaths);
+                if (synthetic is not null)
+                {
+                    diagnostics = diagnostics.Append(synthetic).ToList();
+                }
             }
         }
 
@@ -951,6 +983,59 @@ public sealed class SdkCompileRunner
         string referencePath,
         IReadOnlyList<DeclaredProjectItem> projectReferences) =>
         IsRepresentedByProjectReference(referencePath, projectReferences);
+
+    /// <summary>
+    /// Scans <c>dotnet build</c> output for MSBuild-relayed <c>GSxxxx</c> error
+    /// lines that <see cref="GscInvoker.ParseDiagnostics"/> cannot recognize
+    /// (issue #3634): task/target errors anchored to a non-<c>.gs</c> path such
+    /// as a <c>.targets</c> file or the literal <c>gsgen</c> tool name, with a
+    /// two-coordinate location and an optional trailing <c>[project]</c>
+    /// suffix. The id and full message are surfaced verbatim (including any
+    /// <c>[project]</c> suffix) so the nightly table and fingerprint carry the
+    /// real error instead of the synthetic GS9999. Identical repeated lines are
+    /// deduplicated — MSBuild prints each error again in its final summary.
+    /// </summary>
+    /// <param name="output">The combined stdout+stderr of the <c>dotnet build</c> run.</param>
+    /// <returns>The distinct relayed error diagnostics in output order; empty when none match.</returns>
+    internal static IReadOnlyList<GscDiagnostic> ParseRelayedGsErrors(string output)
+    {
+        var diagnostics = new List<GscDiagnostic>();
+        if (string.IsNullOrEmpty(output))
+        {
+            return diagnostics;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string rawLine in output.Replace("\r\n", "\n").Split('\n'))
+        {
+            Match match = RelayedGsErrorPattern.Match(rawLine.Trim());
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            string file = match.Groups["file"].Success ? match.Groups["file"].Value.Trim() : "unknown";
+            int line = match.Groups["line"].Success ? int.Parse(match.Groups["line"].Value) : 1;
+            int column = match.Groups["col"].Success ? int.Parse(match.Groups["col"].Value) : 1;
+            int endLine = match.Groups["eline"].Success ? int.Parse(match.Groups["eline"].Value) : line;
+            int endColumn = match.Groups["ecol"].Success ? int.Parse(match.Groups["ecol"].Value) : column;
+            var diagnostic = new GscDiagnostic(
+                match.Groups["id"].Value,
+                match.Groups["msg"].Value.Trim(),
+                "error",
+                file,
+                line,
+                column,
+                endLine,
+                endColumn);
+            if (seen.Add(diagnostic.Id + "|" + diagnostic.File + "|" + diagnostic.Line + "," + diagnostic.Column + "|" + diagnostic.Message))
+            {
+                diagnostics.Add(diagnostic);
+            }
+        }
+
+        return diagnostics;
+    }
 
     private static string FindInheritedBuildProps(string projectDirectory)
     {
