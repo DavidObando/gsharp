@@ -1956,7 +1956,40 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                 }
 
-                return new PropertyPattern(fields);
+                // A designation on the (possibly nested) untyped property
+                // pattern (`{ ClrType: { IsGenericType: true } closedClr }`)
+                // maps to G#'s native ADR-0166 designator after the closing
+                // brace — dropping it orphans every body reference to the
+                // binder (the nightly selfmig regression on
+                // TupleElementNamesReader.cs).
+                string propertyDesignator = null;
+                if (recursive.Designation is SingleVariableDesignationSyntax propertyVariable)
+                {
+                    propertyDesignator = this.EmittedName(propertyVariable, propertyVariable.Identifier);
+                    if (mutableBindings != null
+                        && this.context.GetDeclaredSymbol(propertyVariable) is ILocalSymbol propertySymbol
+                        && this.IsSymbolReassigned(
+                            propertySymbol,
+                            this.state.CurrentBodyScope ?? recursive.SyntaxTree.GetRoot()))
+                    {
+                        string captureName =
+                            this.NewMutableSwitchPatternCaptureName(recursive, usedDesignators);
+                        mutableBindings.Add((propertySymbol, new IdentifierExpression(captureName)));
+                        propertyDesignator = captureName;
+                    }
+                    else
+                    {
+                        usedDesignators?.Add(propertyDesignator);
+                    }
+                }
+                else if (recursive.Designation is ParenthesizedVariableDesignationSyntax)
+                {
+                    this.context.ReportUnsupported(
+                        recursive,
+                        "property pattern with tuple designation has no canonical G# form yet (ADR-0115 §B).");
+                }
+
+                return new PropertyPattern(fields, propertyDesignator);
             }
 
             // Typed recursive pattern: synthesize a designator named after the type
