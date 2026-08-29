@@ -1520,7 +1520,8 @@ internal sealed class ConversionClassifier
         return mapped != null
             && mapped != TypeSymbol.Error
             && (TypeSymbol.RequiresSymbolicProjection(mapped)
-                || mapped is TupleTypeSymbol)
+                || mapped is TupleTypeSymbol
+                || TypeSymbol.ContainsNamedTupleElements(mapped))
             ? mapped
             : null;
     }

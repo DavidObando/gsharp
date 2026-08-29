@@ -3056,7 +3056,11 @@ internal sealed partial class ExpressionBinder
             // `Comparer<!TResult>` TypeSpec instead of the erased
             // `Comparer<object>` — yielding verifiable IL exactly as the
             // concrete-argument receiver does.
-            var symbolicReceiver = typeArgs.Any(TypeSymbol.RequiresSymbolicProjection)
+            // ADR-0172: a named-tuple-bearing argument at any nesting depth
+            // (`List[List[(a int32, b string)]]`) shares its CLR backing with
+            // the unnamed shape — only the symbolic view preserves the names.
+            var symbolicReceiver = typeArgs.Any(static a =>
+                TypeSymbol.RequiresSymbolicProjection(a) || TypeSymbol.ContainsNamedTupleElements(a))
                 ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
                 : null;
             constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);

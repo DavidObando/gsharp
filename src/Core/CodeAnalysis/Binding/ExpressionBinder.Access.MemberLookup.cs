@@ -2288,7 +2288,14 @@ internal sealed partial class ExpressionBinder
         // (e.g. `outer[0]` on `List[List[MyGs]]` -> `List[MyGs]`); without
         // this the element would type-erase to `List<object>` and downstream
         // member access on the result would emit against the wrong parent.
-        if (target.HasSubstitutableTypeArgument
+        // ADR-0172: `HasSubstitutableTypeArgument` only counts a DIRECT named
+        // tuple argument; a named tuple nested deeper in the argument
+        // (`List[[](a int32, b string)]`) still needs the substitution to
+        // surface its names, so widen the gate here without changing the
+        // property's broader (conversion/lowering) meaning.
+        if ((target.HasSubstitutableTypeArgument
+                || (!target.TypeArguments.IsDefaultOrEmpty
+                    && target.TypeArguments.Any(TypeSymbol.ContainsNamedTupleElements)))
             && target.OpenDefinition is System.Type openDefinition)
         {
             try
@@ -2328,7 +2335,8 @@ internal sealed partial class ExpressionBinder
                             target.TypeArguments);
                         if (projected != null
                             && projected != TypeSymbol.Error
-                            && TypeSymbol.RequiresSymbolicProjection(projected))
+                            && (TypeSymbol.RequiresSymbolicProjection(projected)
+                                || TypeSymbol.ContainsNamedTupleElements(projected)))
                         {
                             return openElement.IsByRef ? ByRefTypeSymbol.Get(projected) : projected;
                         }

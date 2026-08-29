@@ -1585,7 +1585,12 @@ internal sealed partial class ExpressionBinder
 
             // Issues #2664/#3560: preserve symbolic shapes and tuple conversion
             // semantics so member arguments can recover their language target.
-            if (TypeSymbol.RequiresSymbolicProjection(ta) || ta is TupleTypeSymbol)
+            // ADR-0172: a named-tuple-bearing argument at ANY nesting depth
+            // (`List[(a int32, b string)]`) shares its CLR backing with the
+            // unnamed shape — only the symbolic argument preserves the names.
+            if (TypeSymbol.RequiresSymbolicProjection(ta)
+                || ta is TupleTypeSymbol
+                || TypeSymbol.ContainsNamedTupleElements(ta))
             {
                 hasSymbolicArg = true;
             }
