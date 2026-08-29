@@ -1588,8 +1588,80 @@ public sealed partial class CSharpToGSharpTranslator
                     parameter,
                     includePromotedValue: true);
             }
+            else if (!IsNameOfArgument(argument)
+                && !isXunitNullAssertion
+                && argumentOperation is null
+                && this.TryGetExpandedParamsElementTarget(
+                    argument,
+                    out ITypeSymbol paramsElementType,
+                    out IParameterSymbol paramsParameter))
+            {
+                // Issue #3644: an argument in the EXPANDED tail of a params
+                // call (`params T[]` or the C#13 `params ReadOnlySpan<T>`,
+                // e.g. `Path.Combine(a, b, c, d, e)` binding
+                // `Path.Combine(params ReadOnlySpan<string>)`) has no
+                // IArgumentOperation of its own — Roslyn wraps the whole tail
+                // in one synthesized collection argument — so the
+                // parameter-targeted bridge above never sees it and a
+                // promoted/declared-nullable value flowed into the non-null
+                // element slot bare (GS0154/GS0155, the migrated
+                // Cs2Gs.Pipeline `FindNupkgForVersion` wall). Bridge against
+                // the params ELEMENT contract instead.
+                translated = this.ForgiveNullableReferenceValue(
+                    argument.Expression,
+                    translated,
+                    paramsElementType,
+                    paramsParameter,
+                    includePromotedValue: true);
+            }
 
             return translated;
+        }
+
+        // Issue #3644: resolves the element contract an argument binds to when
+        // it sits in the EXPANDED tail of a `params T[]` /
+        // `params ReadOnlySpan<T>` (or other single-type-argument params
+        // collection) parameter. The single-argument DIRECT collection form
+        // (`Path.Combine(paths)`) binds the parameter itself and is excluded.
+        private bool TryGetExpandedParamsElementTarget(
+            ArgumentSyntax argument,
+            out ITypeSymbol elementType,
+            out IParameterSymbol paramsParameter)
+        {
+            elementType = null;
+            paramsParameter = null;
+            if (argument.NameColon != null
+                || argument.Parent is not BaseArgumentListSyntax { Parent: ExpressionSyntax call } argumentList
+                || this.context.GetSymbolInfo(call).Symbol is not IMethodSymbol method
+                || method.Parameters.Length == 0)
+            {
+                return false;
+            }
+
+            IParameterSymbol lastParameter = method.Parameters[^1];
+            ITypeSymbol candidateElementType = lastParameter.Type switch
+            {
+                IArrayTypeSymbol arrayType => arrayType.ElementType,
+                INamedTypeSymbol { TypeArguments.Length: 1 } spanLike => spanLike.TypeArguments[0],
+                _ => null,
+            };
+            if (!lastParameter.IsParams
+                || candidateElementType == null
+                || argumentList.Arguments.IndexOf(argument) < method.Parameters.Length - 1)
+            {
+                return false;
+            }
+
+            ITypeSymbol convertedType = this.context.GetTypeInfo(argument.Expression).ConvertedType;
+            if (convertedType != null
+                && SymbolEqualityComparer.Default.Equals(convertedType, lastParameter.Type))
+            {
+                return false;
+            }
+
+            elementType = candidateElementType;
+            paramsParameter = lastParameter;
+            return true;
         }
 
         // ADR-0060: whether this argument binds (implicitly, in C#) to an `in`
