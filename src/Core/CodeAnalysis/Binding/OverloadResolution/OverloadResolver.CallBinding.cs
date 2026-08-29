@@ -2153,10 +2153,10 @@ internal sealed partial class OverloadResolver
         if (isVariadic)
         {
             var variadicParam = function.Parameters[function.Parameters.Length - 1];
-            var paramSliceType = (SliceTypeSymbol)variadicParam.Type;
+            var paramCarrierType = variadicParam.Type;
             var sliceType = substitution != null
-                ? (SliceTypeSymbol)substituteType(paramSliceType, substitution)
-                : paramSliceType;
+                ? substituteType(paramCarrierType, substitution)
+                : paramCarrierType;
 
             // Issue #1630: pack/pass-through through the canonical helper
             // (applies #1493 element coercion when packing).

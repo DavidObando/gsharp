@@ -103,6 +103,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<ParameterHandle, TypeSymbol> emitTupleElementNamesOnParameter;
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
+    private readonly Action<ParameterHandle> emitParamCollectionAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
     private readonly Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> getCtorReferenceForType;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
@@ -132,6 +133,7 @@ internal sealed class TypeDefEmitter
         Action<ParameterHandle, TypeSymbol> emitTupleElementNamesOnParameter,
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
+        Action<ParameterHandle> emitParamCollectionAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
         Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> getCtorReferenceForType,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
@@ -160,6 +162,7 @@ internal sealed class TypeDefEmitter
         this.emitTupleElementNamesOnParameter = emitTupleElementNamesOnParameter ?? throw new ArgumentNullException(nameof(emitTupleElementNamesOnParameter));
         this.emitIsReadOnlyAttributeOnParameter = emitIsReadOnlyAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitIsReadOnlyAttributeOnParameter));
         this.emitParamArrayAttributeOnParameter = emitParamArrayAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamArrayAttributeOnParameter));
+        this.emitParamCollectionAttributeOnParameter = emitParamCollectionAttributeOnParameter ?? throw new ArgumentNullException(nameof(emitParamCollectionAttributeOnParameter));
         this.getCtorReference = getCtorReference ?? throw new ArgumentNullException(nameof(getCtorReference));
         this.getCtorReferenceForType = getCtorReferenceForType ?? throw new ArgumentNullException(nameof(getCtorReferenceForType));
         this.emitStaticConstructorBodyBytes = emitStaticConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitStaticConstructorBodyBytes));
@@ -1128,7 +1131,16 @@ internal sealed class TypeDefEmitter
             // consumers see the delegate as a normal `params T[]` delegate.
             if (p.IsVariadic)
             {
-                this.emitParamArrayAttributeOnParameter(paramHandle);
+                // ADR-0173: array carriers keep [ParamArray]; collection
+                // carriers stamp C#13's [ParamCollection].
+                if (Binding.VariadicCarriers.GetCarrierKind(p.Type) == Binding.VariadicCarriers.CarrierKind.Array)
+                {
+                    this.emitParamArrayAttributeOnParameter(paramHandle);
+                }
+                else
+                {
+                    this.emitParamCollectionAttributeOnParameter(paramHandle);
+                }
             }
 
             this.EmitConstructorParameterNullability(paramHandle, p);
@@ -1356,7 +1368,16 @@ internal sealed class TypeDefEmitter
 
             if (p.IsVariadic)
             {
-                this.emitParamArrayAttributeOnParameter(paramHandle);
+                // ADR-0173: array carriers keep [ParamArray]; collection
+                // carriers stamp C#13's [ParamCollection].
+                if (Binding.VariadicCarriers.GetCarrierKind(p.Type) == Binding.VariadicCarriers.CarrierKind.Array)
+                {
+                    this.emitParamArrayAttributeOnParameter(paramHandle);
+                }
+                else
+                {
+                    this.emitParamCollectionAttributeOnParameter(paramHandle);
+                }
             }
 
             this.EmitConstructorParameterNullability(paramHandle, p);
@@ -1707,7 +1728,16 @@ internal sealed class TypeDefEmitter
 
             if (p.IsVariadic)
             {
-                this.emitParamArrayAttributeOnParameter(paramHandle);
+                // ADR-0173: array carriers keep [ParamArray]; collection
+                // carriers stamp C#13's [ParamCollection].
+                if (Binding.VariadicCarriers.GetCarrierKind(p.Type) == Binding.VariadicCarriers.CarrierKind.Array)
+                {
+                    this.emitParamArrayAttributeOnParameter(paramHandle);
+                }
+                else
+                {
+                    this.emitParamCollectionAttributeOnParameter(paramHandle);
+                }
             }
         }
 

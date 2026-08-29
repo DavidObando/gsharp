@@ -425,6 +425,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor TupleElementNameMismatch = new("GS0541", DiagnosticSeverity.Warning, "Tuple element name '{0}' is ignored because the target type names this position '{1}'.");
     internal static readonly DiagnosticDescriptor ReservedTupleElementName = new("GS0542", DiagnosticSeverity.Error, "Tuple element name '{0}' is reserved{1}.");
     internal static readonly DiagnosticDescriptor TupleElementNameOutsideTuple = new("GS0543", DiagnosticSeverity.Error, "An element name is only valid inside a tuple of two or more elements; a parenthesized single element is grouping.");
+    internal static readonly DiagnosticDescriptor VariadicCarrierElementNotConstructible = new("GS0544", DiagnosticSeverity.Error, "Variadic carrier '{0}' cannot be constructed over element type '{1}' at this call site; use an array carrier ('...T') or pass the collection directly.");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

@@ -1620,7 +1620,8 @@
     "nodeType": "ParameterSyntax",
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.5",
-    "rationale": "None"
+    "rationale": "None",
+    "notes": "ADR-0173 / issue #3627: params collections (List, the IEnumerable family, Span/ReadOnlySpan) translate to gsc variadic carriers (...X[T]); expanded calls on source-declared callees stay natural. params HashSet\u003CT\u003E and other non-allowlisted collection shapes still gap."
   },
   {
     "kind": "ParameterList",

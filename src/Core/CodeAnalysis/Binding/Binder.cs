@@ -3499,7 +3499,7 @@ public sealed class Binder
                     // call-site pack / pass-through can share machinery.
                     if (pt != TypeSymbol.Error)
                     {
-                        pt = SliceTypeSymbol.Get(pt);
+                        pt = VariadicCarriers.ResolveDeclaredParameterType(pt);
                     }
                 }
 

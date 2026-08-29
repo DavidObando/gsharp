@@ -456,8 +456,10 @@ internal sealed partial class OverloadResolver
             var kinds = new ClrOverloadResolution.ImplicitConversionKind[boundArguments.Count];
             var paramTypes = new TypeSymbol[boundArguments.Count];
             var isTailSlot = new bool[boundArguments.Count];
-            var elementType = isVariadic && cand.Parameters[cand.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice
-                ? variadicSlice.ElementType
+            var elementType = isVariadic
+                && VariadicCarriers.GetElementType(cand.Parameters[cand.Parameters.Length - 1].Type) is { } variadicElement
+                && variadicElement != TypeSymbol.Error
+                ? variadicElement
                 : null;
             for (var i = 0; i < boundArguments.Count; i++)
             {
@@ -1175,9 +1177,10 @@ internal sealed partial class OverloadResolver
         // applicability/ranking in agreement with the final element coercion.
         if (isVariadic
             && !HasNamedArguments(argumentNames)
-            && candidate.Parameters[candidate.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice)
+            && VariadicCarriers.GetElementType(candidate.Parameters[candidate.Parameters.Length - 1].Type) is { } variadicTailElement
+            && variadicTailElement != TypeSymbol.Error)
         {
-            var elementType = variadicSlice.ElementType;
+            var elementType = variadicTailElement;
             var tailStart = fixedParamCount;
 
             // A single trailing argument already typed as the slice itself is a
@@ -1925,7 +1928,9 @@ internal sealed partial class OverloadResolver
             inferTypeArguments(candidate.Parameters[i + parameterOffset].Type, argType, substitution);
         }
 
-        if (isVariadic && candidate.Parameters[candidate.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice)
+        if (isVariadic
+            && VariadicCarriers.GetElementType(candidate.Parameters[candidate.Parameters.Length - 1].Type) is { } inferenceElement
+            && inferenceElement != TypeSymbol.Error)
         {
             for (var i = fixedParamCount; i < argumentCount && i < boundArguments.Count; i++)
             {
@@ -1936,7 +1941,7 @@ internal sealed partial class OverloadResolver
                 }
 
                 var source = argType is SliceTypeSymbol argSlice ? argSlice.ElementType : argType;
-                inferTypeArguments(variadicSlice.ElementType, source, substitution);
+                inferTypeArguments(inferenceElement, source, substitution);
             }
         }
 

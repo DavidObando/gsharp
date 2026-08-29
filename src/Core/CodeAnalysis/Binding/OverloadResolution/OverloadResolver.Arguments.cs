@@ -270,7 +270,7 @@ internal sealed partial class OverloadResolver
     /// <param name="callSyntax">The syntax node attributed to the packed <see cref="BoundArrayCreationExpression"/> when packing is required.</param>
     /// <param name="boundArguments">The fully-bound, in-order argument list; length must be at least <paramref name="fixedCount"/>.</param>
     /// <param name="fixedCount">The number of leading fixed (non-variadic) parameters.</param>
-    /// <param name="sliceType">The (possibly substituted) variadic parameter's slice type.</param>
+    /// <param name="carrierType">The (possibly substituted) variadic parameter's carrier type — a slice for classic `...T`, or an ADR-0173 collection carrier (`...List[T]`, `...ReadOnlySpan[T]`, …).</param>
     /// <param name="parameterName">The variadic parameter's name, surfaced in GS0154 diagnostics for elements with no valid conversion.</param>
     /// <param name="locationAt">Maps a trailing argument's index in <paramref name="boundArguments"/> to the source location used for its conversion diagnostics.</param>
     /// <param name="hasErrors">Set to <see langword="true"/> when any trailing element has no valid conversion to the slice's element type.</param>
@@ -281,14 +281,14 @@ internal sealed partial class OverloadResolver
         SyntaxNode callSyntax,
         ImmutableArray<BoundExpression> boundArguments,
         int fixedCount,
-        SliceTypeSymbol sliceType,
+        TypeSymbol carrierType,
         string parameterName,
         Func<int, TextLocation> locationAt,
         ref bool hasErrors)
     {
         var trailingCount = boundArguments.Length - fixedCount;
         var passThrough = trailingCount == 1
-            && Conversion.Classify(boundArguments[fixedCount].Type, sliceType).IsImplicit;
+            && Conversion.Classify(boundArguments[fixedCount].Type, carrierType).IsImplicit;
 
         var result = ImmutableArray.CreateBuilder<BoundExpression>(fixedCount + 1);
         for (var i = 0; i < fixedCount; i++)
@@ -301,11 +301,15 @@ internal sealed partial class OverloadResolver
             result.Add(conversions.BindConversion(
                 locationAt(fixedCount),
                 boundArguments[fixedCount],
-                sliceType));
+                carrierType));
             return result.MoveToImmutable();
         }
 
-        var elementType = sliceType.ElementType;
+        // ADR-0173: the elements are packed into a fresh array of the
+        // carrier's element type, then wrapped in the carrier's construction
+        // form (identity for the array family, upcast for interface
+        // carriers, `new List<T>(T[])` / span `T[]` ctor otherwise).
+        var elementType = VariadicCarriers.GetElementType(carrierType);
         var packed = ImmutableArray.CreateBuilder<BoundExpression>(trailingCount);
         for (var i = fixedCount; i < boundArguments.Length; i++)
         {
@@ -319,7 +323,11 @@ internal sealed partial class OverloadResolver
                 ref hasErrors));
         }
 
-        result.Add(new BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable()));
+        var packedArray = new BoundArrayCreationExpression(
+            callSyntax,
+            carrierType as SliceTypeSymbol ?? SliceTypeSymbol.Get(elementType),
+            packed.MoveToImmutable());
+        result.Add(VariadicCarriers.WrapPackedArray(conversions, diagnostics, callSyntax, carrierType, packedArray));
         return result.MoveToImmutable();
     }
 

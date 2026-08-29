@@ -1138,6 +1138,7 @@ internal sealed class ReflectionMetadataEmitter
             (paramHandle, paramType) => this.customAttrEncoder.EmitTupleElementNamesAttribute(paramHandle, paramType),
             this.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter,
             this.customAttrEncoder.EmitParamArrayAttributeOnParameter,
+            this.customAttrEncoder.EmitParamCollectionAttributeOnParameter,
             this.memberRefs.GetCtorReference,
             (ctor, containingType) => this.memberRefs.GetCtorReference(ctor, containingType),
             this.ctorBodies.EmitStaticConstructorBodyBytes,
