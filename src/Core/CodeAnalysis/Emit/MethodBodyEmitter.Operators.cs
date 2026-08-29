@@ -1417,9 +1417,6 @@ internal sealed partial class MethodBodyEmitter
         var leftNullable = (NullableTypeSymbol)b.Left.Type;
         var rightNullable = b.Right.Type == TypeSymbol.Null ? null : (NullableTypeSymbol)b.Right.Type;
         var leftUnderlying = leftNullable.UnderlyingType;
-        var leftUnderlyingClr = leftUnderlying.ClrType
-            ?? throw new InvalidOperationException(
-                $"Lifted binary operator '{b.Op.Kind}' on Nullable<{leftUnderlying.Name}>: underlying has no CLR type.");
         var lhsSlot = slots.LhsSlot;
         var rhsSlot = slots.RhsSlot;
 
@@ -1427,10 +1424,15 @@ internal sealed partial class MethodBodyEmitter
         // this with right-operand type Null; the slot bundle has no RHS
         // and no result slot. Spill the LHS once and consult HasValue.
         // For `== nil` the result is `!HasValue`; for `!= nil` it is
-        // `HasValue`.
+        // `HasValue`. Issue #3626: route through GetNullableHasValueRef
+        // rather than the ClrType-only well-known lookup — a tuple
+        // underlying can have a symbolic-null ClrType (e.g. an element
+        // carries a nullable-reference-type annotation), and this is the
+        // only form reachable for `Nullable<TupleTypeSymbol>` since tuples
+        // have no other lifted binary operators.
         if (b.Right.Type == TypeSymbol.Null)
         {
-            var getHasValue = this.outer.wellKnown.GetNullableGetHasValueReference(leftUnderlyingClr);
+            var getHasValue = this.GetNullableHasValueRef(leftNullable);
 
             this.EmitExpression(b.Left);
             this.il.StoreLocal(lhsSlot);
@@ -1447,6 +1449,10 @@ internal sealed partial class MethodBodyEmitter
 
             return;
         }
+
+        var leftUnderlyingClr = leftUnderlying.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted binary operator '{b.Op.Kind}' on Nullable<{leftUnderlying.Name}>: underlying has no CLR type.");
 
         // Resolved only past the `x? == nil` arm above, which is the one form
         // that has no nullable right operand at all.
@@ -2068,10 +2074,14 @@ internal sealed partial class MethodBodyEmitter
     // Type (imported CLR value type, e.g. DateTime) or is still
     // TypeBuilder-backed (same-compilation struct/enum) — mirrors the
     // existing get_Value split already used by the `(v!!)` unwrap operator
-    // (NullableLifting.IsUserValueTypeNullable / RequiresSymbolicNullableGetValue).
+    // and the null-conditional receiver probe. Issue #3626: gated on the
+    // broader RequiresSymbolicNullableGetValue (not IsUserValueTypeNullable)
+    // so a tuple with a symbolic-null ClrType (e.g. an element carries a
+    // nullable-reference-type annotation) also routes through the symbolic
+    // MemberRef instead of dereferencing a null ClrType.
     private MemberReferenceHandle GetNullableHasValueRef(NullableTypeSymbol nullable)
     {
-        return NullableLifting.IsUserValueTypeNullable(nullable)
+        return NullableLifting.RequiresSymbolicNullableGetValue(nullable)
             ? this.outer.memberRefs.GetNullableGetHasValueMemberRefForUserValueType(nullable)
             : this.outer.wellKnown.GetNullableGetHasValueReference(
                 Invariant.Required(nullable.UnderlyingType.ClrType, "a runtime nullable type has a CLR underlying type"));
@@ -2079,7 +2089,7 @@ internal sealed partial class MethodBodyEmitter
 
     private MemberReferenceHandle GetNullableValueRef(NullableTypeSymbol nullable)
     {
-        return NullableLifting.IsUserValueTypeNullable(nullable)
+        return NullableLifting.RequiresSymbolicNullableGetValue(nullable)
             ? this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(nullable)
             : this.outer.wellKnown.GetNullableGetValueReference(
                 Invariant.Required(nullable.UnderlyingType.ClrType, "a runtime nullable type has a CLR underlying type"));
