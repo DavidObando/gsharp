@@ -1811,8 +1811,16 @@ internal sealed class SlotPlanner
             // and then emit `ceq` — an `InvalidProgramException` at
             // runtime. Treating this as a lifted form lets the emitter
             // spill the LHS once and consult `HasValue`.
+            //
+            // Issue #3626: a bare `ClrType.IsValueType` probe misses a
+            // `Nullable<TupleTypeSymbol>` whose ClrType is symbolic-null
+            // (e.g. a tuple element carries a nullable-reference-type
+            // annotation like `string?`, or was decoded from an imported
+            // signature) — `NullableLifting.IsValueTypeNullable` is the
+            // canonical predicate that already special-cases tuples for
+            // exactly this reason.
             bool leftIsValueNullable = node.Left.Type is NullableTypeSymbol left
-                && left.UnderlyingType?.ClrType is { IsValueType: true };
+                && NullableLifting.IsValueTypeNullable(left);
             if (!leftIsValueNullable)
             {
                 return false;
@@ -1836,7 +1844,7 @@ internal sealed class SlotPlanner
             // the EnumOperatorTable permits different-typed operands.
             var leftNullable = (NullableTypeSymbol)node.Left.Type!;
             if (leftNullable != rightNullable
-                && !(rightNullable.UnderlyingType?.ClrType is { IsValueType: true }))
+                && !NullableLifting.IsValueTypeNullable(rightNullable))
             {
                 return false;
             }
