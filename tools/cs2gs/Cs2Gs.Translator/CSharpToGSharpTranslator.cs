@@ -1097,8 +1097,18 @@ public sealed partial class CSharpToGSharpTranslator
         EmittedNameAllocator nameAllocator)
     {
         INamespaceSymbol current = context.Compilation.GlobalNamespace;
-        foreach (string segment in packageName.Split('.'))
+        foreach (string rawSegment in packageName.Split('.'))
         {
+            // Issue #3610 / ADR-0170: a keyword-named namespace arrives in its
+            // C# display spelling (`@class`) — from ToDisplayString on the
+            // package-split path — while the SYMBOL's Name is the bare
+            // metadata name (`class`). Compare the bare spelling so the walk
+            // succeeds and the allocator can hand back the G# `$class`
+            // escape; falling through returned the raw `@` text, which does
+            // not round-trip-parse (the Cs2Gs.Tests selfmig AtToken wall).
+            string segment = rawSegment.Length > 1 && rawSegment[0] == '@'
+                ? rawSegment.Substring(1)
+                : rawSegment;
             current = current.GetNamespaceMembers()
                 .FirstOrDefault(candidate => candidate.Name == segment);
             if (current == null)

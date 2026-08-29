@@ -1182,6 +1182,56 @@ public sealed class Issue3461IdentifierSanitizationTests
         Assert.False(match.Success, $"raw identifier '{identifier}' leaked into translated G#:\n{rendered}");
     }
 
+    /// <summary>Issue #3610 / ADR-0170 follow-up: the repository-mode
+    /// package-split path resolves each split unit's package through
+    /// <c>ResolvePackageName</c> with the C# DISPLAY spelling of the
+    /// namespace (<c>@class</c> from <c>ToDisplayString</c>). The symbol
+    /// walk must compare the bare metadata name so a keyword-named
+    /// namespace prints as the G# <c>$class</c> escape — the raw <c>@</c>
+    /// text does not round-trip-parse (the Cs2Gs.Tests selfmig AtToken
+    /// wall in the 2026-08-28 nightly).</summary>
+    [Fact]
+    public void PackageSplit_KeywordNamespace_PrintsEscapedPackage()
+    {
+        const string source = """
+            namespace @class
+            {
+                public sealed class @defer
+                {
+                    public int Value => 19;
+                }
+            }
+
+            namespace Other
+            {
+                public sealed class Marker
+                {
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Issue3461Split.cs", source) });
+        Assert.True(
+            project.BoundWithoutErrors,
+            "inline source should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+
+        // The pipeline hands the split translator ToDisplayString packages.
+        IReadOnlyList<string> packages = CSharpToGSharpTranslator.GetDeclaredPackages(document);
+        Assert.Contains("@class", packages);
+
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var splitTranslator = new CSharpToGSharpTranslator(packageFilter: "@class");
+        string printed = GSharpPrinter.Print(splitTranslator.TranslateDocument(document, context));
+
+        Assert.Contains("package $class", printed);
+        Assert.DoesNotContain("@class", printed);
+        Assert.Contains("class $defer", printed);
+    }
+
     private static string Render(
         string source,
         IReadOnlyList<MetadataReference> references = null)
