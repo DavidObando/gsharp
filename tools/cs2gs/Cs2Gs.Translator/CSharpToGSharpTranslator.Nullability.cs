@@ -252,6 +252,71 @@ public sealed partial class CSharpToGSharpTranslator
             return this.PromoteTupleTypeArguments(mapped, returnType, symbol, new List<int>());
         }
 
+        // Issue #3641: `var prepared = new List<(string, byte[])>()` renders the
+        // CREATED type, not the local's declared type, so promoting only the
+        // declaration would leave the initializer's `List[(string, []uint8)]`
+        // unconvertible to the promoted `List[(string, []?uint8)]`. G# tuple
+        // types agree structurally: the construction that feeds a promoted sink
+        // has to be spelled with the same elements. The sink's own element paths
+        // are reused directly — the mapper walks the CREATED type's arguments,
+        // which coincide with the sink's for the covariant collection hand-offs
+        // this shape uses (`List<T>` stored as `IReadOnlyList<T>`) and simply ask
+        // an untainted key otherwise.
+        private GTypeReference PromoteCreationTupleArguments(
+            GTypeReference type,
+            ITypeSymbol typeSymbol,
+            BaseObjectCreationExpressionSyntax creation)
+        {
+            if (type == null || typeSymbol == null || !this.IsObliviousCompilation())
+            {
+                return type;
+            }
+
+            ISymbol sink = this.ResolveValueSink(creation);
+            return sink == null
+                ? type
+                : this.PromoteTupleTypeArguments(type, typeSymbol, sink, new List<int>());
+        }
+
+        // The declaration a freshly built value flows into: the local/field being
+        // initialized, the assignment target, the invoked parameter, or the
+        // enclosing member whose return it is. Mirrors the sinks the analyzer's
+        // tuple-flow collectors record edges for, so both sides agree on which
+        // declaration owns the element key.
+        private ISymbol ResolveValueSink(ExpressionSyntax value)
+        {
+            SyntaxNode node = value;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            switch (node.Parent)
+            {
+                case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }:
+                    return this.context.GetDeclaredSymbol(declarator);
+
+                case AssignmentExpressionSyntax assignment
+                    when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                        && assignment.Right == node:
+                    return this.context.GetSymbolInfo(assignment.Left).Symbol;
+
+                case ArgumentSyntax argument:
+                    return (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
+                        ?.Parameter;
+
+                case ReturnStatementSyntax returnStatement:
+                    return this.context.SemanticModel
+                        .GetEnclosingSymbol(returnStatement.SpanStart) as IMethodSymbol;
+
+                case ArrowExpressionClauseSyntax arrow:
+                    return this.context.SemanticModel.GetDeclaredSymbol(arrow.Parent);
+
+                default:
+                    return null;
+            }
+        }
+
         private GTypeReference PromoteTupleTypeArguments(
             GTypeReference mapped,
             ITypeSymbol declaredType,

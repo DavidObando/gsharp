@@ -1080,14 +1080,13 @@ internal static class ObliviousNullabilityAnalyzer
                 case VariableDeclaratorSyntax declarator
                     when declarator.Initializer?.Value is ExpressionSyntax initializer:
                     ISymbol declared = model.GetDeclaredSymbol(declarator);
-                    if (TryGetTupleType(declared, out INamedTypeSymbol declaredTuple))
+                    if (declared != null && SymbolValueType(declared) is ITypeSymbol declaredType)
                     {
-                        CollectTupleValueFlow(
+                        CollectDeclarationTupleFlow(
                             Canonical(declared),
-                            declaredTuple,
+                            declaredType,
                             initializer,
                             model,
-                            string.Empty,
                             tupleTainted,
                             tupleEdges,
                             tupleScalarEdges);
@@ -1098,14 +1097,13 @@ internal static class ObliviousNullabilityAnalyzer
                 case AssignmentExpressionSyntax assignment
                     when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
                     ISymbol target = ResolveAssignable(assignment.Left, model);
-                    if (TryGetTupleType(target, out INamedTypeSymbol targetTuple))
+                    if (target != null && SymbolValueType(target) is ITypeSymbol assignedType)
                     {
-                        CollectTupleValueFlow(
+                        CollectDeclarationTupleFlow(
                             target,
-                            targetTuple,
+                            assignedType,
                             assignment.Right,
                             model,
-                            string.Empty,
                             tupleTainted,
                             tupleEdges,
                             tupleScalarEdges);
@@ -1148,7 +1146,9 @@ internal static class ObliviousNullabilityAnalyzer
         List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
         List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
     {
-        if (!TryGetTupleType(method, out INamedTypeSymbol tupleType))
+        ITypeSymbol returnType = SymbolValueType(method);
+        if (returnType is not INamedTypeSymbol { IsTupleType: true }
+            && NestedTupleSlots(returnType).Count == 0)
         {
             return;
         }
@@ -1156,12 +1156,11 @@ internal static class ObliviousNullabilityAnalyzer
         ISymbol target = Canonical(method);
         if (arrowBody != null)
         {
-            CollectTupleValueFlow(
+            CollectDeclarationTupleFlow(
                 target,
-                tupleType,
+                returnType,
                 arrowBody,
                 model,
-                string.Empty,
                 tupleTainted,
                 tupleEdges,
                 tupleScalarEdges);
@@ -1171,12 +1170,11 @@ internal static class ObliviousNullabilityAnalyzer
         {
             if (statement.Expression != null)
             {
-                CollectTupleValueFlow(
+                CollectDeclarationTupleFlow(
                     target,
-                    tupleType,
+                    returnType,
                     statement.Expression,
                     model,
-                    string.Empty,
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges);
@@ -1258,14 +1256,13 @@ internal static class ObliviousNullabilityAnalyzer
         {
             if (argument.Parameter is IParameterSymbol parameter
                 && argument.Value?.Syntax is ExpressionSyntax value
-                && TryGetTupleType(parameter, out INamedTypeSymbol tupleType))
+                && parameter.Type is ITypeSymbol parameterType)
             {
-                CollectTupleValueFlow(
+                CollectDeclarationTupleFlow(
                     Canonical(parameter),
-                    tupleType,
+                    parameterType,
                     value,
                     model,
-                    string.Empty,
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges);
@@ -1302,16 +1299,23 @@ internal static class ObliviousNullabilityAnalyzer
         };
 
         ISymbol target = receiver == null ? null : model.GetSymbolInfo(receiver).Symbol;
+
+        // Issue #3641: a LOCAL collection is just as much a declaration sink as
+        // a field/property — `var prepared = new List<(string, byte[])>();
+        // prepared.Add((path, original))` is where the null-bearing element
+        // enters the tuple that the enclosing method then returns.
         ITypeSymbol targetType = target switch
         {
             IFieldSymbol field => field.Type,
             IPropertySymbol property => property.Type,
+            ILocalSymbol local => local.Type,
+            IParameterSymbol receiverParameter => receiverParameter.Type,
             _ => null,
         };
 
         // Scalar flow already treats out as callee-to-caller and deliberately
         // excludes ref, so neither is receiver-directed here.
-        if (target is not (IFieldSymbol or IPropertySymbol)
+        if (target is not (IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol)
             || targetType is not INamedTypeSymbol receiverType
             || argument.Parameter is not IParameterSymbol parameter
             || parameter.RefKind is RefKind.Out or RefKind.Ref
@@ -1334,6 +1338,137 @@ internal static class ObliviousNullabilityAnalyzer
             tupleTainted,
             tupleEdges,
             tupleScalarEdges);
+    }
+
+    /// <summary>
+    /// Issue #3641: routes a value flowing into a declaration to the bare-tuple
+    /// collector or to the nested (generic type argument) one, so a tuple that
+    /// lives under `List&lt;T&gt;` / `IReadOnlyList&lt;T&gt;` / `IEnumerable&lt;T&gt;` is the same
+    /// declaration sink as a bare tuple. G# tuple types agree structurally, so a
+    /// producer's return, the intermediate locals and the consumer's parameter
+    /// must all render an element identically or none of them may.
+    /// </summary>
+    /// <param name="target">The declaration receiving the value.</param>
+    /// <param name="targetType">The declaration's declared (or awaited) type.</param>
+    /// <param name="value">The flowing value expression.</param>
+    /// <param name="model">The semantic model for <paramref name="value"/>.</param>
+    /// <param name="tupleTainted">Directly tainted tuple leaves.</param>
+    /// <param name="tupleEdges">Tuple-leaf to tuple-leaf edges.</param>
+    /// <param name="tupleScalarEdges">Tuple-leaf to scalar-declaration edges.</param>
+    private static void CollectDeclarationTupleFlow(
+        ISymbol target,
+        ITypeSymbol targetType,
+        ExpressionSyntax value,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
+        List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
+    {
+        if (target == null)
+        {
+            return;
+        }
+
+        if (targetType is INamedTypeSymbol { IsTupleType: true } tuple)
+        {
+            CollectTupleValueFlow(
+                target,
+                tuple,
+                value,
+                model,
+                string.Empty,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges);
+            return;
+        }
+
+        CollectNestedTupleValueFlow(target, targetType, value, model, tupleTainted, tupleEdges);
+    }
+
+    // Issue #3641: pairs the nested tuple slots of the target's declared type
+    // with those of the source's, positionally and only when both sides expose
+    // the same number of slots with the same element arity. That keeps the
+    // pairing sound across the covariant hand-offs the shape actually uses
+    // (`List<T>` returned as `IReadOnlyList<T>`, passed as `IEnumerable<T>`)
+    // without inventing a second cross-signature keying model: each side keeps
+    // the element path of ITS OWN rendered type.
+    private static void CollectNestedTupleValueFlow(
+        ISymbol target,
+        ITypeSymbol targetType,
+        ExpressionSyntax value,
+        SemanticModel model,
+        HashSet<TupleElementKey> tupleTainted,
+        List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges)
+    {
+        List<(string Path, INamedTypeSymbol Tuple)> targetSlots = NestedTupleSlots(targetType);
+        if (targetSlots.Count == 0)
+        {
+            return;
+        }
+
+        value = UnwrapTupleValue(value);
+        switch (value)
+        {
+            case null:
+                return;
+
+            case ConditionalExpressionSyntax conditional:
+                CollectNestedTupleValueFlow(
+                    target, targetType, conditional.WhenTrue, model, tupleTainted, tupleEdges);
+                CollectNestedTupleValueFlow(
+                    target, targetType, conditional.WhenFalse, model, tupleTainted, tupleEdges);
+                return;
+
+            case SwitchExpressionSyntax switchExpression:
+                foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                {
+                    CollectNestedTupleValueFlow(
+                        target, targetType, arm.Expression, model, tupleTainted, tupleEdges);
+                }
+
+                return;
+        }
+
+        ISymbol source = value switch
+        {
+            InvocationExpressionSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax =>
+                model.GetSymbolInfo(value).Symbol,
+            _ => null,
+        };
+
+        if (source == null)
+        {
+            return;
+        }
+
+        List<(string Path, INamedTypeSymbol Tuple)> sourceSlots = NestedTupleSlots(SymbolValueType(source));
+        if (sourceSlots.Count != targetSlots.Count)
+        {
+            return;
+        }
+
+        for (int i = 0; i < targetSlots.Count; i++)
+        {
+            if (targetSlots[i].Tuple.TupleElements.Length != sourceSlots[i].Tuple.TupleElements.Length)
+            {
+                return;
+            }
+        }
+
+        ISymbol canonicalSource = Canonical(source);
+        for (int i = 0; i < targetSlots.Count; i++)
+        {
+            AddTupleShapeEdges(
+                target,
+                targetSlots[i].Tuple,
+                targetSlots[i].Path,
+                canonicalSource,
+                sourceSlots[i].Tuple,
+                sourceSlots[i].Path,
+                tupleTainted,
+                tupleEdges);
+        }
     }
 
     private static void CollectTupleValueFlow(
@@ -1855,18 +1990,68 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static bool TryGetTupleType(ISymbol symbol, out INamedTypeSymbol tupleType)
     {
-        ITypeSymbol type = symbol switch
-        {
-            IMethodSymbol method => UnwrapAwaitedType(method.ReturnType),
-            IPropertySymbol property => property.Type,
-            IFieldSymbol field => field.Type,
-            ILocalSymbol local => local.Type,
-            IParameterSymbol parameter => parameter.Type,
-            _ => null,
-        };
-
-        tupleType = type as INamedTypeSymbol;
+        tupleType = SymbolValueType(symbol) as INamedTypeSymbol;
         return tupleType is { IsTupleType: true };
+    }
+
+    /// <summary>
+    /// The type of the value a declaration symbol denotes — a method's
+    /// (awaited) return type, otherwise the declared type. Returns
+    /// <see langword="null"/> for symbols that are not value declarations.
+    /// </summary>
+    /// <param name="symbol">The candidate declaration symbol.</param>
+    /// <returns>The denoted value type, or <see langword="null"/>.</returns>
+    private static ITypeSymbol SymbolValueType(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol method => UnwrapAwaitedType(method.ReturnType),
+        IPropertySymbol property => property.Type,
+        IFieldSymbol field => field.Type,
+        ILocalSymbol local => local.Type,
+        IParameterSymbol parameter => parameter.Type,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #3641: the tuple positions reachable from <paramref name="type"/>
+    /// through generic type ARGUMENTS (`List&lt;(string, byte[])&gt;`), keyed by the
+    /// very path the type mapper walks when it renders the declaration
+    /// (<c>PromoteTupleTypeArguments</c>): type-argument indexes first, tuple
+    /// element indexes after. Bare tuple types are excluded — those already own
+    /// the empty-prefix key — so the two collectors never key the same leaf twice.
+    /// </summary>
+    /// <param name="type">The declared type to scan.</param>
+    /// <returns>The nested tuple slots, outermost type argument first.</returns>
+    private static List<(string Path, INamedTypeSymbol Tuple)> NestedTupleSlots(ITypeSymbol type)
+    {
+        var slots = new List<(string Path, INamedTypeSymbol Tuple)>();
+        if (type is INamedTypeSymbol { IsTupleType: false })
+        {
+            CollectNestedTupleSlots(type, string.Empty, slots);
+        }
+
+        return slots;
+    }
+
+    private static void CollectNestedTupleSlots(
+        ITypeSymbol type,
+        string prefix,
+        List<(string Path, INamedTypeSymbol Tuple)> slots)
+    {
+        if (type is not INamedTypeSymbol named)
+        {
+            return;
+        }
+
+        if (named.IsTupleType)
+        {
+            slots.Add((prefix, named));
+            return;
+        }
+
+        for (int i = 0; i < named.TypeArguments.Length; i++)
+        {
+            CollectNestedTupleSlots(named.TypeArguments[i], AppendTuplePath(prefix, i), slots);
+        }
     }
 
     private static bool TryResolveReceiverTypeParameterPath(
@@ -1968,15 +2153,7 @@ internal static class ObliviousNullabilityAnalyzer
 
     private static bool IsEligibleScalarTarget(ISymbol symbol)
     {
-        ITypeSymbol type = symbol switch
-        {
-            IMethodSymbol method => UnwrapAwaitedType(method.ReturnType),
-            IPropertySymbol property => property.Type,
-            IFieldSymbol field => field.Type,
-            ILocalSymbol local => local.Type,
-            IParameterSymbol parameter => parameter.Type,
-            _ => null,
-        };
+        ITypeSymbol type = SymbolValueType(symbol);
 
         return type is { IsReferenceType: true }
             && type.NullableAnnotation != NullableAnnotation.Annotated;

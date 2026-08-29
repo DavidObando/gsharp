@@ -2238,6 +2238,7 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference type = typeSymbol != null
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(creation.Type.ToString());
+            type = this.PromoteCreationTupleArguments(type, typeSymbol, creation);
 
             var arguments = this.TranslateCallArguments(
                 creation,
