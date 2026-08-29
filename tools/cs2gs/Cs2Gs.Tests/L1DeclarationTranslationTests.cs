@@ -152,18 +152,19 @@ namespace Corpus.L1
             diagnostic => diagnostic.Message.Contains("primary constructor", StringComparison.Ordinal));
     }
 
-    /// <summary>T1 (ADR-0115 §B.4): a C# named-tuple field type maps to the
-    /// canonical G# positional tuple type <c>(string, int32, int32)</c> — element
-    /// names dropped — recorded as an Info decision, no longer Unsupported.</summary>
+    /// <summary>T1 (ADR-0115 §B.4 as amended by ADR-0172): a C# named-tuple
+    /// field type maps to the native G# tuple type with its element names
+    /// PRESERVED name-first (<c>(Name string, Price int32, Quantity int32)</c>);
+    /// nothing is Unsupported and no name-drop Info diagnostic remains.</summary>
     [Fact]
-    public void L1Document_MapsNamedTupleFieldToPositionalTuple()
+    public void L1Document_MapsNamedTupleFieldToNamedTuple()
     {
         (CompilationUnit unit, TranslationContext context) = TranslateL1();
 
-        Assert.Contains(
+        // ADR-0172 retired the ADR-0115 §B.4 name-drop Info diagnostic.
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Info &&
-                d.Message.Contains("positional tuple"));
+            d => d.Message.Contains("element names are dropped"));
 
         // No tuple is left as an Unsupported placeholder.
         Assert.DoesNotContain(
@@ -180,6 +181,7 @@ namespace Corpus.L1
         Assert.Equal(
             new[] { "string", "int32", "int32" },
             tuple.ElementTypes.Select(e => Assert.IsType<NamedTypeReference>(e).Name));
+        Assert.Equal(new[] { "Name", "Price", "Quantity" }, tuple.ElementNames);
     }
 
     /// <summary>B.11 / ADR-0131: an expression-bodied property

@@ -587,6 +587,35 @@ public class TypeSymbol : Symbol
     });
 
     /// <summary>
+    /// ADR-0172: returns <see langword="true"/> when <paramref name="type"/>
+    /// structurally contains a tuple with declared element names. Named
+    /// tuples share their CLR backing with the unnamed shape, so CLR-driven
+    /// re-derivation (member projection, imported-call return mapping) erases
+    /// the names; gates that decide between "keep the symbolic projection"
+    /// and "fall back to the CLR shape" must treat named-tuple content like
+    /// symbolically-required content.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when any tuple position declares a name.</returns>
+    public static bool ContainsNamedTupleElements(TypeSymbol? type) => type switch
+    {
+        null => false,
+        TupleTypeSymbol tuple => tuple.HasNames || tuple.ElementTypes.Any(ContainsNamedTupleElements),
+        NullableTypeSymbol nullable => ContainsNamedTupleElements(nullable.UnderlyingType),
+        ArrayTypeSymbol array => ContainsNamedTupleElements(array.ElementType),
+        SliceTypeSymbol slice => ContainsNamedTupleElements(slice.ElementType),
+        RectangularArrayTypeSymbol rectangular => ContainsNamedTupleElements(rectangular.ElementType),
+        MapTypeSymbol map => ContainsNamedTupleElements(map.KeyType) || ContainsNamedTupleElements(map.ValueType),
+        SequenceTypeSymbol sequence => ContainsNamedTupleElements(sequence.ElementType),
+        AsyncSequenceTypeSymbol asyncSequence => ContainsNamedTupleElements(asyncSequence.ElementType),
+        ChannelTypeSymbol channel => ContainsNamedTupleElements(channel.ElementType),
+        ByRefTypeSymbol byRef => ContainsNamedTupleElements(byRef.PointeeType),
+        FunctionTypeSymbol function => function.ParameterTypes.Any(ContainsNamedTupleElements) || ContainsNamedTupleElements(function.ReturnType),
+        ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported => imported.TypeArguments.Any(ContainsNamedTupleElements),
+        _ => false,
+    };
+
+    /// <summary>
     /// Issue #810 / #1481: returns <see langword="true"/> when
     /// <paramref name="type"/> structurally references any of the supplied
     /// <paramref name="outerMethodTypeParameters"/>. Used by the iterator

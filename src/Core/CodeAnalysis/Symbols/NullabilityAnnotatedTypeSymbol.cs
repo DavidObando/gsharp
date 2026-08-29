@@ -157,14 +157,24 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         return TypeSymbol.FromClrType(targetClrType);
     }
 
-    private static TypeSymbol TransferTupleNames(TypeSymbol source, TypeSymbol target) => (source, target) switch
+    private static TypeSymbol TransferTupleNames(TypeSymbol source, TypeSymbol target)
     {
-        (TupleTypeSymbol { HasNames: true } namedSource, TupleTypeSymbol unnamedTarget)
-            when namedSource.Arity == unnamedTarget.Arity && !unnamedTarget.HasNames
-            => TupleTypeSymbol.Get(unnamedTarget.ElementTypes, namedSource.ElementNames),
-        (NullableTypeSymbol { UnderlyingType: TupleTypeSymbol { HasNames: true } namedSource }, NullableTypeSymbol { UnderlyingType: TupleTypeSymbol unnamedTarget })
-            when namedSource.Arity == unnamedTarget.Arity && !unnamedTarget.HasNames
-            => NullableTypeSymbol.Get(TupleTypeSymbol.Get(unnamedTarget.ElementTypes, namedSource.ElementNames)),
-        _ => target,
-    };
+        if (source is TupleTypeSymbol { HasNames: true } namedSource
+            && target is TupleTypeSymbol unnamedTarget
+            && namedSource.Arity == unnamedTarget.Arity
+            && !unnamedTarget.HasNames)
+        {
+            return TupleTypeSymbol.Get(unnamedTarget.ElementTypes, namedSource.ElementNames);
+        }
+
+        if (source is NullableTypeSymbol { UnderlyingType: TupleTypeSymbol { HasNames: true } namedUnderlying }
+            && target is NullableTypeSymbol { UnderlyingType: TupleTypeSymbol unnamedUnderlying }
+            && namedUnderlying.Arity == unnamedUnderlying.Arity
+            && !unnamedUnderlying.HasNames)
+        {
+            return NullableTypeSymbol.Get(TupleTypeSymbol.Get(unnamedUnderlying.ElementTypes, namedUnderlying.ElementNames));
+        }
+
+        return target;
+    }
 }

@@ -191,7 +191,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("async func TryFindAsync() (bool, IProfile?)", printed);
+        Assert.Contains("async func TryFindAsync() (Ok bool, Found IProfile?)", printed);
     }
 
     [Fact]

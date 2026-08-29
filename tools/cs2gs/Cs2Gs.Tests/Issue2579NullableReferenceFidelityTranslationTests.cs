@@ -142,7 +142,8 @@ public sealed class Issue2579NullableReferenceFidelityTranslationTests
             }
             """);
 
-        Assert.Contains("tool.Item2!!()", printed, StringComparison.Ordinal);
+        // ADR-0172: the named element access stays by-name.
+        Assert.Contains("tool.Handler!!()", printed, StringComparison.Ordinal);
     }
 
     private static string Translate(string source)

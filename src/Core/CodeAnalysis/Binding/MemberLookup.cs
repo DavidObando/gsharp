@@ -1430,7 +1430,11 @@ internal sealed class MemberLookup
 
         var mapped = MapOpenClrTypeToSymbolic(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
 
+        // ADR-0172: a named-tuple-bearing return shares its CLR backing with
+        // the unnamed shape, so the CLR fallback would erase the names — keep
+        // the symbolic projection for it too.
         return TypeSymbol.RequiresSymbolicProjection(mapped)
+            || TypeSymbol.ContainsNamedTupleElements(mapped)
             ? mapped
             : null;
     }
@@ -1507,8 +1511,12 @@ internal sealed class MemberLookup
             // recovered from a `List[Check]` receiver) does too — the closed
             // CLR method erased it to `object`, so without the symbolic vector
             // the call's return type / lambda parameter type would be `object`.
+            // ADR-0172: a named-tuple-bearing inferred argument also needs
+            // the symbolic vector — the closed CLR method's shapes share the
+            // unnamed backing, so the CLR fallback would erase the names.
             if (inferred[i] is { } inferredType
-                && TypeSymbol.RequiresSymbolicProjection(inferredType))
+                && (TypeSymbol.RequiresSymbolicProjection(inferredType)
+                    || TypeSymbol.ContainsNamedTupleElements(inferredType)))
             {
                 anySymbolic = true;
                 break;

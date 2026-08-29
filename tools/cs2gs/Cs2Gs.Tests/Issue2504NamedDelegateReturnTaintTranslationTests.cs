@@ -189,8 +189,8 @@ public sealed class Issue2504NamedDelegateReturnTaintTranslationTests
         Assert.Contains("() T?;", printed, StringComparison.Ordinal);
         Assert.Contains("delegate TaskCallback() Task[Result?];", printed, StringComparison.Ordinal);
         Assert.Contains("delegate ValueTaskCallback() ValueTask[Result?];", printed, StringComparison.Ordinal);
-        Assert.Contains("delegate TupleCallback() (Result?, Result);", printed, StringComparison.Ordinal);
-        Assert.Contains("delegate LambdaTupleCallback() (Result?, Result);", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate TupleCallback() (First Result?, Second Result);", printed, StringComparison.Ordinal);
+        Assert.Contains("delegate LambdaTupleCallback() (First Result?, Second Result);", printed, StringComparison.Ordinal);
         Assert.Contains("delegate ArrayCallback() []?Result;", printed, StringComparison.Ordinal);
         Assert.Contains("delegate NestedCallback() Box[Result]?;", printed, StringComparison.Ordinal);
     }
