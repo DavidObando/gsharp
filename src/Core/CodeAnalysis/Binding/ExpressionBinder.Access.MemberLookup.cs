@@ -93,6 +93,34 @@ internal sealed partial class ExpressionBinder
         return field == null || !ClrTypeUtilities.IsDelegateType(field.FieldType);
     }
 
+    /// <summary>
+    /// Issue #3649: a DECLARED tuple element name (ADR-0172 — <c>t.f(10)</c>)
+    /// never exists as a member on the tuple's CLR backing (element names are
+    /// metadata-only; only <c>ItemN</c> fields are real), so a call through a
+    /// declared name must always bind as element read + indirect invocation.
+    /// Without this, only the <see cref="RequiresSymbolicTupleElementInvocation"/>
+    /// cases took the indirect path and <c>t.f(10)</c> fell through to CLR
+    /// method lookup on <c>ValueTuple</c>, reporting "Cannot find function f"
+    /// even though <c>let a = t.f; a(10)</c> worked. Positional <c>ItemN</c> /
+    /// <c>.N</c> spellings keep their existing paths.
+    /// </summary>
+    private static bool RequiresDeclaredNameTupleElementInvocation(
+        string memberName,
+        TupleTypeSymbol tupleType,
+        int index)
+    {
+        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(tupleType.ElementTypes[index], out _))
+        {
+            return false;
+        }
+
+        // Only declared element names need the indirect path here; the
+        // canonical `ItemN` spelling resolves against the real CLR field, and
+        // a declared name that IS `ItemN` behaves identically either way.
+        return tupleType.TryGetElementIndexByName(memberName, out var namedIndex)
+            && namedIndex == index;
+    }
+
     private BoundExpression BindAccessorStep(
         BoundExpression? receiver,
         ImportedClassSymbol? classSymbol,
@@ -172,10 +200,14 @@ internal sealed partial class ExpressionBinder
             case CallExpressionSyntax ce:
                 // Issue #3084: bind tuple fields symbolically when their CLR
                 // projection cannot expose the stored function as a delegate.
+                // Issue #3649 extends this to calls through a DECLARED element
+                // name (`t.f(10)`), which has no CLR-visible member to fall
+                // back to regardless of the element's projected field type.
                 if (ce.NullableQuestionToken == null
                     && receiver?.Type is TupleTypeSymbol tupleType
                     && TryGetTupleElementIndex(ce.Identifier.ValueText, tupleType, out var tupleIndex)
-                    && RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex))
+                    && (RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex)
+                        || RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex)))
                 {
                     var tupleElement = new BoundTupleElementAccessExpression(
                         null,
