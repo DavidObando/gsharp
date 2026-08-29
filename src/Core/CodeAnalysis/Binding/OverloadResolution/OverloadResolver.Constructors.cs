@@ -346,7 +346,7 @@ internal sealed partial class OverloadResolver
             }
 
             var variadicParam = parameters[parameters.Length - 1];
-            var variadicSliceType = (SliceTypeSymbol)variadicParam.Type;
+            var variadicSliceType = variadicParam.Type;
 
             var parameterSyntaxV = new ExpressionSyntax[requestedArgCount];
             for (var i = 0; i < requestedArgCount; i++)
@@ -1112,7 +1112,7 @@ internal sealed partial class OverloadResolver
             // Issue #1214: use the (possibly type-argument-substituted) slice
             // type so a generic variadic init (`init(xs ...T)` on `Box[int32]`)
             // packs into `[]int32`, matching the concrete argument types.
-            var sliceType = (SliceTypeSymbol)effectiveParamTypes[parameters.Length - 1];
+            var sliceType = effectiveParamTypes[parameters.Length - 1];
             var trailingCount = requestedArgCount - fixedCtorParamCount;
             var passThrough = trailingCount == 1
                 && boundArguments[fixedCtorParamCount].Type == sliceType;

@@ -748,6 +748,20 @@ parenthesized single element is an error because `(T)` is grouping, not a
 | GS0542 | Error | `Tuple element name '<name>' is reserved<detail>.` | `(Item2 int32, x int32)`; `(Rest: 1, x: 2)` |
 | GS0543 | Error | `An element name is only valid inside a tuple of two or more elements; a parenthesized single element is grouping.` | `(line: 1)`; `let x (line int32) = 1` |
 
+## Variadic carrier construction (GS0544)
+
+[ADR-0173](adr/0173-generalized-variadic-carriers.md) / issue #3627: a
+variadic COLLECTION carrier (`...List[T]`, `...ReadOnlySpan[T]`) packs its
+expanded call-site arguments via the carrier's CLR construction form
+(`new List<T>(T[])`, the span's `T[]` constructor). When the element type is
+a same-compilation type whose CLR shape is still erased at bind time, no
+closed construction exists; use the array carrier (`...T`) instead, or pass
+an existing collection directly.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | `func F(xs ...List[MyLocalClass])` called expanded |
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 [ADR-0166](adr/0166-is-pattern-variables.md): a designation in a boolean `is`

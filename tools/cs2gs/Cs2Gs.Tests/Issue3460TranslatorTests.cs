@@ -137,17 +137,9 @@ namespace Cs2Gs.Tests.Fixtures
         public int Value { get; init; }
     }
 
-    public sealed class Issue3460UnsupportedParamsOptions
-    {
-        public Issue3460UnsupportedParamsOptions(params HashSet<int> values)
-        {
-            Count = values.Count;
-        }
-
-        public int Count { get; }
-
-        public int Value { get; init; }
-    }
+    // NOTE: the deliberately UNTRANSLATABLE `params HashSet<int>` fixture is
+    // compiled in-memory by its test (see CompileUnsupportedParamsLibrary) so
+    // this project's own source stays fully cs2gs-translatable for #3501.
 
     public sealed class Issue3460StringDefaultOptions
     {
@@ -1023,7 +1015,7 @@ namespace Cs2Gs.Tests
                         new Issue3460UnsupportedParamsOptions(1, 2) { Value = 3 };
                 }
                 """,
-                MetadataReference.CreateFromFile(typeof(Fixtures.Issue3460UnsupportedParamsOptions).Assembly.Location));
+                CompileUnsupportedParamsLibrary());
 
             Assert.Contains(
                 context.Diagnostics,
@@ -1063,6 +1055,41 @@ namespace Cs2Gs.Tests
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
             Assert.Equal(183, result.Value);
+        }
+
+        private static MetadataReference CompileUnsupportedParamsLibrary()
+        {
+            // Compiled in memory (not project source) so Cs2Gs.Tests itself
+            // never carries an untranslatable `params HashSet<int>` member.
+            var tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(
+                """
+                namespace Cs2Gs.Tests.Fixtures
+                {
+                    public sealed class Issue3460UnsupportedParamsOptions
+                    {
+                        public Issue3460UnsupportedParamsOptions(params System.Collections.Generic.HashSet<int> values)
+                        {
+                            Count = values.Count;
+                        }
+
+                        public int Count { get; }
+
+                        public int Value { get; init; }
+                    }
+                }
+                """,
+                new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions(
+                    Microsoft.CodeAnalysis.CSharp.LanguageVersion.Latest));
+            var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+                "Issue3460UnsupportedParamsLib",
+                new[] { tree },
+                CSharpProjectLoader.RuntimeReferences(),
+                new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            using var peStream = new System.IO.MemoryStream();
+            Microsoft.CodeAnalysis.Emit.EmitResult emit = compilation.Emit(peStream);
+            Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+            peStream.Position = 0;
+            return MetadataReference.CreateFromStream(peStream);
         }
 
         private static string Translate(

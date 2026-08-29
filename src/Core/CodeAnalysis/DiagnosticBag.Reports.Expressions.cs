@@ -220,6 +220,17 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.TupleElementNameOutsideTuple);
 
     /// <summary>
+    /// ADR-0173: reports a variadic collection carrier (List/span) whose
+    /// element type has no closed CLR construction shape at the call site
+    /// (same-compilation erased element).
+    /// </summary>
+    /// <param name="location">The call location.</param>
+    /// <param name="carrierType">The declared carrier type.</param>
+    /// <param name="elementType">The variadic element type.</param>
+    public void ReportVariadicCarrierElementNotConstructible(TextLocation location, TypeSymbol carrierType, TypeSymbol elementType)
+    => Report(location, DiagnosticDescriptors.VariadicCarrierElementNotConstructible, carrierType, elementType);
+
+    /// <summary>
     /// Issue #3317 / ADR-0159: reports that a nil comparison against a bare
     /// (non-<c>?</c>) magic collection type is statically constant — with
     /// sound empty-instance zero values such a value can never be nil, so

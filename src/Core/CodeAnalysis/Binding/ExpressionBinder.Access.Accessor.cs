@@ -3763,7 +3763,7 @@ internal sealed partial class ExpressionBinder
                     if (isVariadic)
                     {
                         var variadicParam = method.Parameters[method.Parameters.Length - 1];
-                        var variadicElementType = ((SliceTypeSymbol)variadicParam.Type).ElementType;
+                        var variadicElementType = VariadicCarriers.GetElementType(variadicParam.Type);
                         var trailingCount = arguments.Length - fixedParamCount;
                         if (trailingCount == 1 && arguments[fixedParamCount].Type is SliceTypeSymbol singleSlice)
                         {
@@ -3811,9 +3811,9 @@ internal sealed partial class ExpressionBinder
             if (isVariadic)
             {
                 var variadicParam = method.Parameters[method.Parameters.Length - 1];
-                var sliceType = (SliceTypeSymbol)variadicParam.Type;
+                var sliceType = variadicParam.Type;
                 var substitutedSlice = substitution != null
-                    ? (SliceTypeSymbol)Binder.SubstituteType(sliceType, substitution, scope.References.MapClrTypeToReferences)
+                    ? Binder.SubstituteType(sliceType, substitution, scope.References.MapClrTypeToReferences)
                     : sliceType;
                 var hasVariadicErrors = false;
 

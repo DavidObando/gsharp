@@ -274,7 +274,7 @@ internal sealed partial class DeclarationBinder
                 var isVariadic = parameterSyntax.IsVariadic;
                 if (isVariadic && parameterType != TypeSymbol.Error)
                 {
-                    parameterType = SliceTypeSymbol.Get(parameterType);
+                    parameterType = VariadicCarriers.ResolveDeclaredParameterType(parameterType);
                 }
 
                 var parameterRefKind = conversions.BindAndValidateParameterRefKind(

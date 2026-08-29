@@ -951,22 +951,28 @@ public sealed partial class CSharpToGSharpTranslator
             // shape, which gsc's variadic slice already models 1:1. The
             // corresponding expanded call site (`Total(1, 2, 3)`) is lowered at the
             // CALL, not the declaration — see <see cref="TranslateParamsCollectionArguments"/>.
-            bool variadic = symbol.IsParams && symbol.Type is IArrayTypeSymbol;
+            // ADR-0173 / issue #3627: gsc now supports generalized variadic
+            // carriers (`...X[T]` ≡ C#13 `params X<T>`). An array params maps
+            // to the classic `...T` element spelling; a supported collection
+            // params (List, the IEnumerable family, Span/ReadOnlySpan) keeps
+            // its CARRIER type after the ellipsis (`...List[int32]`). Only
+            // unsupported collection shapes (e.g. HashSet<T>) still gap.
+            bool variadic = symbol.IsParams
+                && (symbol.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(symbol.Type));
             ITypeSymbol parameterType = symbol.Type;
-            if (variadic && parameterType is IArrayTypeSymbol arrayType)
+            if (variadic && parameterType is IArrayTypeSymbol arrayType
+                && arrayType.ElementType is not IArrayTypeSymbol
+                && !IsSupportedParamsCollectionType(arrayType.ElementType))
             {
                 parameterType = arrayType.ElementType;
             }
 
-            if (symbol.IsParams && !variadic && !IsSupportedParamsCollectionType(parameterType))
+            // An array params whose ELEMENT is itself carrier-shaped (e.g.
+            // `params List<int>[]`, `params byte[][]`) keeps the explicit
+            // array spelling (`...[]List[int32]`, `...[][]uint8`) — the bare
+            // element spelling would reinterpret as a carrier under ADR-0173.
+            if (symbol.IsParams && !variadic)
             {
-                // The call-site expansion (TranslateCallArguments) only knows how
-                // to lower an expanded 'params' call into a List[T]{...} literal
-                // for the allowlisted collection shapes below. A callee declared
-                // with e.g. `params ReadOnlySpan<T>`/`params HashSet<T>` would
-                // otherwise translate "successfully" here while every call site
-                // gaps — a half-translated callee with no working caller. Gap the
-                // declaration too, so the two sides stay consistent.
                 this.context.ReportUnsupported(
                     fallbackNode,
                     $"params collection of type '{parameterType}' has no gsc construction form.");

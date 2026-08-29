@@ -1165,6 +1165,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // ADR-0173 / issue #3627: gsc's generalized variadic carriers
+            // cover the span types too (`...ReadOnlySpan[T]` ≡ C#13's
+            // preferred `params ReadOnlySpan<T>` form).
+            if (IsSpanParamsCollectionType(named))
+            {
+                return true;
+            }
+
             return named.OriginalDefinition.SpecialType is
                 SpecialType.System_Collections_Generic_IEnumerable_T or
                 SpecialType.System_Collections_Generic_ICollection_T or
@@ -1226,8 +1234,32 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateArguments(arguments);
             }
 
+            // ADR-0173 / issue #3627: a SOURCE-DECLARED callee's params
+            // collection now translates as a gsc variadic carrier
+            // (`...X[T]`), so the expanded call site stays in its natural
+            // form — gsc packs the trailing arguments into the carrier
+            // exactly as C# does. Referenced (BCL) callees keep the
+            // pre-existing lowerings below: gsc does not yet expand imported
+            // [ParamCollection] members.
+            bool sourceDeclaredCallee = targetMethod?.DeclaringSyntaxReferences.IsEmpty == false;
+            if (sourceDeclaredCallee && IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type))
+            {
+                return this.TranslateArguments(arguments);
+            }
+
+            // Referenced span-params callees (e.g. BCL
+            // `Task.WhenAll(params ReadOnlySpan<Task>)`) keep the pre-#1901
+            // fallback: emit the natural expanded call and let gsc bind the
+            // array/IEnumerable sibling overload via [ParamArray] expansion.
             bool spanObjectCreation = callSyntax is BaseObjectCreationExpressionSyntax
                 && IsSpanParamsCollectionType(paramsCollectionArg.Parameter.Type);
+            if (!sourceDeclaredCallee
+                && !spanObjectCreation
+                && IsSpanParamsCollectionType(paramsCollectionArg.Parameter.Type))
+            {
+                return this.TranslateArguments(arguments);
+            }
+
             if (!IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type)
                 && !spanObjectCreation)
             {

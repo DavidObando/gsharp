@@ -104,6 +104,7 @@ internal sealed class WellKnownReferences
     // parameters as annotated instead of inferring the assembly default.
     private MemberReferenceHandle? nullableAttributeByteCtorRef;
     private MemberReferenceHandle? tupleElementNamesAttributeCtorRef;
+    private MemberReferenceHandle? paramCollectionAttributeCtorRef;
     private MemberReferenceHandle? nullableAttributeByteArrayCtorRef;
     private MemberReferenceHandle? nullableContextAttributeByteCtorRef;
 
@@ -652,6 +653,44 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.nullableAttributeByteArrayCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0173 / issue #3627: returns the cached MemberRef for
+    /// <c>System.Runtime.CompilerServices.ParamCollectionAttribute()</c> —
+    /// the C#13 params-collections marker stamped on a variadic parameter
+    /// whose carrier is a non-array collection (<c>...List[T]</c>,
+    /// <c>...ReadOnlySpan[T]</c>, …), so C# consumers see the method as a
+    /// C#13 <c>params X&lt;T&gt;</c> member.
+    /// </summary>
+    /// <returns>
+    /// The cached <see cref="MemberReferenceHandle"/>, or
+    /// <see langword="default"/> when the attribute can't be resolved from
+    /// the reference closure (pre-.NET 9 TFMs).
+    /// </returns>
+    public MemberReferenceHandle GetParamCollectionAttributeCtorRef()
+    {
+        if (this.paramCollectionAttributeCtorRef.HasValue)
+        {
+            return this.paramCollectionAttributeCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.ParamCollectionAttribute", requireExternalVisibility: false, out var attrType))
+        {
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), p => { });
+
+        this.paramCollectionAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.paramCollectionAttributeCtorRef.Value;
     }
 
     /// <summary>

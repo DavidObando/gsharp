@@ -193,6 +193,32 @@ internal sealed class CustomAttributeEncoder
     }
 
     /// <summary>
+    /// ADR-0173 / issue #3627: emits
+    /// <c>System.Runtime.CompilerServices.ParamCollectionAttribute</c> on a
+    /// Param row — the C#13 params-collections marker for a variadic
+    /// parameter whose carrier is a non-array collection. Silently no-ops
+    /// when the attribute type can't be resolved (pre-.NET 9 TFMs).
+    /// </summary>
+    /// <param name="paramHandle">The Param row to attach the attribute to.</param>
+    public void EmitParamCollectionAttributeOnParameter(ParameterHandle paramHandle)
+    {
+        var ctorRef = this.wellKnown.GetParamCollectionAttributeCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: paramHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
     /// Issue #834: emits
     /// <c>System.Runtime.CompilerServices.NullableAttribute</c> on a Param row
     /// using either the single-byte ctor (when <paramref name="flags"/> has

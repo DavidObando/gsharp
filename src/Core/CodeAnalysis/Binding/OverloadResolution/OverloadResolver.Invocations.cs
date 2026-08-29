@@ -472,7 +472,7 @@ internal sealed partial class OverloadResolver
         {
             // Issue #1630: pack/pass-through through the canonical helper
             // (applies #1493 element coercion when packing).
-            var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.Arity - 1];
+            var sliceType = functionType.ParameterTypes[functionType.Arity - 1];
             var hasElementErrors = false;
             Func<int, TextLocation> argumentLocation = argumentIndex => syntax.Arguments[argumentIndex].Location;
             permutedArgs = PackOrPassThroughVariadicArguments(
@@ -623,7 +623,7 @@ internal sealed partial class OverloadResolver
                 syntax,
                 arguments,
                 fixedCount,
-                (SliceTypeSymbol)variadicParameter.Type,
+                variadicParameter.Type,
                 variadicParameter.Name,
                 i =>
                 {
@@ -1609,18 +1609,26 @@ internal sealed partial class OverloadResolver
                     var paramType = method.Parameters[i + parameterOffset].Type;
                     if (isVariadic
                         && i + parameterOffset == method.Parameters.Length - 1
-                        && paramType is SliceTypeSymbol variadicSlice)
+                        && VariadicCarriers.GetElementType(paramType) is { } variadicInferElement
+                        && variadicInferElement != TypeSymbol.Error)
                     {
                         var argType = permutedArguments[i].Type;
                         if (permutedArguments.Length - i == 1 && argType is SliceTypeSymbol passThroughSlice)
                         {
-                            inferTypeArguments(variadicSlice.ElementType, passThroughSlice.ElementType, substitution);
+                            inferTypeArguments(variadicInferElement, passThroughSlice.ElementType, substitution);
+                        }
+                        else if (permutedArguments.Length - i == 1
+                            && Conversion.Classify(argType, paramType).IsImplicit)
+                        {
+                            // Carrier pass-through (`f(existingList)`): let the
+                            // general structural walk unify the carrier shapes.
+                            inferTypeArguments(paramType, argType, substitution);
                         }
                         else
                         {
                             for (var j = i; j < permutedArguments.Length; j++)
                             {
-                                inferTypeArguments(variadicSlice.ElementType, permutedArguments[j].Type, substitution);
+                                inferTypeArguments(variadicInferElement, permutedArguments[j].Type, substitution);
                             }
                         }
 
@@ -1683,10 +1691,10 @@ internal sealed partial class OverloadResolver
             }
 
             var variadicParam = method.Parameters[method.Parameters.Length - 1];
-            var paramSliceType = (SliceTypeSymbol)variadicParam.Type;
+            var paramCarrierType = variadicParam.Type;
             var sliceType = substitution != null
-                ? (SliceTypeSymbol)substituteType(paramSliceType, substitution)
-                : paramSliceType;
+                ? substituteType(paramCarrierType, substitution)
+                : paramCarrierType;
             var trailingCount = permutedArguments.Length - fixedCallableParamCount;
 
             var passThrough = trailingCount == 1

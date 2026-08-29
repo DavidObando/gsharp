@@ -723,7 +723,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundExpression> permutedArgs = arguments;
         if (fldIsVariadic)
         {
-            var sliceType = (SliceTypeSymbol)functionType.ParameterTypes[functionType.ParameterTypes.Length - 1];
+            var sliceType = functionType.ParameterTypes[functionType.ParameterTypes.Length - 1];
             var hasVariadicErrors = false;
 
             // Issue #1823: route through the #1630 canonical helper so

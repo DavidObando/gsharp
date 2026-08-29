@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
@@ -172,9 +173,11 @@ namespace Corpus.Issue1901
 }
 ");
 
-        Assert.Contains("func Total(values List[int32]) int32", rendered, StringComparison.Ordinal);
-        Assert.Contains("let zero = Total(List[int32]())", rendered, StringComparison.Ordinal);
-        Assert.Contains("let three = Total(List[int32]{ 1, 2, 3 })", rendered, StringComparison.Ordinal);
+        // ADR-0173 / issue #3627: the params collection keeps its carrier
+        // after the ellipsis and expanded calls stay natural — gsc packs.
+        Assert.Contains("func Total(values ...List[int32]) int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("let zero = Total()", rendered, StringComparison.Ordinal);
+        Assert.Contains("let three = Total(1, 2, 3)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -235,25 +238,23 @@ namespace Corpus.Issue1901
 }
 ");
 
-        Assert.Contains("func JoinParts(parts IEnumerable[string]) string", rendered, StringComparison.Ordinal);
-        Assert.Contains(
-            "let joined = JoinParts(cast[IEnumerable[string]](List[string]{ \"a\", \"b\", \"c\" }))",
-            rendered,
-            StringComparison.Ordinal);
+        // ADR-0173 / issue #3627: carrier declaration + natural expanded call.
+        Assert.Contains("func JoinParts(parts ...IEnumerable[string]) string", rendered, StringComparison.Ordinal);
+        Assert.Contains("let joined = JoinParts(\"a\", \"b\", \"c\")", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     /// <summary>
-    /// A <c>params ReadOnlySpan&lt;T&gt;</c> callee (C#13's PREFERRED params-collection
-    /// overload) has no gsc construction form at an expanded call site — gsc can
-    /// only build a <c>List[T]{...}</c> literal, and a <c>List&lt;T&gt;</c> does not
-    /// convert to <c>ReadOnlySpan&lt;T&gt;</c>. Must gap loudly, not silently emit a
-    /// type-mismatched call.
+    /// ADR-0173 / issue #3627: a <c>params ReadOnlySpan&lt;T&gt;</c> callee
+    /// (C#13's PREFERRED params-collection overload) now translates to the
+    /// gsc span carrier <c>...ReadOnlySpan[T]</c> with natural expanded
+    /// calls — the wall that kept Cs2Gs.Tests translate-red in the #3501
+    /// selfmig nightly.
     /// </summary>
     [Fact]
-    public void ParamsCollection_ReadOnlySpan_ExpandedCall_ReportsUnsupported()
+    public void ParamsCollection_ReadOnlySpan_TranslatesAsSpanCarrier()
     {
-        (_, TranslationContext context) = Translate(@"
+        (CompilationUnit unit, TranslationContext context) = Translate(@"
 using System;
 namespace Corpus.Issue1901
 {
@@ -278,14 +279,17 @@ namespace Corpus.Issue1901
 }
 ");
 
-        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
-            && d.Message.Contains("ReadOnlySpan", StringComparison.Ordinal));
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        string rendered = GSharpPrinter.Print(unit);
+        Assert.Contains("func Total(values ...ReadOnlySpan[int32]) int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("let three = Total(1, 2, 3)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void ParamsCollection_Span_ExpandedCall_ReportsUnsupported()
+    public void ParamsCollection_Span_TranslatesAsSpanCarrier()
     {
-        (_, TranslationContext context) = Translate(@"
+        (CompilationUnit unit, TranslationContext context) = Translate(@"
 using System;
 namespace Corpus.Issue1901
 {
@@ -310,8 +314,11 @@ namespace Corpus.Issue1901
 }
 ");
 
-        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
-            && d.Message.Contains("Span", StringComparison.Ordinal));
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        string rendered = GSharpPrinter.Print(unit);
+        Assert.Contains("func Total(values ...Span[int32]) int32", rendered, StringComparison.Ordinal);
+        Assert.Contains("let three = Total(1, 2, 3)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     /// <summary>

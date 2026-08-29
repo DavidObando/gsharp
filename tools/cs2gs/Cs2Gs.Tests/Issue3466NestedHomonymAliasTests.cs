@@ -127,12 +127,17 @@ public sealed class Issue3466NestedHomonymAliasTests
             "import GenericList = System.Collections.Generic.List",
             printed,
             StringComparison.Ordinal);
+
+        // ADR-0173: params collections stay variadic (`...GenericList[int32]`)
+        // and source-declared callees are called in natural expanded form; the
+        // collection-expression argument passes through as the alias-spelled
+        // carrier literal.
         Assert.Contains(
-            "func Total(values GenericList[int32]) int32",
+            "func Total(values ...GenericList[int32]) int32",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Total(GenericList[int32]{ 1, 2, 3 })",
+            "Total(1, 2, 3)",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -140,7 +145,7 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "TotalInterface(cast[IEnumerable[int32]](GenericList[int32]{ 6, 7 }))",
+            "TotalInterface(6, 7)",
             printed,
             StringComparison.Ordinal);
 

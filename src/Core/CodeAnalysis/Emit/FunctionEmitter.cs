@@ -726,14 +726,23 @@ internal sealed class FunctionEmitter
                 this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(paramHandle);
             }
 
-            // ADR-0101 / issue #799: emit [ParamArrayAttribute] on the
-            // trailing variadic parameter so C#/F# consumers expand the
-            // argument list at the call site exactly as they would for a
-            // C# `params T[]` method. The variadic flag is propagated
-            // through the ParameterSymbol by DeclarationBinder.
+            // ADR-0101 / issue #799: emit [ParamArrayAttribute] on a
+            // trailing array-carrier variadic parameter so C#/F# consumers
+            // expand the argument list at the call site exactly as they
+            // would for a C# `params T[]` method. ADR-0173 / issue #3627: a
+            // non-array collection carrier (`...List[T]`,
+            // `...ReadOnlySpan[T]`, …) instead stamps C#13's
+            // [ParamCollectionAttribute], matching `params X<T>`.
             if (p.IsVariadic)
             {
-                this.outer.customAttrEncoder.EmitParamArrayAttributeOnParameter(paramHandle);
+                if (Binding.VariadicCarriers.GetCarrierKind(p.Type) == Binding.VariadicCarriers.CarrierKind.Array)
+                {
+                    this.outer.customAttrEncoder.EmitParamArrayAttributeOnParameter(paramHandle);
+                }
+                else
+                {
+                    this.outer.customAttrEncoder.EmitParamCollectionAttributeOnParameter(paramHandle);
+                }
             }
 
             paramHandles.Add((p, paramHandle, paramFlagsList[flagsIndex++]));

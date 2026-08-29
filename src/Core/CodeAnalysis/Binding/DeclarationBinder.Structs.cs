@@ -310,7 +310,7 @@ internal sealed partial class DeclarationBinder
                 var isVariadic = paramSyntax.IsVariadic;
                 if (isVariadic && paramType != TypeSymbol.Error)
                 {
-                    paramType = SliceTypeSymbol.Get(paramType);
+                    paramType = VariadicCarriers.ResolveDeclaredParameterType(paramType);
                 }
 
                 if (!seenFieldNames.Add(paramName))
@@ -1031,7 +1031,7 @@ internal sealed partial class DeclarationBinder
                         var isVariadic = parameterSyntax.IsVariadic;
                         if (isVariadic && parameterType != TypeSymbol.Error)
                         {
-                            parameterType = SliceTypeSymbol.Get(parameterType);
+                            parameterType = VariadicCarriers.ResolveDeclaredParameterType(parameterType);
                         }
 
                         var parameterRefKind = conversions.BindAndValidateParameterRefKind(
@@ -2400,7 +2400,7 @@ internal sealed partial class DeclarationBinder
                         var isVariadic = parameterSyntax.IsVariadic;
                         if (isVariadic && parameterType != TypeSymbol.Error)
                         {
-                            parameterType = SliceTypeSymbol.Get(parameterType);
+                            parameterType = VariadicCarriers.ResolveDeclaredParameterType(parameterType);
                         }
 
                         var parameterRefKind = conversions.BindAndValidateParameterRefKind(
