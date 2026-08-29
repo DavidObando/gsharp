@@ -966,9 +966,23 @@ public partial class Parser
 
     private bool LooksLikeParenthesizedArrowFunctionTypeClauseStart()
     {
-        return Current.Kind == SyntaxKind.OpenParenthesisToken
-            && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
-            && LooksLikeArrowFunctionTypeClauseStart(1);
+        if (Current.Kind != SyntaxKind.OpenParenthesisToken
+            || Peek(1).Kind != SyntaxKind.OpenParenthesisToken
+            || !LooksLikeArrowFunctionTypeClauseStart(1))
+        {
+            return false;
+        }
+
+        // Issue #3639: the ADR-0137 parenthesized form `((T) -> R)?` wraps
+        // EXACTLY ONE arrow type — the outer group never contains a top-level
+        // comma. When it does, the outer parens are a TUPLE type whose first
+        // element happens to be a parenthesized arrow type
+        // (`((int32) -> int32, (int32) -> int32)`), so fall through to the
+        // tuple-type parse, whose element parses re-dispatch on the arrow
+        // look-ahead per element. Only the comma flag matters here — the
+        // scan's arrow verdict is about the token AFTER the outer group.
+        _ = LooksLikeArrowFunctionTypeClauseStart(0, out var outerHasTopLevelComma);
+        return !outerHasTopLevelComma;
     }
 
     private bool LooksLikeArrowFunctionTypeClauseStart(int startOffset)
