@@ -2927,8 +2927,21 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(ExpressionSyntax use)
         {
+            // Issue #3644: only a SYNTACTICALLY nullable result shape (`a?.b`,
+            // `a ?? nullableFallback`, `cond ? a : b` with a nullable arm) keeps
+            // its nullable lambda result unasserted — those forms introduce
+            // nullability the C# author wrote deliberately. A value whose
+            // nullability comes solely from the DECLARED `T?` annotation of the
+            // bound member (e.g. the annotated-BCL `Path.GetDirectoryName(...)`)
+            // was compiled by oblivious C# under the target delegate's NON-NULL
+            // return contract (`Func<string, string>`), so it must be bridged
+            // with `!!` like every other tainted forward — otherwise gsc infers
+            // the lambda result `T?` and the divergence cascades into every
+            // downstream sink (`Select(...)` element flows, `foreach` variables,
+            // non-null arguments: the migrated Cs2Gs.Pipeline
+            // `PrepareTemporaryBuildProps` GS0154 walls).
             if (IsNullOrSuppressedNull(use)
-                || this.IsNullableInitializer(use)
+                || this.IsSyntacticallyNullableResultShape(use)
                 || !this.IsObliviousCompilation()
                 || this.IsWithinExpressionTreeLambda(use)
                 || this.FindResultLambda(use) is not { } lambda

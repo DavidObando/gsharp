@@ -650,6 +650,37 @@ public sealed partial class CSharpToGSharpTranslator
                 && symbolType.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
+        // Issue #3644: the subset of <see cref="IsNullableInitializer"/> whose
+        // nullability is written into the EXPRESSION SHAPE itself (`a?.b`,
+        // `a ?? nullableFallback`, `cond ? a : b` with a nullable arm) rather
+        // than inherited from a bound member's declared `T?` annotation. The
+        // runtime-lambda result seam keeps these shapes unasserted (their
+        // nullability is deliberate) while a flat declared-annotated member
+        // read forwarded as the lambda result is bridged with `!!` to preserve
+        // the oblivious C# delegate's non-null return contract.
+        private bool IsSyntacticallyNullableResultShape(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax paren:
+                    return this.IsSyntacticallyNullableResultShape(paren.Expression);
+
+                case ConditionalAccessExpressionSyntax:
+                    return true;
+
+                case BinaryExpressionSyntax coalesce
+                    when coalesce.IsKind(SyntaxKind.CoalesceExpression):
+                    return this.IsNullableInitializer(coalesce.Right);
+
+                case ConditionalExpressionSyntax ternary:
+                    return this.IsNullableInitializer(ternary.WhenTrue)
+                        || this.IsNullableInitializer(ternary.WhenFalse);
+
+                default:
+                    return false;
+            }
+        }
+
         // Issue #1072/#2113/#914: the single translator-side promotion decision
         // for a reference-typed symbol position. Declaration rendering and sink
         // `!!` insertion both route through this helper so a tainted interface/
