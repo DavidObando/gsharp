@@ -173,6 +173,57 @@ public class NamedTupleMetadataEmitTests
         Assert.Equal($"3{Environment.NewLine}5{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void GsToGsRoundTrip_AwaitedTaskOfNamedTuple_KeepsNames()
+    {
+        // The imported awaitable arrives wrapped in nullability metadata
+        // (NullabilityAnnotatedTypeSymbol); the await element derivation must
+        // unwrap to the symbolic Task so `t.line` still binds — and the
+        // nullable named tuple (`(line int32, gitRef string?)?`) must survive
+        // an if-let unwrap of the awaited value.
+        var libSource = """
+            package NamedAsyncLib
+            import System.Threading.Tasks
+
+            class Fetcher {
+                shared {
+                    async func Find() (line int32, column int32) {
+                        await Task.Delay(1)
+                        return (3, 5)
+                    }
+
+                    async func TryFind(ok bool) (line int32, gitRef string?)? {
+                        await Task.Delay(1)
+                        if ok {
+                            return (7, "main")
+                        }
+
+                        return nil
+                    }
+                }
+            }
+            """;
+        var appSource = """
+            package App
+            import System
+            import NamedAsyncLib
+
+            async func run() {
+                let t = await Fetcher.Find()
+                Console.WriteLine(t.line)
+                if let r = await Fetcher.TryFind(true) {
+                    Console.WriteLine(r.line)
+                    Console.WriteLine(r.gitRef)
+                }
+            }
+
+            run().Wait()
+            """;
+
+        var output = CompileAndRunWithLibrary(libSource, appSource, libraryName: "NamedAsyncLib");
+        Assert.Equal($"3{Environment.NewLine}7{Environment.NewLine}main{Environment.NewLine}", output);
+    }
+
     private static string[] ReadNames(ICustomAttributeProvider provider)
     {
         var data = FindAttribute(provider);
@@ -205,13 +256,13 @@ public class NamedTupleMetadataEmitTests
         return Assembly.Load(File.ReadAllBytes(outPath));
     }
 
-    private static string CompileAndRunWithLibrary(string libSource, string appSource)
+    private static string CompileAndRunWithLibrary(string libSource, string appSource, string libraryName = "namedlib")
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_ntuple_rt_").FullName;
         try
         {
             var libSrc = Path.Combine(tempDir, "lib.gs");
-            var libDll = Path.Combine(tempDir, "namedlib.dll");
+            var libDll = Path.Combine(tempDir, libraryName + ".dll");
             var appSrc = Path.Combine(tempDir, "app.gs");
             var appDll = Path.Combine(tempDir, "app.dll");
             File.WriteAllText(libSrc, libSource);
