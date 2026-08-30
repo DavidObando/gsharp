@@ -848,6 +848,28 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #3694: C# gives a declaration two nullability contracts, an
+            // INPUT and an OUTPUT one, and `[AllowNull]` keeps the output
+            // non-nullable while widening the input — `[AllowNull] T P { get;
+            // set; }` is exactly "the setter takes T?, the getter returns T",
+            // the shape of a property whose setter normalises `null` to a
+            // default. G# has a SINGLE nullability per declaration (ADR-0155,
+            // Kotlin-style), so the only rendering that still accepts the
+            // writes the C# accepts is `T?`; anything else turns a supported
+            // assignment into an unrepresentable one (gsc GS0155 at the write —
+            // and there is no `!!` for "assign nil to a non-nil target", so
+            // there is nothing to bridge with at the use site).
+            //
+            // Being attribute-driven, this is decided by the DECLARATION alone:
+            // no consumer evidence, no taint fixpoint, the same answer in every
+            // compilation of a run. That is what makes it safe across projects,
+            // where a consumer's promotion decision could otherwise disagree
+            // with the contract the referenced project actually emitted.
+            if (ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(symbol))
+            {
+                return true;
+            }
+
             // EF Core treats reference properties from nullable-oblivious C#
             // entity types as optional. Preserve that model when translating
             // DbSet<T> entities; emitting a non-nullable G# property would make
@@ -1059,6 +1081,17 @@ public sealed partial class CSharpToGSharpTranslator
             // the target never remains non-nullable and nullable arguments
             // need no `!!` bridge.
             if (this.InAnalyzerApiMode && Analyzers.RoslynAnalyzerApiMap.IsNamespaceSymbolType(targetType))
+            {
+                return false;
+            }
+
+            // Issue #3694: an `[AllowNull]` target is promoted from its own
+            // declaration, so it widens in the project that emits it whether or
+            // not that project is the one being translated here. Unlike the
+            // evidence-driven promotions below, this one needs no
+            // same-compilation gate — the referenced project's migrated
+            // declaration is nullable too, so a nullable value needs no bridge.
+            if (ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(targetSymbol))
             {
                 return false;
             }

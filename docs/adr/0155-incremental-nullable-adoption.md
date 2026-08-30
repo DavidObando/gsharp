@@ -246,3 +246,17 @@ A6's `classify` split — annotation-only versus behaviour-capable — is the ri
 `test/Core.Tests/Baselines/refactoring-baseline.json` is the cheapest strong oracle available: a byte-for-byte PE comparison that an annotation-only change cannot move. It stayed unchanged across the entire migration, which is what makes the emit-side claim credible.
 
 Finally: any detector written to audit these shapes needs a mutation witness (ADR-0154). A first attempt at auditing the migration's 588 `Invariant.Required` sites reported zero hits and was simply broken — its method segmenter mis-parsed, and re-introducing a known defect failed to trip it. **A zero from an unwitnessed detector carries no information.**
+
+## Amendment (2026-08-30)
+
+### A9 — A null-accepting setter must say `[AllowNull]`; G# has only one contract per declaration
+
+A5 leaves production annotated and the ~489k-line test tree oblivious, and A4 records the *read* direction of what that costs. Issue #3694 is the **write** direction, and it is the sharper one.
+
+`Compilation.DebugInformation` is declared `DebugInformationOptions` — non-nullable — and its setter is `value ?? new DebugInformationOptions()`, i.e. it deliberately accepts `null`. Its own doc comment says so. An oblivious test writes `DebugInformation = null` and the C# compiler reports **nothing**: the write crosses a nullable-context boundary, so nothing ever checks the annotation against the code that contradicts it. The annotation is simply wrong, and the build cannot say so — a fifth entry in A8's catalogue of what the build cannot check, differing from the other four in that the *evidence* lives in a project the checker does not check.
+
+> **Rule.** A setter that normalises `null` states that with `[AllowNull]` (`System.Diagnostics.CodeAnalysis`). C# splits a declaration into an input and an output contract; `[AllowNull] T P { get; set; }` is exactly "the setter takes `T?`, the getter returns `T`". Writing `T` alone claims a contract the setter does not enforce and the compiler will not test.
+
+This is not only hygiene. G#, like Kotlin (ADR-0001), has **one** nullability per declaration — there is no separate write contract to widen, and no `!!` that can bridge "assign `nil` to a non-`nil` target"; `!!` forgives a nullable *value*, and a literal `nil` has nothing to forgive. So a null-accepting C# setter has exactly one faithful G# rendering, `T?`, and cs2gs promotes any source declaration carrying `[AllowNull]` to it (`ObliviousNullabilityAnalyzer.HasAllowNullWriteContract`). The getter widens with it and reads across the corpus pick up `!!` through the existing use-site pass; that is sound precisely because the setter's normalisation means the getter never returns `nil`.
+
+The alternative — inferring the same promotion from the fact that *some oblivious consumer somewhere* writes `null` — was rejected. It makes a library's migrated public surface depend on its consumers, it can disagree between the project that emits the declaration and the project that writes to it, and it re-derives, from weaker evidence, a fact the author can simply state. The attribute is decided by the declaration alone, so every compilation in a migration run computes the same answer. Metadata-only declarations are excluded for the same reason: a referenced assembly's contract is already emitted, and gsc imports `[AllowNull] T` as plain `T`.

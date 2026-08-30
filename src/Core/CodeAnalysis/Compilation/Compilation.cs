@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -103,6 +104,7 @@ public class Compilation
     /// conditional methods are elided by default unless the embedder opts
     /// in. Setting <c>null</c> is normalised to the empty set.
     /// </summary>
+    [AllowNull]
     public ImmutableHashSet<string> PreprocessorSymbols
     {
         get => preprocessorSymbols;
@@ -117,6 +119,7 @@ public class Compilation
     /// opt in produce bit-for-bit identical PE output. Setting
     /// <see langword="null"/> is normalised to a fresh default instance.
     /// </summary>
+    [AllowNull]
     public DebugInformationOptions DebugInformation
     {
         get => debugInformation;
