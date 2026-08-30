@@ -47,6 +47,23 @@ internal sealed partial class ExpressionBinder
             return BindDereferenceExpression(syntax);
         }
 
+        // Issue #3684 (family F14) / ECMA-334 §12.9.3: the lexer types a
+        // decimal literal one past int.MaxValue as `uint32` (it does not fit
+        // int32), so `-2147483648` — plain `int32.MinValue`, and how every C#
+        // corpus spells it — bound as a negation of uint32 and was rejected
+        // outright with GS0128 (`-` is not defined for uint32). C# resolves
+        // this at the token level: a decimal literal whose value is exactly
+        // 2^31 and which sits IMMEDIATELY under a unary minus is an `int32`.
+        // The enum-member folder (DeclarationBinder.TryFoldEnumMemberValue,
+        // issue #1912) already carried this rule; mirror it for the general
+        // expression position so the two agree.
+        if (syntax.OperatorToken.Kind == SyntaxKind.MinusToken
+            && syntax.Operand is LiteralExpressionSyntax { Value: uint negatedMagnitude }
+            && negatedMagnitude == (uint)int.MaxValue + 1)
+        {
+            return new BoundLiteralExpression(null, int.MinValue, TypeSymbol.Int32);
+        }
+
         var boundOperand = BindExpression(syntax.Operand);
 
         if (boundOperand.Type == TypeSymbol.Error)

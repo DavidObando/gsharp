@@ -511,6 +511,29 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #3684 (family F14): `-2147483648` is `int.MinValue` in C#
+    /// (§12.9.3 types the decimal literal 2147483648 as `int` when it sits
+    /// immediately after a unary minus), but the LITERAL TOKEN's lexed value is
+    /// the `uint` 2147483648. Deriving the width suffix from the token value
+    /// emitted `-2147483648U`, and G# has no unary `-` on uint32 (GS0128).
+    /// </summary>
+    [Fact]
+    public void NegatedIntMinValueLiteral_GetsNoUnsignedSuffix()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class Bounds
+    {
+        public static int Min() => -2147483648;
+    }
+}");
+
+        Assert.Contains("-2147483648", printed);
+        Assert.DoesNotContain("2147483648U", printed);
+    }
+
+    /// <summary>
     /// ADR-0115 §B: a bare catch-all `catch { }` (no declaration) has no G# form;
     /// the translator synthesizes the required typed binder
     /// `catch (__caught Exception) { }`.

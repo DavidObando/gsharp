@@ -147,6 +147,20 @@ StatusCode.DefaultError == StatusCode.ServerError
         return Assert.Single(globalScope.Enums);
     }
 
+    [Fact]
+    public void MinValueLiteral_InExpressionPosition_BindsAndEvaluatesAsInt32()
+    {
+        // Issue #3684 (family F14): the same lattice quirk applies OUTSIDE an
+        // enum-member initializer — the enum folder special-cased
+        // `-2147483648` but the general expression binder still saw a negation
+        // of `uint32` and reported GS0128, so every migrated
+        // `Assert.Equal(-2147483648, …)` failed to compile.
+        var result = Evaluate("-2147483648");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(int.MinValue, result.Value);
+    }
+
     private static ImmutableArray<Diagnostic> BindDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

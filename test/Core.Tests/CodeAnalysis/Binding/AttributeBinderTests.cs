@@ -1073,6 +1073,68 @@ struct Point {
     }
 
     [Fact]
+    public void AttributeArgument_EnumFlagsOr_IsFoldedAsConstant()
+    {
+        // Issue #3684 (family F11): `AttributeTargets.Method |
+        // AttributeTargets.Class` is a compile-time constant per ECMA-335
+        // II.23.3 (the blob carries the folded underlying primitive), but it
+        // parses as a binary expression and so missed the enum-literal
+        // fallthrough in TryBindAttributeArgument — GS0202.
+        var source = """
+            import System
+
+            @Attribute
+            @AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple: true, Inherited: true)
+            class Marker {
+            }
+
+            @Marker
+            func Foo() {
+            }
+
+            @Marker
+            class Boxed {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0202");
+
+        // The folded ValidOn must actually cover BOTH targets — a fold that
+        // silently kept only the first operand would report GS0209 on one of
+        // the two applications.
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0209");
+    }
+
+    [Fact]
+    public void AttributeArgument_ArrayOfTypeOfSameCompilationType_IsFoldedAsConstant()
+    {
+        // Issue #3684 (family F11): a 1-D array of `typeof` is explicitly
+        // legal, but an element naming a type declared in THIS compilation has
+        // no CLR `Type` yet — the binder hands back the `TypeSymbol`
+        // placeholder, which a `Type[]` container could not hold, so
+        // `Array.SetValue` threw and the whole argument was rejected (GS0202).
+        var source = """
+            import System
+
+            class Generators {
+            }
+
+            @Attribute
+            @AttributeUsage(AttributeTargets.All)
+            class ArbitraryAttribute {
+            }
+
+            @Arbitrary([]Type{typeof(Generators), typeof(string)})
+            func Foo() {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0202");
+    }
+
+    [Fact]
     public void Conditional_On_Non_Void_Function_Reports_GS0212()
     {
         // Issue #176 / ADR-0047 §6: `[Conditional]` requires a void return

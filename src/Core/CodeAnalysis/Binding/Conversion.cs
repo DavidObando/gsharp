@@ -1781,6 +1781,22 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// Returns whether <c>to(fromValue)</c> is a checked CLR <em>unboxing</em>
+    /// cast — the value-type mirror of
+    /// <see cref="HasCheckedReferenceConversion"/>. Issue #3684 (family F8):
+    /// the conversion-call spelling <c>T(expr)</c> over a value-typed <c>T</c>
+    /// (e.g. <c>ImmutableArray[P](method.Invoke(…))</c>, the G# form of a C#
+    /// <c>(ImmutableArray&lt;P&gt;)</c> cast) needs this alongside the
+    /// reference case, because the constructor-overload fallback in
+    /// <c>ExpressionBinder</c> can only offer a conversion it can name.
+    /// </summary>
+    /// <param name="from">Static source type.</param>
+    /// <param name="to">Requested target type.</param>
+    /// <returns><see langword="true"/> for an explicit checked unboxing conversion.</returns>
+    internal static bool HasCheckedUnboxingConversion(TypeSymbol? from, TypeSymbol? to)
+        => HasExplicitUnboxingConversion(from, to);
+
+    /// <summary>
     /// Returns whether <c>to(fromValue)</c> is a checked CLR reference cast.
     /// The conversion preserves a null reference, returns the target reference
     /// on success, and throws <see cref="InvalidCastException"/> for an
