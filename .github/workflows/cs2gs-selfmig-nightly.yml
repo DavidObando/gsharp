@@ -3,13 +3,34 @@ name: cs2gs-selfmig-nightly
 # Issue #3501 Track C: the repo self-migration gate. Migrates the entire
 # GSharp repository C# → G# nightly and enforces the ratcheting baseline in
 # tools/cs2gs/selfmig-baseline.json — a green-count floor plus readability
-# ceilings (synthetic labels, __local_ lifts, >300-char lines) over the
-# migrated output. Track A/B improvements tighten the baseline in the same
-# PR, so the migration goal ratchets instead of drifting.
+# ceilings (synthetic labels, __local_ lifts, >300-char lines, !! assertions)
+# over the migrated output. Track A/B improvements tighten the baseline in the
+# same PR, so the migration goal ratchets instead of drifting.
 #
-# Too expensive for the PR gates (~40+ minutes: 55 projects through
-# translate + SDK compile + ilverify + parity); scheduled clear of
-# cs2gs-nightly (07:17), windows-nightly (09:23), macos-nightly (11:23).
+# Issue #3668: the gate outgrew a single job. Once a cascade clears, apps stop
+# short-circuiting at translate and start paying for compile + ILVerify +
+# test-parity, and the serial run blew past two hours after 23 of 51 apps.
+# It now runs as three jobs:
+#
+#   migrate  — ONE whole-repository translate pass. Translation is NOT
+#              sharded: linked sources (e.g. test/Shared/EmittedOracle.cs) are
+#              compiled into several projects and TranslateStage cross-checks
+#              that they translate identically in all of them; that guard only
+#              exists when every project translates in the same run.
+#   validate — N shards, each downloading the migrated tree and running
+#              compile/ILVerify/test-parity for its own apps. These stages are
+#              independent per app, which is what makes them shardable. Shards
+#              are selected with `cs2gs validate --app`, NEVER with --exclude:
+#              excluding a project another app project-references breaks
+#              reference resolution and manufactures phantom cascades.
+#   gate     — merges the shard results with the migrate pass's translate
+#              results, replays the shards' `!!` polish rewrites onto the
+#              migrated tree, re-measures the readability metrics and applies
+#              the baseline. Runs even when shards fail, so a red run still
+#              reports a number.
+#
+# build/run-cs2gs-selfmig.sh remains the equivalent single-job reference path
+# for local proofs.
 
 on:
   schedule:
@@ -20,17 +41,21 @@ env:
   # See build.yml: parallel MSBuild nodes corrupt $GITHUB_ENV via
   # Nerdbank.GitVersioning's GitBuildVersion* emission.
   NBGV_SetCloudBuildVersionVars: false
+  SELFMIG_SHARDS: '6'
+  # Pinned rather than left to the scripts' ${TMPDIR:-/tmp} default: the
+  # artifact paths below are absolute, and the migrate job's run directory is
+  # handed to the shards as an absolute path, so all three jobs must agree.
+  SELFMIG_GATE_ROOT: /tmp/gsharp-cs2gs-selfmig
 
 jobs:
-  selfmig:
+  migrate:
     runs-on: ubuntu-latest
-    # Issue #3668: an app that fails at TRANSLATE costs seconds; one that gets
-    # past it pays for compile + ILVerify + test-parity. Clearing the #3666
-    # cascade (PR #3667) moved ~19 apps from "fails immediately" to "runs the
-    # full pipeline", so the run blew through the old 120-minute budget after
-    # only 23 of 51 apps and was cancelled with no verdict. Raised so the gate
-    # can report at all; a sharded matrix is the durable fix (#3668).
-    timeout-minutes: 360
+    # Generous by design: this is the one job that cannot be split, and a
+    # nightly's wall time is cheap. PR #3669 raised the old single job to 360;
+    # the translate pass alone is a fraction of that, but keep the headroom.
+    timeout-minutes: 240
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
 
     steps:
       - uses: actions/checkout@v5
@@ -51,17 +76,122 @@ jobs:
       - name: Build cs2gs (Release)
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph
 
-      - name: Run self-migration gate
-        run: ./build/run-cs2gs-selfmig.sh
+      - name: Translate the repository
+        run: ./build/run-cs2gs-selfmig-migrate.sh
 
-      - name: Upload run artifacts
+      - name: Plan validation shards
+        id: matrix
+        run: |
+          run_dir=$(cat /tmp/gsharp-cs2gs-selfmig/migrate-run-dir.txt)
+          matrix=$(python3 build/generate-selfmig-shard-matrix.py \
+            --run-dir "$run_dir" --shards "$SELFMIG_SHARDS")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+      - name: Upload migrated tree
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-selfmig-migrated
+          retention-days: 3
+          include-hidden-files: true
+          path: |
+            /tmp/gsharp-cs2gs-selfmig/migrated/**
+            /tmp/gsharp-cs2gs-selfmig/runs/**
+            /tmp/gsharp-cs2gs-selfmig/migrate.log
+            /tmp/gsharp-cs2gs-selfmig/metrics.json
+            /tmp/gsharp-cs2gs-selfmig/migrate-run-dir.txt
+
+  validate:
+    name: validate (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    needs: migrate
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.migrate.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build cs2gs (Release)
+        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj --configuration Release --no-restore -graph
+
+      - name: Download migrated tree
+        uses: actions/download-artifact@v5
+        with:
+          name: cs2gs-selfmig-migrated
+          path: /tmp/gsharp-cs2gs-selfmig
+
+      - name: Validate shard
+        env:
+          SHARD_NAME: ${{ matrix.name }}
+          SHARD_APPS: ${{ matrix.apps }}
+        # SHARD_APPS is a space-separated app-id list and is deliberately
+        # unquoted so it splits into one argument per app.
+        # shellcheck disable=SC2086
+        run: ./build/run-cs2gs-selfmig-validate.sh "$SHARD_NAME" $SHARD_APPS
+
+      - name: Upload shard result
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-selfmig-shard-${{ matrix.name }}
+          retention-days: 3
+          path: |
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/run.json
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/polished.tar.gz
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/validate.log
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/*.json
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/report.html
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/sdk.build.log
+
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [migrate, validate]
+    # Report even when a shard failed: the whole point of the gate is to
+    # produce a number, and a shard that errored out must not silently leave
+    # the run verdict-less (which is exactly what the timeout did in #3668).
+    # The merge itself fails loudly if a translated app has no shard result.
+    if: always() && needs.migrate.result == 'success'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download migrated tree
+        uses: actions/download-artifact@v5
+        with:
+          name: cs2gs-selfmig-migrated
+          path: /tmp/gsharp-cs2gs-selfmig
+
+      - name: Download shard results
+        uses: actions/download-artifact@v5
+        with:
+          pattern: cs2gs-selfmig-shard-*
+          path: /tmp/gsharp-cs2gs-selfmig-shards
+
+      - name: Apply the baseline
+        run: ./build/run-cs2gs-selfmig-gate.sh /tmp/gsharp-cs2gs-selfmig /tmp/gsharp-cs2gs-selfmig-shards
+
+      - name: Upload merged run
         if: always()
         uses: actions/upload-artifact@v5
         with:
           name: cs2gs-selfmig-run
           path: |
+            /tmp/gsharp-cs2gs-selfmig/run.merged.json
+            /tmp/gsharp-cs2gs-selfmig/metrics.json
             /tmp/gsharp-cs2gs-selfmig/migrate.log
-            /tmp/gsharp-cs2gs-selfmig/runs/**/run.json
-            /tmp/gsharp-cs2gs-selfmig/runs/**/report.html
-            /tmp/gsharp-cs2gs-selfmig/runs/**/*.json
-            /tmp/gsharp-cs2gs-selfmig/runs/**/sdk.build.log

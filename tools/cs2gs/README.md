@@ -23,7 +23,7 @@ oracle, §F reporting). This README is the operational quick start.
 | `Cs2Gs.Translator` | Roslyn C# front end. `CSharpToGSharpTranslator` + `CSharpTypeMapper` map C# syntax/semantics to the code model (the only project that references `Microsoft.CodeAnalysis.CSharp`). |
 | `Cs2Gs.Pipeline` | The four ordered, short-circuiting migration stages, the triage builder + fingerprint, corpus discovery, and the `gsc` invoker. |
 | `Cs2Gs.Report` | Aggregates a run into a self-contained `report.html` + `summary.json`. |
-| `Cs2Gs.Cli` | The `cs2gs` command-line front end (`migrate` / `report` verbs). |
+| `Cs2Gs.Cli` | The `cs2gs` command-line front end (`migrate` / `validate` / `report` verbs). |
 | `Cs2Gs.Tests` | Unit + golden + live tests for all of the above. |
 | `corpus/` | The curated C# **input** corpus (L1–L5) plus xUnit oracles. Isolated from `GSharp.sln`; see [`corpus/README.md`](corpus/README.md). |
 
@@ -75,6 +75,7 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
 | `--app <id>` | Diagnostic-run only; migrate one app (repeatable). |
 | `--gsc <path>` | Override `gsc.dll` (default `out/bin/<Config>/Compiler/gsc.dll`). |
 | `--config <name>` | Build config used to locate `gsc` (default `Release`). |
+| `--translate-only` | Repository mode: run stage 1 only, then stop (see `validate`). |
 
 Repository mode preserves relative directories, copies non-C# files, translates
 checked-in `.cs` files to `.gs`, transforms `.csproj` files to `.gsproj`, and
@@ -91,6 +92,43 @@ cs2gs migrate --diagnostic-run \
   --corpus tools/cs2gs/corpus \
   --out cs2gs-runs
 ```
+
+### `validate` — run stages 2–4 for a subset of an already-migrated tree
+
+The self-migration gate outgrew a single CI job (issue #3668): once a cascade
+clears, apps stop short-circuiting at translate and start paying for compile +
+ILVerify + test-parity. `migrate --translate-only` plus N `validate` shards is
+the same work split across runners.
+
+```sh
+# One whole-repository translate pass.
+cs2gs migrate --corpus "$repo" --out /tmp/migrated --artifacts /tmp/runs \
+  --config Release --translate-only --exclude ...
+
+# N independent shards over the SAME migrated tree.
+cs2gs validate --corpus "$repo" --migrated /tmp/migrated \
+  --artifacts /tmp/shard1 --manifests /tmp/runs/<runId> \
+  --config Release --exclude ... --shard 1/6
+```
+
+Two invariants make this safe, and both are load-bearing:
+
+* **Translation stays ONE whole-repository pass.** Linked sources (e.g.
+  `test/Shared/EmittedOracle.cs`) are compiled into several projects, and
+  `TranslateStage` cross-checks that such a file translates identically in all
+  of them. That guard only exists when every project translates in the same
+  run, so `validate` never runs the translate stage — it is absent from the
+  shard's stage list by construction, not skipped at runtime.
+* **`--exclude` is never a sharding mechanism.** It defines the *discovered*
+  app set, and every job must pass the identical list; excluding a project that
+  another app project-references breaks reference resolution and manufactures
+  phantom cascades. `--app` / `--shard` narrow what is *executed*.
+
+Each shard writes a partial `run.json`; `build/merge-selfmig-runs.py` merges
+them with the translate pass's results back into a single whole-run shape.
+See `build/run-cs2gs-selfmig-{migrate,validate,gate}.sh` and
+`.github/workflows/cs2gs-selfmig-nightly.yml`; `build/run-cs2gs-selfmig.sh`
+remains the equivalent single-job reference path for local proofs.
 
 ### `report` — regenerate a report from an existing run
 

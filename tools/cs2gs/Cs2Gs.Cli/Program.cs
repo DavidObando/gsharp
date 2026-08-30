@@ -60,6 +60,19 @@ internal static class Program
             }
         }
 
+        if (verb is "validate")
+        {
+            try
+            {
+                return await ValidateCommand.RunAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("cs2gs: " + ex.Message);
+                return 2;
+            }
+        }
+
         if (verb is "report")
         {
             try
@@ -152,15 +165,69 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// Prints the per-app × per-stage status matrix and the green-count verdict.
+    /// Shared by <c>migrate</c> and <c>validate</c> so a shard's log reads
+    /// exactly like a whole run's.
+    /// </summary>
+    /// <param name="result">The (possibly partial) run result.</param>
+    /// <param name="stages">The stages the run executed, in order.</param>
+    internal static void PrintSummary(RunResult result, IReadOnlyList<IMigrationStage> stages)
+    {
+        var stageNames = stages.Select(s => TriageSerialization.StageName(s.Kind)).ToList();
+
+        Console.WriteLine();
+        Console.WriteLine($"cs2gs migrate — run {result.RunId}");
+        Console.WriteLine($"gsc: {result.GscVersion}");
+        Console.WriteLine();
+
+        int idWidth = Math.Max(3, result.Apps.Select(a => a.AppId.Length).DefaultIfEmpty(3).Max());
+        string header = "app".PadRight(idWidth) + "  " +
+            string.Join("  ", stageNames.Select(n => n.PadRight(12)));
+        Console.WriteLine(header);
+        Console.WriteLine(new string('-', header.Length));
+
+        foreach (AppResult app in result.Apps)
+        {
+            var cells = new List<string>();
+            foreach (string stageName in stageNames)
+            {
+                StageResult stage = app.Stages.FirstOrDefault(s => s.Stage == stageName);
+                cells.Add(FormatCell(stage).PadRight(12));
+            }
+
+            Console.WriteLine(app.AppId.PadRight(idWidth) + "  " + string.Join("  ", cells));
+            if (!app.Succeeded)
+            {
+                foreach (string artifact in app.Artifacts)
+                {
+                    Console.WriteLine($"    -> {app.FailureCategory}: {artifact}");
+                }
+            }
+        }
+
+        Console.WriteLine();
+
+        // Same precedence as the report (issue #1831): a run-level failure
+        // always wins; otherwise call out unverified apps rather than
+        // rendering them as a plain pass.
+        int passed = result.Apps.Count(a => a.Succeeded && !a.Unverified);
+        int unverified = result.Apps.Count(a => a.Unverified);
+        string verdict = !result.Succeeded
+            ? "FAILED"
+            : unverified > 0 ? $"PASSED ({unverified} unverified)" : "PASSED";
+        Console.WriteLine($"{passed}/{result.Apps.Count} apps green; run {verdict}.");
+    }
+
     private static async Task<int> RunMigrateAsync(string[] args)
     {
-        (string Corpus, List<string> AppIds, PipelineOptions Options, string BaselinePath, bool BaselineStrict)? parsed = ParseMigrateArgs(args, out bool helpRequested);
+        MigrateArguments? parsed = ParseMigrateArgs(args, out bool helpRequested);
         if (parsed is null)
         {
             return helpRequested ? 0 : 1;
         }
 
-        (string corpus, List<string> appIds, PipelineOptions options, string baselinePath, bool baselineStrict) = parsed.Value;
+        (string corpus, List<string> appIds, PipelineOptions options, string baselinePath, bool baselineStrict, bool translateOnly) = parsed.Value;
         options.SourceRoot = Path.GetFullPath(corpus);
 
         IReadOnlyList<CorpusApp> apps;
@@ -240,7 +307,19 @@ internal static class Program
             return 1;
         }
 
-        var pipeline = new MigrationPipeline(options);
+        if (translateOnly && options.OutputLayout != MigrationOutputLayout.Repository)
+        {
+            Console.Error.WriteLine("cs2gs: --translate-only applies to repository migration only.");
+            return 1;
+        }
+
+        // Issue #3668: --translate-only keeps the whole-repository translate
+        // pass (and its cross-project linked-source guard) intact while
+        // deferring the per-app compile/ilverify/test-parity work to
+        // `cs2gs validate` shards.
+        var pipeline = translateOnly
+            ? new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() })
+            : new MigrationPipeline(options);
         RunResult result = await pipeline.RunAsync(apps).ConfigureAwait(false);
 
         PrintSummary(result, pipeline.Stages);
@@ -441,12 +520,13 @@ internal static class Program
         return Path.Combine(root, runId);
     }
 
-    private static (string Corpus, List<string> AppIds, PipelineOptions Options, string BaselinePath, bool BaselineStrict)? ParseMigrateArgs(string[] args, out bool helpRequested)
+    private static MigrateArguments? ParseMigrateArgs(string[] args, out bool helpRequested)
     {
         helpRequested = false;
         string corpus = null;
         string baselinePath = null;
         bool baselineStrict = false;
+        bool translateOnly = false;
         var appIds = new List<string>();
         var options = new PipelineOptions { OutputLayout = MigrationOutputLayout.Repository };
 
@@ -496,6 +576,9 @@ internal static class Program
                     case "--baseline-strict":
                         baselineStrict = true;
                         break;
+                    case "--translate-only":
+                        translateOnly = true;
+                        break;
                     case "--via-sdk":
                         options.CompileViaSdk = true;
                         break;
@@ -526,7 +609,7 @@ internal static class Program
             }
         }
 
-        return (corpus, appIds, options, baselinePath, baselineStrict);
+        return new MigrateArguments(corpus, appIds, options, baselinePath, baselineStrict, translateOnly);
     }
 
     /// <summary>
@@ -569,53 +652,6 @@ internal static class Program
         return null;
     }
 
-    private static void PrintSummary(RunResult result, IReadOnlyList<IMigrationStage> stages)
-    {
-        var stageNames = stages.Select(s => TriageSerialization.StageName(s.Kind)).ToList();
-
-        Console.WriteLine();
-        Console.WriteLine($"cs2gs migrate — run {result.RunId}");
-        Console.WriteLine($"gsc: {result.GscVersion}");
-        Console.WriteLine();
-
-        int idWidth = Math.Max(3, result.Apps.Select(a => a.AppId.Length).DefaultIfEmpty(3).Max());
-        string header = "app".PadRight(idWidth) + "  " +
-            string.Join("  ", stageNames.Select(n => n.PadRight(12)));
-        Console.WriteLine(header);
-        Console.WriteLine(new string('-', header.Length));
-
-        foreach (AppResult app in result.Apps)
-        {
-            var cells = new List<string>();
-            foreach (string stageName in stageNames)
-            {
-                StageResult stage = app.Stages.FirstOrDefault(s => s.Stage == stageName);
-                cells.Add(FormatCell(stage).PadRight(12));
-            }
-
-            Console.WriteLine(app.AppId.PadRight(idWidth) + "  " + string.Join("  ", cells));
-            if (!app.Succeeded)
-            {
-                foreach (string artifact in app.Artifacts)
-                {
-                    Console.WriteLine($"    -> {app.FailureCategory}: {artifact}");
-                }
-            }
-        }
-
-        Console.WriteLine();
-
-        // Same precedence as the report (issue #1831): a run-level failure
-        // always wins; otherwise call out unverified apps rather than
-        // rendering them as a plain pass.
-        int passed = result.Apps.Count(a => a.Succeeded && !a.Unverified);
-        int unverified = result.Apps.Count(a => a.Unverified);
-        string verdict = !result.Succeeded
-            ? "FAILED"
-            : unverified > 0 ? $"PASSED ({unverified} unverified)" : "PASSED";
-        Console.WriteLine($"{passed}/{result.Apps.Count} apps green; run {verdict}.");
-    }
-
     private static string FormatCell(StageResult stage)
     {
         if (stage is null)
@@ -638,6 +674,7 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  cs2gs migrate [options]");
+        Console.WriteLine("  cs2gs validate --corpus <repo-root> --migrated <dir> [--shard i/N | --app <id>...]");
         Console.WriteLine("  cs2gs report --run <runDir> [--out <file-or-dir>]");
         Console.WriteLine("  cs2gs coverage [--write] [--repo-root <dir>]");
         Console.WriteLine("  cs2gs triage list --run <runDir> [--gaps <file>]");
@@ -661,6 +698,11 @@ internal static class Program
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");
         Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
         Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
+        Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
+        Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
+        Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");
+        Console.WriteLine();
+        Console.WriteLine("validate options: run 'cs2gs validate --help'.");
         Console.WriteLine();
         Console.WriteLine("report options:");
         Console.WriteLine("  --run <dir>       Existing run directory containing run.json (required).");
@@ -680,6 +722,23 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Exit code is non-zero if any app fails a stage (so CI can gate).");
     }
+
+    /// <summary>
+    /// The parsed <c>migrate</c> command line.
+    /// </summary>
+    /// <param name="Corpus">The source repository root.</param>
+    /// <param name="AppIds">Explicit <c>--app</c> ids (diagnostic runs only).</param>
+    /// <param name="Options">The pipeline options.</param>
+    /// <param name="BaselinePath">The gap-ledger path, or <see langword="null"/>.</param>
+    /// <param name="BaselineStrict">Whether stale ledger entries fail the gate.</param>
+    /// <param name="TranslateOnly">Whether to run the translate stage only (issue #3668).</param>
+    private readonly record struct MigrateArguments(
+        string Corpus,
+        List<string> AppIds,
+        PipelineOptions Options,
+        string BaselinePath,
+        bool BaselineStrict,
+        bool TranslateOnly);
 
     /// <summary>
     /// Sentinel exception thrown by <see cref="NextValue"/> when an option's

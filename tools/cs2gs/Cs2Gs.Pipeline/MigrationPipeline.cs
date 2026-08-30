@@ -69,6 +69,22 @@ public sealed class MigrationPipeline
     public static string SanitizeAppId(string id) => id.Replace('/', '_').Replace('\\', '_');
 
     /// <summary>
+    /// The artifact directory name for one app under a run directory. In
+    /// repository layout it is suffixed with a hash of the app id so two
+    /// projects with the same sanitized id cannot collide. Deterministic from
+    /// the app id alone, so a <c>validate</c> shard can locate the manifest
+    /// written by the whole-repository translate pass (issue #3668).
+    /// </summary>
+    /// <param name="appId">The corpus app id.</param>
+    /// <param name="layout">The migration output layout.</param>
+    /// <returns>The artifact directory name.</returns>
+    public static string ArtifactDirectoryName(string appId, MigrationOutputLayout layout) =>
+        layout == MigrationOutputLayout.Repository
+            ? SanitizeAppId(appId) + "-" + Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(appId))).Substring(0, 8).ToLowerInvariant()
+            : SanitizeAppId(appId);
+
+    /// <summary>
     /// Executes the pipeline over the supplied apps, writing all artifacts and
     /// the run summary, and returns the machine-readable run result.
     /// </summary>
@@ -319,6 +335,163 @@ public sealed class MigrationPipeline
         return runResult;
     }
 
+    /// <summary>
+    /// Validates an ALREADY-migrated repository tree for a subset of its apps
+    /// (issue #3668). Runs this pipeline's stages — normally compile →
+    /// ilverify → test-parity — against the migrated tree at
+    /// <see cref="PipelineOptions.OutputRoot"/>, rehydrating each app's
+    /// translate-derived state from the <see cref="ValidationManifest"/> the
+    /// whole-repository <c>migrate</c> pass wrote, and returns a PARTIAL
+    /// <see cref="RunResult"/> covering only <paramref name="selectedApps"/>.
+    /// <para>
+    /// <paramref name="allApps"/> must be the COMPLETE app list of the migrate
+    /// run (same <c>--exclude</c> set), because the mirrored project map every
+    /// stage resolves <c>ProjectReference</c>s through is repository-wide.
+    /// Narrowing it — for instance by excluding the projects a shard does not
+    /// own — breaks reference resolution and manufactures phantom cascades.
+    /// </para>
+    /// </summary>
+    /// <param name="allApps">Every app in the migrated tree, in discovery order.</param>
+    /// <param name="selectedApps">The subset this shard validates.</param>
+    /// <param name="manifestRunDir">The migrate run directory holding the per-app manifests.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The partial run result for <paramref name="selectedApps"/>.</returns>
+    /// <exception cref="InvalidOperationException">No <c>gsc.dll</c> could be resolved.</exception>
+    public async Task<RunResult> ValidateAsync(
+        IReadOnlyList<CorpusApp> allApps,
+        IReadOnlyList<CorpusApp> selectedApps,
+        string manifestRunDir,
+        CancellationToken cancellationToken = default)
+    {
+        if (allApps is null)
+        {
+            throw new ArgumentNullException(nameof(allApps));
+        }
+
+        if (selectedApps is null)
+        {
+            throw new ArgumentNullException(nameof(selectedApps));
+        }
+
+        if (string.IsNullOrWhiteSpace(this.options.OutputRoot))
+        {
+            throw new InvalidOperationException("Validation requires --migrated <existing-migrated-tree>.");
+        }
+
+        string migratedRoot = Path.GetFullPath(this.options.OutputRoot);
+        if (!Directory.Exists(migratedRoot))
+        {
+            throw new InvalidOperationException($"Migrated tree '{migratedRoot}' does not exist.");
+        }
+
+        this.options.OutputLayout = MigrationOutputLayout.Repository;
+
+        string gscPath = GscInvoker.Resolve(
+            this.options.GscPath,
+            this.options.Config,
+            Directory.GetCurrentDirectory());
+        if (gscPath is null)
+        {
+            throw new InvalidOperationException(
+                "Could not resolve gsc.dll. Build GSharp.sln or pass --gsc <path>.");
+        }
+
+        string gsgenPath = GscInvoker.ResolveGsgenTool(
+            this.options.GsgenPath,
+            this.options.Config,
+            Directory.GetCurrentDirectory());
+        var gsc = new GscInvoker(gscPath, gsgenPath);
+        string gscVersion = gsc.GetVersion();
+
+        DateTime nowUtc = DateTime.UtcNow;
+        string runId = NewRunId(nowUtc);
+        string timestamp = nowUtc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+
+        string outputRoot = Path.GetFullPath(
+            this.options.ArtifactRoot ?? migratedRoot + ".cs2gs-runs");
+        string runDir = Path.Combine(outputRoot, runId);
+        Directory.CreateDirectory(runDir);
+
+        // The mirrored-project map is repository-wide by construction: it is
+        // the same map the migrate pass built, computed from the full app list
+        // and the migrated tree root.
+        this.options.GeneratedProjectPaths = allApps.ToDictionary(
+            app => Path.GetFullPath(app.ProjectPath),
+            app => Path.Combine(
+                migratedRoot,
+                Path.ChangeExtension(
+                    app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
+                    ".gsproj")),
+            StringComparer.OrdinalIgnoreCase);
+        this.options.ProjectsReferencedByOtherApps =
+            DeclaredProjectItems.CollectCompileReferencedProjectPaths(
+                allApps.Select(app => app.ProjectPath));
+
+        IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory =
+            LoadPriorRetryEntries(outputRoot, runId);
+
+        var runResult = new RunResult
+        {
+            RunId = runId,
+            Timestamp = timestamp,
+            GscVersion = gscVersion,
+            GscPath = gscPath,
+            Succeeded = true,
+        };
+
+        foreach (CorpusApp app in selectedApps)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            StageExecutionContext context = this.CreateAppContext(
+                app, gsc, gscVersion, runId, timestamp, runDir, out string artifactDir);
+
+            ValidationManifest manifest = ValidationManifest.Read(
+                Path.Combine(
+                    manifestRunDir ?? string.Empty,
+                    ArtifactDirectoryName(app.Id, MigrationOutputLayout.Repository)));
+            if (manifest is null)
+            {
+                throw new InvalidOperationException(
+                    $"No {ValidationManifest.FileName} for app '{app.Id}' under '{manifestRunDir}'. " +
+                    "Validation shards must run against the artifacts of the migrate pass that " +
+                    "produced the migrated tree.");
+            }
+
+            if (!manifest.Translated)
+            {
+                // The app never got past stage 1, so it has no migrated sources
+                // to compile and its verdict already exists in the migrate run.
+                // Reporting it here would render an empty compile as a PASS and
+                // inflate the green count; the merge takes the translate
+                // failure from the migrate pass instead.
+                Console.WriteLine($"cs2gs validate: skipping '{app.Id}' — it did not translate.");
+                continue;
+            }
+
+            manifest.Hydrate(context, migratedRoot);
+
+            AppResult appResult = await this.RunStagesAsync(
+                app, context, artifactDir, runDir, priorHistory, cancellationToken).ConfigureAwait(false);
+            runResult.Apps.Add(appResult);
+            if (!appResult.Succeeded)
+            {
+                runResult.Succeeded = false;
+            }
+        }
+
+        if (runResult.Succeeded && runResult.Apps.Any(a => a.Unverified))
+        {
+            runResult.Unverified = true;
+        }
+
+        File.WriteAllText(
+            Path.Combine(runDir, "run.json"),
+            JsonSerializer.Serialize(runResult, TriageSerialization.Options));
+
+        return runResult;
+    }
+
     private IReadOnlyList<CorpusApp> OrderForSdkBuild(IReadOnlyList<CorpusApp> apps)
     {
         if (!this.options.CompileViaSdk || apps.Count <= 1)
@@ -524,6 +697,27 @@ public sealed class MigrationPipeline
         }
     }
 
+    private StageExecutionContext CreateAppContext(
+        CorpusApp app,
+        GscInvoker gsc,
+        string gscVersion,
+        string runId,
+        string timestamp,
+        string runDir,
+        out string artifactDir)
+    {
+        artifactDir = Path.Combine(runDir, ArtifactDirectoryName(app.Id, this.options.OutputLayout));
+        string projectOutputDir = this.options.OutputLayout == MigrationOutputLayout.Repository
+            ? Path.GetDirectoryName(this.options.GeneratedProjectPaths[Path.GetFullPath(app.ProjectPath)])
+            : artifactDir;
+        Directory.CreateDirectory(artifactDir);
+        Directory.CreateDirectory(projectOutputDir);
+
+        var triage = new TriageBuilder(runId, timestamp, gscVersion, app.Id);
+        return new StageExecutionContext(
+            app, this.options, gsc, projectOutputDir, artifactDir, triage);
+    }
+
     private async Task<AppResult> RunAppAsync(
         CorpusApp app,
         GscInvoker gsc,
@@ -534,21 +728,36 @@ public sealed class MigrationPipeline
         IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory,
         CancellationToken cancellationToken)
     {
-        string artifactDirectoryName = this.options.OutputLayout == MigrationOutputLayout.Repository
-            ? SanitizeAppId(app.Id) + "-" + Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(app.Id))).Substring(0, 8).ToLowerInvariant()
-            : SanitizeAppId(app.Id);
-        string artifactDir = Path.Combine(runDir, artifactDirectoryName);
-        string projectOutputDir = this.options.OutputLayout == MigrationOutputLayout.Repository
-            ? Path.GetDirectoryName(this.options.GeneratedProjectPaths[Path.GetFullPath(app.ProjectPath)])
-            : artifactDir;
-        Directory.CreateDirectory(artifactDir);
-        Directory.CreateDirectory(projectOutputDir);
+        StageExecutionContext context = this.CreateAppContext(
+            app, gsc, gscVersion, runId, timestamp, runDir, out string artifactDir);
 
-        var triage = new TriageBuilder(runId, timestamp, gscVersion, app.Id);
-        var context = new StageExecutionContext(
-            app, this.options, gsc, projectOutputDir, artifactDir, triage);
+        AppResult appResult = await this.RunStagesAsync(
+            app, context, artifactDir, runDir, priorHistory, cancellationToken).ConfigureAwait(false);
 
+        if (this.options.OutputLayout == MigrationOutputLayout.Repository &&
+            !string.IsNullOrWhiteSpace(this.options.OutputRoot))
+        {
+            // Issue #3668: hand the translate-derived state of this app to any
+            // later `cs2gs validate` shard over the same migrated tree.
+            bool translated = appResult.Stages
+                .Any(s => s.Stage == TriageSerialization.StageName(MigrationStageKind.Translate)
+                    && s.Status == "passed");
+            ValidationManifest.Write(
+                ValidationManifest.Capture(context, translated, this.options.OutputRoot),
+                artifactDir);
+        }
+
+        return appResult;
+    }
+
+    private async Task<AppResult> RunStagesAsync(
+        CorpusApp app,
+        StageExecutionContext context,
+        string artifactDir,
+        string runDir,
+        IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory,
+        CancellationToken cancellationToken)
+    {
         var appResult = new AppResult { AppId = app.Id, Succeeded = true };
         bool shortCircuited = false;
 
@@ -577,7 +786,7 @@ public sealed class MigrationPipeline
             }
             catch (Exception ex)
             {
-                outcome = StageOutcome.Failed(new[] { StageCrashArtifact(triage, stage.Kind, ex) });
+                outcome = StageOutcome.Failed(new[] { StageCrashArtifact(context.Triage, stage.Kind, ex) });
             }
 
             if (outcome.Status == StageStatus.Passed)
