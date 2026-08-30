@@ -462,24 +462,29 @@ internal sealed class MemberLookup
         return null;
     }
 
-    /// <summary>Finds a public instance event on a CLR type or any implemented interface.</summary>
+    /// <summary>
+    /// Finds a visible instance event on a CLR type or any implemented
+    /// interface. Issue #3705: <c>event</c> was the member kind #3693 and
+    /// #3702 never reached, so a friend assembly's <c>internal event</c> was
+    /// invisible while its <c>internal</c> methods, properties and fields were
+    /// not. Only metadata <c>assembly</c> accessibility is admitted.
+    /// </summary>
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="name">The event name to match.</param>
+    /// <param name="includeInternal">Whether friend internals are visible.</param>
     /// <returns>The matching <see cref="EventInfo"/>, or <c>null</c>.</returns>
-    public static EventInfo? SafeGetEventIncludingSelfAndInterfaces(Type clrType, string name)
+    public static EventInfo? SafeGetEventIncludingSelfAndInterfaces(Type clrType, string name, bool includeInternal = false)
     {
         if (clrType == null)
         {
             return null;
         }
 
+        var flags = ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal);
         foreach (var type in EnumerateSelfAndInterfaces(clrType))
         {
-            var eventInfo = ClrTypeUtilities.SafeGetEvent(
-                type,
-                name,
-                BindingFlags.Public | BindingFlags.Instance);
-            if (eventInfo != null)
+            var eventInfo = ClrTypeUtilities.SafeGetEvent(type, name, flags);
+            if (ClrMemberVisibility.IsVisible(eventInfo, includeInternal))
             {
                 return eventInfo;
             }
@@ -3384,7 +3389,9 @@ internal sealed class MemberLookup
         var hasSetOnlyIndexer = false;
         foreach (var property in properties)
         {
-            hasSetOnlyIndexer |= property.GetGetMethod(nonPublic: false) == null;
+            hasSetOnlyIndexer |= ClrMemberVisibility.GetVisibleGetter(
+                property,
+                this.binderCtx.References.CanAccessInternalMembers(property.DeclaringType?.Assembly)) == null;
         }
 
         if (hasSymbolicArgument || hasSetOnlyIndexer)
@@ -4541,17 +4548,24 @@ internal sealed class MemberLookup
         return elementType != null && elementType != TypeSymbol.Error;
     }
 
-    private static PropertyInfo[] CollectVisibleClrIndexers(TypeSymbol targetType, Type clrTarget)
+    private PropertyInfo[] CollectVisibleClrIndexers(TypeSymbol targetType, Type clrTarget)
     {
         var declaringTypes = clrTarget.IsInterface
             ? EnumerateSelfAndInterfaces(clrTarget)
             : new List<Type> { clrTarget };
+
+        // Issue #3705: the indexer was the member kind #3693 / #3702 never
+        // reached, so a friend assembly's `internal this[…]` — or a
+        // `{ get; internal set; }` indexer — was invisible while its
+        // methods, properties and fields were not. Only metadata `assembly`
+        // accessibility is admitted.
+        var includeInternal = this.binderCtx.References.CanAccessInternalMembers(clrTarget.Assembly);
         var collected = new List<PropertyInfo>();
         foreach (var declaringType in declaringTypes)
         {
             foreach (var property in ClrTypeUtilities.SafeGetProperties(
                 declaringType,
-                BindingFlags.Public | BindingFlags.Instance))
+                ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal)))
             {
                 var alreadyCollected = false;
                 foreach (var existing in collected)
@@ -4566,8 +4580,7 @@ internal sealed class MemberLookup
                 }
 
                 if (property.GetIndexParameters().Length == 0
-                    || (property.GetGetMethod(nonPublic: false) == null
-                        && property.GetSetMethod(nonPublic: false) == null)
+                    || !ClrMemberVisibility.IsVisible(property, includeInternal)
                     || alreadyCollected)
                 {
                     continue;

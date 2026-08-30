@@ -566,13 +566,16 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(subscription.Handler);
         }
 
+        // Issue #3705: the binder decides accessibility (including a friend
+        // assembly's `internal` event); emit must not re-derive it with a
+        // narrower probe, or a bound subscription would fail here.
         var accessor = subscription.IsAdd
-            ? subscription.Event.GetAddMethod(nonPublic: false)
-            : subscription.Event.GetRemoveMethod(nonPublic: false);
+            ? subscription.Event.GetAddMethod(nonPublic: true)
+            : subscription.Event.GetRemoveMethod(nonPublic: true);
         if (accessor == null)
         {
             throw new InvalidOperationException(
-                $"Event '{subscription.Event.DeclaringType?.FullName}.{subscription.Event.Name}' has no public {(subscription.IsAdd ? "add" : "remove")} accessor.");
+                $"Event '{subscription.Event.DeclaringType?.FullName}.{subscription.Event.Name}' has no {(subscription.IsAdd ? "add" : "remove")} accessor.");
         }
 
         if (subscription.IsConstrainedTypeParameterAccess)

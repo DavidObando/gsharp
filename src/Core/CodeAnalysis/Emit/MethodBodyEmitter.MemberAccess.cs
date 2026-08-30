@@ -1343,9 +1343,13 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(arg);
         }
 
+        // Issue #3705: fall back to the non-public accessor exactly as the
+        // plain-property arms above do — the binder has already decided that a
+        // friend assembly's `internal` indexer accessor is callable here.
         var getter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(idx.Indexer, wantSetter: false)
+            ?? ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(idx.Indexer, wantSetter: false, nonPublic: true)
             ?? throw new InvalidOperationException(
-                $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no public getter.");
+                $"Indexer on '{idx.Indexer.DeclaringType?.FullName}' has no getter.");
         var receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(idx.Target.Type);
         this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
         // Issue #671: route through the receiver-aware overload so the indexer
@@ -1374,7 +1378,10 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
     {
-        var setter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true);
+        // Issue #3705: see EmitClrIndexAccess — the indexer arm honours a
+        // friend-visible `internal` accessor like its property siblings.
+        var setter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true)
+            ?? ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: true, nonPublic: true);
 
         if (ixa.IsConstrainedTypeParameterAccess)
         {
@@ -1415,8 +1422,9 @@ internal sealed partial class MethodBodyEmitter
         if (setter == null)
         {
             var refGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: false)
+                ?? ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: false, nonPublic: true)
                 ?? throw new InvalidOperationException(
-                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
+                    $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no setter or getter.");
             BoundExpression receiver = ixa.TargetExpression ?? new BoundVariableExpression(null, BoundNodeForm.VariableTarget(ixa));
             var tmp = this.indexAssignmentValueSlots[ixa];
 

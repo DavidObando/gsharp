@@ -1291,8 +1291,7 @@ internal sealed partial class ExpressionBinder
                         receiverType,
                         p,
                         projectOnlyWhenSymbolicallyRequired: true);
-                writable = p.CanWrite
-                    && (p.GetSetMethod(nonPublic: false) != null || IsFriendVisibleInternalSetter(p));
+                writable = p.CanWrite && GetVisibleSetter(p) != null;
                 return writable;
             case FieldInfo f:
                 targetType = f.FieldType;
@@ -1310,30 +1309,90 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #3684: whether <paramref name="property"/>'s setter is an
-    /// <c>internal</c> (metadata <c>assembly</c>) accessor declared by an
-    /// assembly that named this compilation in an
-    /// <c>InternalsVisibleTo</c> — i.e. a setter this compilation may legally
-    /// call, exactly as C# lets a friend assembly write
-    /// <c>{ get; internal set; }</c>.
-    /// <para>
-    /// #3693 widened the CLR instance-call and imported-static probes the same
-    /// way; the writability test kept <c>GetSetMethod(nonPublic: false)</c>, so
-    /// a friend could READ an internal-set property but never write it — in a
-    /// plain assignment or an object initializer alike (GS0127). Only
-    /// <c>assembly</c> accessibility is admitted: <c>private</c>,
-    /// <c>protected</c>, <c>protected internal</c> and <c>private protected</c>
-    /// setters stay unwritable however the friendship is declared.
-    /// </para>
+    /// Issue #3705: whether this compilation may see the <c>internal</c>
+    /// members declared by <paramref name="clrType"/>'s assembly.
+    /// </summary>
+    /// <param name="clrType">The declaring CLR type.</param>
+    /// <returns><see langword="true"/> when friend internals are visible.</returns>
+    private bool CanAccessInternalsOf(Type? clrType)
+        => clrType?.Assembly is { } assembly && scope.References.CanAccessInternalMembers(assembly);
+
+    /// <summary>
+    /// Issue #3705: the property's getter when this compilation may call it —
+    /// public, or <c>internal</c> in a friend assembly. Member-lookup gates
+    /// should use this rather than <c>GetGetMethod(nonPublic: false)</c>, which
+    /// silently rejects a friend-visible accessor.
     /// </summary>
     /// <param name="property">The imported CLR property.</param>
-    /// <returns><see langword="true"/> when the internal setter is visible here.</returns>
-    private bool IsFriendVisibleInternalSetter(PropertyInfo property)
+    /// <returns>The callable getter, or <see langword="null"/>.</returns>
+    private MethodInfo? GetVisibleGetter(PropertyInfo property)
+        => ClrMemberVisibility.GetVisibleGetter(property, CanAccessInternalsOf(property.DeclaringType));
+
+    /// <summary>
+    /// Issue #3705: the setter sibling of <see cref="GetVisibleGetter"/>.
+    /// </summary>
+    /// <param name="property">The imported CLR property.</param>
+    /// <returns>The callable setter, or <see langword="null"/>.</returns>
+    private MethodInfo? GetVisibleSetter(PropertyInfo property)
+        => ClrMemberVisibility.GetVisibleSetter(property, CanAccessInternalsOf(property.DeclaringType));
+
+    /// <summary>
+    /// Issue #3705: the shared instance-property probe for CLR member lookup.
+    /// <para>
+    /// #3693 widened the method probes and #3702 the writability test, but the
+    /// property/field <em>lookups</em> on the assignment paths still ran
+    /// <c>BindingFlags.Public</c>-only, so a friend assembly could read
+    /// <c>internal T P { get; set; }</c> and never write it (GS0130). Both the
+    /// read and the write path now come through here, so the two cannot drift
+    /// apart again. Only metadata <c>assembly</c> accessibility is admitted —
+    /// <c>private</c>, <c>protected</c>, <c>protected internal</c> and
+    /// <c>private protected</c> stay invisible.
+    /// </para>
+    /// </summary>
+    /// <param name="clrReceiverType">The receiver's CLR type.</param>
+    /// <param name="name">The member name to find.</param>
+    /// <returns>The visible property, or <see langword="null"/>.</returns>
+    private PropertyInfo? SafeGetVisibleInstanceProperty(Type clrReceiverType, string name)
     {
-        var setter = property.GetSetMethod(nonPublic: true);
-        return setter is { IsAssembly: true }
-            && setter.DeclaringType?.Assembly is { } declaringAssembly
-            && scope.References.CanAccessInternalMembers(declaringAssembly);
+        var property = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+            clrReceiverType,
+            name,
+            BindingFlags.Public | BindingFlags.Instance);
+        if (property != null || !CanAccessInternalsOf(clrReceiverType))
+        {
+            return property;
+        }
+
+        var candidate = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+            clrReceiverType,
+            name,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        return ClrMemberVisibility.IsVisible(candidate, includeInternal: true) ? candidate : null;
+    }
+
+    /// <summary>
+    /// Issue #3705: the shared instance-field probe for CLR member lookup —
+    /// the field sibling of <see cref="SafeGetVisibleInstanceProperty"/>.
+    /// </summary>
+    /// <param name="clrReceiverType">The receiver's CLR type.</param>
+    /// <param name="name">The member name to find.</param>
+    /// <returns>The visible field, or <see langword="null"/>.</returns>
+    private FieldInfo? SafeGetVisibleInstanceField(Type clrReceiverType, string name)
+    {
+        var field = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
+            clrReceiverType,
+            name,
+            BindingFlags.Public | BindingFlags.Instance);
+        if (field != null || !CanAccessInternalsOf(clrReceiverType))
+        {
+            return field;
+        }
+
+        var candidate = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
+            clrReceiverType,
+            name,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        return ClrMemberVisibility.IsVisible(candidate, includeInternal: true) ? candidate : null;
     }
 
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>

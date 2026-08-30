@@ -399,9 +399,19 @@ internal sealed partial class ExpressionBinder
         EventInfo? eventInfo = null;
         if (isEventCapableOperator && receiverClrType != null)
         {
+            // Issue #3705: friend-visible `internal` events are candidates
+            // here exactly as friend-visible methods/properties/fields are.
+            var eventsIncludeInternal = CanAccessInternalsOf(receiverClrType);
             eventInfo = boundReceiver != null
-                ? MemberLookup.SafeGetEventIncludingSelfAndInterfaces(receiverClrType, eventName)
-                : ClrTypeUtilities.SafeGetEvent(receiverClrType, eventName, flags);
+                ? MemberLookup.SafeGetEventIncludingSelfAndInterfaces(receiverClrType, eventName, eventsIncludeInternal)
+                : ClrTypeUtilities.SafeGetEvent(
+                    receiverClrType,
+                    eventName,
+                    ClrMemberVisibility.Widen(flags, eventsIncludeInternal));
+            if (!ClrMemberVisibility.IsVisible(eventInfo, eventsIncludeInternal))
+            {
+                eventInfo = null;
+            }
         }
 
         if (eventInfo == null)
