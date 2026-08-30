@@ -2090,6 +2090,18 @@ internal sealed partial class ExpressionBinder
                 var openParameterType = openParameters[paramIndex].ParameterType;
                 TypeSymbol? mappedDelegate;
                 FunctionTypeSymbol? functionType;
+
+                // Issue #3666: set when the delegate's RETURN shape was closed
+                // entirely by this unification — every method type parameter it
+                // mentions was resolved — even though it still mentions an
+                // enclosing type parameter carried by the receiver's symbolic
+                // arguments (e.g. `[]TMember` from
+                // `MemberCache[TMember].Cache : ConcurrentDictionary[(Type,
+                // BindingFlags), []TMember]`). Such a return cannot be recorded
+                // as an *exact* target return (the lambda body still has to
+                // infer it), but it does prove the reflected CLR target would be
+                // erased, so this symbolic path must win over the CLR probe.
+                var returnGroundedInReceiver = false;
                 if (openParameterType.IsGenericParameter)
                 {
                     if (!TryBuildSymbolicDelegateTarget(
@@ -2238,6 +2250,8 @@ internal sealed partial class ExpressionBinder
                             openMethod,
                             methodTypeArgs);
                     functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), mappedReturnType);
+                    returnGroundedInReceiver = returnClrType != null
+                        && AllMethodTypeParametersResolved(returnClrType, openMethod, inferred);
                 }
 
                 foreach (var parameterType in functionType.ParameterTypes)
@@ -2265,6 +2279,26 @@ internal sealed partial class ExpressionBinder
                     {
                         candidateHasSymbolicType = true;
                     }
+                }
+                else if (returnGroundedInReceiver
+                    && mappedReturn != null
+                    && mappedReturn != TypeSymbol.Error
+                    && TypeSymbol.RequiresSymbolicProjection(mappedReturn))
+                {
+                    // Issue #3666: the return shape is fully determined by the
+                    // receiver's symbolic arguments yet still mentions a type
+                    // parameter, so it stays a placeholder (the body infers it)
+                    // — but the shape IS symbolic information reflection cannot
+                    // represent, so this candidate must count toward the success
+                    // gate below. Otherwise the whole symbolic recovery declines
+                    // and the CLR probe binds the lambda against the receiver's
+                    // erased target instead: `MemberCache[TMember].Cache
+                    // .GetOrAdd(key, k -> …)` got `Func[…, object[]]`, and the
+                    // body's genuine `[]TMember` result failed to convert
+                    // (GS0155). This slot deliberately does NOT enter
+                    // `slotReturnTypes`, so the lambda still infers its own
+                    // return type from the body.
+                    candidateHasSymbolicType = true;
                 }
             }
 
