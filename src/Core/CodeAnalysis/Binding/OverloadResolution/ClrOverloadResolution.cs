@@ -1918,7 +1918,10 @@ internal static class ClrOverloadResolution
     /// <c>System.Action</c> / <c>Action&lt;...&gt;</c>). Parameter and return
     /// types are compared by name to remain safe across reflection contexts
     /// (the target may be loaded through a <c>MetadataLoadContext</c> while the
-    /// literal's natural <c>Func&lt;...&gt;</c> is a live-runtime type).
+    /// literal's natural <c>Func&lt;...&gt;</c> is a live-runtime type), and
+    /// both signatures are read through <see cref="TryGetDelegateSignature"/>
+    /// so a constructed delegate whose <c>Invoke</c> is unreachable across
+    /// those contexts still decomposes (issue #3681).
     /// </summary>
     /// <param name="target">The candidate void-returning delegate parameter type.</param>
     /// <param name="source">The argument's natural delegate type.</param>
@@ -1930,36 +1933,40 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        MethodInfo? targetInvoke;
-        MethodInfo? sourceInvoke;
-        try
-        {
-            targetInvoke = target.GetMethodSafe("Invoke");
-            sourceInvoke = source.GetMethodSafe("Invoke");
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-
-        if (targetInvoke is null || sourceInvoke is null)
+        // Issue #3681: read both signatures through TryGetDelegateSignature
+        // rather than reflecting `Invoke` directly. A lambda's natural
+        // `Func<...>` is built by closing the live `System.Func`n` over the
+        // bound argument types; whenever any of those came from the reference
+        // load context (every non-primitive imported type — `MemberInfo`,
+        // `Type`, `List<int>`, …) the runtime materialises the closure as a
+        // `TypeBuilderInstantiation`, whose `GetMethod("Invoke")` throws
+        // `NotSupportedException` and whose `GetMethodSafe` wrapper therefore
+        // answers null. This predicate then silently reported "not a discard
+        // conversion" and `Assert.All(items, (x T) -> value)` failed overload
+        // resolution with GS0159 for exactly those element types, while the
+        // same call over `string`/`object`/`int32` (host runtime types)
+        // resolved. `TryGetDelegateSignature` already carries the
+        // cross-context fallback that decomposes `Func`n`/`Action`n`/any
+        // closed generic delegate through its open definition, and the two
+        // sibling delegate predicates (#908 covariance, #1150 return
+        // widening) already go through it — this one was the outlier.
+        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
         {
             return false;
         }
 
         // Target must return void; source must return a value.
-        if (!string.Equals(targetInvoke.ReturnType.FullName, "System.Void", StringComparison.Ordinal))
+        if (!string.Equals(targetReturn.FullName, "System.Void", StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (string.Equals(sourceInvoke.ReturnType.FullName, "System.Void", StringComparison.Ordinal))
+        if (string.Equals(sourceReturn.FullName, "System.Void", StringComparison.Ordinal))
         {
             return false;
         }
 
-        var targetParams = targetInvoke.GetParameters();
-        var sourceParams = sourceInvoke.GetParameters();
         if (targetParams.Length != sourceParams.Length)
         {
             return false;
@@ -1967,7 +1974,7 @@ internal static class ClrOverloadResolution
 
         for (var i = 0; i < targetParams.Length; i++)
         {
-            if (!ClrTypeUtilities.AreSame(targetParams[i].ParameterType, sourceParams[i].ParameterType))
+            if (!ClrTypeUtilities.AreSame(targetParams[i], sourceParams[i]))
             {
                 return false;
             }
@@ -5297,6 +5304,33 @@ internal static class ClrOverloadResolution
         }
     }
 
+    /// <summary>
+    /// Issue #3681: decides whether <paramref name="source"/> — one lower bound
+    /// collected for a method type parameter — may be absorbed into
+    /// <paramref name="target"/>, the other bound, when fixing that type
+    /// parameter (C# §12.6.3.11). Only the <em>standard</em> implicit
+    /// conversions C# admits at this point are accepted: identity, implicit
+    /// numeric widening, reference upcasts (including interface satisfaction)
+    /// and boxing. Deliberately excludes the contextual conversions
+    /// <see cref="ClassifyImplicit"/> also classifies (user-defined
+    /// <c>op_Implicit</c>, interpolated-string handlers, the lambda/delegate
+    /// shape conversions), none of which participate in fixing — admitting them
+    /// would let genuinely conflicting bounds unify and would widen the
+    /// applicable candidate set beyond what C# resolves.
+    /// </summary>
+    /// <param name="target">The bound being promoted to.</param>
+    /// <param name="source">The bound being absorbed.</param>
+    /// <returns><see langword="true"/> when the promotion is valid.</returns>
+    private static bool IsInferenceBoundPromotion(Type target, Type source) =>
+        ClassifyImplicit(target, source) switch
+        {
+            ImplicitConversionKind.Identity => true,
+            ImplicitConversionKind.NumericWidening => true,
+            ImplicitConversionKind.Reference => true,
+            ImplicitConversionKind.Boxing => true,
+            _ => false,
+        };
+
     private static bool UnifyForInference(Type? parameterType, Type? argumentType, Dictionary<string, Type> bounds)
     {
         if (parameterType is null || argumentType is null)
@@ -5355,8 +5389,32 @@ internal static class ClrOverloadResolution
                 }
                 catch (InvalidOperationException)
                 {
-                    // MLC cross-context: treat as inconclusive.
-                    return false;
+                    // MLC cross-context: fall through to the classifier below,
+                    // which compares by name and is safe across contexts.
+                }
+
+                // Issue #3681: C# fixing (§12.6.3.11) resolves a type parameter
+                // to the unique bound that every other bound converts to
+                // *implicitly* — not merely by reference assignment.
+                // `Type.IsAssignableFrom` above models neither boxing
+                // (`Assert.Equal<T>(TimeSpan, object)`, where C# fixes
+                // T = object) nor implicit numeric widening
+                // (`Assert.Equal<T>(2, byteValue)`, where C# fixes T = int),
+                // and it silently answers false whenever the two bounds were
+                // loaded through different reflection contexts — a host
+                // `System.Object` against a reference-context `TimeSpan`. Retry
+                // through this file's own classifier, which compares by name
+                // (cross-context safe) and is restricted here to the standard
+                // conversions C# admits when fixing.
+                if (IsInferenceBoundPromotion(existing, argumentType))
+                {
+                    return true;
+                }
+
+                if (IsInferenceBoundPromotion(argumentType, existing))
+                {
+                    bounds[parameterType.Name] = argumentType;
+                    return true;
                 }
 
                 return false;
