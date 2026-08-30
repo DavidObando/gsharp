@@ -83,28 +83,38 @@ internal sealed partial class ExpressionBinder
             {
                 TryResolveOpenGenericImportedType(typeClauseIdentifier.ValueText, out typeSymbol);
             }
-            else if (TryGetNestedUnboundGenericReflectionSegments(typeClause, out var reflectionSegments, out var firstGenericSegment))
+            else if (TryGetNestedUnboundGenericReflectionSegments(
+                typeClause,
+                out var reflectionSegments,
+                out var firstGenericSegment,
+                out var segmentNames,
+                out var segmentArities))
             {
                 var qualifiedType = ResolveNestedUnboundGenericType(
                     reflectionSegments,
                     firstGenericSegment,
                     out var reflectionName,
                     out var isAmbiguous);
-                if (qualifiedType == null)
+                if (qualifiedType != null)
                 {
-                    if (isAmbiguous)
-                    {
-                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, reflectionName);
-                    }
-                    else
-                    {
-                        Diagnostics.ReportUndefinedType(typeClause.Location, reflectionName);
-                    }
-
+                    typeSymbol = TypeSymbol.FromClrType(qualifiedType);
+                }
+                else if (isAmbiguous)
+                {
+                    Diagnostics.ReportAmbiguousImportedType(typeClause.Location, reflectionName);
                     return new BoundErrorExpression(null);
                 }
-
-                typeSymbol = TypeSymbol.FromClrType(qualifiedType);
+                else if (!TryResolveOpenGenericDeclaredNestedType(segmentNames, segmentArities, out typeSymbol))
+                {
+                    // Issue #3677: the reflection walk above only ever consults
+                    // REFERENCED assemblies, so the nested unbound spelling
+                    // (`typeof(Outer[_].Inner[_])`) could not name a type
+                    // declared in THIS compilation. The declaration table is
+                    // consulted last, so an imported match still wins exactly
+                    // as before.
+                    Diagnostics.ReportUndefinedType(typeClause.Location, reflectionName);
+                    return new BoundErrorExpression(null);
+                }
             }
             else if (typeClause.HasTypeArguments
                 && TryGetUnboundGenericArity(typeClause, out var arity))
@@ -135,12 +145,15 @@ internal sealed partial class ExpressionBinder
                 // GS0113 even though the bare `typeof(Slot)` form resolves it
                 // through `bindTypeClause`. Try the declaration table last, so
                 // an imported match still wins exactly as before.
-                if (!resolved
-                    && !isAmbiguous
-                    && !typeClause.HasQualifier
-                    && TryResolveOpenGenericDeclaredType(typeClauseIdentifier.ValueText, arity, out typeSymbol))
+                // Issue #3677: the QUALIFIED spelling (`typeof(A.B[_, _])`)
+                // needs the same fallback, walking the source enclosing-type /
+                // package chain segment by segment rather than by reflection
+                // name.
+                if (!resolved && !isAmbiguous)
                 {
-                    resolved = true;
+                    resolved = typeClause.HasQualifier
+                        ? TryResolveOpenGenericDeclaredQualifiedType(typeClause, arity, out typeSymbol)
+                        : TryResolveOpenGenericDeclaredType(typeClauseIdentifier.ValueText, arity, out typeSymbol);
                 }
 
                 if (!resolved)
@@ -284,12 +297,178 @@ internal sealed partial class ExpressionBinder
         _ => -1,
     };
 
+    /// <summary>
+    /// Issue #3677: whether a segment of a dotted open-generic
+    /// <c>typeof(...)</c> target resolved to a type whose declared shape
+    /// matches what the spelling asked for — a generic DEFINITION of exactly
+    /// <paramref name="arity"/> type parameters when the segment carried
+    /// <c>_</c> placeholders, and a non-generic (or already-constructed) type
+    /// when it carried none. Without the negative half a segment written
+    /// without placeholders could silently pick up a generic homonym.
+    /// </summary>
+    /// <param name="type">The type the segment resolved to.</param>
+    /// <param name="arity">The segment's requested arity, or -1 when it carried no placeholders.</param>
+    /// <returns>Whether the resolved type matches the requested shape.</returns>
+    private static bool DeclaredSegmentShapeMatches(TypeSymbol type, int arity)
+        => arity < 0
+            ? DeclaredGenericDefinitionArity(type) < 0
+            : DeclaredGenericDefinitionArity(type) == arity;
+
+    /// <summary>
+    /// Issue #3677: resolves the QUALIFIED explicit-arity unbound-generic
+    /// spelling (<c>typeof(Fixtures.IQuery[_])</c>,
+    /// <c>typeof(Demo.Fixtures.IChain[_, _])</c>) against types DECLARED IN
+    /// THIS COMPILATION. The qualified branch of
+    /// <see cref="BindTypeOfExpression"/> resolves through
+    /// <c>scope.References.TryResolveType(DottedName + "`" + arity)</c>, a
+    /// reflection-name lookup that only ever sees referenced assemblies, so a
+    /// source-declared nested generic was unreachable through the only
+    /// spelling that can select an arity.
+    /// </summary>
+    /// <param name="typeClause">The <c>typeof(...)</c> target type clause.</param>
+    /// <param name="arity">The requested arity, carried by the deepest segment's <c>_</c> placeholders.</param>
+    /// <param name="type">The resolved open generic definition on success.</param>
+    /// <returns><see langword="true"/> when the dotted name resolved to a declared generic definition of that arity.</returns>
+    private bool TryResolveOpenGenericDeclaredQualifiedType(TypeClauseSyntax typeClause, int arity, out TypeSymbol? type)
+    {
+        type = null;
+        var names = typeClause.DottedName.Split('.');
+        if (names.Length < 2)
+        {
+            return false;
+        }
+
+        var arities = new int[names.Length];
+        Array.Fill(arities, -1);
+        arities[names.Length - 1] = arity;
+        return TryResolveOpenGenericDeclaredNestedType(names, arities, out type);
+    }
+
+    /// <summary>
+    /// Issue #3677: resolves a dotted open-generic <c>typeof(...)</c> target
+    /// against the declaration table by walking SOURCE symbols — the head
+    /// segment through the ordinary source-type lookup (so lexical nesting,
+    /// packages and imports apply), every later segment as a nested type of the
+    /// previously-resolved container. Leading segments that do not name a type
+    /// are skipped — that is how a package qualifier
+    /// (<c>Fixtures2523.IQuery2523[_]</c>) resolves — but only when they spell
+    /// the head's declaring package (see
+    /// <see cref="PrefixMatchesDeclaringPackage"/>); the longest chain (the
+    /// earliest viable head) wins, matching
+    /// <see cref="Binder.TryResolveUserNestedTypeChain"/>.
+    /// Every segment's declared shape is verified against
+    /// <paramref name="arities"/>, so a wrong-arity spelling keeps reporting
+    /// GS0113 rather than silently binding a same-named homonym.
+    /// </summary>
+    /// <param name="names">The raw per-segment names, outermost first.</param>
+    /// <param name="arities">The per-segment requested arity, or -1 for a segment with no <c>_</c> placeholders.</param>
+    /// <param name="type">The resolved type on success.</param>
+    /// <returns><see langword="true"/> when the whole chain resolved to declared types of the requested shapes.</returns>
+    private bool TryResolveOpenGenericDeclaredNestedType(string[] names, int[] arities, out TypeSymbol? type)
+    {
+        type = null;
+        for (var head = 0; head < names.Length; head++)
+        {
+            if (!binderCtx.TryLookupSourceType(
+                    scope,
+                    names[head],
+                    arities[head],
+                    getCurrentFunction(),
+                    out var current,
+                    out _)
+                || !DeclaredSegmentShapeMatches(current, arities[head])
+                || !PrefixMatchesDeclaringPackage(current, names, head))
+            {
+                continue;
+            }
+
+            var resolved = true;
+            for (var i = head + 1; i < names.Length; i++)
+            {
+                var container = (current as StructSymbol)?.Definition ?? current;
+                if (!scope.TryLookupNestedTypeAlias(container, names[i], arities[i], out var nested)
+                    && !(container is StructSymbol containerStruct
+                        && scope.TryLookupNestedTypeAliasIncludingInherited(
+                            containerStruct,
+                            names[i],
+                            arities[i],
+                            out nested,
+                            out _)))
+                {
+                    resolved = false;
+                    break;
+                }
+
+                if (!DeclaredSegmentShapeMatches(nested, arities[i]))
+                {
+                    resolved = false;
+                    break;
+                }
+
+                current = nested;
+            }
+
+            if (resolved)
+            {
+                type = current;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3677: whether the dotted segments BEFORE the segment that named
+    /// the chain head spell that head's declaring package — either in full
+    /// (<c>Demo.Binding.Fixtures.IQuery[_]</c>) or as the trailing part of it
+    /// (<c>Fixtures.IQuery[_]</c> from inside <c>Demo.Binding</c>), which is the
+    /// relative form C# namespace qualification translates to and the shape
+    /// migrated code overwhelmingly uses. Leading segments have to be skipped
+    /// for a package qualifier to resolve at all, but skipping them unchecked
+    /// would accept any prefix whatsoever
+    /// (<c>typeof(Nonsense.Fixtures.IQuery[_])</c>).
+    /// </summary>
+    /// <param name="head">The type the head segment resolved to.</param>
+    /// <param name="names">The raw per-segment names, outermost first.</param>
+    /// <param name="headIndex">The index of the segment that named <paramref name="head"/>.</param>
+    /// <returns>Whether the skipped prefix names the declaring package.</returns>
+    private static bool PrefixMatchesDeclaringPackage(TypeSymbol head, string[] names, int headIndex)
+    {
+        if (headIndex == 0)
+        {
+            return true;
+        }
+
+        var declaringPackage = head switch
+        {
+            StructSymbol structSymbol => structSymbol.PackageName,
+            InterfaceSymbol interfaceSymbol => interfaceSymbol.PackageName,
+            EnumSymbol enumSymbol => enumSymbol.PackageName,
+            DelegateTypeSymbol delegateSymbol => delegateSymbol.PackageName,
+            _ => null,
+        };
+
+        if (declaringPackage == null)
+        {
+            return false;
+        }
+
+        var prefix = string.Join(".", names, 0, headIndex);
+        return string.Equals(prefix, declaringPackage, StringComparison.Ordinal)
+            || declaringPackage.EndsWith("." + prefix, StringComparison.Ordinal);
+    }
+
     private bool TryGetNestedUnboundGenericReflectionSegments(
         TypeClauseSyntax typeClause,
         out string[] segments,
-        out int firstGenericSegment)
+        out int firstGenericSegment,
+        out string[] names,
+        out int[] arities)
     {
         segments = Array.Empty<string>();
+        names = Array.Empty<string>();
+        arities = Array.Empty<int>();
         firstGenericSegment = -1;
         if (!typeClause.HasQualifier || typeClause.IsArray || typeClause.IsNullable || lookupType("_") != null)
         {
@@ -302,6 +481,13 @@ internal sealed partial class ExpressionBinder
         {
             segments[i] = typeClause.QualifierIdentifierTokens[i - 1].Text;
         }
+
+        // Issue #3677: the source-declaration fallback walks SYMBOLS, not
+        // `+`-joined reflection names, so it needs the raw per-segment name and
+        // arity next to the arity-mangled reflection segments built below.
+        names = (string[])segments.Clone();
+        arities = new int[segments.Length];
+        Array.Fill(arities, -1);
 
         for (var i = 0; i < segments.Length; i++)
         {
@@ -322,6 +508,7 @@ internal sealed partial class ExpressionBinder
             }
 
             firstGenericSegment = firstGenericSegment < 0 ? i : firstGenericSegment;
+            arities[i] = args.Count;
             segments[i] += "`" + args.Count;
         }
 
