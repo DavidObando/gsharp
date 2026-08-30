@@ -2804,9 +2804,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedValue;
             }
 
+            // Issue #3676: in a nullable-ENABLED compilation the promoted value
+            // to bridge is a generated-code declaration this translator
+            // repainted `T?` on direct null evidence — the LSP
+            // `Location { Uri = DocumentUri.FromFileSystemPath(path) }` shape,
+            // where the callee's `return null` branch is real but the target
+            // property has no null evidence of its own and stays non-null. The
+            // C# accepted the initializer only by trusting the generated
+            // annotation, so asserting restores the contract it assumed.
             return (this.NullableReferenceValueMayBeNull(valueExpression)
                     || (this.IsObliviousCompilation()
-                        && this.IsNullablePromotedValue(valueExpression)))
+                        ? this.IsNullablePromotedValue(valueExpression)
+                        : this.IsGeneratedDeclarationPromotedValue(valueExpression)))
                 ? EnsureNonNullAssertion(translatedValue)
                 : translatedValue;
         }
