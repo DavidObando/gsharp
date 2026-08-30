@@ -1257,10 +1257,19 @@ internal sealed class UserTokenResolver
         FieldSymbol? defField = null;
         foreach (var candidate in def.Fields)
         {
-            if (candidate.Name == fieldOnContaining.Name)
+            // Issue #3689: prefer the exact field instance. Matching by name
+            // alone silently aliases two same-named slots with different
+            // signatures onto the first one's blob (state machines used to
+            // hoist every lowered `for` temp as `<>5__$enum`).
+            if (ReferenceEquals(candidate, fieldOnContaining))
             {
                 defField = candidate;
                 break;
+            }
+
+            if (defField == null && candidate.Name == fieldOnContaining.Name)
+            {
+                defField = candidate;
             }
         }
 

@@ -556,6 +556,7 @@ internal sealed class StateMachineEmitter
             }
 
             var hoistedFields = new Dictionary<VariableSymbol, FieldSymbol>();
+            var hoistedOrdinal = 1;
             foreach (var local in plan.HoistedLocals)
             {
                 if (fieldMap.ContainsKey(local))
@@ -563,7 +564,21 @@ internal sealed class StateMachineEmitter
                     continue;
                 }
 
-                var field = new FieldSymbol("<>5__" + local.Name, local.Type, Accessibility.Public);
+                // Issue #3689: the hoisted-slot name must be unique per state
+                // machine. Two distinct locals routinely share a name — every
+                // lowered `for` loop introduces its own `$enum` temp — and the
+                // MemberRef path for a generic state machine
+                // (UserTokenResolver.GetUserStructFieldRef) resolves the
+                // definition field BY NAME, so same-named slots with different
+                // types all collapsed onto the first one's signature. In a
+                // generic iterator with nested loops that produced
+                // `IEnumerator<Node>` where `IEnumerator<T>` was expected
+                // (ilverify StackUnexpected). Use the same
+                // `<name>5__N` ordinal form the async builder already emits.
+                var field = new FieldSymbol(
+                    GeneratedNames.HoistedLocalField(local.Name, hoistedOrdinal++),
+                    local.Type,
+                    Accessibility.Public);
                 fields.Add(field);
                 fieldMap[local] = field;
                 hoistedFields[local] = field;
@@ -890,6 +905,7 @@ internal sealed class StateMachineEmitter
                 fieldMap[plan.Function.ThisParameter] = thisProxyField;
             }
 
+            var hoistedOrdinal = 1;
             foreach (var local in plan.HoistedLocals)
             {
                 if (fieldMap.ContainsKey(local))
@@ -897,7 +913,13 @@ internal sealed class StateMachineEmitter
                     continue;
                 }
 
-                var field = new FieldSymbol("<>5__" + local.Name, local.Type, Accessibility.Public);
+                // Issue #3689: see the sync-iterator builder above — hoisted
+                // slot names must be unique, because the generic state
+                // machine's field MemberRefs are resolved by name.
+                var field = new FieldSymbol(
+                    GeneratedNames.HoistedLocalField(local.Name, hoistedOrdinal++),
+                    local.Type,
+                    Accessibility.Public);
                 fields.Add(field);
                 fieldMap[local] = field;
             }
