@@ -301,9 +301,33 @@ public sealed partial class CSharpToGSharpTranslator
                             this.TranslateExpression(conditionalAccess.Expression));
                     }
 
+                    // Issue #3700: gsc's `?[i]` is a single postfix STEP whose
+                    // result is `T?`, unlike `?.` — which swallows the whole
+                    // continuation into its guarded branch. A C# `a?[i].B`
+                    // therefore cannot be printed flat: gsc reads it as
+                    // `(a?[i]).B` and rejects the dereference of a `T?`
+                    // (GS0158 / GS0116). Re-split it at the index so the
+                    // continuation hangs off a second `?` seam instead.
+                    if (TryFindConditionalIndexContinuation(
+                            conditionalAccess.WhenNotNull,
+                            out ElementBindingExpressionSyntax chainedIndexBinding))
+                    {
+                        return this.TranslateConditionalIndexWithContinuation(
+                            conditionalAccess,
+                            chainedIndexBinding);
+                    }
+
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
+
+                case ElementBindingExpressionSyntax replacedBinding
+                    when this.state.ConditionalElementBindingReplacements.TryGetValue(
+                        replacedBinding,
+                        out GExpression bindingReplacement):
+                    // Issue #3700: the index step is already the inner `?` seam's
+                    // target; the rest of the chain reads the conditional receiver.
+                    return bindingReplacement;
 
                 case MemberBindingExpressionSyntax memberBinding:
                     // Issue #1879: `word?.DoubledLength` binds to the same
@@ -589,6 +613,110 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 this.state.ConditionalElementReceivers.Remove(elementBinding);
             }
+        }
+
+        /// <summary>
+        /// Issue #3700: matches a conditional-access continuation that is rooted
+        /// at a null-conditional INDEX (<c>a?[i].B</c>, <c>a?[i].M()</c>,
+        /// <c>a?[i][j]</c>) and carries at least one further postfix step.
+        /// </summary>
+        /// <remarks>
+        /// gsc parses <c>?.</c> and <c>?[</c> asymmetrically: the member form
+        /// takes the whole trailing chain as its guarded continuation, while the
+        /// index form is one postfix step whose result is <c>T?</c>. Printing the
+        /// C# shape flat therefore says <c>(a?[i]).B</c> to gsc, which rejects
+        /// the dereference. Asserting the index result instead
+        /// (<c>a?[i]!!.B</c>) would be actively wrong: it throws when <c>a</c>
+        /// itself is nil, which is the case <c>?[</c> exists to short-circuit.
+        /// </remarks>
+        /// <param name="whenNotNull">The conditional-access continuation.</param>
+        /// <param name="elementBinding">The leading <c>?[i]</c> binding when matched.</param>
+        /// <returns><see langword="true"/> when the continuation must be re-split.</returns>
+        private static bool TryFindConditionalIndexContinuation(
+            ExpressionSyntax whenNotNull,
+            out ElementBindingExpressionSyntax elementBinding)
+        {
+            elementBinding = null;
+            for (ExpressionSyntax current = whenNotNull; current != null;)
+            {
+                switch (current)
+                {
+                    case ParenthesizedExpressionSyntax parenthesized:
+                        current = parenthesized.Expression;
+                        continue;
+
+                    // A nested `?.` further along the chain keeps its own seam;
+                    // keep walking to the index at the root of the continuation.
+                    case ConditionalAccessExpressionSyntax nested:
+                        current = nested.Expression;
+                        continue;
+
+                    case InvocationExpressionSyntax invocation:
+                        current = invocation.Expression;
+                        continue;
+
+                    case MemberAccessExpressionSyntax memberAccess:
+                        current = memberAccess.Expression;
+                        continue;
+
+                    case ElementAccessExpressionSyntax elementAccess:
+                        current = elementAccess.Expression;
+                        continue;
+
+                    case ElementBindingExpressionSyntax binding:
+                        elementBinding = binding;
+                        current = null;
+                        continue;
+
+                    default:
+                        return false;
+                }
+            }
+
+            // Fire only when the step DIRECTLY after the index is an ordinary
+            // `.` / `[`. A bare `a?[i]` needs no second seam, and `a?[i]?.b`
+            // already has one (re-splitting it would print `[i]??.b`).
+            return elementBinding != null
+                && ((elementBinding.Parent is MemberAccessExpressionSyntax member
+                        && member.Expression == elementBinding)
+                    || (elementBinding.Parent is ElementAccessExpressionSyntax element
+                        && element.Expression == elementBinding));
+        }
+
+        /// <summary>
+        /// Issue #3700: emits <c>a?[i]?<em>rest</em></c> for a C# <c>a?[i].rest</c>,
+        /// giving the continuation its own guarded seam (see
+        /// <see cref="TryFindConditionalIndexContinuation"/>).
+        /// </summary>
+        /// <param name="conditionalAccess">The C# conditional access.</param>
+        /// <param name="elementBinding">Its leading <c>?[i]</c> binding.</param>
+        /// <returns>The nested conditional-access form.</returns>
+        private GExpression TranslateConditionalIndexWithContinuation(
+            ConditionalAccessExpressionSyntax conditionalAccess,
+            ElementBindingExpressionSyntax elementBinding)
+        {
+            GExpression receiver = this.TranslateExpression(conditionalAccess.Expression);
+
+            // Translate the index step first, while the binding still renders as
+            // the index itself; it becomes the inner seam's target.
+            GExpression indexStep = this.TranslateExpression(elementBinding);
+
+            this.state.ConditionalElementBindingReplacements.Add(
+                elementBinding,
+                new ConditionalReceiverExpression());
+            GExpression continuation;
+            try
+            {
+                continuation = this.TranslateExpression(conditionalAccess.WhenNotNull);
+            }
+            finally
+            {
+                this.state.ConditionalElementBindingReplacements.Remove(elementBinding);
+            }
+
+            return new ConditionalAccessExpression(
+                receiver,
+                new ConditionalAccessExpression(indexStep, continuation));
         }
 
         private bool ConditionalIndexReceiverIsNullable(ExpressionSyntax receiver)

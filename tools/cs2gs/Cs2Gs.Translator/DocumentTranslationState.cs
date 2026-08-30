@@ -223,6 +223,13 @@ internal sealed class DocumentTranslationState
     public Dictionary<ElementBindingExpressionSyntax, GExpression> ConditionalElementReceivers { get; } =
         new Dictionary<ElementBindingExpressionSyntax, GExpression>();
 
+    // Issue #3700: while re-splitting a `?[i]`-rooted continuation into a second
+    // `?` seam, the element binding itself has already been emitted as the inner
+    // seam's TARGET, so the rest of the chain must translate against the
+    // conditional receiver instead of re-emitting the index.
+    public Dictionary<ElementBindingExpressionSyntax, GExpression> ConditionalElementBindingReplacements { get; } =
+        new Dictionary<ElementBindingExpressionSyntax, GExpression>();
+
     // Issue #1902: numbers the `__qN` tuple parameter synthesized to carry a
     // query's transparent identifier (multiple in-scope range variables)
     // through a lambda that C#'s query-translation spec (§12.19.3) would bind

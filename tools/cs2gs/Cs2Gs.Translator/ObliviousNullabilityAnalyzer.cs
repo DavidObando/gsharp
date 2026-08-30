@@ -2920,6 +2920,23 @@ internal static class ObliviousNullabilityAnalyzer
             if (descendant is YieldStatementSyntax { Expression: { } yielded }
                 && descendant.IsKind(SyntaxKind.YieldReturnStatement))
             {
+                // Issue #3700: a yield that a syntactic null-check guard proves
+                // non-null yields no evidence about the ELEMENT. The canonical
+                // shape is `var child = (T)p.GetValue(o); if (child != null) {
+                // yield return child; }` — the local is nullable because the
+                // reflective read lowers to `as`, but the element never is.
+                // Promoting it anyway widens the iterator's element to `T?`,
+                // and that `T?` then escapes through every `foreach` variable
+                // and recursive call the sequence feeds (gsc GS0154). The
+                // repair belongs at the DECLARATION, exactly as it does for a
+                // guarded constructor argument above: gsc's own smart-cast
+                // narrows the same guarded read at the yield seam, so standing
+                // the promotion down reintroduces no `T? -> T`.
+                if (IsNullGuardDominatedRead(yielded, model))
+                {
+                    continue;
+                }
+
                 ApplyReturnValue(
                     canonicalReturn,
                     yielded,
