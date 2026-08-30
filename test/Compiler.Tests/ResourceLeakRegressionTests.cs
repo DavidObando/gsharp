@@ -134,7 +134,15 @@ public class ResourceLeakRegressionTests
     private static object InvokeMemberLookupCache(Type type)
     {
         var memberLookup = typeof(ReferenceResolver).Assembly.GetType("GSharp.Core.CodeAnalysis.Binding.MemberLookup");
-        var method = memberLookup?.GetMethod("SafeGetMethodsIncludingSelfAndInterfaces", BindingFlags.Public | BindingFlags.Static);
+
+        // Issue #3679 added an `includeInternal` overload, so the probe must
+        // name the parameter types instead of matching on the name alone.
+        var method = memberLookup?.GetMethod(
+            "SafeGetMethodsIncludingSelfAndInterfaces",
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            new[] { typeof(Type), typeof(string) },
+            modifiers: null);
         return method?.Invoke(null, new object[] { type, "ToString" });
     }
 
