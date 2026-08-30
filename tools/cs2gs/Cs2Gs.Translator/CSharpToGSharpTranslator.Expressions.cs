@@ -843,6 +843,17 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
         {
             GExpression translated = this.TranslateExpression(recv);
+
+            // Issue #3700: a `?.` / `?[` CONDITIONAL RECEIVER is null-guarded by
+            // the seam that produced it, so an assertion there is at best
+            // redundant and at worst masks the guard — and it is not even
+            // printable, since the receiver renders as the empty string and the
+            // assertion would split the `?.` token (`[i]?!!.B`).
+            if (translated is ConditionalReceiverExpression)
+            {
+                return translated;
+            }
+
             bool iteratorForeachReceiverRequiresAssertion =
                 this.IteratorForeachReceiverRequiresAssertion(recv);
             bool importedGenericTupleElementRequiresAssertion =
