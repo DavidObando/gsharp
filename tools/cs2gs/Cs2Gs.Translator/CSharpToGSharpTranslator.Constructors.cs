@@ -2961,7 +2961,9 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     returnPrologue.Add(new ReturnStatement(
-                        this.CoercePointerConversion(ret.Expression, returnValue),
+                        this.CoerceCovariantArrayConversion(
+                            ret.Expression,
+                            this.CoercePointerConversion(ret.Expression, returnValue)),
                         isRef: ret.Expression is RefExpressionSyntax));
                     return returnPrologue;
                 }

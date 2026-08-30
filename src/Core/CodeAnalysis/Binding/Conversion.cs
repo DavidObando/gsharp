@@ -1275,7 +1275,8 @@ public sealed class Conversion
         if (from is SliceTypeSymbol
             && (to is SliceTypeSymbol or ArrayTypeSymbol || to?.ClrType?.IsArray == true))
         {
-            return allowExplicitReference && HasCheckedReferenceConversion(from, to)
+            return allowExplicitReference
+                && (HasCheckedReferenceConversion(from, to) || IsCovariantArrayUpcast(from, to))
                 ? Conversion.Explicit
                 : Conversion.None;
         }
@@ -1302,7 +1303,8 @@ public sealed class Conversion
                 return Conversion.Implicit;
             }
 
-            return allowExplicitReference && HasCheckedReferenceConversion(from, to)
+            return allowExplicitReference
+                && (HasCheckedReferenceConversion(from, to) || IsCovariantArrayUpcast(from, to))
                 ? Conversion.Explicit
                 : Conversion.None;
         }
@@ -1851,6 +1853,85 @@ public sealed class Conversion
 
         return false;
     }
+
+    /// <summary>
+    /// Issue #3685: reports whether a one-dimensional array/slice pair forms a
+    /// CLR-covariant reference UPCAST — the source element is a reference type
+    /// that converts to the target element by an implicit reference conversion
+    /// (<c>[]DirectoryInfo</c> → <c>[]FileSystemInfo</c>).
+    /// </summary>
+    /// <remarks>
+    /// G# slices stay INVARIANT for IMPLICIT conversions (issue #2516): an
+    /// unannounced covariant assignment is the classic
+    /// <see cref="ArrayTypeMismatchException"/> hazard, and no implicit branch
+    /// consults this predicate. But the runtime representation of <c>[]T</c> is
+    /// exactly a CLR <c>T[]</c> (ADR-0016), which the CLR already treats as a
+    /// <c>B[]</c> for any base <c>B</c> of <c>T</c>, so the conversion cannot
+    /// fail — it is a no-op reference upcast. Requiring it to be SPELLED
+    /// (<c>cast[[]FileSystemInfo](dirs)</c>) keeps the hazard visible at the
+    /// use site while giving migrated C# (whose array covariance is implicit)
+    /// a faithful, identity-preserving target — the alternative, a projecting
+    /// copy, would silently change reference identity.
+    /// </remarks>
+    /// <param name="from">Static source type.</param>
+    /// <param name="to">Requested target type.</param>
+    /// <returns><see langword="true"/> for a covariant one-dimensional array upcast.</returns>
+    internal static bool IsCovariantArrayUpcast(TypeSymbol? from, TypeSymbol? to)
+    {
+        var sourceElement = OneDimensionalArrayElement(from);
+        var targetElement = OneDimensionalArrayElement(to);
+        if (sourceElement == null
+            || targetElement == null
+            || !IsReferenceLikeTarget(sourceElement)
+            || !IsReferenceLikeTarget(targetElement)
+            || AreTypeArgumentsEquivalent(sourceElement, targetElement))
+        {
+            return false;
+        }
+
+        // The relationship must be a genuine CLR REFERENCE widening, not merely
+        // "some implicit conversion exists". When both elements are CLR-backed,
+        // metadata assignability is the authority — it excludes an imported
+        // `op_Implicit` between two unrelated classes, which converts values but
+        // establishes no array relationship, so treating it as a no-op upcast
+        // would hand out a type-unsafe array. Only when an element's `ClrType`
+        // is still unavailable (a same-compilation class during binding) does
+        // the symbolic probe stand in; owned reference types cannot declare
+        // conversion operators (those require an owned STRUCT), so no
+        // user-defined conversion can slip through that arm.
+        //
+        // The probe runs WITHOUT the explicit-reference fallback either way:
+        // only a widening (upcast) element relationship is covariant.
+        if (sourceElement.ClrType is { } sourceClr && targetElement.ClrType is { } targetClr)
+        {
+            return ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr);
+        }
+
+        var element = ClassifyCore(
+            sourceElement,
+            targetElement,
+            allowStructuralProjection: false,
+            allowExplicitReference: false);
+        return element.Exists && element.IsImplicit;
+    }
+
+    /// <summary>
+    /// Returns the element type of a one-dimensional array-like type
+    /// (<see cref="SliceTypeSymbol"/>, <see cref="ArrayTypeSymbol"/>, or an
+    /// imported SZ-array surfaced through metadata), or <see langword="null"/>
+    /// when <paramref name="type"/> is not one.
+    /// </summary>
+    /// <param name="type">The candidate array-like type.</param>
+    /// <returns>The element type, or <see langword="null"/>.</returns>
+    internal static TypeSymbol? OneDimensionalArrayElement(TypeSymbol? type) => type switch
+    {
+        SliceTypeSymbol slice => slice.ElementType,
+        ArrayTypeSymbol array => array.ElementType,
+        RectangularArrayTypeSymbol => null,
+        { ClrType: { IsArray: true } clrArray } when clrArray.GetArrayRank() == 1
+            => TypeSymbol.FromClrType(clrArray.GetElementType()),
+        _ => null,
+    };
 
     /// <summary>
     /// Issue #2354 follow-up: true when a bare (non-<c>?</c>) <paramref
