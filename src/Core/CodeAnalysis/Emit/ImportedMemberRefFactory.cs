@@ -407,7 +407,64 @@ internal sealed class ImportedMemberRefFactory
             return this.GetTypeHandleForMember(nullableType);
         }
 
+        // Issue #3678: `typeof(Slot)` / `typeof(Slot[_])` names the OPEN
+        // generic DEFINITION of a type declared in this compilation, and
+        // `ldtoken` of a definition takes its TypeDef row. The generic-
+        // reference TypeSpec `GetElementTypeToken` builds instead
+        // (`Slot<!0>`) names VAR slots that have no binding in this scope, so
+        // the emitted PE failed to load with BadImageFormatException the
+        // moment the `typeof` ran.
+        if (TryGetOpenGenericDefinition(type, out var definition)
+            && this.TryGetUserTypeDef(definition, out var definitionHandle))
+        {
+            return definitionHandle;
+        }
+
         return this.GetElementTypeToken(type);
+    }
+
+    /// <summary>
+    /// Issue #3678: the user-declared generic DEFINITION behind
+    /// <paramref name="type"/> — a type that declares type parameters and
+    /// supplies no type arguments — or <see langword="false"/> for anything
+    /// else (a constructed instantiation, a non-generic type, an imported
+    /// CLR type, which already carries its own open <see cref="Type"/>).
+    /// </summary>
+    /// <param name="type">The candidate type.</param>
+    /// <param name="definition">The open generic definition on success.</param>
+    /// <returns>Whether <paramref name="type"/> is an open user generic definition.</returns>
+    private static bool TryGetOpenGenericDefinition(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? definition)
+    {
+        definition = type switch
+        {
+            StructSymbol { IsGenericDefinition: true } structSym => structSym,
+            InterfaceSymbol { IsGenericDefinition: true } interfaceSym => interfaceSym,
+            _ => null,
+        };
+
+        return definition != null;
+    }
+
+    /// <summary>
+    /// Issue #3678: the emitted TypeDef row for a user-declared type.
+    /// </summary>
+    /// <param name="definition">The type definition symbol.</param>
+    /// <param name="handle">The TypeDef handle on success.</param>
+    /// <returns>Whether a TypeDef row has been emitted for the definition.</returns>
+    private bool TryGetUserTypeDef(TypeSymbol definition, out EntityHandle handle)
+    {
+        switch (definition)
+        {
+            case StructSymbol structSym when this.cache.StructTypeDefs.TryGetValue(structSym, out var structHandle):
+                handle = structHandle;
+                return true;
+            case InterfaceSymbol interfaceSym when this.cache.InterfaceTypeDefs.TryGetValue(interfaceSym, out var interfaceHandle):
+                handle = interfaceHandle;
+                return true;
+            default:
+                handle = default;
+                return false;
+        }
     }
 
     private AssemblyReferenceHandle GetAssemblyReference(Assembly assembly)

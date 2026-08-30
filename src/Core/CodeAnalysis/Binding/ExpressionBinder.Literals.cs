@@ -128,6 +128,21 @@ internal sealed partial class ExpressionBinder
                         out isAmbiguous);
                 }
 
+                // Issue #3678: both walks above only ever consult REFERENCED
+                // assemblies, so the explicit-arity spelling could not name a
+                // generic type declared in THIS compilation —
+                // `typeof(Slot[_])` on a source `class Slot[T]` failed with
+                // GS0113 even though the bare `typeof(Slot)` form resolves it
+                // through `bindTypeClause`. Try the declaration table last, so
+                // an imported match still wins exactly as before.
+                if (!resolved
+                    && !isAmbiguous
+                    && !typeClause.HasQualifier
+                    && TryResolveOpenGenericDeclaredType(typeClauseIdentifier.ValueText, arity, out typeSymbol))
+                {
+                    resolved = true;
+                }
+
                 if (!resolved)
                 {
                     // Issue #2012 (N3): "ambiguous across imports" and "no
@@ -226,6 +241,48 @@ internal sealed partial class ExpressionBinder
         type = TypeSymbol.FromClrType(match);
         return true;
     }
+
+    /// <summary>
+    /// Issue #3678: resolves an explicit-arity unbound generic
+    /// (<c>Slot[_]</c>, <c>Pair[_, _]</c>) to a generic type DECLARED IN THIS
+    /// COMPILATION, at the EXACT requested arity. The imported walks
+    /// (<see cref="TryResolveOpenGenericImportedType"/> /
+    /// <see cref="TryResolveOpenGenericImportedTypeWithArity"/>) only search
+    /// referenced assemblies, so without this a source generic was reachable
+    /// through the bare <c>typeof(Slot)</c> spelling but not through the
+    /// arity-bearing one — the only spelling available when the base name is
+    /// shared by several arities.
+    /// </summary>
+    /// <param name="name">The bare generic base name.</param>
+    /// <param name="arity">The exact requested arity.</param>
+    /// <param name="type">The resolved open generic definition on success.</param>
+    /// <returns><see langword="true"/> when a declared generic definition of that arity was found.</returns>
+    private bool TryResolveOpenGenericDeclaredType(string name, int arity, out TypeSymbol? type)
+    {
+        type = null;
+        var candidate = lookupType(name);
+        if (candidate == null || DeclaredGenericDefinitionArity(candidate) != arity)
+        {
+            return false;
+        }
+
+        type = candidate;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3678: the type-parameter count of a source generic type
+    /// DEFINITION (never a constructed instantiation, whose type arguments are
+    /// already supplied), or <c>-1</c> for anything else.
+    /// </summary>
+    /// <param name="type">The candidate type.</param>
+    /// <returns>The definition's arity, or <c>-1</c>.</returns>
+    private static int DeclaredGenericDefinitionArity(TypeSymbol type) => type switch
+    {
+        StructSymbol { IsGenericDefinition: true } structSymbol => structSymbol.TypeParameters.Length,
+        InterfaceSymbol { IsGenericDefinition: true } interfaceSymbol => interfaceSymbol.TypeParameters.Length,
+        _ => -1,
+    };
 
     private bool TryGetNestedUnboundGenericReflectionSegments(
         TypeClauseSyntax typeClause,
