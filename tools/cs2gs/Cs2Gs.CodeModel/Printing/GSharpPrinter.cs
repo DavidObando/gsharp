@@ -1819,14 +1819,23 @@ public static class GSharpPrinter
         var sb = new StringBuilder();
         sb.Append(RenderAttributeBlock(declaration.Attributes, indent));
         sb.Append(pad);
+        sb.Append(RenderVisibility(declaration.Visibility));
         if (declaration.IsUnsafe)
         {
-            // ADR-0122 / issue #1014: the `unsafe` contextual modifier precedes
-            // the accessibility keyword (`unsafe public class …`).
+            // ADR-0122 / issue #1202 (issue #3684, family F9): the canonical
+            // aggregate head is `[visibility]? [unsafe]? [open|sealed]? …` —
+            // `ParseMember` consumes the accessibility keyword BEFORE
+            // `TryDetectAggregateDeclarationHead` runs, so an `unsafe` that
+            // precedes the visibility keyword is not recognised as a
+            // declaration head at all and the token parses as an expression
+            // statement (GS0125 `Variable 'unsafe' doesn't exist`). Emitting
+            // it AFTER the visibility keyword matches the grammar; the
+            // modifier then actually establishes the unsafe context, which is
+            // what makes a `*T` member signature legal (otherwise `*T` means a
+            // managed by-ref and GS0243 rejects it as a parameter type).
             sb.Append("unsafe ");
         }
 
-        sb.Append(RenderVisibility(declaration.Visibility));
         if (declaration.IsOpen)
         {
             sb.Append("open ");

@@ -905,6 +905,29 @@ internal sealed partial class DeclarationBinder
                 }
 
                 return false;
+
+            // Issue #3684 (family F11): a flags-enum combination —
+            // `@AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)`
+            // — is the single most common attribute argument in the BCL's own
+            // surface, and it is a compile-time constant per ECMA-335 II.23.3
+            // (the blob carries the folded underlying primitive). It parses as
+            // a binary expression, so like the unary case above it never
+            // reached the enum-literal fallthrough. Fold it with the same
+            // constant evaluator the `const`-field binder uses and accept only
+            // serialisable (primitive / string / enum) results.
+            case BinaryExpressionSyntax binarySyntax:
+                if (bindExpression(binarySyntax) is { } boundBinary
+                    && boundBinary.Type is { } binaryType
+                    && ConstantExpressionEvaluator.TryEvaluate(boundBinary, out var foldedBinary)
+                    && foldedBinary is not null
+                    && IsSerialisableAttributeConstant(binaryType))
+                {
+                    value = foldedBinary;
+                    type = binaryType;
+                    return true;
+                }
+
+                return false;
         }
 
         // Issue #177: accept BoundLiteralExpression whose static type is an
@@ -969,7 +992,19 @@ internal sealed partial class DeclarationBinder
         // values via Array.GetValue — so a runtime-equivalent container
         // element type is exact.
         var containerElementType = ResolveRuntimeContainerElementType(elementClrType);
-        var result = Array.CreateInstance(containerElementType, elements.Count);
+
+        // Issue #3684 (family F11): bind every element FIRST, because a
+        // `typeof(T)` naming a type declared in THIS compilation has no CLR
+        // `Type` yet — `TryBindAttributeArgument` hands back the `TypeSymbol`
+        // placeholder instead (the same placeholder the SCALAR `typeof`
+        // argument position has always carried, and which
+        // `CustomAttributeEncoder.WriteCustomAttributeFixedArg` already
+        // serialises). A `Type[]` container cannot hold that placeholder, so
+        // `SetValue` threw and `@Property(Arbitrary: []Type{typeof(Local)})`
+        // was rejected as non-constant. Widen the CONTAINER to `object[]` in
+        // that case; the blob is written from the SIGNATURE's element type, so
+        // the container's own element type never reaches metadata.
+        var elementValues = new object?[elements.Count];
         for (int i = 0; i < elements.Count; i++)
         {
             if (!TryBindAttributeArgument(elements[i], out var elementValue, out _))
@@ -977,9 +1012,19 @@ internal sealed partial class DeclarationBinder
                 return false;
             }
 
+            elementValues[i] = elementValue;
+            if (elementValue is TypeSymbol)
+            {
+                containerElementType = typeof(object);
+            }
+        }
+
+        var result = Array.CreateInstance(containerElementType, elements.Count);
+        for (int i = 0; i < elements.Count; i++)
+        {
             try
             {
-                result.SetValue(CoerceAttributeElement(elementValue, containerElementType), i);
+                result.SetValue(CoerceAttributeElement(elementValues[i], containerElementType), i);
             }
             catch
             {

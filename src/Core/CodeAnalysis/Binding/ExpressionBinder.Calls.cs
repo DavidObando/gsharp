@@ -1492,7 +1492,39 @@ internal sealed partial class ExpressionBinder
             }
 
             var argument = boundArguments[0];
-            if (Conversion.HasCheckedReferenceConversion(argument.Type, conversionTarget))
+
+            // Issue #3684 (family F8): the same fallback must cover the
+            // value-typed target. `ImmutableArray[ParameterSymbol](method.Invoke(…))`
+            // is a G# conversion call over an IMPORTED GENERIC value type — a
+            // plain C# `(ImmutableArray<ParameterSymbol>)` cast — but the type
+            // name binds as a constructor call, no `.ctor` takes a single
+            // `object?`, and the reference-cast fallback below rejects a value
+            // type outright, so the whole shape reported GS0267. An unboxing
+            // cast from `object`/`ValueType`/`Enum`/a implemented interface is
+            // exactly as checked (and as runtime-throwing) as the reference
+            // case, so it belongs on the same fallback.
+            if (Conversion.HasCheckedReferenceConversion(argument.Type, conversionTarget)
+                || Conversion.HasCheckedUnboxingConversion(argument.Type, conversionTarget))
+            {
+                result = conversions.BindConversion(
+                    syntax.Arguments[0].Location,
+                    argument,
+                    conversionTarget,
+                    allowExplicit: true);
+                return true;
+            }
+
+            // Issue #3684 (family F8), third shape: a DELEGATE target —
+            // `Func[TypeSymbol, TypeSymbol]((e TypeSymbol) -> …)`, the G# form
+            // of a C# `(Func<TypeSymbol, TypeSymbol>)(e => …)` cast. The CLR
+            // delegate `.ctor` takes `(object, IntPtr)`, so a one-argument call
+            // never resolves and the whole conversion reported GS0267. Bind it
+            // as the conversion it is, but only when one genuinely exists —
+            // an argument that cannot convert still falls through to GS0267.
+            if (conversionTarget.ClrType is { } targetClr
+                && ClrTypeUtilities.IsDelegateType(targetClr)
+                && argument.Type is { } argumentType
+                && Conversion.Classify(argumentType, conversionTarget).Exists)
             {
                 result = conversions.BindConversion(
                     syntax.Arguments[0].Location,

@@ -147,8 +147,13 @@ namespace Demo
     }
 
     /// <summary>
-    /// Issue #1026: a C# <c>unsafe class</c> maps to a G# <c>unsafe class</c> (the
-    /// <c>unsafe</c> modifier precedes the visibility on the type declaration).
+    /// Issue #1026: a C# <c>unsafe class</c> maps to a G# <c>unsafe class</c>.
+    /// Issue #3684 (family F9): the <c>unsafe</c> modifier FOLLOWS the
+    /// visibility keyword — ADR-0078's aggregate head is
+    /// <c>[visibility]? [unsafe]? [open|sealed]? class …</c> and gsc's
+    /// <c>ParseMember</c> consumes the accessibility keyword before it probes
+    /// for a declaration head, so <c>unsafe internal class</c> does not parse
+    /// at all.
     /// </summary>
     [Fact]
     public void UnsafeClass_TranslatesToUnsafeClassModifier()
@@ -162,7 +167,39 @@ namespace Demo
     }
 }");
 
+        // `public` is G#'s default visibility, so the rendered head is bare
+        // `unsafe class` — what matters is that no accessibility keyword ever
+        // follows the `unsafe` modifier.
         Assert.Contains("unsafe class Native", printed);
+        Assert.DoesNotContain("unsafe public", printed);
+    }
+
+    /// <summary>
+    /// Issue #3684 (family F9): a C# <c>file unsafe sealed class</c> with a
+    /// pointer-typed member parameter. The type's visibility is `internal`, so
+    /// the modifier order regression showed up as `unsafe internal class`; with
+    /// the canonical order the `unsafe` modifier actually takes effect and the
+    /// <c>*T</c> parameter binds as an UNMANAGED pointer rather than a managed
+    /// by-ref (which gsc rejects as a parameter type with GS0243).
+    /// </summary>
+    [Fact]
+    public void UnsafeInternalClassWithPointerParameter_EmitsVisibilityBeforeUnsafe()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    internal unsafe sealed class Fixture<T>
+        where T : unmanaged
+    {
+        public void AcceptPointer(T* value) => _ = value;
+    }
+}");
+
+        // G# classes are sealed by default (`open` is the opt-in), so `sealed`
+        // is dropped; the load-bearing part is that `unsafe` follows `internal`.
+        Assert.Contains("internal unsafe class Fixture[T unmanaged]", printed);
+        Assert.DoesNotContain("unsafe internal", printed);
+        Assert.Contains("value *T", printed);
     }
 
     /// <summary>

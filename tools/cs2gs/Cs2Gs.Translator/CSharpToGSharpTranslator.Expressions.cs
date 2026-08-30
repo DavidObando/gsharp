@@ -438,6 +438,26 @@ public sealed partial class CSharpToGSharpTranslator
                 return text;
             }
 
+            // Issue #3684 (family F14): the width suffix must come from the type
+            // of the NEGATED expression, not the bare literal. C# §12.9.3 gives
+            // `-2147483648` the type `int` (value int.MinValue) even though the
+            // literal `2147483648` on its own is `uint`, and Roslyn records that
+            // only on the enclosing unary node. Suffixing off the literal
+            // produced `-2147483648U`, which G# rejects outright — it has no
+            // unary `-` on uint32 (GS0128). Take the negated expression's own
+            // bound type instead, and never emit an UNSIGNED suffix under a
+            // minus: an unsigned operand is exactly what makes the operator
+            // undefined.
+            if (literal.Parent is PrefixUnaryExpressionSyntax negation
+                && negation.IsKind(SyntaxKind.UnaryMinusExpression))
+            {
+                return this.context.GetTypeInfo(negation).Type?.SpecialType switch
+                {
+                    SpecialType.System_Int64 => text + "L",
+                    _ => text,
+                };
+            }
+
             switch (value)
             {
                 case ulong:
