@@ -1630,22 +1630,55 @@ internal sealed partial class ExpressionBinder
             argumentIndex > 0
             && argumentIndex - 1 < arguments.Length
             && arguments[argumentIndex - 1] is BoundFunctionLiteralExpression;
-        var resolution = ClrOverloadResolution.Resolve(
-            candidates,
-            argTypes,
-            explicitTypeArgs,
-            scope.References.MapClrTypeToReferences,
-            ComputeInterpolatedStringArgFlags(ce.Arguments, argTypes.Length, receiverArgCount: 1),
-            argumentNames: extensionArgumentNames,
-            recoverTypeArgSymbols: recoverExtensionTypeArgs,
-            supplementaryInterfaceCheck: supplementaryInterfaceCheck,
-            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
-            structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
-            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
-            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
-            deferredInferenceArgs: deferredInferenceArgs,
-            functionLiteralArgumentCheck: functionLiteralArgumentCheck);
+        ClrOverloadResolution.Result<MethodInfo> ResolveExtensionCandidates() =>
+            ClrOverloadResolution.Resolve(
+                candidates,
+                argTypes,
+                explicitTypeArgs,
+                scope.References.MapClrTypeToReferences,
+                ComputeInterpolatedStringArgFlags(ce.Arguments, argTypes.Length, receiverArgCount: 1),
+                argumentNames: extensionArgumentNames,
+                recoverTypeArgSymbols: recoverExtensionTypeArgs,
+                supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+                constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
+                structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
+                delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
+                methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
+                methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
+                deferredInferenceArgs: deferredInferenceArgs,
+                functionLiteralArgumentCheck: functionLiteralArgumentCheck);
+
+        var resolution = ResolveExtensionCandidates();
+
+        // Issue #3673: `NullableTypeSymbol.ClrType` is the *underlying* CLR type
+        // (`Int32` for `int32?`), so slot 0 above presents a value-typed nullable
+        // receiver unlifted. A candidate whose `this` parameter is
+        // `Nullable<T>` — for example
+        // `Gsharp.Extensions.Optional.OrThrow[T struct](self T?, message string)` —
+        // then has no evidence to infer `T` from, because none of the user
+        // arguments mention it, and the whole call dead-ends at GS0159. (Sibling
+        // helpers such as `OrElse`/`OrCompute` are unaffected only because their
+        // user argument independently pins `T`.) Retry once with the lifted
+        // `Nullable<T>` receiver shape so `Nullable<T>` self-parameters unify.
+        // The retry runs only after the unlifted shape has already failed, so
+        // extensions that legitimately match the underlying type keep binding
+        // exactly as before.
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.NoneApplicable
+            && receiver.Type is NullableTypeSymbol
+            && NullableLifting.GetEffectiveClrType(receiver.Type) is { } liftedReceiverClrType
+            && !ClrTypeUtilities.AreSame(liftedReceiverClrType, receiverClrType))
+        {
+            argTypes[0] = liftedReceiverClrType;
+            var liftedResolution = ResolveExtensionCandidates();
+            if (liftedResolution.Outcome != ClrOverloadResolution.ResolutionOutcome.NoneApplicable)
+            {
+                resolution = liftedResolution;
+            }
+            else
+            {
+                argTypes[0] = receiverClrType;
+            }
+        }
 
         switch (resolution.Outcome)
         {
