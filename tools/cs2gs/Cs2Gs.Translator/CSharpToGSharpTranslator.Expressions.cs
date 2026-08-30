@@ -2378,6 +2378,19 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case IdentifierNameSyntax:
                 case MemberAccessExpressionSyntax:
+                    // Issue #3663: a DECONSTRUCTING `foreach` variable carries no
+                    // taint of its own — it aliases a tuple leaf of the enumerated
+                    // sequence, and G# infers its type from that leaf. A promoted
+                    // leaf therefore makes the dereference `T? -> T` (GS0158).
+                    if (ObliviousNullabilityAnalyzer.IsDeconstructedForEachElementTainted(
+                        this.context.Compilation,
+                        expression,
+                        this.context.SemanticModel,
+                        this.context.SiblingCompilations))
+                    {
+                        return true;
+                    }
+
                     ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
                     if (symbol is ILocalSymbol local
                         && !this.ShouldPromoteToNullableReference(local)

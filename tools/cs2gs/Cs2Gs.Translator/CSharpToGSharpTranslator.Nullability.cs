@@ -445,6 +445,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #3663: a DECONSTRUCTING `foreach` variable aliases a tuple
+            // leaf without ever naming it, and G#'s `for (a, b) in items` infers
+            // each name from the sequence's element tuple. When #3641's
+            // nested-tuple promotion renders that element `T?`, the variable IS
+            // a nullable value even though its own declaration symbol carries no
+            // taint of its own — bridge its reads like any other promoted value.
+            if (ObliviousNullabilityAnalyzer.IsDeconstructedForEachElementTainted(
+                this.context.Compilation,
+                expression,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations))
+            {
+                return true;
+            }
+
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
             if (symbol is ILocalSymbol local
                 && !this.ShouldPromoteToNullableReference(local)

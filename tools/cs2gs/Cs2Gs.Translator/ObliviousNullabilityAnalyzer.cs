@@ -248,6 +248,49 @@ internal static class ObliviousNullabilityAnalyzer
             new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
     }
 
+    /// <summary>
+    /// Issue #3663: whether <paramref name="expression"/> reads a variable bound
+    /// by a DECONSTRUCTING <c>foreach</c> header
+    /// (<c>foreach ((A a, B b) in items)</c>) whose corresponding tuple leaf is
+    /// null-tainted. Such a variable has no declared type of its own on the G#
+    /// side — <c>for (a, b) in items</c> infers each name from the sequence's
+    /// element tuple — so when #3641's nested-tuple promotion renders that
+    /// element <c>A?</c>, every read of the variable is a nullable value the
+    /// translator must bridge with <c>!!</c> at its non-null sinks. The sibling
+    /// <see cref="IsTupleElementTainted(CSharpCompilation, ExpressionSyntax, SemanticModel, IReadOnlyList{CSharpCompilation})"/>
+    /// only recognizes an explicit member read (<c>pair.Item1</c>), which a
+    /// deconstruction never writes.
+    /// </summary>
+    /// <param name="compilation">The compilation containing the expression.</param>
+    /// <param name="expression">A read of a deconstruction-bound variable.</param>
+    /// <param name="model">The semantic model for the expression.</param>
+    /// <param name="siblingCompilations">Other compilations loaded in the same translation run.</param>
+    /// <returns><see langword="true"/> when the bound tuple leaf is null-tainted.</returns>
+    public static bool IsDeconstructedForEachElementTainted(
+        CSharpCompilation compilation,
+        ExpressionSyntax expression,
+        SemanticModel model,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        if (compilation == null
+            || expression == null
+            || model == null
+            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable
+            || !TryResolveForEachDeconstructionSource(expression, model, out TupleElementKey source))
+        {
+            return false;
+        }
+
+        RegisterSourceAssemblies(compilation, siblingCompilations);
+        return IsTupleElementTaintedCore(
+            compilation,
+            source.Symbol,
+            source.Path,
+            siblingCompilations,
+            new HashSet<ScalarQuery>(ScalarQueryComparer.Instance),
+            new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
+    }
+
     public static HashSet<INamedTypeSymbol> CollectEfEntityTypes(Compilation compilation)
     {
         var entities = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -1969,6 +2012,103 @@ internal static class ObliviousNullabilityAnalyzer
 
         source = default;
         return false;
+    }
+
+    // Issue #3663: resolves a read of a variable declared by a DECONSTRUCTING
+    // `foreach` header back to the leaf it aliases — the enumerated collection's
+    // declaration symbol plus the element path the type mapper walks when it
+    // renders that declaration (`PromoteTupleTypeArguments`: type-argument
+    // indexes first, tuple element indexes after). Both header spellings climb
+    // the same way: `var (a, b)` nests SingleVariableDesignations inside a
+    // ParenthesizedVariableDesignation, while the explicitly typed `(A a, B b)`
+    // nests DeclarationExpressions inside a TupleExpression.
+    private static bool TryResolveForEachDeconstructionSource(
+        ExpressionSyntax expression,
+        SemanticModel model,
+        out TupleElementKey source)
+    {
+        source = default;
+        if (model.GetSymbolInfo(expression).Symbol is not ILocalSymbol local
+            || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                is not SingleVariableDesignationSyntax designation)
+        {
+            return false;
+        }
+
+        var indexes = new List<int>();
+        SyntaxNode current = designation;
+        bool climbing = true;
+        while (climbing)
+        {
+            switch (current.Parent)
+            {
+                case ParenthesizedVariableDesignationSyntax nested
+                    when current is VariableDesignationSyntax variable:
+                    int nestedIndex = nested.Variables.IndexOf(variable);
+                    if (nestedIndex < 0)
+                    {
+                        return false;
+                    }
+
+                    indexes.Insert(0, nestedIndex);
+                    current = nested;
+                    break;
+
+                case DeclarationExpressionSyntax declaration:
+                    current = declaration;
+                    break;
+
+                case ArgumentSyntax { Parent: TupleExpressionSyntax tuple } argument:
+                    int tupleIndex = tuple.Arguments.IndexOf(argument);
+                    if (tupleIndex < 0)
+                    {
+                        return false;
+                    }
+
+                    indexes.Insert(0, tupleIndex);
+                    current = tuple;
+                    break;
+
+                default:
+                    climbing = false;
+                    break;
+            }
+        }
+
+        if (indexes.Count == 0
+            || current.Parent is not ForEachVariableStatementSyntax forEach
+            || forEach.Variable != current)
+        {
+            return false;
+        }
+
+        if (model.GetForEachStatementInfo(forEach).ElementType
+                is not INamedTypeSymbol { IsTupleType: true } elementTuple
+            || model.GetSymbolInfo(forEach.Expression).Symbol is not { } collection
+            || SymbolValueType(collection) is not { } collectionType)
+        {
+            return false;
+        }
+
+        // The enumerated element tuple has to sit at exactly ONE position of the
+        // collection's rendered type; an ambiguous match (two identical tuple
+        // slots) would key the leaf arbitrarily, so leave those unbridged.
+        List<(string Path, INamedTypeSymbol Tuple)> slots = NestedTupleSlots(collectionType)
+            .Where(slot => SymbolEqualityComparer.Default.Equals(slot.Tuple, elementTuple))
+            .ToList();
+        if (slots.Count != 1)
+        {
+            return false;
+        }
+
+        string path = slots[0].Path;
+        foreach (int index in indexes)
+        {
+            path = AppendTuplePath(path, index);
+        }
+
+        source = new TupleElementKey(Canonical(collection), path);
+        return true;
     }
 
     private static int TupleElementIndex(INamedTypeSymbol tupleType, IFieldSymbol field)
