@@ -78,6 +78,12 @@ internal static class GSharpProjectTransformer
             sourceProjectDirectory,
             fullDestinationDirectory,
             generatedProjectPaths);
+        RewriteNestedProjectPaths(
+            document,
+            sourceProjectDirectory,
+            fullDestinationDirectory,
+            generatedProjectPaths);
+        RewriteGeneratePackageOnBuild(document);
         RewriteOutputType(document);
         RewriteCompileItems(document);
         RewriteCSharpMetadata(document);
@@ -211,6 +217,202 @@ internal static class GSharpProjectTransformer
                     destinationProjectDirectory,
                     Path.GetFullPath(generatedProjectPath))
                 .Replace('\\', '/');
+        }
+    }
+
+    // Issue #3674: a project can name sibling projects outside
+    // ProjectReference — the <MSBuild Projects="…"/> task and the
+    // PropertyGroup properties that feed it (this repo's own
+    // Gsharp.NET.Sdk.csproj does both in its Pack* targets). Those specs are
+    // relative to the SOURCE repository, so in a mirror they resolve to a
+    // project that is either absent or present only as .gsproj, and the
+    // nested build dies with MSB3202 for a reason unrelated to translation.
+    //
+    // The rewrite is deliberately narrow: a spec is redirected to its
+    // generated counterpart only when it resolves to a project that is in
+    // the migration set. Anything else is left verbatim. In particular an
+    // unmapped project (excluded from the run, or simply outside it) is NOT
+    // re-anchored at the real repository: doing so would make a mirror build
+    // write into the source tree's obj/bin and would compile unmigrated C#
+    // inside a run whose whole purpose is to exercise migrated code.
+    private static void RewriteNestedProjectPaths(
+        XDocument document,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        if (generatedProjectPaths is null || generatedProjectPaths.Count == 0)
+        {
+            return;
+        }
+
+        foreach (XElement task in ElementsNamed(document, "MSBuild"))
+        {
+            XAttribute projects = AttributeNamed(task, "Projects");
+            if (projects is null || string.IsNullOrWhiteSpace(projects.Value))
+            {
+                continue;
+            }
+
+            string rewritten = RewriteProjectPathList(
+                projects.Value,
+                sourceProjectDirectory,
+                destinationProjectDirectory,
+                generatedProjectPaths);
+            if (!string.Equals(rewritten, projects.Value, StringComparison.Ordinal))
+            {
+                projects.Value = rewritten;
+            }
+        }
+
+        foreach (XElement propertyGroup in ElementsNamed(document, "PropertyGroup"))
+        {
+            foreach (XElement property in propertyGroup.Elements())
+            {
+                if (property.HasElements)
+                {
+                    continue;
+                }
+
+                string rewritten = RewriteProjectPathList(
+                    property.Value,
+                    sourceProjectDirectory,
+                    destinationProjectDirectory,
+                    generatedProjectPaths);
+                if (!string.Equals(rewritten, property.Value, StringComparison.Ordinal))
+                {
+                    property.Value = rewritten;
+                }
+            }
+        }
+    }
+
+    private static string RewriteProjectPathList(
+        string value,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        if (value.IndexOf(".csproj", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return value;
+        }
+
+        string[] specs = value.Split(';');
+        bool changed = false;
+        for (int i = 0; i < specs.Length; i++)
+        {
+            if (TryMapProjectPathSpec(
+                specs[i],
+                sourceProjectDirectory,
+                destinationProjectDirectory,
+                generatedProjectPaths,
+                out string mapped))
+            {
+                specs[i] = mapped;
+                changed = true;
+            }
+        }
+
+        return changed ? string.Join(";", specs) : value;
+    }
+
+    // Maps one path spec to its generated counterpart, preserving the leading
+    // MSBuild directory expression (the only two that can be expanded without
+    // evaluating the project) and any surrounding whitespace. Returns false —
+    // leaving the spec untouched — for anything that cannot be resolved
+    // statically or that is not part of the migration set.
+    private static bool TryMapProjectPathSpec(
+        string spec,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        out string mapped)
+    {
+        mapped = null;
+        string value = spec.Trim();
+        if (value.Length == 0 || !value.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        int start = 0;
+        while (char.IsWhiteSpace(spec[start]))
+        {
+            start++;
+        }
+
+        string leading = spec.Substring(0, start);
+        string trailing = spec.Substring(start + value.Length);
+
+        string prefix = string.Empty;
+        string remainder = value;
+        if (value.StartsWith("$(", StringComparison.Ordinal))
+        {
+            int close = value.IndexOf(')');
+            if (close < 0)
+            {
+                return false;
+            }
+
+            prefix = value.Substring(0, close + 1);
+            if (!IsAnchorExpression(prefix))
+            {
+                return false;
+            }
+
+            remainder = value.Substring(close + 1).TrimStart('/', '\\');
+        }
+
+        // Anything still holding an unexpanded expression or a wildcard
+        // cannot be resolved to a single project path here.
+        if (remainder.Length == 0
+            || remainder.Contains("$(", StringComparison.Ordinal)
+            || remainder.Contains("@(", StringComparison.Ordinal)
+            || remainder.Contains('*'))
+        {
+            return false;
+        }
+
+        string sourceReferencePath = Path.GetFullPath(
+            Path.Combine(sourceProjectDirectory, NormalizeDirectorySeparators(remainder)));
+        if (!generatedProjectPaths.TryGetValue(sourceReferencePath, out string generatedProjectPath))
+        {
+            return false;
+        }
+
+        string relative = Path.GetRelativePath(
+                destinationProjectDirectory,
+                Path.GetFullPath(generatedProjectPath))
+            .Replace('\\', '/');
+
+        // $(MSBuildThisFileDirectory) already expands with a trailing
+        // separator; $(MSBuildProjectDirectory) does not.
+        string separator = prefix.Equals("$(MSBuildProjectDirectory)", StringComparison.OrdinalIgnoreCase)
+            ? "/"
+            : string.Empty;
+        mapped = leading + prefix + separator + relative + trailing;
+        return true;
+    }
+
+    private static bool IsAnchorExpression(string expression) =>
+        expression.Equals("$(MSBuildThisFileDirectory)", StringComparison.OrdinalIgnoreCase)
+        || expression.Equals("$(MSBuildProjectDirectory)", StringComparison.OrdinalIgnoreCase);
+
+    // Issue #3674, the other half of the MSB3202 story: packaging is
+    // repository infrastructure a mirror cannot reproduce. Pack targets reach
+    // for projects outside the migration set and for repository assets
+    // (READMEs, icons, prebuilt output directories) that the mirror does not
+    // carry, and a mirrored build has no reason to produce a NuGet package at
+    // all. Neutralize pack-on-build in the emitted project so the mirror is
+    // self-consistent for anyone building it directly — the compile stage
+    // additionally passes the same property globally
+    // (SdkCompileRunner.BuildMirroredBuildArguments).
+    private static void RewriteGeneratePackageOnBuild(XDocument document)
+    {
+        foreach (XElement generatePackageOnBuild in ElementsNamed(document, "GeneratePackageOnBuild"))
+        {
+            generatePackageOnBuild.Value = "false";
         }
     }
 

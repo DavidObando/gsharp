@@ -196,6 +196,155 @@ public sealed class GSharpProjectTransformerTests
         }
     }
 
+    // Issue #3674: the Pack* targets of this repo's own Gsharp.NET.Sdk.csproj
+    // drive nested builds through <MSBuild Projects="…"/> and through
+    // PropertyGroup properties holding project paths. Both shapes must follow
+    // the migration set or the mirrored build fails with MSB3202.
+    [Fact]
+    public void Transform_RewritesNestedBuildProjectPathsForMigratedProjects()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "Sdk", "Sdk.csproj");
+        string sourceCompiler = Path.Combine(scratch.Path, "source", "Compiler", "Compiler.csproj");
+        string sourceTool = Path.Combine(scratch.Path, "source", "tools", "Gsgen", "Gsgen.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "Sdk");
+        string generatedCompiler = Path.Combine(scratch.Path, "generated", "Compiler", "Compiler.gsproj");
+        string generatedTool = Path.Combine(scratch.Path, "generated", "tools", "Gsgen", "Gsgen.gsproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <_CompilerProject>$(MSBuildThisFileDirectory)..\Compiler\Compiler.csproj</_CompilerProject>
+                <_ExtensionsProject>$(MSBuildThisFileDirectory)..\Extensions\Extensions.csproj</_ExtensionsProject>
+                <_ToolProject>$(MSBuildProjectDirectory)\..\tools\Gsgen\Gsgen.csproj</_ToolProject>
+                <_Unrelated>net10.0</_Unrelated>
+              </PropertyGroup>
+              <Target Name="PackEverything">
+                <MSBuild Projects="$(MSBuildThisFileDirectory)..\Compiler\Compiler.csproj" Targets="Publish" />
+                <MSBuild Projects="..\tools\Gsgen\Gsgen.csproj; ..\Extensions\Extensions.csproj" Targets="Build" />
+                <MSBuild Projects="$(_CompilerProject)" Targets="Build" />
+              </Target>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>
+            {
+                [Path.GetFullPath(sourceCompiler)] = generatedCompiler,
+                [Path.GetFullPath(sourceTool)] = generatedTool,
+            });
+
+        Assert.Equal(
+            "$(MSBuildThisFileDirectory)../Compiler/Compiler.gsproj",
+            SingleElement(transformed, "_CompilerProject").Value);
+        Assert.Equal(
+            "$(MSBuildProjectDirectory)/../tools/Gsgen/Gsgen.gsproj",
+            SingleElement(transformed, "_ToolProject").Value);
+
+        // Not in the migration set: left verbatim rather than re-anchored at
+        // the source repository.
+        Assert.Equal(
+            "$(MSBuildThisFileDirectory)..\\Extensions\\Extensions.csproj",
+            SingleElement(transformed, "_ExtensionsProject").Value);
+        Assert.Equal("net10.0", SingleElement(transformed, "_Unrelated").Value);
+
+        XElement[] nestedBuilds = ElementsNamed(transformed, "MSBuild").ToArray();
+        Assert.Equal(
+            "$(MSBuildThisFileDirectory)../Compiler/Compiler.gsproj",
+            nestedBuilds[0].Attribute("Projects")?.Value);
+        Assert.Equal("Publish", nestedBuilds[0].Attribute("Targets")?.Value);
+        Assert.Equal(
+            "../tools/Gsgen/Gsgen.gsproj; ..\\Extensions\\Extensions.csproj",
+            nestedBuilds[1].Attribute("Projects")?.Value);
+
+        // The property it names was rewritten, so the indirection needs no edit.
+        Assert.Equal("$(_CompilerProject)", nestedBuilds[2].Attribute("Projects")?.Value);
+    }
+
+    [Fact]
+    public void Transform_TurnsOffPackOnBuild()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "Sdk.csproj");
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+                <IsPackable>true</IsPackable>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            scratch.Path,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>());
+
+        Assert.Equal("false", SingleElement(transformed, "GeneratePackageOnBuild").Value);
+        Assert.Equal("true", SingleElement(transformed, "IsPackable").Value);
+    }
+
+    [Fact]
+    public void Transform_LeavesUnresolvableNestedBuildProjectPathsUntouched()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "Sdk", "Sdk.csproj");
+        string sourceCompiler = Path.Combine(scratch.Path, "source", "Compiler", "Compiler.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "Sdk");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <_FromUnknownRoot>$(RepoRoot)Compiler\Compiler.csproj</_FromUnknownRoot>
+                <_ThroughProperty>$(MSBuildThisFileDirectory)..\$(Leaf)\Compiler.csproj</_ThroughProperty>
+                <_Glob>$(MSBuildThisFileDirectory)..\**\*.csproj</_Glob>
+                <_NotAProject>$(MSBuildThisFileDirectory)..\Compiler\Compiler.props</_NotAProject>
+              </PropertyGroup>
+              <Target Name="Pack">
+                <MSBuild Projects="@(CompilerProjects)" Targets="Build" />
+              </Target>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>
+            {
+                [Path.GetFullPath(sourceCompiler)] =
+                    Path.Combine(scratch.Path, "generated", "Compiler", "Compiler.gsproj"),
+            });
+
+        Assert.Equal(
+            "$(RepoRoot)Compiler\\Compiler.csproj",
+            SingleElement(transformed, "_FromUnknownRoot").Value);
+        Assert.Equal(
+            "$(MSBuildThisFileDirectory)..\\$(Leaf)\\Compiler.csproj",
+            SingleElement(transformed, "_ThroughProperty").Value);
+        Assert.Equal(
+            "$(MSBuildThisFileDirectory)..\\**\\*.csproj",
+            SingleElement(transformed, "_Glob").Value);
+        Assert.Equal(
+            "$(MSBuildThisFileDirectory)..\\Compiler\\Compiler.props",
+            SingleElement(transformed, "_NotAProject").Value);
+        Assert.Equal(
+            "@(CompilerProjects)",
+            SingleElement(transformed, "MSBuild").Attribute("Projects")?.Value);
+    }
+
     [Fact]
     public void Transform_PropagatesMalformedXmlException()
     {
