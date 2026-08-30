@@ -2257,6 +2257,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #3683 (family F5): the sibling of the promoted-value rule
+            // above for a declaration that was never promoted because it was
+            // ANNOTATED `T?` all along, read from an OBLIVIOUS file. Same
+            // receiver-only gate, same faithfulness argument.
+            if (isDereferenceReceiver && this.ReceiverValueIsObliviouslyReadAnnotatedResult(recv))
+            {
+                return true;
+            }
+
             // Issue #2164: the classic lazy-singleton pattern initializes a
             // nullable static/instance field (or auto-property) under a null
             // guard (`if (F == null) { F = new(); } ... return F;` / `F ??= …;`),
@@ -2445,6 +2454,66 @@ public sealed partial class CSharpToGSharpTranslator
             // too, so its flow-proven uses need the same assertion for consistency.
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.ShouldPromoteToNullableReference(symbol);
+        }
+
+        /// <summary>
+        /// Issue #3683 (family F5): true when <paramref name="expression"/> is a
+        /// CALL RESULT — an invocation or an indexer read — whose <em>declared</em>
+        /// return is an annotated <c>T?</c> reference, evaluated inside a
+        /// nullable-OBLIVIOUS compilation.
+        /// </summary>
+        /// <remarks>
+        /// This is the call-result door onto the same cross-nullable-context read
+        /// that issue #3683's cast-receiver half (family F6) closed. When an
+        /// oblivious file (<c>test/Core.Tests</c> declares no <c>Nullable</c>
+        /// setting) calls an ANNOTATED API (<c>src/Core</c>, or the annotated BCL:
+        /// <c>Type? Type.GetElementType()</c>), Roslyn erases the annotation at the
+        /// call site — <c>GetTypeInfo(...).Type.NullableAnnotation</c> reads
+        /// <c>None</c> and the flow state is <c>None</c> too — so neither
+        /// <see cref="NullableReferenceValueMayBeNull"/> nor the flow-gated tail of
+        /// <see cref="ReceiverNeedsNullForgiveness"/> can see anything nullable.
+        /// The declaring symbol's own return type still carries the annotation, and
+        /// gsc maps it to <c>T?</c>, so the chained dereference was rejected
+        /// (GS0158 on a member, GS0116 on an index). A nullable-ENABLED compilation
+        /// needs none of this: there the annotation survives on the expression's
+        /// type and the existing predicates already fire, so this stays gated to
+        /// oblivious.
+        /// <para>
+        /// Asserting is faithful and stays receiver-only: C# raises a
+        /// <see cref="System.NullReferenceException"/> at exactly this dereference,
+        /// and <c>!!</c> raises at exactly the same point. A call result forwarded
+        /// as a return value or an argument is NOT covered here — that value must
+        /// keep its <c>T?</c> and reach the declaration-promotion path instead.
+        /// </para>
+        /// </remarks>
+        private bool ReceiverValueIsObliviouslyReadAnnotatedResult(ExpressionSyntax expression)
+        {
+            if (!this.IsObliviousCompilation())
+            {
+                return false;
+            }
+
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.ReceiverValueIsObliviouslyReadAnnotatedResult(parenthesized.Expression);
+
+                case InvocationExpressionSyntax invocation:
+                    // A `Task<T>`/`ValueTask<T>` envelope is itself non-null; its
+                    // annotation belongs to the awaited T (see
+                    // AwaitedReceiverValueIsPromotedNullable), never to the
+                    // receiver being dereferenced here.
+                    return this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method
+                        && !IsTaskLikeEnvelope(method.ReturnType)
+                        && IsAnnotatedNullableReference(method.ReturnType);
+
+                case ElementAccessExpressionSyntax elementAccess:
+                    return this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol indexer
+                        && IsAnnotatedNullableReference(indexer.Type);
+
+                default:
+                    return false;
+            }
         }
 
         private bool ReceiverValueIsPromotedNullable(ExpressionSyntax expression)
