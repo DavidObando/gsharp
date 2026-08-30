@@ -49,6 +49,18 @@ public sealed class SdkCompileRunner
         @"error\s+(?<id>GS\d{4}):\s*(?<msg>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Issue #3672: the same shape for a build that failed with NO GSxxxx line
+    // at all — an MSBuild task/target error (`error MSB3202:`), a restore
+    // failure (`error NU1101:`), or a csc error from a C# project still in the
+    // graph (`error CS0246:`). Only consulted when the GS scan above found
+    // nothing, so a real G# diagnostic always wins.
+    // The coordinates are optional here as well as the whole prefix, so the
+    // location-free `MSBUILD : error MSB1009: …` shape is recognized too.
+    private static readonly Regex RelayedBuildErrorPattern = new Regex(
+        @"^(?:(?<file>.+?)(?:\((?<line>\d+),(?<col>\d+)(?:,(?<eline>\d+),(?<ecol>\d+))?\))?\s*:\s*)?" +
+        @"error\s+(?<id>[A-Za-z]{2,}\d{2,}):\s*(?<msg>.*)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     // The well-known NuGet package-asset directories that follow an
     // `{id}/{version}/` pair under a packages cache root (generic detector,
     // not specific to any single package).
@@ -109,16 +121,11 @@ public sealed class SdkCompileRunner
         try
         {
             temporaryBuildProps = PrepareTemporaryBuildProps(generatedProjectPaths.Values);
-            var args = new List<string>
-            {
-                "build",
+            IReadOnlyList<string> args = BuildMirroredBuildArguments(
                 generatedProjectPath,
-                "-c",
-                config ?? "Release",
-                "-p:RestoreConfigFile=" + projectNugetConfig,
-                "-p:RestorePackagesPath=" + Path.Combine(artifactDirectory, ".nuget-packages"),
-                "-p:Cs2GsArtifactRoot=" + artifactDirectory,
-            };
+                artifactDirectory,
+                config,
+                projectNugetConfig);
             ProcessRunResult result = ProcessRunner.Run(
                 "dotnet",
                 args,
@@ -133,7 +140,16 @@ public sealed class SdkCompileRunner
                 // Issue #3634: surface MSBuild-relayed GSxxxx errors (.targets-
                 // or gsgen-anchored lines the source-anchored parser misses)
                 // instead of letting the caller synthesize an opaque GS9999.
-                diagnostics = diagnostics.Concat(ParseRelayedGsErrors(result.Output)).ToList();
+                // Issue #3672: when the build failed without any GSxxxx line at
+                // all — an MSBuild/NuGet/csc-level failure such as MSB3202 —
+                // relay THAT verbatim for the same reason.
+                IReadOnlyList<GscDiagnostic> relayed = ParseRelayedGsErrors(result.Output);
+                if (relayed.Count == 0)
+                {
+                    relayed = ParseRelayedBuildErrors(result.Output);
+                }
+
+                diagnostics = diagnostics.Concat(relayed).ToList();
             }
 
             string assemblyPath = result.ExitCode == 0
@@ -997,7 +1013,58 @@ public sealed class SdkCompileRunner
     /// </summary>
     /// <param name="output">The combined stdout+stderr of the <c>dotnet build</c> run.</param>
     /// <returns>The distinct relayed error diagnostics in output order; empty when none match.</returns>
-    internal static IReadOnlyList<GscDiagnostic> ParseRelayedGsErrors(string output)
+    internal static IReadOnlyList<GscDiagnostic> ParseRelayedGsErrors(string output) =>
+        ParseRelayedErrors(output, RelayedGsErrorPattern);
+
+    /// <summary>
+    /// Scans <c>dotnet build</c> output for a relayed error of ANY id shape —
+    /// <c>MSB3202</c>, <c>NU1101</c>, <c>CS0246</c> — for the case where the
+    /// build failed without emitting a single <c>GSxxxx</c> line (issue #3672).
+    /// Without this, such a failure reached the caller as an opaque
+    /// <c>GS9999 … no parseable diagnostic</c> whose truncated output excerpt
+    /// routinely captured only leading warning noise, hiding the one real error
+    /// far below it. Only consulted after
+    /// <see cref="ParseRelayedGsErrors"/> comes back empty.
+    /// </summary>
+    /// <param name="output">The combined stdout+stderr of the <c>dotnet build</c> run.</param>
+    /// <returns>The distinct relayed error diagnostics in output order; empty when none match.</returns>
+    internal static IReadOnlyList<GscDiagnostic> ParseRelayedBuildErrors(string output) =>
+        ParseRelayedErrors(output, RelayedBuildErrorPattern);
+
+    /// <summary>
+    /// Issue #3672: the mirrored-build command line. The compile stage measures
+    /// whether the translated G# compiles, so packaging is switched off:
+    /// a source project with <c>&lt;GeneratePackageOnBuild&gt;true</c> (e.g.
+    /// <c>src/Sdk/Gsharp.NET.Sdk</c>) otherwise runs its pack targets, which
+    /// reach out to sibling REPO projects by literal <c>.csproj</c> path —
+    /// paths that in a partial mirror are either absent (an <c>--exclude</c>d
+    /// project) or exist only as <c>.gsproj</c>, failing the build with MSB3202
+    /// for a reason that has nothing to do with the translation. The property is
+    /// global, so it also applies to every project reference in the graph.
+    /// </summary>
+    /// <param name="generatedProjectPath">The mirrored G# project to build.</param>
+    /// <param name="artifactDirectory">The external build and log directory.</param>
+    /// <param name="config">The build configuration.</param>
+    /// <param name="projectNugetConfig">The nuget.config written beside the generated project.</param>
+    /// <returns>The <c>dotnet</c> arguments.</returns>
+    internal static IReadOnlyList<string> BuildMirroredBuildArguments(
+        string generatedProjectPath,
+        string artifactDirectory,
+        string config,
+        string projectNugetConfig) =>
+        new List<string>
+        {
+            "build",
+            generatedProjectPath,
+            "-c",
+            config ?? "Release",
+            "-p:RestoreConfigFile=" + projectNugetConfig,
+            "-p:RestorePackagesPath=" + Path.Combine(artifactDirectory, ".nuget-packages"),
+            "-p:Cs2GsArtifactRoot=" + artifactDirectory,
+            "-p:GeneratePackageOnBuild=false",
+        };
+
+    private static IReadOnlyList<GscDiagnostic> ParseRelayedErrors(string output, Regex pattern)
     {
         var diagnostics = new List<GscDiagnostic>();
         if (string.IsNullOrEmpty(output))
@@ -1008,7 +1075,7 @@ public sealed class SdkCompileRunner
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (string rawLine in output.Replace("\r\n", "\n").Split('\n'))
         {
-            Match match = RelayedGsErrorPattern.Match(rawLine.Trim());
+            Match match = pattern.Match(rawLine.Trim());
             if (!match.Success)
             {
                 continue;

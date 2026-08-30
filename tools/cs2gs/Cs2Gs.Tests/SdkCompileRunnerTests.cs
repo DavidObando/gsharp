@@ -568,6 +568,83 @@ public class SdkCompileRunnerTests
         Assert.Empty(SdkCompileRunner.ParseRelayedGsErrors(null));
     }
 
+    [Fact]
+    public void ParseRelayedBuildErrors_ParsesMsBuildTaskError()
+    {
+        // Issue #3672: the exact shape that walled four selfmig apps behind an
+        // opaque GS9999 — one MSB3202 line buried under ~80 warning lines.
+        const string Output =
+            "/migrated/build/gsharp.props(24,5): warning : Gsharp project does not exist: '/migrated/src/Core/Core.csproj'\n" +
+            "  Gsharp.NET.Sdk -> /migrated/out/bin/Release/Gsharp.NET.Sdk/Gsharp.NET.Sdk.dll\n" +
+            "/migrated/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj(104,5): error MSB3202: " +
+            "The project file \"/migrated/src/Compiler/Compiler.csproj\" was not found.\n" +
+            "Build FAILED.\n";
+
+        var diagnostics = SdkCompileRunner.ParseRelayedBuildErrors(Output);
+
+        GscDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("MSB3202", diagnostic.Id);
+        Assert.Equal(
+            "The project file \"/migrated/src/Compiler/Compiler.csproj\" was not found.",
+            diagnostic.Message);
+        Assert.Equal("error", diagnostic.Severity);
+        Assert.Equal("/migrated/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj", diagnostic.File);
+        Assert.Equal(104, diagnostic.Line);
+        Assert.Equal(5, diagnostic.Column);
+    }
+
+    [Fact]
+    public void ParseRelayedBuildErrors_ParsesRestoreAndCsharpAndLocationFreeShapes()
+    {
+        const string Output =
+            "MSBUILD : error MSB1009: Project file does not exist.\n" +
+            "/src/App.csproj : error NU1101: Unable to find package Foo.\n" +
+            "/src/App.cs(3,1): error CS0246: The type or namespace name 'Foo' could not be found\n" +
+            "/src/App.gs(3,1,3,4): warning GS0100: not an error\n" +
+            "Build FAILED.\n";
+
+        var diagnostics = SdkCompileRunner.ParseRelayedBuildErrors(Output);
+
+        Assert.Equal(3, diagnostics.Count);
+        Assert.Equal(new[] { "MSB1009", "NU1101", "CS0246" }, diagnostics.Select(d => d.Id).ToArray());
+        Assert.Equal("MSBUILD", diagnostics[0].File);
+        Assert.Equal(1, diagnostics[0].Line);
+        Assert.Equal("/src/App.cs", diagnostics[2].File);
+        Assert.Equal(3, diagnostics[2].Line);
+    }
+
+    [Fact]
+    public void ParseRelayedBuildErrors_ReturnsEmpty_WhenNoErrorLinePresent()
+    {
+        const string Output =
+            "/src/App.gs(3,1,3,4): warning GS0100: not an error\n" +
+            "    0 Error(s)\n" +
+            "Build succeeded.\n";
+
+        Assert.Empty(SdkCompileRunner.ParseRelayedBuildErrors(Output));
+        Assert.Empty(SdkCompileRunner.ParseRelayedBuildErrors(string.Empty));
+        Assert.Empty(SdkCompileRunner.ParseRelayedBuildErrors(null));
+    }
+
+    [Fact]
+    public void BuildMirroredBuildArguments_DisablesPackagingOnBuild()
+    {
+        // Issue #3672: packing is not what the compile stage measures, and a
+        // source project's pack targets reach out to sibling repo .csproj paths
+        // the mirror never produced (MSB3202).
+        IReadOnlyList<string> args = SdkCompileRunner.BuildMirroredBuildArguments(
+            "/out/App.gsproj",
+            "/artifacts/app",
+            "Release",
+            "/out/nuget.config");
+
+        Assert.Equal("build", args[0]);
+        Assert.Equal("/out/App.gsproj", args[1]);
+        Assert.Contains("-p:GeneratePackageOnBuild=false", args);
+        Assert.Contains("-p:Cs2GsArtifactRoot=/artifacts/app", args);
+        Assert.Contains("-p:RestoreConfigFile=/out/nuget.config", args);
+    }
+
     /// <summary>
     /// A scratch directory populated with one fake shared-framework assembly
     /// file, so <see cref="SdkCompileRunner.PartitionReferences"/>'s runtime-dir
