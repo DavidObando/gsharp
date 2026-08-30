@@ -172,12 +172,16 @@ internal static class Program
     /// </summary>
     /// <param name="result">The (possibly partial) run result.</param>
     /// <param name="stages">The stages the run executed, in order.</param>
-    internal static void PrintSummary(RunResult result, IReadOnlyList<IMigrationStage> stages)
+    /// <param name="verb">The verb to label the run with (<c>migrate</c> or <c>validate</c>).</param>
+    internal static void PrintSummary(
+        RunResult result,
+        IReadOnlyList<IMigrationStage> stages,
+        string verb = "migrate")
     {
         var stageNames = stages.Select(s => TriageSerialization.StageName(s.Kind)).ToList();
 
         Console.WriteLine();
-        Console.WriteLine($"cs2gs migrate — run {result.RunId}");
+        Console.WriteLine($"cs2gs {verb} — run {result.RunId}");
         Console.WriteLine($"gsc: {result.GscVersion}");
         Console.WriteLine();
 

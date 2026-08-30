@@ -151,7 +151,7 @@ jobs:
           name: cs2gs-selfmig-shard-${{ matrix.name }}
           retention-days: 3
           path: |
-            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/run.json
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/shard-run.json
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/polished.tar.gz
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/validate.log
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/*.json

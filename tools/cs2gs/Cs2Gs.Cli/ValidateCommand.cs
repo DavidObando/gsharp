@@ -154,7 +154,7 @@ internal static class ValidateCommand
             .ValidateAsync(allApps, selected, manifests)
             .ConfigureAwait(false);
 
-        Program.PrintSummary(result, pipeline.Stages);
+        Program.PrintSummary(result, pipeline.Stages, "validate");
 
         string runDir = Path.Combine(options.ArtifactRoot, result.RunId);
         Console.WriteLine($"partial run: {Path.Combine(runDir, "run.json")}");

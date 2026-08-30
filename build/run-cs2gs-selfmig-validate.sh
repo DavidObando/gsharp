@@ -16,7 +16,9 @@
 #   runs/<runId>/           per-app validation-context.json manifests
 #   migrate-run-dir.txt     the manifest run directory
 # Outputs under $SELFMIG_GATE_ROOT/shard-<name>/:
-#   run.json                this shard's partial run result
+#   shard-run.json          this shard's partial run result (named distinctly from
+#                           the inner runs/<runId>/run.json so the gate's merge
+#                           cannot pick up the same result twice)
 #   polished.tar.gz         the .gs files stage 2's `!!` polish pass rewrote
 set -euo pipefail
 
@@ -89,7 +91,7 @@ if [[ -z "$shard_run_json" ]]; then
   echo "self-migration shard $shard_name: no run.json produced." >&2
   exit 1
 fi
-cp "$shard_run_json" "$shard_out/run.json"
+cp "$shard_run_json" "$shard_out/shard-run.json"
 
 selfmig_hash_tree "$migrated_dir" > "$shard_out/post.sha256"
 
@@ -103,6 +105,6 @@ if (( polished_count > 0 )); then
   tar -czf "$shard_out/polished.tar.gz" -C "$migrated_dir" -T "$shard_out/polished.txt"
 fi
 
-green=$(jq '[.apps[] | select(.succeeded)] | length' "$shard_out/run.json")
-total=$(jq '.apps | length' "$shard_out/run.json")
+green=$(jq '[.apps[] | select(.succeeded)] | length' "$shard_out/shard-run.json")
+total=$(jq '.apps | length' "$shard_out/shard-run.json")
 echo "self-migration shard $shard_name: $green/$total apps green."

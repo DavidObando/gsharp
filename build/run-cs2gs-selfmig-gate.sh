@@ -7,7 +7,7 @@
 #   <migrate-artifact-dir>  the unpacked migrate artifact: migrated/, runs/,
 #                           metrics.json, migrate-run-dir.txt
 #   <shards-dir>            a directory containing one subdirectory per shard,
-#                           each holding run.json and (optionally)
+#                           each holding shard-run.json and (optionally)
 #                           polished.tar.gz
 #
 # The merge reconstructs exactly the per-app verdicts a single whole run would
@@ -45,10 +45,10 @@ fi
 shard_run_jsons=()
 while IFS= read -r path; do
   shard_run_jsons+=("$path")
-done < <(find "$shards_dir" -name run.json | sort)
+done < <(find "$shards_dir" -name shard-run.json | sort)
 
 if (( ${#shard_run_jsons[@]} == 0 )); then
-  echo "self-migration gate: no shard results found under $shards_dir." >&2
+  echo "self-migration gate: no shard-run.json found under $shards_dir." >&2
   exit 1
 fi
 
