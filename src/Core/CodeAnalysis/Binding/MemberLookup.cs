@@ -2708,11 +2708,18 @@ internal sealed class MemberLookup
             anyVariadic |= paramArray;
         }
 
+        // Issue #3695: the return position must read its reference-type
+        // nullability from metadata exactly as the parameter positions above
+        // already do (ClrNullability.GetParameterTypeSymbol). Dropping it here
+        // made a delegate whose C# signature returns `T?` (e.g.
+        // `ResolveEventHandler`, whose Invoke returns `Assembly?`) present a
+        // non-null `T` target return to lambda binding, so an arrow lambda
+        // body's `return nil` was rejected with GS0155.
         var returnType = invoke.ReturnType.IsSameAs(typeof(void))
             ? TypeSymbol.Void
             : invoke.ReturnType.ContainsGenericParameters
                 ? TypeSymbol.Object
-                : TypeSymbol.FromClrType(invoke.ReturnType);
+                : ClrNullability.GetReturnTypeSymbol(invoke);
         var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
         functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), variadicFlags, returnType);
         return true;
@@ -3999,12 +4006,32 @@ internal sealed class MemberLookup
                     declaringTypeArguments);
                 if (mapped.ClrType?.ContainsGenericParameters != true)
                 {
-                    return mapped;
+                    return ApplyEventDeclarationNullability(mapped, openEvent, openDefinition);
                 }
             }
         }
 
-        return TypeSymbol.FromClrType(closedEvent.EventHandlerType);
+        return GetClrEventHandlerTypeSymbol(closedEvent);
+    }
+
+    /// <summary>
+    /// Issue #3695: the reflected handler type of an event reached WITHOUT a
+    /// symbolic receiver (an imported static event, say), with the event
+    /// declaration's <c>[Nullable]</c> metadata applied.
+    /// </summary>
+    /// <param name="closedEvent">The reflected event.</param>
+    /// <returns>The handler type with declaration-site nullability applied.</returns>
+    internal static TypeSymbol GetClrEventHandlerTypeSymbol(EventInfo closedEvent)
+    {
+        var handlerType = TypeSymbol.FromClrType(closedEvent.EventHandlerType);
+
+        // A constructed generic declaring type would need its flags projected
+        // through the substitution first (the symbolic path above does exactly
+        // that); leave those alone rather than misalign the byte positions.
+        return closedEvent.DeclaringType is { } declaringType
+            && !declaringType.IsConstructedGenericType
+            ? ApplyEventDeclarationNullability(handlerType, closedEvent, declaringType)
+            : handlerType;
     }
 
     /// <summary>
@@ -6400,6 +6427,41 @@ internal sealed class MemberLookup
     /// <returns>The pointee type for a by-ref member; the type unchanged otherwise.</returns>
     private static Type DereferenceByRefElement(Type elementType) =>
         elementType.IsByRef ? elementType.GetElementType() ?? elementType : elementType;
+
+    /// <summary>
+    /// Issue #3695: folds an event declaration's <c>[Nullable]</c> metadata
+    /// into the symbolic handler type, mirroring the field path's
+    /// <see cref="NullableFlagsBuilder.MergeDeclarationNullability"/> call.
+    /// Without it a handler declared <c>Func&lt;…, Assembly?&gt;</c> presented
+    /// a non-null <c>Assembly</c> return to lambda target typing, so an arrow
+    /// lambda subscribing to the event could not <c>return nil</c>.
+    /// The event slot's own top-level nullability is deliberately dropped: it
+    /// describes the delegate field, not the handler shape a lambda is
+    /// converted to (and a nullable target suppresses lambda target typing).
+    /// </summary>
+    /// <param name="mapped">The symbolically-substituted handler type.</param>
+    /// <param name="openEvent">The event as declared on the open definition.</param>
+    /// <param name="openDefinition">The open declaring type, for <c>[NullableContext]</c> lookup.</param>
+    /// <returns>The handler type with declaration-site nullability applied.</returns>
+    private static TypeSymbol ApplyEventDeclarationNullability(
+        TypeSymbol mapped,
+        EventInfo openEvent,
+        Type openDefinition)
+    {
+        if (openEvent.EventHandlerType is not Type handlerLayout)
+        {
+            return mapped;
+        }
+
+        var declarationFlags = ClrNullability.ReadNullableFlags(openEvent, openDefinition);
+        var merged = NullableFlagsBuilder.MergeDeclarationNullability(
+            mapped,
+            handlerLayout,
+            declarationFlags);
+        return merged is NullableTypeSymbol nullableHandler
+            ? nullableHandler.UnderlyingType
+            : merged;
+    }
 
     /// <summary>
     /// Issue #985: a single CLR interface method slot that an implementing type
