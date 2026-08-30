@@ -24,7 +24,13 @@ env:
 jobs:
   selfmig:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Issue #3668: an app that fails at TRANSLATE costs seconds; one that gets
+    # past it pays for compile + ILVerify + test-parity. Clearing the #3666
+    # cascade (PR #3667) moved ~19 apps from "fails immediately" to "runs the
+    # full pipeline", so the run blew through the old 120-minute budget after
+    # only 23 of 51 apps and was cancelled with no verdict. Raised so the gate
+    # can report at all; a sharded matrix is the durable fix (#3668).
+    timeout-minutes: 360
 
     steps:
       - uses: actions/checkout@v5
