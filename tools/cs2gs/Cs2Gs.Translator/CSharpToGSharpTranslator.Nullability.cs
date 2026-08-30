@@ -639,6 +639,47 @@ public sealed partial class CSharpToGSharpTranslator
                 : nested;
         }
 
+        // Issue #3682: the element type of an array / slice literal that
+        // literally writes `null` (or `default`) into a NON-nullable reference
+        // element. C# accepts the write — the literal sits in an oblivious file
+        // (`test/Core.Tests` has no `<Nullable>` setting), or its element type
+        // was inferred from an oblivious/unannotated target — but G#'s element
+        // type is genuinely non-nullable and gsc rejects the `nil` (GS0155,
+        // `Cannot convert type 'nil' to 'object'`).
+        //
+        // The right repair is the DECLARATION, not the value: the `nil` really
+        // is nil, so `!!` would turn a clean C# `new object[] { a, null }` into
+        // a runtime throw. A literal's element type is inferred AT the literal
+        // rather than pinned by a declaration, so widening it to `T?` is both
+        // faithful and local — the array genuinely holds a nil.
+        //
+        // Restricted to reference elements whose annotation is not already
+        // `Annotated` (those already render `T?`); value-typed elements never
+        // receive a `nil` in the first place.
+        private GTypeReference PromoteElementTypeForNullElements(
+            GTypeReference elementType,
+            ITypeSymbol elementTypeSymbol,
+            IEnumerable<ExpressionSyntax> elements)
+        {
+            if (elementType == null
+                || elementType.IsNullable
+                || elementTypeSymbol is not { IsReferenceType: true }
+                || elementTypeSymbol.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return elementType;
+            }
+
+            foreach (ExpressionSyntax element in elements)
+            {
+                if (element != null && IsNullOrDefaultLiteral(element))
+                {
+                    return MakeNullable(elementType);
+                }
+            }
+
+            return elementType;
+        }
+
         // Issue #914: whether <paramref name="expression"/> is a bare `null` /
         // `null!` literal or a `default` / `default(T)` expression — the direct
         // null-argument forms used to detect a null flowing into a delegate

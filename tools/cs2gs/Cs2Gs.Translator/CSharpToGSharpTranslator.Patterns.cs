@@ -1885,11 +1885,15 @@ public sealed partial class CSharpToGSharpTranslator
                             leaves);
                     }
 
+                    GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
+                        elementType, elementTypeSymbol, leaves);
+                    bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
                     return new ArrayAllocationExpression(
-                        elementType,
+                        leafElementType,
                         dimensions,
                         leaves.Select(expression =>
-                            this.TranslateArrayInitializerElement(expression, elementTypeSymbol)).ToList());
+                            this.TranslateArrayInitializerElement(
+                                expression, elementTypeSymbol, leafPromoted)).ToList());
                 }
 
                 return new ArrayAllocationExpression(
@@ -1903,11 +1907,15 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 // `new T[]{a, b}` / `new T[0]` (with an explicit, possibly empty,
                 // initializer) → the slice literal `[]T{a, b}`.
+                GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
+                    elementType, elementTypeSymbol, creation.Initializer.Expressions);
+                bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
                 return new ArrayLiteralExpression(
-                    elementType,
+                    literalElementType,
                     creation.Initializer.Expressions
                         .Select(expression =>
-                            this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                            this.TranslateArrayInitializerElement(
+                                expression, elementTypeSymbol, literalPromoted))
                         .ToList());
             }
 
@@ -2081,9 +2089,20 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateArrayInitializerElement(
             ExpressionSyntax expression,
-            ITypeSymbol elementType)
+            ITypeSymbol elementType,
+            bool elementTypePromotedToNullable = false)
         {
             GExpression translated = this.TranslateExpression(expression);
+
+            // Issue #3682: the literal's element type was widened to `T?`
+            // because the literal writes a `nil` into it, so no element needs
+            // (or may take) a `!!` bridge against a non-nullable element — the
+            // slot accepts nil by construction now.
+            if (elementTypePromotedToNullable)
+            {
+                return translated;
+            }
+
             translated = this.ForgiveNullableReferenceValue(
                 expression,
                 translated,
@@ -2137,19 +2156,27 @@ public sealed partial class CSharpToGSharpTranslator
                     rank: arrayType.Rank,
                     dims,
                     leaves);
+                GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
+                    elementType, elementTypeSymbol, leaves);
+                bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
                 return new ArrayAllocationExpression(
-                    elementType,
+                    leafElementType,
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
                     leaves.Select(expression =>
-                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol)).ToList());
+                        this.TranslateArrayInitializerElement(
+                            expression, elementTypeSymbol, leafPromoted)).ToList());
             }
 
+            GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
+                elementType, elementTypeSymbol, creation.Initializer.Expressions);
+            bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
             return new ArrayLiteralExpression(
-                elementType,
+                literalElementType,
                 creation.Initializer.Expressions
                     .Select(expression =>
-                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                        this.TranslateArrayInitializerElement(
+                            expression, elementTypeSymbol, literalPromoted))
                     .ToList());
         }
 
@@ -2398,6 +2425,15 @@ public sealed partial class CSharpToGSharpTranslator
             // canonical G# slice literal `[]T{ … }` (ADR-0115 §B). Spreads map
             // directly to native G# ellipsis elements, with no statement-hosted
             // build/append temporary (issue #3096).
+            //
+            // Issue #3682: `[null, null, "d"]` writes a `nil` into the slice's
+            // element type, which the C# target left non-nullable.
+            GTypeReference sliceElementType = this.PromoteElementTypeForNullElements(
+                elementType,
+                elementTypeSymbol,
+                collection.Elements.OfType<ExpressionElementSyntax>().Select(e => e.Expression));
+            bool slicePromoted = !ReferenceEquals(sliceElementType, elementType);
+
             var elements = new List<GExpression>();
             foreach (CollectionElementSyntax element in collection.Elements)
             {
@@ -2408,14 +2444,16 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
-                    elements.Add(this.CoerceCollectionElement(
-                        expressionElement.Expression,
-                        elementType,
-                        elementTypeSymbol));
+                    elements.Add(slicePromoted
+                        ? this.TranslateExpression(expressionElement.Expression)
+                        : this.CoerceCollectionElement(
+                            expressionElement.Expression,
+                            elementType,
+                            elementTypeSymbol));
                 }
             }
 
-            return new ArrayLiteralExpression(elementType, elements);
+            return new ArrayLiteralExpression(sliceElementType, elements);
         }
 
         private GExpression CoerceCollectionElement(
