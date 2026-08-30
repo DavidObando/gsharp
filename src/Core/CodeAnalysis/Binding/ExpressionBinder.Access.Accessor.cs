@@ -3143,8 +3143,9 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// ADR-0089 / issue #1030: reshapes a type-name expression (a simple name
-    /// such as <c>int32</c> or a nested generic such as <c>IBox[int32]</c>) into
-    /// a <see cref="TypeClauseSyntax"/> so it can be bound by the shared
+    /// such as <c>int32</c> or a dotted name such as
+    /// <c>System.Collections.Immutable.ImmutableArray</c>) into a
+    /// <see cref="TypeClauseSyntax"/> so it can be bound by the shared
     /// type-clause binder. Returns <c>false</c> for non-type shapes.
     /// </summary>
     /// <param name="expr">The candidate type expression.</param>
@@ -3161,7 +3162,90 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        // Issue #3658: a type argument written as a dotted name
+        // (`ImmutableArray[GSharp.Core.CodeAnalysis.Diagnostic].Empty`) reaches
+        // the binder as an accessor chain, not a bare name. Flatten the chain
+        // into the type clause's qualifier tokens so it binds exactly as the
+        // same spelling does in type position.
+        if (expr is AccessorExpressionSyntax accessor)
+        {
+            return TryBuildQualifiedTypeClauseFromAccessor(accessor, out typeClause);
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// Issue #3658: flattens a dotted accessor chain whose every segment is a
+    /// plain identifier (<c>A.B.C</c>) into a qualified
+    /// <see cref="TypeClauseSyntax"/>. Returns <c>false</c> when any segment is
+    /// null-conditional or is not a simple name, so genuine value expressions
+    /// fall back to ordinary expression binding.
+    /// </summary>
+    /// <param name="accessor">The candidate dotted type name.</param>
+    /// <param name="typeClause">The synthesized qualified type clause on success.</param>
+    /// <returns>Whether the accessor chain spells a dotted type name.</returns>
+    private static bool TryBuildQualifiedTypeClauseFromAccessor(
+        AccessorExpressionSyntax accessor,
+        [NotNullWhen(true)] out TypeClauseSyntax? typeClause)
+    {
+        typeClause = null;
+        var dots = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var segments = ImmutableArray.CreateBuilder<SyntaxToken>();
+        if (!TryCollectDottedNameSegments(accessor, dots, segments) || segments.Count < 2)
+        {
+            return false;
+        }
+
+        var head = segments[0];
+        segments.RemoveAt(0);
+        typeClause = new TypeClauseSyntax(
+            accessor.SyntaxTree,
+            openBracketToken: null,
+            lengthToken: null,
+            closeBracketToken: null,
+            head,
+            dots.ToImmutable(),
+            segments.ToImmutable(),
+            typeArgumentOpenBracketToken: null,
+            typeArguments: default,
+            typeArgumentCloseBracketToken: null,
+            questionToken: null);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3658: appends the identifier tokens of a dotted-name expression to
+    /// <paramref name="segments"/> in source order, and the <c>.</c> tokens that
+    /// separate them to <paramref name="dots"/>. The parser nests accessor
+    /// chains to the right (<c>A.B.C</c> is <c>A.(B.C)</c>) in expression
+    /// position but to the left elsewhere, so both leanings are walked.
+    /// </summary>
+    /// <param name="expr">The candidate dotted name.</param>
+    /// <param name="dots">Receives the separating <c>.</c> tokens.</param>
+    /// <param name="segments">Receives the identifier tokens.</param>
+    /// <returns>Whether every node in the chain is a plain identifier or a non-null-conditional dot.</returns>
+    private static bool TryCollectDottedNameSegments(
+        ExpressionSyntax expr,
+        ImmutableArray<SyntaxToken>.Builder dots,
+        ImmutableArray<SyntaxToken>.Builder segments)
+    {
+        switch (expr)
+        {
+            case NameExpressionSyntax name when !name.IdentifierToken.IsMissing:
+                segments.Add(name.IdentifierToken);
+                return true;
+            case AccessorExpressionSyntax step when !step.IsNullConditional:
+                if (!TryCollectDottedNameSegments(step.LeftPart, dots, segments))
+                {
+                    return false;
+                }
+
+                dots.Add(step.DotToken);
+                return TryCollectDottedNameSegments(step.RightPart, dots, segments);
+            default:
+                return false;
+        }
     }
 
     /// <summary>
