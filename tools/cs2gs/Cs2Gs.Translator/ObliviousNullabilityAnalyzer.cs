@@ -55,6 +55,12 @@ namespace Cs2Gs.Translator;
 /// </summary>
 internal static class ObliviousNullabilityAnalyzer
 {
+    // Issue #3694: the metadata name of the attribute that states "null is an
+    // accepted input for this declaration" (`System.Diagnostics.CodeAnalysis`).
+    // Matched by name rather than by symbol so the lookup needs no compilation
+    // and answers identically in every compilation a migration run loads.
+    private const string AllowNullAttributeName = "AllowNullAttribute";
+
     // Keyed by Compilation identity so an edited/new compilation naturally gets
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
@@ -227,6 +233,58 @@ internal static class ObliviousNullabilityAnalyzer
                 {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3694: whether <paramref name="symbol"/> declares — with
+    /// <see cref="AllowNullAttributeName"/> — that <c>null</c> is an accepted
+    /// INPUT even though its type is annotated non-nullable. C# splits a
+    /// declaration's nullability into an input and an output contract, so
+    /// <c>[AllowNull] T P { get; set; }</c> means "the setter takes
+    /// <c>T?</c>, the getter returns <c>T</c>". G#, like Kotlin, has ONE
+    /// nullability per declaration, so the only rendering that admits the
+    /// writes the C# genuinely accepts is <c>T?</c>.
+    ///
+    /// <para>
+    /// The answer is a property of the DECLARATION alone — no consumer
+    /// evidence and no taint fixpoint — so every compilation in a run that
+    /// sees the symbol computes the same result, which is what lets a
+    /// cross-project write site trust that the referenced project's migrated
+    /// declaration really will be nullable.
+    /// </para>
+    ///
+    /// <para>
+    /// The attribute is looked up on the symbol itself, on a property setter's
+    /// <c>value</c> parameter (where the C# compiler also accepts it), and on
+    /// the SOURCE base or interface declaration an overriding/implementing
+    /// member inherits its signature from — a member whose base is
+    /// <c>[AllowNull]</c> must be promoted with it or the two G# signatures no
+    /// longer match (gsc GS0185/GS0386).
+    /// </para>
+    /// </summary>
+    /// <param name="symbol">The declaration symbol to test.</param>
+    /// <returns><see langword="true"/> when null is an accepted input for the declaration.</returns>
+    public static bool HasAllowNullWriteContract(ISymbol symbol)
+    {
+        // Scoped to declarations this migration EMITS. A metadata-only symbol
+        // (the BCL, a NuGet package) keeps whatever contract its assembly
+        // already carries — gsc imports `[AllowNull] T` as plain `T` — so
+        // widening the translator's view of it would only manufacture
+        // mismatches at sites gsc still binds non-nullably.
+        if (symbol == null || symbol.OriginalDefinition.DeclaringSyntaxReferences.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (ISymbol candidate in AllowNullContractSites(symbol.OriginalDefinition))
+        {
+            if (candidate != null && CarriesAllowNull(candidate))
+            {
+                return true;
             }
         }
 
@@ -818,6 +876,124 @@ internal static class ObliviousNullabilityAnalyzer
         symbol is IMethodSymbol { MethodKind: MethodKind.PropertyGet, AssociatedSymbol: { } property }
             ? property
             : symbol;
+
+    // Every declaration whose `[AllowNull]` binds `symbol`'s write contract:
+    // the symbol itself, a property setter's `value` parameter, and the base or
+    // interface declaration an inherited signature comes from.
+    private static IEnumerable<ISymbol> AllowNullContractSites(ISymbol symbol)
+    {
+        switch (symbol)
+        {
+            case IPropertySymbol property:
+                yield return property;
+                if (property.SetMethod is { Parameters.Length: > 0 } setter)
+                {
+                    yield return setter.Parameters[0];
+                }
+
+                foreach (ISymbol inherited in InheritedDeclarations(property))
+                {
+                    yield return inherited;
+                    if (inherited is IPropertySymbol { SetMethod.Parameters.Length: > 0 } inheritedProperty)
+                    {
+                        yield return inheritedProperty.SetMethod.Parameters[0];
+                    }
+                }
+
+                break;
+
+            case IParameterSymbol parameter:
+                yield return parameter;
+                if (parameter.ContainingSymbol is IMethodSymbol owner)
+                {
+                    foreach (ISymbol inherited in InheritedDeclarations(owner))
+                    {
+                        if (inherited is IMethodSymbol inheritedMethod
+                            && parameter.Ordinal < inheritedMethod.Parameters.Length)
+                        {
+                            yield return inheritedMethod.Parameters[parameter.Ordinal];
+                        }
+                    }
+                }
+
+                break;
+
+            case IFieldSymbol field:
+                yield return field;
+                break;
+        }
+    }
+
+    // The base-class overrides and interface members `member` inherits its
+    // signature from.
+    private static IEnumerable<ISymbol> InheritedDeclarations(ISymbol member)
+    {
+        for (ISymbol current = OverriddenDeclaration(member); current != null; current = OverriddenDeclaration(current))
+        {
+            yield return current;
+        }
+
+        foreach (ISymbol explicitImplementation in ExplicitImplementations(member))
+        {
+            yield return explicitImplementation;
+        }
+
+        INamedTypeSymbol containing = member.ContainingType;
+        if (containing == null)
+        {
+            yield break;
+        }
+
+        foreach (INamedTypeSymbol contract in containing.AllInterfaces)
+        {
+            foreach (ISymbol candidate in contract.GetMembers(member.Name))
+            {
+                if (SymbolEqualityComparer.Default.Equals(
+                    containing.FindImplementationForInterfaceMember(candidate), member))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+    }
+
+    private static ISymbol OverriddenDeclaration(ISymbol member) =>
+        member switch
+        {
+            IMethodSymbol method => method.OverriddenMethod,
+            IPropertySymbol property => property.OverriddenProperty,
+            _ => null,
+        };
+
+    private static IEnumerable<ISymbol> ExplicitImplementations(ISymbol member) =>
+        member switch
+        {
+            IMethodSymbol method => method.ExplicitInterfaceImplementations,
+            IPropertySymbol property => property.ExplicitInterfaceImplementations,
+            _ => Enumerable.Empty<ISymbol>(),
+        };
+
+    private static bool CarriesAllowNull(ISymbol symbol)
+    {
+        // A metadata base declaration is already emitted as plain `T`, so an
+        // `[AllowNull]` there must not repaint a source override that has to
+        // keep matching it.
+        ISymbol declaring = symbol is IParameterSymbol parameter ? parameter.ContainingSymbol : symbol;
+        if (declaring == null || declaring.DeclaringSyntaxReferences.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (AttributeData attribute in symbol.GetAttributes())
+        {
+            if (attribute.AttributeClass?.Name == AllowNullAttributeName)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // Whether the member owning `symbol`'s type position inherits that position
     // from a base class or interface declaration, so its nullability is not the
