@@ -41,8 +41,15 @@ public class Issue2516SliceCovarianceBindingTests
         var integers = SliceTypeSymbol.Get(TypeSymbol.Int32);
 
         Assert.False(Conversion.Classify(strings, ListObject).Exists);
-        Assert.False(Conversion.Classify(strings, SliceTypeSymbol.Get(TypeSymbol.Object)).Exists);
         Assert.False(Conversion.Classify(integers, EnumerableObject).Exists);
+
+        // Issue #3685: `[]string -> []object` gained an EXPLICIT spelling
+        // (`cast[[]object](strings)`), so the conversion now exists — but the
+        // #2516 invariance rule is unchanged, which is what this guard pins:
+        // it must never be IMPLICIT.
+        var covariantSlice = Conversion.Classify(strings, SliceTypeSymbol.Get(TypeSymbol.Object));
+        Assert.True(covariantSlice.Exists);
+        Assert.False(covariantSlice.IsImplicit);
     }
 
     [Fact]
@@ -56,8 +63,11 @@ public class Issue2516SliceCovarianceBindingTests
             IsImplicit: true,
         });
         Assert.False(Conversion.Classify(strings, ListObject).Exists);
-        Assert.False(
-            Conversion.Classify(strings, TypeSymbol.FromClrType(typeof(object[]))).Exists);
+
+        // Issue #3685, imported-array arm of the same rule: explicit-only.
+        var covariantArray = Conversion.Classify(strings, TypeSymbol.FromClrType(typeof(object[])));
+        Assert.True(covariantArray.Exists);
+        Assert.False(covariantArray.IsImplicit);
     }
 
     [Fact]

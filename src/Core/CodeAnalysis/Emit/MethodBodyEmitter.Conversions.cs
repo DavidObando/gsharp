@@ -610,6 +610,18 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #3685: an explicitly spelled covariant one-dimensional array
+        // upcast (`cast[[]FileSystemInfo](dirs)`). A G# slice IS a CLR SZ-array
+        // (ADR-0016) and the CLR already treats a `D[]` reference as a `B[]`
+        // for any base `B` of `D`, so the widening needs no IL at all — the
+        // same no-op the class → base / class → interface arm above emits. The
+        // `IsReferenceCompatible` probe misses it because a slice's element
+        // relationship, not the slice symbol's own CLR backing, is what widens.
+        if (Conversion.IsCovariantArrayUpcast(from, to))
+        {
+            return;
+        }
+
         // Issue #3421: canonical `T(value)` reference downcasts use the CLR's
         // checked-cast operation. `castclass` preserves null, returns the same
         // reference on success, and throws InvalidCastException for an

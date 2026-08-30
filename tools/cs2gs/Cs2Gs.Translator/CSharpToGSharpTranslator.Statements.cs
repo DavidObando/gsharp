@@ -57,11 +57,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                     try
                     {
-                        initializer = this.CoercePointerConversion(
+                        initializer = this.CoerceCovariantArrayConversion(
                             declarator.Initializer.Value,
-                            this.CoerceConstantToUnsigned(
+                            this.CoercePointerConversion(
                                 declarator.Initializer.Value,
-                                this.TranslateExpression(declarator.Initializer.Value)));
+                                this.CoerceConstantToUnsigned(
+                                    declarator.Initializer.Value,
+                                    this.TranslateExpression(declarator.Initializer.Value))));
                     }
                     finally
                     {
@@ -1322,6 +1324,48 @@ public sealed partial class CSharpToGSharpTranslator
             return translated;
         }
 
+        // Issue #3685: wraps a translated expression in the explicit checked
+        // reference cast `cast[[]B](expr)` when C# performed an implicit ARRAY
+        // COVARIANCE conversion at this position (`PortableExecutableReference[]`
+        // returned as `MetadataReference[]`, the InternalAnalyzers.Tests wall).
+        // C# widens `D[] -> B[]` implicitly; G# slices are invariant by design
+        // (gsc issue #2516 — the ArrayTypeMismatchException hazard must be
+        // announced), so the bare operand is rejected (GS0155/GS0156) and the
+        // upcast has to be spelled. `cast[…]` is the identity-preserving
+        // spelling: it is a reference-level no-op on the SAME array instance,
+        // unlike a projecting `.Cast[B]().ToArray()` copy.
+        //
+        // Applied at the same argument / assignment / return / local-initializer
+        // positions as CoercePointerConversion, and for the same reason: those
+        // are the positions where C# inserts a target-typed conversion. Rank and
+        // element-kind guards keep it to the one-dimensional reference-element
+        // case the CLR actually widens; an annotation-only element difference
+        // compares equal under SymbolEqualityComparer.Default and is left bare.
+        private GExpression CoerceCovariantArrayConversion(ExpressionSyntax expression, GExpression translated)
+        {
+            if (expression == null)
+            {
+                return translated;
+            }
+
+            TypeInfo info = this.context.GetTypeInfo(expression);
+            if (info.Type is IArrayTypeSymbol source &&
+                info.ConvertedType is IArrayTypeSymbol target &&
+                source.Rank == 1 &&
+                target.Rank == 1 &&
+                source.ElementType is { IsReferenceType: true } sourceElement &&
+                target.ElementType is { IsReferenceType: true } targetElement &&
+                sourceElement.TypeKind != TypeKind.Error &&
+                targetElement.TypeKind != TypeKind.Error &&
+                !SymbolEqualityComparer.Default.Equals(sourceElement, targetElement))
+            {
+                GTypeReference targetRef = this.typeMapper.Map(target, this.context, expression.GetLocation());
+                return new ConversionExpression(targetRef, translated, isCheckedReferenceCast: true);
+            }
+
+            return translated;
+        }
+
         // Reports whether `type` is a value type that is not `System.Nullable<T>`,
         // i.e. a target for which G#'s `as` operator is invalid (GS0270) and the
         // conversion-call form must be used instead.
@@ -2316,7 +2360,9 @@ public sealed partial class CSharpToGSharpTranslator
                 assignment.Right,
                 this.TranslateExpression(assignment.Right));
             value = this.CoerceCompoundAssignmentRhs(assignment, value);
-            value = this.CoercePointerConversion(assignment.Right, value);
+            value = this.CoerceCovariantArrayConversion(
+                assignment.Right,
+                this.CoercePointerConversion(assignment.Right, value));
             value = this.ForgiveEventSubscriptionRhs(assignment, value);
             value = this.ForgiveElementAccessAssignmentRhs(assignment, value);
             value = this.ForgiveObliviousExternalAssignmentRhs(assignment, value);

@@ -1571,11 +1571,13 @@ public sealed partial class CSharpToGSharpTranslator
             // when gsc accepts the conversion on its own and keeps the explicit
             // `T(x)` wrap only where gsc still needs it.
             GExpression exactCallable = this.TranslateExactCallableArgument(argument);
-            GExpression translated = this.CoercePointerConversion(
+            GExpression translated = this.CoerceCovariantArrayConversion(
                 argument.Expression,
-                this.CoerceNumericArgumentToConverted(
-                    argument,
-                    exactCallable ?? this.TranslateExpression(argument.Expression)));
+                this.CoercePointerConversion(
+                    argument.Expression,
+                    this.CoerceNumericArgumentToConverted(
+                        argument,
+                        exactCallable ?? this.TranslateExpression(argument.Expression))));
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull

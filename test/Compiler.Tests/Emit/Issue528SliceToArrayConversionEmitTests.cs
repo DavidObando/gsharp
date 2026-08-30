@@ -263,6 +263,14 @@ public class Issue528SliceToArrayConversionEmitTests
         // same invariance. `[]string → object[]` is therefore not implicit
         // (even though the CLR would allow the reference upcast). If a
         // future spec relaxes this, the test should be updated explicitly.
+        //
+        // Issue #3685: the rejection is unchanged — what moved is the
+        // diagnostic. Now that the covariant array upcast has an EXPLICIT
+        // spelling (`cast[[]object](...)`), the classifier reports GS0156
+        // ("an explicit conversion exists") instead of the dead-end GS0155,
+        // pointing the author at the cast. Assert GS0156 and assert GS0155
+        // is absent, so this still fails loudly if the conversion ever
+        // becomes implicit.
         var sibling = """
             namespace Probe.CSharp
             {
@@ -283,7 +291,8 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var diags = CompileAndCollectDiagnosticsWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Contains("GS0155", diags);
+        Assert.Contains("GS0156", diags);
+        Assert.DoesNotContain("GS0155", diags);
     }
 
     [Fact]

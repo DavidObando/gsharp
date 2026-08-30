@@ -175,12 +175,21 @@ public class Issue2516SliceCovarianceEmitTests
         Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
+    // Issue #3685: every case here is still REJECTED — slice invariance is
+    // unchanged. What differs per case is which diagnostic explains the
+    // rejection. The reference-element slice → slice case now has an
+    // EXPLICIT spelling (`cast[[]Animal](...)`), so the classifier reports
+    // GS0156 ("an explicit conversion exists") and points the author at the
+    // cast; the interface targets and the value-type element have no such
+    // spelling and keep the dead-end GS0155. The expected id is a parameter
+    // so an accidental slide into an IMPLICIT conversion still fails loudly
+    // via the exit-code assertion below.
     [Theory]
-    [InlineData("[]Animal", "[]Dog{Dog()}")]
-    [InlineData("IList[Animal]", "[]Dog{Dog()}")]
-    [InlineData("ICollection[Animal]", "[]Dog{Dog()}")]
-    [InlineData("IEnumerable[object]", "[]int32{1}")]
-    public void UnsafeOrValueTypeVariance_RemainsRejected(string targetType, string value)
+    [InlineData("[]Animal", "[]Dog{Dog()}", "GS0156")]
+    [InlineData("IList[Animal]", "[]Dog{Dog()}", "GS0155")]
+    [InlineData("ICollection[Animal]", "[]Dog{Dog()}", "GS0155")]
+    [InlineData("IEnumerable[object]", "[]int32{1}", "GS0155")]
+    public void UnsafeOrValueTypeVariance_RemainsRejected(string targetType, string value, string expectedDiagnostic)
     {
         string source = $$"""
             package Probe
@@ -194,7 +203,7 @@ public class Issue2516SliceCovarianceEmitTests
 
         var (exitCode, diagnostics) = Compile(source);
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
+        Assert.Contains(expectedDiagnostic, diagnostics, StringComparison.Ordinal);
         Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
     }
 
