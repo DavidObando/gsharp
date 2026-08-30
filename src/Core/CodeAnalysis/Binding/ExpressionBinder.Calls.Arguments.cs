@@ -3115,7 +3115,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var getter = clrProp.GetGetMethod(nonPublic: false);
+        var getter = GetVisibleGetter(clrProp);
         if (getter == null)
         {
             return false;
@@ -3187,7 +3187,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        var setter = clrProp.GetSetMethod(nonPublic: false);
+        var setter = GetVisibleSetter(clrProp);
         if (setter == null)
         {
             Diagnostics.ReportCannotAssign(equalsLocation, memberName);

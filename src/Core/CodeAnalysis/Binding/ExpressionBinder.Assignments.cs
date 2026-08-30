@@ -500,13 +500,13 @@ internal sealed partial class ExpressionBinder
         if (receiverType is not StructSymbol && receiverType is not NullableTypeSymbol && receiverType.ClrType != null)
         {
             var clrReceiverType = receiverType.ClrType;
-            MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo? instanceMember = SafeGetVisibleInstanceProperty(clrReceiverType, propertyName);
             if (instanceMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, propertyName);
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.PropertyIdentifier.Location, propertyName);
@@ -860,13 +860,13 @@ internal sealed partial class ExpressionBinder
         {
             var clrReceiverType = assignmentReceiverType.ClrType;
             var fieldName = syntax.FieldIdentifier.ValueText;
-            MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo? instanceMember = SafeGetVisibleInstanceProperty(clrReceiverType, fieldName);
             if (instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, fieldName);
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -1845,13 +1845,13 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember = SafeGetVisibleInstanceProperty(clrReceiverType, memberName);
             if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, memberName);
         }
 
         if (instanceMember == null)
@@ -2822,13 +2822,13 @@ internal sealed partial class ExpressionBinder
         if (CanBindClrInstanceMember(receiver))
         {
             var clrReceiverType = Invariant.Required(receiverType.ClrType, "a CLR member receiver has a CLR type");
-            MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo? instanceMember = SafeGetVisibleInstanceProperty(clrReceiverType, fieldName);
             if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
             }
 
-            instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, fieldName);
             if (instanceMember == null)
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -3313,13 +3313,13 @@ internal sealed partial class ExpressionBinder
 
         var clrReceiverType = globalType.ClrType;
         var memberName = syntax.FieldIdentifier.ValueText;
-        MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        MemberInfo? instanceMember = SafeGetVisibleInstanceProperty(clrReceiverType, memberName);
         if (instanceMember is PropertyInfo indexedProperty && indexedProperty.GetIndexParameters().Length != 0)
         {
             instanceMember = null;
         }
 
-        instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, memberName);
         if (instanceMember == null)
         {
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, memberName);

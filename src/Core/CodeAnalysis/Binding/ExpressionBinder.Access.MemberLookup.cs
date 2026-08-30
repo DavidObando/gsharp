@@ -642,20 +642,16 @@ internal sealed partial class ExpressionBinder
                     // Issue #529: use interface-aware lookup so that members
                     // declared on a base interface (e.g. IReadOnlyCollection<T>.Count
                     // surfaced through IReadOnlyList<T>) are found.
-                    var prop = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
-                    if (prop == null && scope.References.CanAccessInternalMembers(clrReceiverType.Assembly))
-                    {
-                        var internalCandidate = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
-                            clrReceiverType,
-                            memberName,
-                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        if (internalCandidate?.GetMethod?.IsAssembly == true)
-                        {
-                            prop = internalCandidate;
-                        }
-                    }
+                    // Issue #3705: the read and the write path share one probe
+                    // so the friend-`internal` widening cannot drift apart
+                    // between them again (#3693 / #3702). The getter gate is
+                    // the visible one — a `{ private get; … }` property is not
+                    // readable here however the property itself was found.
+                    var prop = SafeGetVisibleInstanceProperty(clrReceiverType, memberName);
 
-                    if (prop != null && prop.GetIndexParameters().Length == 0 && prop.CanRead)
+                    if (prop != null
+                        && prop.GetIndexParameters().Length == 0
+                        && GetVisibleGetter(prop) != null)
                     {
                         // Issue #504 follow-up: properties with NRT
                         // annotations (e.g. `DirectoryInfo.Parent` is
@@ -681,19 +677,7 @@ internal sealed partial class ExpressionBinder
                         return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrPropertyAccessExpression(null, receiver!, prop, propType));
                     }
 
-                    var fld = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
-                    if (fld == null && scope.References.CanAccessInternalMembers(clrReceiverType.Assembly))
-                    {
-                        var internalCandidate = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
-                            clrReceiverType,
-                            memberName,
-                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        if (internalCandidate?.IsAssembly == true)
-                        {
-                            fld = internalCandidate;
-                        }
-                    }
-
+                    var fld = SafeGetVisibleInstanceField(clrReceiverType, memberName);
                     if (fld != null)
                     {
                         var fieldType = NormalizeImportedSemanticAggregate(
@@ -1353,7 +1337,7 @@ internal sealed partial class ExpressionBinder
                     out var idxProp,
                     out var resolvedIdxArgs))
                 {
-                    if (idxProp!.GetGetMethod(nonPublic: false) == null)
+                    if (ClrMemberVisibility.GetVisibleGetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
                     {
                         Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
                         return new BoundErrorExpression(null);
@@ -1389,7 +1373,7 @@ internal sealed partial class ExpressionBinder
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
             {
                 // A successful CLR indexer resolution establishes a non-null property.
-                if (idxPropAnnot!.GetGetMethod(nonPublic: false) == null)
+                if (ClrMemberVisibility.GetVisibleGetter(idxPropAnnot!, CanAccessInternalsOf(idxPropAnnot!.DeclaringType)) == null)
                 {
                     Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
                     return new BoundErrorExpression(null);
@@ -1413,7 +1397,7 @@ internal sealed partial class ExpressionBinder
             if (this.memberLookup.TryResolveClrIndexer(target.Type, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
             {
                 // A successful CLR indexer resolution establishes a non-null property.
-                if (idxProp!.GetGetMethod(nonPublic: false) == null)
+                if (ClrMemberVisibility.GetVisibleGetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
                 {
                     Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
                     return new BoundErrorExpression(null);
@@ -2097,7 +2081,7 @@ internal sealed partial class ExpressionBinder
                     out var idxProp,
                     out var resolvedIdxArgs))
                 {
-                    if (idxProp!.GetSetMethod(nonPublic: false) == null)
+                    if (ClrMemberVisibility.GetVisibleSetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
                     {
                         Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                         return new BoundErrorExpression(null);
@@ -2129,7 +2113,7 @@ internal sealed partial class ExpressionBinder
             if (this.memberLookup.TryResolveClrIndexer(targetType, clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
             {
                 // A successful CLR indexer resolution establishes a non-null property.
-                if (idxPropAnnotWr!.GetSetMethod(nonPublic: false) == null)
+                if (ClrMemberVisibility.GetVisibleSetter(idxPropAnnotWr!, CanAccessInternalsOf(idxPropAnnotWr!.DeclaringType)) == null)
                 {
                     Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);
@@ -2168,9 +2152,9 @@ internal sealed partial class ExpressionBinder
                 // managed pointer. Detect the ref-returning getter and store through
                 // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
                 // hard error (GS0226).
-                if (idxProp!.GetSetMethod(nonPublic: false) == null)
+                if (ClrMemberVisibility.GetVisibleSetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
                 {
-                    var refGetter = idxProp.GetGetMethod(nonPublic: false);
+                    var refGetter = GetVisibleGetter(idxProp);
                     if (refGetter != null && refGetter.ReturnType.IsByRef)
                     {
                         if (IsReadOnlyRefReturn(idxProp, refGetter))
@@ -2795,7 +2779,7 @@ internal sealed partial class ExpressionBinder
             }
 
             // Either indexer lookup succeeded, so the property is present here.
-            var getter = indexer!.GetGetMethod(nonPublic: false);
+            var getter = ClrMemberVisibility.GetVisibleGetter(indexer!, CanAccessInternalsOf(indexer!.DeclaringType));
             var valueType = ResolveIndexerElementType(targetType, indexer);
             if (!indexer.CanWrite)
             {
