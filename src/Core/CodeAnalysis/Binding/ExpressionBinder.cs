@@ -1271,10 +1271,10 @@ internal sealed partial class ExpressionBinder
         return fnRetClr == invoke.ReturnType;
     }
 
-    private static bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable)
+    private bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable)
         => TryGetWritableClrMember(member, receiverType: null, out targetType, out targetTypeSymbol, out writable);
 
-    private static bool TryGetWritableClrMember(
+    private bool TryGetWritableClrMember(
         MemberInfo? member,
         TypeSymbol? receiverType,
         [NotNullWhen(true)] out Type? targetType,
@@ -1291,7 +1291,8 @@ internal sealed partial class ExpressionBinder
                         receiverType,
                         p,
                         projectOnlyWhenSymbolicallyRequired: true);
-                writable = p.CanWrite && p.GetSetMethod(nonPublic: false) != null;
+                writable = p.CanWrite
+                    && (p.GetSetMethod(nonPublic: false) != null || IsFriendVisibleInternalSetter(p));
                 return writable;
             case FieldInfo f:
                 targetType = f.FieldType;
@@ -1306,6 +1307,33 @@ internal sealed partial class ExpressionBinder
                 writable = false;
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Issue #3684: whether <paramref name="property"/>'s setter is an
+    /// <c>internal</c> (metadata <c>assembly</c>) accessor declared by an
+    /// assembly that named this compilation in an
+    /// <c>InternalsVisibleTo</c> — i.e. a setter this compilation may legally
+    /// call, exactly as C# lets a friend assembly write
+    /// <c>{ get; internal set; }</c>.
+    /// <para>
+    /// #3693 widened the CLR instance-call and imported-static probes the same
+    /// way; the writability test kept <c>GetSetMethod(nonPublic: false)</c>, so
+    /// a friend could READ an internal-set property but never write it — in a
+    /// plain assignment or an object initializer alike (GS0127). Only
+    /// <c>assembly</c> accessibility is admitted: <c>private</c>,
+    /// <c>protected</c>, <c>protected internal</c> and <c>private protected</c>
+    /// setters stay unwritable however the friendship is declared.
+    /// </para>
+    /// </summary>
+    /// <param name="property">The imported CLR property.</param>
+    /// <returns><see langword="true"/> when the internal setter is visible here.</returns>
+    private bool IsFriendVisibleInternalSetter(PropertyInfo property)
+    {
+        var setter = property.GetSetMethod(nonPublic: true);
+        return setter is { IsAssembly: true }
+            && setter.DeclaringType?.Assembly is { } declaringAssembly
+            && scope.References.CanAccessInternalMembers(declaringAssembly);
     }
 
     /// <summary>ADR-0039: Determines whether an expression is an lvalue (can have its address taken).</summary>
