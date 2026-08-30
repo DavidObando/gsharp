@@ -3446,8 +3446,18 @@ internal sealed partial class ExpressionBinder
         var instSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
             receiverType: null,
             ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
+
+        // Issue #3679: an `internal` instance method of a referenced assembly
+        // that named this compilation in an `InternalsVisibleTo` is a legal
+        // candidate — the msbuild `<InternalsVisibleTo>` item the SDK turns
+        // into that attribute is how every migrated test app reaches the
+        // internals of the project under test.
+        var receiverGrantsInternals = scope.References.CanAccessInternalMembers(clrType.Assembly);
         var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
-            MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, methodName),
+            MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+                clrType,
+                methodName,
+                includeInternal: receiverGrantsInternals),
             instSymbolicArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             effectiveReceiverType).ToList();

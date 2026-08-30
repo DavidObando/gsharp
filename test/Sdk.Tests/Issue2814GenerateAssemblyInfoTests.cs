@@ -37,6 +37,27 @@ public class Issue2814GenerateAssemblyInfoTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Issue #3679: the .NET SDK's <c>GetAssemblyAttributes</c> target turns
+    /// every <c>&lt;InternalsVisibleTo Include="X" /&gt;</c> msbuild item into
+    /// an <c>@(AssemblyAttribute)</c> item whose identity is the suffix-less
+    /// <c>System.Runtime.CompilerServices.InternalsVisibleTo</c>. Rendering it
+    /// is how a <c>.gsproj</c> declares a friend assembly without hand-writing
+    /// the annotation, so the exact spelling is a contract with the binder —
+    /// see <c>Issue3679InternalsVisibleToMemberAccessTests</c>.
+    /// </summary>
+    [Fact]
+    public void Render_InternalsVisibleToItem_EmitsFriendAssemblyAnnotation()
+    {
+        var item = new TaskItem("System.Runtime.CompilerServices.InternalsVisibleTo");
+        item.SetMetadata("_Parameter1", "GSharp.Core.Tests");
+
+        Assert.Contains(
+            "@assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"GSharp.Core.Tests\")",
+            WriteGsharpAssemblyInfoTask.Render(new ITaskItem[] { item }),
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Render_MultiplePositionalParameters_KeepsDeclaredOrder()
     {

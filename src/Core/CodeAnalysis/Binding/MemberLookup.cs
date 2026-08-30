@@ -44,11 +44,19 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal sealed class MemberLookup
 {
+    /// <summary>
+    /// Issue #3679: distinguishes the internal-inclusive candidate set from the
+    /// public-only one inside <see cref="methodsIncludingSelfAndInterfacesCache"/>.
+    /// A NUL is not a legal metadata method name, so no probed name can collide
+    /// with a suffixed key.
+    /// </summary>
+    private const string InternalCandidatesCacheKeySuffix = "\0internal";
+
     private static readonly ConditionalWeakTable<MethodInfo, MethodInfo> OpenMethodsByMappedMethod = new();
     private readonly BinderContext binderCtx;
 
     /// <summary>
-    /// Process-wide memoization backing <see cref="SafeGetMethodsIncludingSelfAndInterfaces"/>,
+    /// Process-wide memoization backing <see cref="SafeGetMethodsIncludingSelfAndInterfaces(Type, string, bool)"/>,
     /// keyed on the CLR <see cref="Type"/> plus the probed method name.
     /// Cleared via <see cref="ClearCache"/> (wired into
     /// <see cref="ReferenceResolver.Dispose"/>) so entries keyed on a disposed
@@ -259,6 +267,36 @@ internal sealed class MemberLookup
     /// <param name="name">The method name to match.</param>
     /// <returns>The candidate list with self-slot methods first.</returns>
     public static IReadOnlyList<MethodInfo> SafeGetMethodsIncludingSelfAndInterfaces(Type clrType, string name)
+        => SafeGetMethodsIncludingSelfAndInterfaces(clrType, name, includeInternal: false);
+
+    /// <summary>
+    /// Issue #3679: the <paramref name="includeInternal"/> variant of
+    /// <see cref="SafeGetMethodsIncludingSelfAndInterfaces(Type, string)"/>,
+    /// which also surfaces <c>internal</c> (metadata <c>assembly</c>) instance
+    /// methods declared by <paramref name="clrType"/> or its base chain.
+    /// Callers pass <see langword="true"/> only when the declaring assembly
+    /// grants this compilation internal access — i.e. when
+    /// <see cref="ReferenceResolver.CanAccessInternalMembers"/> says so for an
+    /// <c>InternalsVisibleTo</c> friend — mirroring the property/field probes
+    /// in <c>ExpressionBinder.Access.MemberLookup</c>, which already widen to
+    /// <see cref="BindingFlags.NonPublic"/> under that same condition. Without
+    /// it a friend assembly could reach a referenced assembly's internal
+    /// fields and properties but never its internal methods.
+    /// <para>
+    /// The result is cached under a distinct key so the public-only and
+    /// internal-inclusive candidate sets never overwrite one another. Neither
+    /// set depends on WHICH consumer is asking — only on the members' declared
+    /// accessibility — so the process-wide cache stays consumer-independent.
+    /// </para>
+    /// </summary>
+    /// <param name="clrType">The CLR type (concrete class or interface) to probe.</param>
+    /// <param name="name">The method name to match.</param>
+    /// <param name="includeInternal">Whether to also return <c>internal</c> instance methods.</param>
+    /// <returns>The candidate list with self-slot methods first.</returns>
+    public static IReadOnlyList<MethodInfo> SafeGetMethodsIncludingSelfAndInterfaces(
+        Type clrType,
+        string name,
+        bool includeInternal)
     {
         static Type? GetBaseTypeSafe(Type type)
         {
@@ -289,8 +327,11 @@ internal sealed class MemberLookup
         // ClrTypeUtilities.ClearCache() clearing the caches it reads from.
         return methodsIncludingSelfAndInterfacesCache
             .GetValue(clrType, static _ => new System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>(StringComparer.Ordinal))
-            .GetOrAdd(name, n =>
+            .GetOrAdd(includeInternal ? name + InternalCandidatesCacheKeySuffix : name, _ =>
         {
+            // The cache key may carry the internal-inclusive suffix; the probe
+            // itself always matches on the bare method name.
+            var n = name;
             var selfMethods = ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance);
             var result = new List<MethodInfo>();
             foreach (var m in selfMethods)
@@ -311,6 +352,27 @@ internal sealed class MemberLookup
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
                     if (ClrTypeUtilities.EmittedMemberNameMatches(m, n)
+                        && !IsMethodHiddenByExisting(result, m))
+                    {
+                        result.Add(m);
+                    }
+                }
+
+                // Issue #3679: an `internal` instance method of a friend
+                // assembly is a legal candidate. Only `assembly` accessibility
+                // is admitted — `private`/`protected`/`private protected`
+                // members stay invisible however the friendship is declared.
+                if (!includeInternal)
+                {
+                    continue;
+                }
+
+                foreach (var m in ClrTypeUtilities.SafeGetMethods(
+                    current,
+                    BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (m.IsAssembly
+                        && ClrTypeUtilities.EmittedMemberNameMatches(m, n)
                         && !IsMethodHiddenByExisting(result, m))
                     {
                         result.Add(m);
@@ -3495,11 +3557,22 @@ internal sealed class MemberLookup
         if (staticClassType != null)
         {
             var statics = new List<MethodInfo>();
-            foreach (var method in ClrTypeUtilities.SafeGetMethods(
-                         staticClassType,
-                         BindingFlags.Static | BindingFlags.Public))
+
+            // Issue #3679: widen to the `internal` statics as well when the
+            // declaring assembly named this compilation in an
+            // `InternalsVisibleTo`; only `assembly` accessibility is admitted.
+            var staticFlags = BindingFlags.Static | BindingFlags.Public;
+            var staticsIncludeInternal =
+                this.binderCtx.References.CanAccessInternalMembers(staticClassType.Assembly);
+            if (staticsIncludeInternal)
             {
-                if (ClrTypeUtilities.EmittedMemberNameMatches(method, methodName))
+                staticFlags |= BindingFlags.NonPublic;
+            }
+
+            foreach (var method in ClrTypeUtilities.SafeGetMethods(staticClassType, staticFlags))
+            {
+                if ((method.IsPublic || (staticsIncludeInternal && method.IsAssembly))
+                    && ClrTypeUtilities.EmittedMemberNameMatches(method, methodName))
                 {
                     statics.Add(method);
                 }
@@ -3515,7 +3588,13 @@ internal sealed class MemberLookup
 
         if (receiverClrType != null)
         {
-            var instance = new List<MethodInfo>(SafeGetMethodsIncludingSelfAndInterfaces(receiverClrType, methodName));
+            // Issue #3679: friend-visible `internal` instance methods are
+            // candidates here too, exactly as they are on the final CLR
+            // instance-call path.
+            var instance = new List<MethodInfo>(SafeGetMethodsIncludingSelfAndInterfaces(
+                receiverClrType,
+                methodName,
+                includeInternal: this.binderCtx.References.CanAccessInternalMembers(receiverClrType.Assembly)));
             if (instance.Count > 0)
             {
                 result.Add(new ImportedMethodProbe(instance, receiverParameterOffset: 0));
