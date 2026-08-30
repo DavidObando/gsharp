@@ -342,7 +342,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // from) surfaces GS0362. Emitting `default(T)` keeps it valid
                     // everywhere (ADR-0100). Falls back to bare `default` only when
                     // the type is genuinely unavailable.
-                    return new DefaultValueExpression(this.ResolveExpressionType(literal));
+                    return new DefaultValueExpression(this.ResolveDefaultLiteralType(literal));
 
                 default:
                     this.context.ReportUnsupported(
@@ -350,6 +350,76 @@ public sealed partial class CSharpToGSharpTranslator
                         $"literal '{literal.Kind()}' has no canonical G# form yet; emitted nil (ADR-0115 §B.12).");
                     return LiteralExpression.Null();
             }
+        }
+
+        // Issue #3676: the target type a bare `default` is rendered against.
+        //
+        // `ResolveExpressionType` reads `ConvertedType`, whose nullable
+        // annotation on a `default` literal is FLOW-derived, not declared:
+        // Roslyn types `return default;` in an unconstrained `T`-returning
+        // method as `T?` to model "maybe default", even though the return type
+        // the author declared is a bare `T`. `CSharpTypeMapper` then honours
+        // that `?` (an annotated type parameter is the one case where `?`
+        // survives on a non-reference type), emitting `default(T?)` into a `T`
+        // slot — which gsc rejects, since G#'s `T?` on an unconstrained
+        // parameter is a genuinely different type, not a flow state
+        // (GS0155 `T?` -> `T`).
+        //
+        // For such a target the honest emission is `default(T)`: it is exactly
+        // what C# `default` means there (the zero value, `initobj T`), and it
+        // still converts into a `T?` slot, so dropping a FLOW `?` can only
+        // widen what binds.
+        //
+        // The rewrite is scoped to the RETURN position, where the enclosing
+        // method's DECLARED return type settles the question and no flow state
+        // can reach it. Everywhere else an annotated type parameter on a
+        // `default` may be a genuinely AUTHORED `T?` that issue #2500 exists to
+        // preserve — `Same<T?>(default)` / `Task.FromResult<T?>(default)` write
+        // the nullable type argument explicitly and must keep emitting
+        // `default(T?)`.
+        private GTypeReference ResolveDefaultLiteralType(LiteralExpressionSyntax literal)
+        {
+            GTypeReference resolved = this.ResolveExpressionType(literal);
+            TypeInfo info = this.context.GetTypeInfo(literal);
+            return (info.ConvertedType ?? info.Type) is ITypeParameterSymbol
+                && resolved is NamedTypeReference { IsNullable: true } named
+                && this.ReturnsBareTypeParameter(literal)
+                    ? new NamedTypeReference(named.Name, named.TypeArguments, named.ContainingType)
+                    : resolved;
+        }
+
+        // Whether `literal` is the value of a `return` in a method or local
+        // function whose DECLARED result is an unannotated type parameter. An
+        // async method's result is the awaited one (`async Task<T>` declares
+        // `T`), matching what `return default;` is target-typed to.
+        private bool ReturnsBareTypeParameter(LiteralExpressionSyntax literal)
+        {
+            if (literal.Parent is not ReturnStatementSyntax returnStatement)
+            {
+                return false;
+            }
+
+            SyntaxNode owner = returnStatement.Ancestors()
+                .FirstOrDefault(node =>
+                    node is BaseMethodDeclarationSyntax
+                        or LocalFunctionStatementSyntax
+                        or AnonymousFunctionExpressionSyntax);
+
+            if (owner is not (BaseMethodDeclarationSyntax or LocalFunctionStatementSyntax)
+                || this.context.GetDeclaredSymbol(owner) is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            ITypeSymbol declared = method.ReturnType;
+            if (method.IsAsync
+                && declared is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } awaitable)
+            {
+                declared = awaitable.TypeArguments[0];
+            }
+
+            return declared is ITypeParameterSymbol
+                && declared.NullableAnnotation != NullableAnnotation.Annotated;
         }
 
         // C# infers the type of a suffix-less integer literal from its value: a
@@ -1169,8 +1239,25 @@ public sealed partial class CSharpToGSharpTranslator
                 this.IsFlowNarrowedAnnotatedReference(value);
             bool flowRequiresAssertion = this.ReceiverNeedsNullForgiveness(value)
                 || flowNarrowedAnnotatedValue;
+
+            // Issue #3676: promotion and forgiveness must stay symmetric. In a
+            // nullable-ENABLED compilation the ONLY declaration this translator
+            // repaints `T?` is a generated-code one with direct null evidence,
+            // so that is the only value that may claim a `!!` here — every other
+            // declaration kept the annotation the C# compiler actually checked,
+            // and Roslyn's own flow state already governs it. This is not gated
+            // on `includePromotedValue` because the sinks that matter (an
+            // object-initializer member such as `Location { Uri = … }`) reach
+            // this method through `TranslateValueWithNullForgiveness`, which
+            // does not opt into the oblivious promoted-value pass. The C#
+            // accepted such a sink only by trusting the generated annotation, so
+            // asserting restores exactly the contract it assumed.
+            bool generatedPromotedValue = !isFlowNarrowedLocal
+                && !this.IsObliviousCompilation()
+                && this.IsGeneratedDeclarationPromotedValue(value);
             if (!flowRequiresAssertion
                 && !this.NullableReferenceValueMayBeNull(value)
+                    && !generatedPromotedValue
                     && !(includePromotedValue
                         && !isFlowNarrowedLocal
                         && this.IsObliviousCompilation()
