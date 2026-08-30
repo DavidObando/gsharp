@@ -444,8 +444,219 @@ public class XunitAssertOverloadResolutionTests
             """);
     }
 
+    // --- Issue #3681: xunit generic-method overload resolution (family F4) ---
+    //
+    // Two independent gsc defects, both surfaced by migrated `test/Core.Tests`:
+    //
+    // (a) `Assert.All<T>(IEnumerable<T>, Action<T>)` with a VALUE-RETURNING
+    //     typed lambda. The discard conversion `Func<T,TRet>` -> `Action<T>`
+    //     was decided by reflecting `Invoke` off the lambda's natural delegate
+    //     type directly. That natural type is the live `System.Func`n` closed
+    //     over the bound argument types, so as soon as ANY of those came from
+    //     the reference load context — every non-primitive imported type:
+    //     `MemberInfo`, `Type`, `Exception`, `List<int>`, … — the runtime
+    //     materialises it as a `TypeBuilderInstantiation` whose `GetMethod`
+    //     throws and the conversion silently disappeared. The exact same call
+    //     over `string` / `object` / `int32` (host runtime types) resolved,
+    //     which is why a hand-written analogue never reproduced.
+    //
+    // (b) `Assert.Equal<T>(T, T)` where the two arguments give DIFFERENT lower
+    //     bounds for T. C# fixing picks the bound every other bound converts to
+    //     implicitly; gsc only considered `Type.IsAssignableFrom`, which models
+    //     neither boxing nor numeric widening and is false across reflection
+    //     contexts.
+
+    [Fact]
+    public void Issue3681_AssertAll_ValueReturningLambda_ImportedElementType_Resolves()
+    {
+        // (a): `List[MemberInfo]` — the element type comes from the reference
+        // load context, so the lambda's natural `Func<MemberInfo,string>` is a
+        // cross-context instantiation. Before the fix: GS0159 `Cannot find
+        // function All`. The `string` element type in
+        // Issue3681_AssertAll_ValueReturningLambda_HostElementType_Resolves is
+        // the control that always passed.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+            import System.Reflection
+
+            class P {
+                @Fact
+                func AllOverImportedElement() {
+                    var items = List[MemberInfo]()
+                    Assert.All(items, (m MemberInfo) -> m.ToString())
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertAll_ValueReturningLambda_HostElementType_Resolves()
+    {
+        // (a) control: host-runtime element type, which resolved before the fix
+        // too. Guards against the fix regressing the path that already worked.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class P {
+                @Fact
+                func AllOverHostElement() {
+                    var items = List[string]()
+                    Assert.All(items, (m string) -> m.ToString())
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertAll_ValueReturningLambda_ConstructedGenericElement_Resolves()
+    {
+        // (a): the element type is itself a constructed generic, and the lambda
+        // body is a nested generic xunit assertion whose own type argument is
+        // reference-context too.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Collections.Generic
+
+            class P {
+                @Fact
+                func AllOverConstructedGenericElement() {
+                    var items = List[List[int32]]()
+                    Assert.All(items, (c List[int32]) -> Assert.Single(c))
+                    Assert.All(items, (c List[int32]) -> Assert.IsType[List[int32]](c))
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertAll_ValueReturningLambda_ArrayCollection_Resolves()
+    {
+        // (a) as it appears in migrated Core.Tests: an array collection plus an
+        // `IsAssignableFrom[T]` body whose explicit type argument is imported.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System.Reflection
+
+            class P {
+                @Fact
+                func AllOverArray() {
+                    var items = []MemberInfo{}
+                    Assert.All(items, (m MemberInfo) -> Assert.IsAssignableFrom[PropertyInfo](m))
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertAll_ValueReturningLambda_ImmutableArrayCollection_Resolves()
+    {
+        // (a): `ImmutableArray[T]` reaches `IEnumerable<T>` through an interface
+        // conversion, the shape `AsyncExceptionHandlerRewriterTests.gs` hits.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+            import System
+            import System.Collections.Immutable
+
+            class P {
+                @Fact
+                func AllOverImmutableArray() {
+                    var items = ImmutableArray[Exception].Empty
+                    Assert.All(items, (e Exception) -> Assert.IsType[InvalidOperationException](e))
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertEqual_ValueTypeAndObject_FixesToObject()
+    {
+        // (b): `Assert.Equal<T>(T, T)` with a value-type first argument and an
+        // `object`-typed second. C# fixes T = object by boxing the first; gsc
+        // reported GS0159 because the two bounds live in different reflection
+        // contexts, where `IsAssignableFrom` answers false.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import System
+            import Xunit
+
+            class Holder {
+                var Value object? = nil
+            }
+
+            class P {
+                @Fact
+                func EqualAgainstObject() {
+                    var result = Holder()
+                    Assert.Equal(TimeSpan.FromSeconds(-30), result.Value!!)
+                    Assert.Equal(DateTime(2025, 1, 1), result.Value!!)
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertEqual_WideningNumericBounds_FixesToWiderType()
+    {
+        // (b): the same fixing rule for a numeric pair. `Assert.Equal(2, aByte)`
+        // has bounds { int32, uint8 }; C# fixes T = int32 because uint8 widens
+        // to it. Reference assignability alone rejects both directions.
+        AssertGsCompilesCleanly("""
+            package Probe.Tests
+            import Xunit
+
+            class RefRecord {
+                var Flags uint8 = 0
+            }
+
+            class P {
+                @Fact
+                func EqualAgainstWiderNumeric() {
+                    var r = RefRecord()
+                    Assert.Equal(2, r.Flags)
+                    Assert.Equal(0x02, r.Flags & uint8(0x02))
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void Issue3681_AssertEqual_ConflictingBounds_StillFails()
+    {
+        // Guard rail for (b): widening the fixing rule must not make genuinely
+        // conflicting bounds unify. `int32` and `string` convert in neither
+        // direction, so `Assert.Equal<T>(T, T)` stays inapplicable and the call
+        // must still be reported rather than silently binding.
+        AssertGsFailsToCompile("""
+            package Probe.Tests
+            import Xunit
+
+            class P {
+                @Fact
+                func EqualConflicting() {
+                    Assert.Equal(1, "one")
+                }
+            }
+            """);
+    }
+
     private static void AssertGsCompilesCleanly(string source)
         => CompileGsAgainstReferences(source, ReferenceModeTpa);
+
+    /// <summary>
+    /// Issue #3681: negative counterpart to <see cref="AssertGsCompilesCleanly"/>
+    /// — asserts that gsc still rejects a call C# also rejects, so a widened
+    /// inference rule is not silently accepting conflicting bounds.
+    /// </summary>
+    /// <param name="source">G# source expected to fail compilation.</param>
+    private static void AssertGsFailsToCompile(string source)
+        => CompileGsAgainstReferences(source, ReferenceModeTpa, expectSuccess: false);
     /// <summary>
     /// Issue #504-reopen: drives gsc with the same reference-assembly closure
     /// real users get from the SDK (ref-pack facades + xUnit) — NOT the test
@@ -464,7 +675,7 @@ public class XunitAssertOverloadResolutionTests
     private const int ReferenceModeTpa = 0;
     private const int ReferenceModeRefPack = 1;
 
-    private static void CompileGsAgainstReferences(string source, int referenceMode)
+    private static void CompileGsAgainstReferences(string source, int referenceMode, bool expectSuccess = true)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_xunit_overload_").FullName;
         try
@@ -507,6 +718,14 @@ public class XunitAssertOverloadResolutionTests
             {
                 Console.SetOut(prevOut);
                 Console.SetError(prevErr);
+            }
+
+            if (!expectSuccess)
+            {
+                Assert.True(
+                    compileExit != 0,
+                    $"expected gsc to reject the source, but it succeeded:\nstdout:\n{compileOut}");
+                return;
             }
 
             Assert.True(
