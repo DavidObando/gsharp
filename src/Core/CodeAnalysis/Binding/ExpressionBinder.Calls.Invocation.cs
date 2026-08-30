@@ -1304,7 +1304,22 @@ internal sealed partial class ExpressionBinder
         foreach (var probe in probes)
         {
             var offset = probe.ReceiverParameterOffset;
-            var methods = probe.Methods;
+
+            // Issue #3659: narrow the candidate set to the overloads that can
+            // actually receive a lambda in every deferred slot before probing.
+            // The probe below passes `null` for a deferred slot, which generic
+            // inference skips and treats as reference-convertible to any
+            // parameter — so an overload set like `List[T].Sort`'s (no-arg,
+            // `IComparer[T]`, `Comparison[T]`, `(int32, int32, IComparer[T])`)
+            // stays ambiguous and the untyped lambda never gets a target.
+            // A lambda of known arity can only convert to a delegate-shaped
+            // parameter with the same parameter count, so the other overloads
+            // are not viable receivers for it.
+            var methods = FilterCandidatesByDeferredLambdaShape(
+                probe.Methods,
+                offset,
+                ce,
+                deferredIndices);
             var argTypes = new System.Type?[boundArgs.Length + offset];
             if (offset == 1)
             {
@@ -1466,6 +1481,188 @@ internal sealed partial class ExpressionBinder
         }
 
         return names;
+    }
+
+    /// <summary>
+    /// Issue #3659: narrows a deferred arrow-lambda probe's candidate set to the
+    /// overloads whose deferred-lambda parameters can actually receive a lambda,
+    /// i.e. are delegate-shaped (or <c>Expression&lt;TDelegate&gt;</c>-wrapped)
+    /// with exactly the lambda's parameter count. Without this, an overload set
+    /// whose other members take a non-delegate in the same slot (e.g.
+    /// <c>List[T].Sort(IComparer[T])</c> alongside
+    /// <c>List[T].Sort(Comparison[T])</c>) probes as ambiguous — the deferred
+    /// slot is passed as <c>null</c>, which is applicable to everything — so the
+    /// lambda never receives a target type and binds untargeted (GS0304), which
+    /// in turn fails the whole call (GS0159).
+    /// <para>This is only a narrowing of the best-effort target-type probe; the
+    /// call is re-resolved for real once every argument is bound. The filter
+    /// declines (returning <paramref name="methods"/> unchanged) whenever a
+    /// candidate's slot shape cannot be determined — a bare generic-parameter
+    /// slot, a non-lambda deferred argument, or a metadata load failure — so no
+    /// existing overload-resolution behaviour is loosened.</para>
+    /// </summary>
+    /// <param name="methods">The probe's candidate methods.</param>
+    /// <param name="offset">The probe's receiver parameter offset.</param>
+    /// <param name="ce">The call being bound.</param>
+    /// <param name="deferredIndices">The deferred arrow-lambda argument indices.</param>
+    /// <returns>The narrowed candidates, or <paramref name="methods"/> when no
+    /// narrowing applies.</returns>
+    private static IReadOnlyList<MethodInfo> FilterCandidatesByDeferredLambdaShape(
+        IReadOnlyList<MethodInfo> methods,
+        int offset,
+        CallExpressionSyntax ce,
+        List<int> deferredIndices)
+    {
+        var arities = new int[deferredIndices.Count];
+        for (var i = 0; i < deferredIndices.Count; i++)
+        {
+            var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[deferredIndices[i]]);
+            if (inner is not LambdaExpressionSyntax lambda)
+            {
+                return methods;
+            }
+
+            arities[i] = lambda.Parameters.Count;
+        }
+
+        List<MethodInfo>? filtered = null;
+        foreach (var method in methods)
+        {
+            if (method == null)
+            {
+                continue;
+            }
+
+            ParameterInfo[] parameters;
+            try
+            {
+                parameters = method.GetParameters();
+            }
+            catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+            {
+                return methods;
+            }
+
+            var viable = true;
+            for (var i = 0; i < deferredIndices.Count; i++)
+            {
+                var paramIndex = MapSourceArgumentToParameter(
+                    parameters,
+                    ce,
+                    deferredIndices[i],
+                    offset);
+                if (paramIndex < 0 || paramIndex >= parameters.Length)
+                {
+                    viable = false;
+                    break;
+                }
+
+                if (!CanParameterReceiveLambdaOfArity(parameters[paramIndex], arities[i], out var determined))
+                {
+                    if (!determined)
+                    {
+                        // The slot's shape is unknowable from metadata alone —
+                        // decline to narrow rather than drop a viable candidate.
+                        return methods;
+                    }
+
+                    viable = false;
+                    break;
+                }
+            }
+
+            if (viable)
+            {
+                (filtered ??= new List<MethodInfo>()).Add(method);
+            }
+        }
+
+        return filtered ?? methods;
+    }
+
+    /// <summary>
+    /// Issue #3659: decides whether <paramref name="parameter"/> can receive an
+    /// arrow lambda with <paramref name="arity"/> parameters — that is, whether
+    /// its type is a delegate (possibly wrapped in <c>Expression&lt;T&gt;</c>, or
+    /// reached through the <c>params</c> array element type) whose
+    /// <c>Invoke</c> takes exactly that many parameters.
+    /// </summary>
+    /// <param name="parameter">The candidate parameter.</param>
+    /// <param name="arity">The lambda's parameter count.</param>
+    /// <param name="determined">Set to <see langword="false"/> when the shape
+    /// cannot be decided from metadata (an open type-parameter slot or a
+    /// metadata load failure), in which case the caller must not narrow.</param>
+    /// <returns><see langword="true"/> when the slot can receive the lambda.</returns>
+    private static bool CanParameterReceiveLambdaOfArity(
+        ParameterInfo parameter,
+        int arity,
+        out bool determined)
+    {
+        determined = true;
+
+        var parameterType = parameter.ParameterType;
+        if (parameterType == null)
+        {
+            determined = false;
+            return false;
+        }
+
+        if (parameterType.IsByRef)
+        {
+            parameterType = parameterType.GetElementType();
+            if (parameterType == null)
+            {
+                determined = false;
+                return false;
+            }
+        }
+
+        if (parameterType.IsGenericParameter)
+        {
+            // A bare method/type parameter slot (e.g. `TDelegate`) says nothing
+            // about the delegate shape it will close over.
+            determined = false;
+            return false;
+        }
+
+        try
+        {
+            if (MatchesDelegateArity(parameterType, arity))
+            {
+                return true;
+            }
+
+            // A `params Func[...][]` slot receives the lambda through the array
+            // element type in expanded form.
+            return parameterType.IsArray
+                && parameterType.GetElementType() is { } elementType
+                && MatchesDelegateArity(elementType, arity);
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            determined = false;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #3659: reports whether <paramref name="type"/> is a delegate (or an
+    /// <c>Expression&lt;TDelegate&gt;</c> wrapping one) whose <c>Invoke</c>
+    /// signature takes exactly <paramref name="arity"/> parameters.
+    /// </summary>
+    /// <param name="type">The candidate slot type.</param>
+    /// <param name="arity">The required parameter count.</param>
+    /// <returns><see langword="true"/> when the arity matches.</returns>
+    private static bool MatchesDelegateArity(System.Type type, int arity)
+    {
+        var delegateType = type;
+        if (MemberLookup.TryGetExpressionTreeDelegateType(delegateType, out var unwrapped))
+        {
+            delegateType = unwrapped;
+        }
+
+        var invoke = delegateType?.GetMethodSafe("Invoke");
+        return invoke != null && invoke.GetParameters().Length == arity;
     }
 
     private static int MapSourceArgumentToParameter(
@@ -1789,8 +1986,15 @@ internal sealed partial class ExpressionBinder
 
             MethodInfo openMethod;
             ParameterInfo[] openParameters;
+
+            // Issue #3659: the candidate as reflected off the receiver's own
+            // (erased) closed CLR type — its parameter types are already in the
+            // receiver's erasure domain, which is what the rebound lambda's
+            // argument type must land in.
+            ParameterInfo[] closedParameters;
             try
             {
+                closedParameters = method.GetParameters();
                 if (receiverOpenDefinition != null
                     && TryResolveOpenMethodByToken(
                         receiverOpenDefinition,
@@ -1988,6 +2192,40 @@ internal sealed partial class ExpressionBinder
                     {
                         candidateUsable = false;
                         break;
+                    }
+
+                    // Issue #3659: re-anchor the mapped delegate's ERASED CLR
+                    // shape on this candidate's own closed parameter type.
+                    // `MapOpenClrTypeToSymbolic` re-erases the symbolic type
+                    // arguments through the inference-oriented erasure, which
+                    // does not always agree with the erasure the receiver was
+                    // closed with — a same-compilation enum rides through as
+                    // `Int32` there but as `object` in the receiver
+                    // (`List[TokMod]` is `List<object>`, so its `Sort` candidate
+                    // takes `Comparison<object>` while the mapped target claimed
+                    // `Comparison<Int32>`), and a slice of a same-compilation
+                    // type collapses to `object` there but stays `object[]` in
+                    // the receiver. Either divergence makes the rebound lambda's
+                    // argument type unassignable to EVERY candidate, so the call
+                    // dead-ends at GS0159 "Cannot find function Sort". The
+                    // candidate's own parameter type is by construction in the
+                    // receiver's erasure domain; keep the symbolic arguments
+                    // (which carry the real element identity for emit) and swap
+                    // only the erased CLR shape.
+                    if (mappedDelegate is ImportedTypeSymbol { OpenDefinition: { } mappedOpenDefinition } mappedImported
+                        && paramIndex < closedParameters.Length
+                        && closedParameters[paramIndex].ParameterType is { } closedParameterType
+                        && !closedParameterType.ContainsGenericParameters
+                        && !closedParameterType.IsSameAs(mappedImported.ClrType)
+                        && closedParameterType.IsGenericType
+                        && ClrTypeUtilities.AreSame(
+                            closedParameterType.GetGenericTypeDefinition(),
+                            mappedOpenDefinition))
+                    {
+                        mappedDelegate = ImportedTypeSymbol.GetConstructed(
+                            closedParameterType,
+                            mappedOpenDefinition,
+                            mappedImported.TypeArguments);
                     }
 
                     var returnClrType = invoke.ReturnType;
