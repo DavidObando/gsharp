@@ -984,6 +984,41 @@ internal sealed partial class OverloadResolver
             // not-found paths.
             if (symbol == null)
             {
+                // ADR-0110 / issue #910 nesting: an unqualified call inside a
+                // NESTED type's body may resolve to a `shared` (static) method
+                // of a LEXICALLY ENCLOSING type — C# §7.4 scoping, where a
+                // nested class sees the outer class's static members (including
+                // its private ones) without qualification. The paths above only
+                // consult the nested type's own member set and its base chain,
+                // so `Outer.Inner.M()` calling `Helper(args)` — declared in
+                // `Outer`'s `shared { }` block — reported GS0130. Walk outward
+                // through <c>ContainingType</c> (innermost first, so a nearer
+                // enclosing type shadows a farther one) and finalize through
+                // the shared static-call finalizer for full
+                // private/overload/optional/variadic/generic fidelity. Consulted
+                // before the type-import (`using static`) and imported-CLR
+                // paths because lexical scope outranks imports.
+                if (bindUserTypeStaticCall != null)
+                {
+                    var lexicalSelfType = GetEffectiveThisParameter()?.Type ?? GetImplicitStaticSelfOwner();
+                    for (var enclosing = lexicalSelfType?.ContainingType; enclosing != null; enclosing = enclosing.ContainingType)
+                    {
+                        if (enclosing is not StructSymbol enclosingStruct)
+                        {
+                            continue;
+                        }
+
+                        var enclosingStatics = TypeMemberModel.GetMethods(
+                            enclosingStruct,
+                            syntax.Identifier.ValueText,
+                            MemberQuery.Static(MemberKinds.Method));
+                        if (!enclosingStatics.IsDefaultOrEmpty)
+                        {
+                            return bindUserTypeStaticCall(enclosingStruct, syntax);
+                        }
+                    }
+                }
+
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
                 // to a `shared` (static) method of a type brought into scope by a
                 // type import (`import Ns.Type`). Mirror C#'s using-static
