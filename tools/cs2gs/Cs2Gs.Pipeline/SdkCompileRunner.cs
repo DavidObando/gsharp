@@ -1041,6 +1041,14 @@ public sealed class SdkCompileRunner
     /// project) or exist only as <c>.gsproj</c>, failing the build with MSB3202
     /// for a reason that has nothing to do with the translation. The property is
     /// global, so it also applies to every project reference in the graph.
+    /// <para>
+    /// Issue #3674 taught <see cref="GSharpProjectTransformer"/> to redirect
+    /// those literal paths at their migrated counterparts, but the suppression
+    /// stays: paths outside the migration set stay dangling by design, pack
+    /// targets also consume repository assets a partial mirror does not carry
+    /// (READMEs, icons, prebuilt output directories), and a mirror has no
+    /// reason to spend a compiler publish on producing a NuGet package.
+    /// </para>
     /// </summary>
     /// <param name="generatedProjectPath">The mirrored G# project to build.</param>
     /// <param name="artifactDirectory">The external build and log directory.</param>
