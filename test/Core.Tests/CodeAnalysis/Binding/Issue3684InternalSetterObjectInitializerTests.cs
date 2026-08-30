@@ -52,6 +52,32 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
         }
         """;
 
+    /// <summary>
+    /// The exact shape #3684 hit: FOUR members in one literal, every one of
+    /// them <c>{ get; internal set; }</c> — modelled on <c>BoundProgram</c>'s
+    /// <c>Imports</c> / <c>FriendAssemblies</c> / <c>AssemblyAttributes</c> /
+    /// <c>ModuleAttributes</c>.
+    /// </summary>
+    private const string MultiMemberLibrarySource = """
+        using System.Collections.Immutable;
+        using System.Runtime.CompilerServices;
+
+        [assembly: InternalsVisibleTo("Issue3684.Friend")]
+
+        namespace Issue3684.Library;
+
+        public class Program
+        {
+            public ImmutableArray<string> Imports { get; internal set; } = ImmutableArray<string>.Empty;
+
+            public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
+
+            public ImmutableArray<string> AssemblyAttributes { get; internal set; } = ImmutableArray<string>.Empty;
+
+            public ImmutableArray<string> ModuleAttributes { get; internal set; } = ImmutableArray<string>.Empty;
+        }
+        """;
+
     [Fact]
     public void FriendAssembly_ObjectInitializer_Assigns_Internal_Setter()
     {
@@ -202,28 +228,7 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
         var directory = CreateOutputDirectory();
         try
         {
-            var libraryPath = EmitCSharpLibrary(
-                directory,
-                "Issue3684.Library",
-                """
-                using System.Collections.Immutable;
-                using System.Runtime.CompilerServices;
-
-                [assembly: InternalsVisibleTo("Issue3684.Friend")]
-
-                namespace Issue3684.Library;
-
-                public class Program
-                {
-                    public ImmutableArray<string> Imports { get; internal set; } = ImmutableArray<string>.Empty;
-
-                    public ImmutableArray<string> FriendAssemblies { get; internal set; } = ImmutableArray<string>.Empty;
-
-                    public ImmutableArray<string> AssemblyAttributes { get; internal set; } = ImmutableArray<string>.Empty;
-
-                    public ImmutableArray<string> ModuleAttributes { get; internal set; } = ImmutableArray<string>.Empty;
-                }
-                """);
+            var libraryPath = EmitCSharpLibrary(directory, "Issue3684.Library", MultiMemberLibrarySource);
             var result = CompileGSharp(
                 """
                 package Issue3684.Friend
@@ -237,6 +242,45 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
                         AssemblyAttributes: source.AssemblyAttributes,
                         ModuleAttributes: source.ModuleAttributes,
                     }
+                }
+                """,
+                "Issue3684.Friend",
+                libraryPath);
+
+            Assert.True(result.Success, Describe(result));
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// The literal spelling the migrated `test/Core.Tests` carries: cs2gs
+    /// renders a C# object initializer with `=` and a trailing constructor
+    /// argument list — `T(args){A = x, B = y}` — which is why the reported
+    /// GS0127 locations in #3684 sit on the `=` tokens rather than the member
+    /// names. Every member must bind.
+    /// </summary>
+    [Fact]
+    public void FriendAssembly_EqualsSpelledInitializer_Assigns_Every_Internal_Setter()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, "Issue3684.Library", MultiMemberLibrarySource);
+            var result = CompileGSharp(
+                """
+                package Issue3684.Friend
+                import Issue3684.Library
+                import System.Collections.Immutable
+
+                func Run(source Program) Program {
+                    return Program(){
+                        Imports = source.Imports,
+                        FriendAssemblies = source.FriendAssemblies,
+                        AssemblyAttributes = source.AssemblyAttributes,
+                        ModuleAttributes = source.ModuleAttributes}
                 }
                 """,
                 "Issue3684.Friend",
