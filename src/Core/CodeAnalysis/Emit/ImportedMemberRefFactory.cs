@@ -595,11 +595,89 @@ internal sealed class ImportedMemberRefFactory
             || fullName == "System.Collections.Generic.IAsyncEnumerator`1";
     }
 
+    /// <summary>
+    /// Issue #3718: projects a host-runtime <see cref="Type"/> — one produced by
+    /// a compiler-internal <c>typeof(...)</c> rather than resolved from the
+    /// compilation's references — onto the equivalent type from
+    /// <paramref name="references"/>, so its TypeRef is scoped to the reference
+    /// closure's contract assembly instead of the hosting runtime's
+    /// implementation assembly.
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="false"/> — leaving the caller on the host identity
+    /// — whenever projection is unnecessary or impossible: the type already came
+    /// from a <see cref="System.Reflection.MetadataLoadContext"/> (reflection-only
+    /// assemblies are by construction inside the closure), the resolver has no
+    /// load context at all (the in-process/TPA path, where the host type *is* the
+    /// reference type), the type is a shape with no resolvable full name
+    /// (generic parameter, array/byref/pointer, constructed generic — those are
+    /// projected element-wise by their own encoders), or the references simply do
+    /// not carry the type.
+    /// </remarks>
+    /// <param name="references">The compilation's reference resolver.</param>
+    /// <param name="type">The candidate host type.</param>
+    /// <param name="projected">The reference-set type, when one was found.</param>
+    /// <returns><see langword="true"/> when <paramref name="projected"/> was set.</returns>
+    private static bool TryProjectOntoReferences(
+        ReferenceResolver references,
+        Type type,
+        [NotNullWhen(true)] out Type? projected)
+    {
+        projected = null;
+
+        if (type.Assembly.ReflectionOnly
+            || type.IsGenericParameter
+            || type.HasElementType
+            || type.IsConstructedGenericType)
+        {
+            return false;
+        }
+
+        if (type.FullName is not { Length: > 0 } fullName)
+        {
+            return false;
+        }
+
+        if (!references.TryResolveType(fullName, requireExternalVisibility: false, out var resolved)
+            || ReferenceEquals(resolved, type))
+        {
+            return false;
+        }
+
+        // A non-reflection-only answer means the resolver searched the host's
+        // own runtime assemblies (ReferenceResolver.Default). Projecting there
+        // would be a no-op at best and a cross-identity swap at worst.
+        if (!resolved.Assembly.ReflectionOnly)
+        {
+            return false;
+        }
+
+        projected = resolved;
+        return true;
+    }
+
     internal TypeReferenceHandle GetTypeReference(Type type)
     {
         if (this.cache.TypeRefs.TryGetValue(type, out var existing))
         {
             return existing;
+        }
+
+        // Issue #3718: a lowering or emit site that names a well-known BCL type
+        // with a host `typeof(...)` hands us a *runtime* Type whose assembly is
+        // whichever corlib happens to be hosting gsc (System.Private.CoreLib).
+        // Scoping the TypeRef to that assembly leaks an implementation-assembly
+        // AssemblyRef into a compilation whose reference closure only ever named
+        // the targeting pack. Project the type onto the compilation's own
+        // reference set first so the row is scoped to the contract assembly that
+        // actually declares it. The host type remains the fallback for the
+        // in-process/TPA path, where the resolver has no MetadataLoadContext and
+        // the host identity is already the right one.
+        if (TryProjectOntoReferences(this.emitCtx.References, type, out var projected))
+        {
+            var projectedHandle = this.GetTypeReference(projected);
+            this.cache.TypeRefs[type] = projectedHandle;
+            return projectedHandle;
         }
 
         // Nested types: resolution scope is the TypeRef of the declaring type,

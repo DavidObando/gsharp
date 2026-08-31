@@ -59,18 +59,6 @@ public class DifferentialReferenceClosureTests
     private const string ContractCorlib = "System.Runtime";
 
     /// <summary>
-    /// The reason shared by every <see cref="KnownRefPackCorlibLeaks"/> entry:
-    /// compiler-synthesised references to well-known BCL types (the
-    /// interpolation handler, the async state-machine plumbing, record
-    /// <c>ToString</c>/<c>GetHashCode</c> helpers, the variadic
-    /// <c>System.Array</c> path, …) are resolved with a host <c>typeof</c>
-    /// rather than through the compilation's reference closure, so the emitted
-    /// assembly names the implementation corlib.
-    /// </summary>
-    private const string Issue3718 =
-        "#3718 — synthesised well-known-type reference resolved through the host runtime";
-
-    /// <summary>
     /// The per-PR subset: samples whose codegen goes through imported types in
     /// the ways this defect family attacks — <c>for … in</c> over an imported
     /// enumerable (the #3708 shape), imported delegates and events (#3697),
@@ -108,80 +96,24 @@ public class DifferentialReferenceClosureTests
     /// <summary>
     /// Samples whose ref-pack compile still emits an <c>AssemblyRef</c> to
     /// <c>System.Private.CoreLib</c>, keyed by file with the reason — the
-    /// #3716 guard-rail idiom again. Every entry here is a <b>known defect</b>
-    /// (#3718), not an accepted behaviour; the list is a burn-down, and the
-    /// assertion fails in <em>both</em> directions — an unlisted leak and a
-    /// listed sample that has stopped leaking — so fixing a lowering site
-    /// forces the corresponding entries out.
+    /// #3716 guard-rail idiom again. Every entry here is a <b>known defect</b>,
+    /// not an accepted behaviour; the list is a burn-down, and the assertion
+    /// fails in <em>both</em> directions — an unlisted leak and a listed sample
+    /// that has stopped leaking — so fixing a lowering site forces the
+    /// corresponding entries out.
+    /// <para>
+    /// The list is <b>empty</b>: #3718 burned down all 65 original entries at
+    /// once, because every leak funnelled through the single
+    /// <c>ImportedMemberRefFactory.GetTypeReference(Type)</c> row producer,
+    /// which now projects a host <c>typeof</c> onto the compilation's reference
+    /// closure before choosing the TypeRef's resolution scope. It stays here as
+    /// a burn-down, not as dead code: a new lowering site that names a
+    /// well-known type in a way the projection cannot see re-populates it.
+    /// </para>
     /// </summary>
     private static readonly Dictionary<string, string> KnownRefPackCorlibLeaks =
         new(StringComparer.Ordinal)
         {
-            ["AddressBook.gs"] = Issue3718,
-            ["AnonymousVariadicFunctionType.gs"] = Issue3718,
-            ["ArrowFunctionTypeClause.gs"] = Issue3718,
-            ["AsyncAwaitInLoop.gs"] = Issue3718,
-            ["AsyncAwaitInNestedLoop.gs"] = Issue3718,
-            ["AsyncClassMethod.gs"] = Issue3718,
-            ["AsyncGoScopeJoin.gs"] = Issue3718,
-            ["AsyncMultiAwaitInLoop.gs"] = Issue3718,
-            ["AsyncTask.gs"] = Issue3718,
-            ["AsyncValueReturns.gs"] = Issue3718,
-            ["Channels.gs"] = Issue3718,
-            ["CountWords.gs"] = Issue3718,
-            ["DataStruct.gs"] = Issue3718,
-            ["DataStructErgonomics.gs"] = Issue3718,
-            ["DefaultExpression.gs"] = Issue3718,
-            ["DefaultInterfaceMethods.gs"] = Issue3718,
-            ["DiscriminatedUnion.gs"] = Issue3718,
-            ["Exhaustiveness.gs"] = Issue3718,
-            ["ExpressionEval.gs"] = Issue3718,
-            ["GenericMethodUserTypeArg.gs"] = Issue3718,
-            ["GenericNamedDelegate.gs"] = Issue3718,
-            ["GenericTypeParameterAsTypeArgument.gs"] = Issue3718,
-            ["GoBuiltinsGated.gs"] = Issue3718,
-            ["GoChannelsGated.gs"] = Issue3718,
-            ["GoScope.gs"] = Issue3718,
-            ["GsharpExtensionsMixed.gs"] = Issue3718,
-            ["GsharpExtensionsOptional.gs"] = Issue3718,
-            ["GsharpExtensionsSequences.gs"] = Issue3718,
-            ["IfLetGuardLet.gs"] = Issue3718,
-            ["InterfaceUpcast.gs"] = Issue3718,
-            ["InterpolatedString.gs"] = Issue3718,
-            ["InterpolatedStringFormat.gs"] = Issue3718,
-            ["InterpolatedStringFormattable.gs"] = Issue3718,
-            ["InterpolatedStringRichHoles.gs"] = Issue3718,
-            ["Loop.gs"] = Issue3718,
-            ["MapForIn.gs"] = Issue3718,
-            ["NamedArguments.gs"] = Issue3718,
-            ["NamedTupleElements.gs"] = Issue3718,
-            ["NullableFlow.gs"] = Issue3718,
-            ["NullCoalescingAssignment.gs"] = Issue3718,
-            ["ParenthesizedReceiver.gs"] = Issue3718,
-            ["Patterns.gs"] = Issue3718,
-            ["PatternSwitch.gs"] = Issue3718,
-            ["PInvokeLibraryImport.gs"] = Issue3718,
-            ["PInvokeLibraryImportStringReturn.gs"] = Issue3718,
-            ["PortScan.gs"] = Issue3718,
-            ["PrimaryCtorVariadic.gs"] = Issue3718,
-            ["Records.gs"] = Issue3718,
-            ["ReifiedGenerics.gs"] = Issue3718,
-            ["Sealed.gs"] = Issue3718,
-            ["Select.gs"] = Issue3718,
-            ["SliceLinqUntypedLambda.gs"] = Issue3718,
-            ["SlicePattern.gs"] = Issue3718,
-            ["SpanComprehensive.gs"] = Issue3718,
-            ["SwitchExpression.gs"] = Issue3718,
-            ["TupleArrowElements.gs"] = Issue3718,
-            ["TupleEquality.gs"] = Issue3718,
-            ["TupleSequenceIterators.gs"] = Issue3718,
-            ["UserRefStruct.gs"] = Issue3718,
-            ["ValueTypeObjectMethods.gs"] = Issue3718,
-            ["Variadic.gs"] = Issue3718,
-            ["VariadicDelegate.gs"] = Issue3718,
-            ["VariadicMethods.gs"] = Issue3718,
-            ["WhileAndLabeledLoops.gs"] = Issue3718,
-            ["ZeroValues.gs"] = Issue3718,
         };
 
     public static IEnumerable<object[]> DifferentialSamples()
