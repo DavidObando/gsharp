@@ -66,6 +66,11 @@ for app in "$@"; do
   app_args+=(--app "$app")
 done
 
+# Issue #3721: the moment validation starts, so the per-app durations below can
+# attribute the first app's cost. Captured after the prerequisite build so it
+# measures validation, not the setup every shard pays equally.
+validate_started=$(date +%s)
+
 set +e
 dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
   --corpus "$repo_root" \
@@ -92,6 +97,17 @@ if [[ -z "$shard_run_json" ]]; then
   exit 1
 fi
 cp "$shard_run_json" "$shard_out/shard-run.json"
+
+# Issue #3721: what each app in this shard actually cost, so the next run's
+# matrix generator can balance on observation instead of on a structural proxy.
+# Advisory data — never fail the shard over it.
+if ! python3 "$repo_root/build/derive-selfmig-app-durations.py" \
+  --runs "$shard_out/runs" \
+  --manifests "$manifest_run_dir" \
+  --started "$validate_started" > "$shard_out/shard-costs.json"; then
+  echo "self-migration shard $shard_name: could not derive per-app durations." >&2
+  echo '{}' > "$shard_out/shard-costs.json"
+fi
 
 selfmig_hash_tree "$migrated_dir" > "$shard_out/post.sha256"
 
