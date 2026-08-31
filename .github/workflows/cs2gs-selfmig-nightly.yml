@@ -54,6 +54,11 @@ jobs:
     # nightly's wall time is cheap. PR #3669 raised the old single job to 360;
     # the translate pass alone is a fraction of that, but keep the headroom.
     timeout-minutes: 240
+    # actions:read so the shard planner can download the previous run's
+    # measured per-app durations (issue #3721).
+    permissions:
+      contents: read
+      actions: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
 
@@ -79,10 +84,38 @@ jobs:
       - name: Translate the repository
         run: ./build/run-cs2gs-selfmig-migrate.sh
 
+      # Issue #3721: prefer the durations the LAST run measured over the
+      # checked-in map, so the packing tracks the migration instead of aging
+      # out between refresh commits. Best-effort by construction: any failure
+      # here leaves no file, and the generator falls back on its own.
+      - name: Fetch the previous run's app duration map
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(gh run list --workflow cs2gs-selfmig-nightly.yml \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [[ -z "$previous" ]]; then
+            echo "no previous successful run; using the checked-in duration map."
+            exit 0
+          fi
+          gh run download "$previous" --name cs2gs-selfmig-run --dir /tmp/selfmig-previous
+          if [[ -s /tmp/selfmig-previous/selfmig-shard-costs.json ]]; then
+            cp /tmp/selfmig-previous/selfmig-shard-costs.json build/selfmig-shard-costs.json
+            echo "using durations measured by run $previous."
+          fi
+
       - name: Plan validation shards
         id: matrix
         run: |
           run_dir=$(cat /tmp/gsharp-cs2gs-selfmig/migrate-run-dir.txt)
+          {
+            echo '### validation shard plan'
+            echo '```'
+            python3 build/generate-selfmig-shard-matrix.py \
+              --run-dir "$run_dir" --shards "$SELFMIG_SHARDS" --plan
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           matrix=$(python3 build/generate-selfmig-shard-matrix.py \
             --run-dir "$run_dir" --shards "$SELFMIG_SHARDS")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -152,6 +185,9 @@ jobs:
           retention-days: 3
           path: |
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/shard-run.json
+            # Issue #3721: this shard's measured per-app wall times, which the
+            # gate merges into the run artifact for the NEXT run to pack with.
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/shard-costs.json
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/polished.tar.gz
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/validate.log
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/*.json
@@ -198,3 +234,7 @@ jobs:
             /tmp/gsharp-cs2gs-selfmig/run.merged.json
             /tmp/gsharp-cs2gs-selfmig/metrics.json
             /tmp/gsharp-cs2gs-selfmig/migrate.log
+            # Issue #3721: the per-app duration map the next run's matrix
+            # generator downloads. Refresh build/selfmig-shard-costs.json from
+            # this file when the corpus shifts enough to matter.
+            /tmp/gsharp-cs2gs-selfmig/selfmig-shard-costs.json

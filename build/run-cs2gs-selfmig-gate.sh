@@ -68,6 +68,26 @@ for polished in "$shards_dir"/*/polished.tar.gz; do
 done
 shopt -u nullglob
 
+# Issue #3721: publish the per-app durations the shards measured, in the shape
+# build/selfmig-shard-costs.json wants, so refreshing the checked-in map is a
+# copy of one artifact file. Advisory: a shard that produced no cost file (an
+# older shard job, a crash before the derive step) just contributes nothing.
+shopt -s nullglob
+shard_cost_jsons=("$shards_dir"/*/shard-costs.json)
+shopt -u nullglob
+costs="$migrate_dir/selfmig-shard-costs.json"
+if (( ${#shard_cost_jsons[@]} > 0 )); then
+  jq -s --arg runId "$(jq -r '.runId' "$merged")" \
+    '{schema: 1, runId: $runId,
+      note: "Per-app validation wall time in seconds (issue #3721). Copy over build/selfmig-shard-costs.json to reseed the shard planner.",
+      apps: (reduce .[] as $shard ({}; . + $shard))}' \
+    "${shard_cost_jsons[@]}" > "$costs"
+  echo "gate: recorded durations for $(jq '.apps | length' "$costs") app(s) in $costs"
+else
+  echo "gate: no shard cost files; leaving the checked-in duration map alone." >&2
+  echo '{"schema":1,"apps":{}}' > "$costs"
+fi
+
 green=$(jq '[.apps[] | select(.succeeded)] | length' "$merged")
 total=$(jq '.apps | length' "$merged")
 
