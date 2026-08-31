@@ -2644,13 +2644,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ce.Arguments.Count);
-        foreach (var argument in ce.Arguments)
-        {
-            boundArguments.Add(BindExpression(OverloadResolver.UnwrapNamedArgumentValue(argument)));
-        }
-
-        var arguments = boundArguments.ToImmutable();
+        var arguments = BindBaseCallArguments(ce);
         var method = overloads.SelectInstanceOverloadOrReport(baseOverloads, arguments, ce, methodName, argumentNames);
         if (method == null)
         {
@@ -2689,6 +2683,44 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #3724: binds the argument list of a <c>base.M(args)</c> call.
+    /// <para>
+    /// Both base-call paths used to bind every argument with the plain
+    /// <c>BindExpression</c>, which has no <c>ref</c>/<c>out</c> arm —
+    /// it reaches the "an inline out declaration is only allowed at an out
+    /// parameter position" guard (GS0236) and answers a bound error. That error
+    /// then failed overload resolution, so a user base call surfaced GS0130 and
+    /// an imported base call surfaced GS0384 ("does not declare an accessible
+    /// method"), each followed by a GS0238 definite-assignment cascade on the
+    /// caller's own <c>out</c> parameter. Every other call site in the binder
+    /// routes a <see cref="RefArgumentExpressionSyntax"/> through
+    /// <see cref="BindRefArgumentExpression"/>; base calls now do the same.
+    /// </para>
+    /// <para>
+    /// The parameter is not known during this first pass (the overload is picked
+    /// from the resulting argument types), so inline <c>out var</c>/<c>out let</c>
+    /// payloads bind against their declared type and are patched up by the shared
+    /// instance-call pipeline afterwards — exactly as in
+    /// <c>OverloadResolver.BindCallExpression</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="ce">The method-call syntax whose arguments to bind.</param>
+    /// <returns>The bound arguments, in source order.</returns>
+    private ImmutableArray<BoundExpression> BindBaseCallArguments(CallExpressionSyntax ce)
+    {
+        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ce.Arguments.Count);
+        foreach (var argument in ce.Arguments)
+        {
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument);
+            boundArguments.Add(argSyntax is RefArgumentExpressionSyntax refArgument
+                ? BindRefArgumentExpression(refArgument, parameter: null)
+                : BindExpression(argSyntax));
+        }
+
+        return boundArguments.ToImmutable();
+    }
+
+    /// <summary>
     /// Issue #1260: binds a <c>base.M(args)</c> call into an imported/BCL base
     /// class. Resolves the overload set against <paramref name="clrBase"/>
     /// (which walks the CLR base chain), runs the shared imported-instance
@@ -2723,13 +2755,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ce.Arguments.Count);
-        foreach (var argument in ce.Arguments)
-        {
-            boundArguments.Add(BindExpression(OverloadResolver.UnwrapNamedArgumentValue(argument)));
-        }
-
-        var arguments = boundArguments.ToImmutable();
+        var arguments = BindBaseCallArguments(ce);
         if (function?.ThisParameter is not { } thisParameter)
         {
             return false;
