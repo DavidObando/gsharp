@@ -232,7 +232,17 @@ internal static class Program
         }
 
         (string corpus, List<string> appIds, PipelineOptions options, string baselinePath, bool baselineStrict, bool translateOnly) = parsed.Value;
-        options.SourceRoot = Path.GetFullPath(corpus);
+
+        // Issue #3732: canonicalize, not merely absolutize. A root reached
+        // through a symlink (`/tmp` and `$TMPDIR` are both links on macOS)
+        // splits every mirrored project's NuGet identity between the link
+        // spelling and the real one, restore drops the ProjectReference
+        // closure, and gsc dies with GS9997 on the first transitively-reached
+        // package assembly it needs. See CanonicalRootPath.
+        options.SourceRoot = CanonicalRootPath.Resolve(corpus);
+        corpus = options.SourceRoot;
+        options.OutputRoot = CanonicalRootPath.Resolve(options.OutputRoot);
+        options.ArtifactRoot = CanonicalRootPath.Resolve(options.ArtifactRoot);
 
         IReadOnlyList<CorpusApp> apps;
         if (options.OutputLayout == MigrationOutputLayout.Repository)
@@ -256,7 +266,7 @@ internal static class Program
                 return 1;
             }
 
-            options.ArtifactRoot ??= Path.GetFullPath(options.OutputRoot) + ".cs2gs-runs";
+            options.ArtifactRoot ??= options.OutputRoot + ".cs2gs-runs";
             apps = RepositoryDiscovery.Discover(corpus);
             if (options.ExcludeAppIdPrefixes.Count > 0)
             {

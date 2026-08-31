@@ -112,15 +112,21 @@ internal static class ValidateCommand
             return 1;
         }
 
-        options.SourceRoot = Path.GetFullPath(corpus);
-        options.OutputRoot = Path.GetFullPath(migrated);
+        // Issue #3732: canonicalize, not merely absolutize. A `--migrated`
+        // tree reached through a symlink (`/tmp` and `$TMPDIR` are both links
+        // on macOS) splits every mirrored project's NuGet identity between the
+        // link spelling and the real one, restore drops the ProjectReference
+        // closure, and gsc dies with GS9997 on the first transitively-reached
+        // package assembly it needs. See CanonicalRootPath.
+        options.SourceRoot = CanonicalRootPath.Resolve(corpus);
+        options.OutputRoot = CanonicalRootPath.Resolve(migrated);
         options.ArtifactRoot = string.IsNullOrEmpty(options.ArtifactRoot)
             ? options.OutputRoot + ".cs2gs-runs"
-            : Path.GetFullPath(options.ArtifactRoot);
+            : CanonicalRootPath.Resolve(options.ArtifactRoot);
 
         manifests = string.IsNullOrEmpty(manifests)
             ? FindLatestRunDir(options.ArtifactRoot)
-            : Path.GetFullPath(manifests);
+            : CanonicalRootPath.Resolve(manifests);
         if (string.IsNullOrEmpty(manifests) || !Directory.Exists(manifests))
         {
             Console.Error.WriteLine(
