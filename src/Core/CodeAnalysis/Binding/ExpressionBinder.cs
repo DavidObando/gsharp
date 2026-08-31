@@ -1354,6 +1354,20 @@ internal sealed partial class ExpressionBinder
     /// <returns>The visible property, or <see langword="null"/>.</returns>
     private PropertyInfo? SafeGetVisibleInstanceProperty(Type clrReceiverType, string name)
     {
+        var property = SafeGetVisibleInstancePropertyCore(clrReceiverType, name);
+        return IsHiddenByTheReceiversOwnField(clrReceiverType, property, name) ? null : property;
+    }
+
+    /// <summary>
+    /// Issue #3705: the interface-aware property probe itself. Callers go
+    /// through <see cref="SafeGetVisibleInstanceProperty"/>, which applies the
+    /// #3704 ordering rule on top.
+    /// </summary>
+    /// <param name="clrReceiverType">The receiver's CLR type.</param>
+    /// <param name="name">The member name to find.</param>
+    /// <returns>The visible property, or <see langword="null"/>.</returns>
+    private PropertyInfo? SafeGetVisibleInstancePropertyCore(Type clrReceiverType, string name)
+    {
         var property = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
             clrReceiverType,
             name,
@@ -1368,6 +1382,46 @@ internal sealed partial class ExpressionBinder
             name,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         return ClrMemberVisibility.IsVisible(candidate, includeInternal: true) ? candidate : null;
+    }
+
+    /// <summary>
+    /// Issue #3704: member lookup runs the property probe before the field
+    /// probe, and the property probe walks the receiver's INTERFACES when the
+    /// receiver's own type declares nothing of that name. Those two rules
+    /// combined let an interface-declared property outrank a field the receiver
+    /// really declares — <c>StrongBox&lt;T&gt;</c> is the canonical shape: a
+    /// public field <c>Value</c> of type <c>T</c> beside an explicitly
+    /// implemented <c>IStrongBox.Value</c> of type <c>object?</c>, which typed
+    /// every <c>box.Value</c> read as <c>object?</c>.
+    /// <para>
+    /// A member the receiver's own type (or its base chain) declares always
+    /// outranks one reached only through an interface, so an interface-declared
+    /// property loses to a same-named own field. This does NOT retire the
+    /// interface walk: a receiver with no competing own member still reaches
+    /// the interface property, which is how <c>[]T.Count</c> resolves at all
+    /// (<c>System.Array</c> implements <c>ICollection.Count</c> explicitly).
+    /// </para>
+    /// </summary>
+    /// <param name="clrReceiverType">The receiver's CLR type.</param>
+    /// <param name="property">The property the probe found, if any.</param>
+    /// <param name="name">The member name being looked up.</param>
+    /// <returns><c>true</c> when a same-named own field outranks <paramref name="property"/>.</returns>
+    private bool IsHiddenByTheReceiversOwnField(Type clrReceiverType, PropertyInfo? property, string name)
+    {
+        // An interface receiver has no fields of its own to prefer, and a
+        // property the receiver's own type declares was never a candidate for
+        // this rule — only the interface walk's results are.
+        if (property?.DeclaringType is not { IsInterface: true }
+            || clrReceiverType == null
+            || clrReceiverType.IsInterface)
+        {
+            return false;
+        }
+
+        // For a non-interface receiver the field probe walks the type and its
+        // base chain only, so this asks exactly "does the receiver's own type
+        // declare a visible field with this name?".
+        return SafeGetVisibleInstanceField(clrReceiverType, name) != null;
     }
 
     /// <summary>
