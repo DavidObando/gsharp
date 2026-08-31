@@ -67,6 +67,10 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
     /// <inheritdoc/>
     public Func<string?>? InputProvider { get; set; }
 
+    public bool CaptureSyntaxTree { get; set; }
+
+    public bool CaptureIntermediateLanguage { get; set; }
+
     /// <inheritdoc/>
     public Cell Evaluate(string text) => EvaluateCore(text, CancellationToken.None);
 
@@ -300,6 +304,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         var packageName = "gsi" + n;
 
         var tree = SyntaxTree.Parse(SourceText.From(text, string.Empty));
+        var syntaxTree = CaptureSyntaxTree ? tree.Root.ToString() : string.Empty;
         var referencePaths = submissions.Select(s => s.DllPath).Concat(userReferences).ToArray();
         var resolver = referencePaths.Length > 0
             ? ReferenceResolver.WithReferences(referencePaths)
@@ -326,12 +331,13 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
             if (hasError)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return new Cell(index, text, null, emitResult.Diagnostics, true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
+                return new Cell(index, text, null, emitResult.Diagnostics, true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty, syntaxTree);
             }
 
             // Flush the PE to the session directory before running: future
             // submissions' reference resolvers read it from disk.
             var peImage = peStream.ToArray();
+            var intermediateLanguage = CaptureIntermediateLanguage ? IlDump.Create(peImage) : string.Empty;
             dllPath = Path.Combine(submissionsDirectory, assemblyName + ".dll");
             File.WriteAllBytes(dllPath, peImage);
 
@@ -354,7 +360,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 var ex = runResult.UnhandledException;
                 var diag = new Diagnostic(default, "GSI002", DiagnosticSeverity.Error, $"Unhandled exception. {ex.GetType().Name}: {ex.Message}");
                 cancellationToken.ThrowIfCancellationRequested();
-                return new Cell(index, text, null, emitResult.Diagnostics.Add(diag), true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
+                return new Cell(index, text, null, emitResult.Diagnostics.Add(diag), true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty, syntaxTree, intermediateLanguage);
             }
 
             var value = host.ReadStaticField(
@@ -380,7 +386,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 }
             }
 
-            return new Cell(index, text, value, emitResult.Diagnostics, false, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
+            return new Cell(index, text, value, emitResult.Diagnostics, false, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty, syntaxTree, intermediateLanguage);
         }
         finally
         {

@@ -107,18 +107,13 @@
         "resolved": "13.0.3",
         "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
       },
-      "Spectre.Console": {
+      "SharpTui.Framework": {
         "type": "Transitive",
-        "resolved": "0.55.2",
-        "contentHash": "yc0g12YJpmZHofGJLTQX02/uqfzJ6XHRx6pe9rANNjleQptXMHPxD9KI2/DWkXiJWddc+4oizEdGox15c89hhw==",
+        "resolved": "0.1.1",
+        "contentHash": "wFhtoRjz09qJpEZdAmBIYEq7fdAd2zClxTvsan4ebDdhJCnCd/agslc8W+Of0M3oykLaBDeoFcdygLG3Oah5Lg==",
         "dependencies": {
-          "Spectre.Console.Ansi": "0.55.2"
+          "Yoga.Net": "3.2.3"
         }
-      },
-      "Spectre.Console.Ansi": {
-        "type": "Transitive",
-        "resolved": "0.55.2",
-        "contentHash": "tN3KEJQQZwLW9HJnG5YTSAxfBwxsmg1wVuGvhGG2rM+pbl+NGaHU8pDcNofPlOXlgpkbpBMxI5t9o9qPfy3sHQ=="
       },
       "StreamJsonRpc": {
         "type": "Transitive",
@@ -177,6 +172,11 @@
           "xunit.extensibility.core": "[2.9.2]"
         }
       },
+      "Yoga.Net": {
+        "type": "Transitive",
+        "resolved": "3.2.3",
+        "contentHash": "g7maV1ZBC+kpeExf37jErIMTe559NmAhs/GUSO016mG90vdPQFFLV/ZyOR9+kYk5Zc9TL82QUAP6RJ0olTCYIg=="
+      },
       "gsc": {
         "type": "Project",
         "dependencies": {
@@ -221,7 +221,7 @@
           "GSharp.Gsharp.Extensions": "[1.0.0, )",
           "GSharp.LanguageServer": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )",
-          "Spectre.Console": "[0.55.2, )"
+          "SharpTui.Framework": "[0.1.1, )"
         }
       }
     }

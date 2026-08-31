@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Gsharp.NET.Sdk/0.4.59">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -34,7 +34,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="@(SpectreConsolePackageReference)" />
+    <Compile Include="**\*.cs" Exclude="$(DefaultItemExcludes);$(DefaultExcludesInProjectFolder)" />
+    <PackageReference Include="@(SharpTuiFrameworkPackageReference)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -33,6 +33,10 @@ public interface ISessionEngine
     /// </summary>
     Func<string?>? InputProvider { get; set; }
 
+    bool CaptureSyntaxTree { get; set; }
+
+    bool CaptureIntermediateLanguage { get; set; }
+
     /// <summary>Evaluates a submission, appends a cell, and returns it. Never throws.</summary>
     /// <param name="text">The submission source.</param>
     /// <returns>The evaluated cell.</returns>

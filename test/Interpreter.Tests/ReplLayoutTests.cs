@@ -3,338 +3,378 @@
 // </copyright>
 
 using System;
-using System.IO;
-using System.Linq;
 using System.Threading;
 using GSharp.Repl.Engine;
 using GSharp.Repl.Screens;
-using GSharp.Repl.Shell;
-using GSharp.Repl.Widgets;
-using Spectre.Console;
+using GSharp.Repl.Themes;
+using SharpTui;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
-public class ReplLayoutTests
+public sealed class ReplLayoutTests
 {
-    [Fact]
-    public void Editor_RenderLines_PlacesCursor()
-    {
-        var ed = new MultilineEditor();
-        ed.Insert('a');
-        ed.Insert('b');
-        var line = ed.RenderLines("invert").Single();
-        Assert.Contains("invert", line);
-    }
-
-    [Fact]
-    public void Screen_TypingAndCompletions_RendersWithoutThrow()
-    {
-        using var engine = new EmittedSessionEngine();
-        var screen = new ReplScreen(engine);
-        foreach (var ch in "func Greet() string { return \"hi\" }")
-        {
-            screen.HandleKey(new ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false));
-        }
-
-        screen.HandleKey(new ConsoleKeyInfo(' ', ConsoleKey.Spacebar, false, false, true));
-        var r = screen.Render(80, 24);
-        Assert.NotNull(r);
-    }
-
-    [Fact]
-    public void Snapshot_Empty_BeforeAnyEvaluation()
-    {
-        using var engine = new EmittedSessionEngine();
-        Assert.True(engine.Snapshot().IsEmpty);
-    }
-
-    [Fact]
-    public void Snapshot_CapturesFunctionsVariablesAndImports()
-    {
-        using var engine = new EmittedSessionEngine();
-        engine.Evaluate("import \"System\"");
-        engine.Evaluate("var answer = 42");
-        engine.Evaluate("func Twice(n int) int { return n * 2 }");
-
-        var state = engine.Snapshot();
-        Assert.False(state.IsEmpty);
-        Assert.Contains(state.Variables, v => v.Display.Contains("answer"));
-        Assert.Contains(state.Functions, f => f.Display.Contains("Twice"));
-        Assert.Contains(state.Imports, i => i.Display.Contains("System"));
-    }
-
-    [Fact]
-    public void Screen_WithState_RendersSidebarOnWideTerminal()
-    {
-        using var engine = new EmittedSessionEngine();
-        engine.Evaluate("var answer = 42");
-        var screen = new ReplScreen(engine);
-        Assert.NotNull(screen.Render(120, 30));
-        Assert.NotNull(screen.Render(40, 30));
-    }
-
-    [Fact]
-    public void Backdrop_FillsBackgroundAcrossFullWidthWithAccentBar()
-    {
-        var backdrop = new Backdrop(
-            new Markup("hi"),
-            Color.Grey11,
-            accent: Color.Purple,
-            padLeft: 1,
-            padRight: 1,
-            padTop: 1,
-            padBottom: 1);
-
-        var text = RenderToAnsi(backdrop, 30);
-
-        // The accent bar glyph and a 256-palette background fill are both emitted.
-        Assert.Contains("▏", text);
-        Assert.Contains("48;5;", text);
-    }
-
-    [Fact]
-    public void Screen_Enter_EvaluatesAsynchronouslyAndClearsBusyOnCompletion()
-    {
-        using var engine = new EmittedSessionEngine();
-        var screen = new ReplScreen(engine);
-        foreach (var ch in "1 + 1")
-        {
-            screen.HandleKey(new ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false));
-        }
-
-        screen.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
-
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-        while (screen.IsBusy && DateTime.UtcNow < deadline)
-        {
-            Thread.Sleep(5);
-            screen.Render(80, 24);
-        }
-
-        Assert.False(screen.IsBusy);
-        Assert.Null(screen.FooterOverride);
-        Assert.Single(engine.Cells);
-    }
-
-    [Fact]
-    public void Screen_TranscriptAndInput_EmitBackgroundFills()
-    {
-        using var engine = new EmittedSessionEngine { CaptureConsole = true };
-        engine.Evaluate("var answer = 42");
-        var screen = new ReplScreen(engine);
-
-        var text = RenderToAnsi(screen.Render(100, 24), 100);
-
-        // Distinct cell (Grey11 => idx 234) and input (Grey19 => idx 236) backgrounds.
-        Assert.Contains("48;5;234", text);
-        Assert.Contains("48;5;236", text);
-    }
-
     [Theory]
-    [InlineData(100, 24)]
-    [InlineData(120, 30)]
-    [InlineData(70, 18)]
-    public void Screen_Render_FillsExactHeight_EvenWhenCellsOverflow(int width, int height)
+    [InlineData(120, 32)]
+    [InlineData(80, 24)]
+    [InlineData(48, 18)]
+    public void RetainedTreeRendersAllChromeAtSupportedSizes(int width, int height)
     {
-        using var engine = new EmittedSessionEngine { CaptureConsole = true };
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, width, height);
+
+        driver.Draw();
+        var frame = driver.FrameText();
+
+        Assert.Contains("gsharp", frame, StringComparison.Ordinal);
+        Assert.Contains("1 REPL", frame, StringComparison.Ordinal);
+        Assert.Contains(width < 60 ? "6S" : "6 ", frame, StringComparison.Ordinal);
+        Assert.Contains("session transcript", frame, StringComparison.Ordinal);
+        Assert.Contains("editor [focus]", frame, StringComparison.Ordinal);
+        Assert.Contains("focus: editor", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain(" cells ", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("idle", frame, StringComparison.Ordinal);
+        Assert.Same(root.Editor, driver.FocusedElement);
+
+        if (width == 48)
+        {
+            Text(driver, ":");
+            driver.Draw();
+            frame = driver.FrameText();
+            Assert.Contains("command palette", frame, StringComparison.Ordinal);
+            Assert.Contains("reset", frame, StringComparison.Ordinal);
+            Assert.Contains("exit", frame, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void EditorAnalysisSuppliesSemanticRunsAndDiagnosticUnderline()
+    {
+        const string source = "let = 1";
+        var analysis = AnalysisBridge.Analyze(source);
+        var lines = new EditorLineSource(source, analysis, ReplTheme.Current);
+        var rendered = lines.ItemAt(0);
+
+        Assert.NotEmpty(analysis.Tokens);
+        Assert.NotEmpty(analysis.Diagnostics);
+        Assert.True(rendered.Runs.Count > 1);
+        Assert.Contains(rendered.Runs, run => (run.Style.Attributes & TextAttributes.Underline) != 0);
+    }
+
+    [Fact]
+    public void EditorAnalysisColorsInterpolatedStringHoleSeparately()
+    {
+        const string source = "\"Hello ${1}\"";
+        var analysis = AnalysisBridge.Analyze(source);
+        var rendered = new EditorLineSource(source, analysis, ReplTheme.Current).ItemAt(0);
+
+        Assert.Contains(rendered.Runs, run => run.Text.Contains("Hello", StringComparison.Ordinal)
+            && run.Style.Foreground.Equals(ReplTheme.Current.StringLiteral));
+        Assert.Contains(rendered.Runs, run => run.Text.Contains("1", StringComparison.Ordinal)
+            && run.Style.Foreground.Equals(ReplTheme.Current.Number));
+    }
+
+    [Fact]
+    public void LiveEditorAnalysisDebouncesAndUsesOnlyInlineUnderline()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 26);
+
+        Type(driver, "let = 1");
+        Assert.Empty(root.Editor.StyleSource.ItemAt(0).Runs);
+
+        Tick(driver);
+        Tick(driver);
+        Assert.Empty(root.Editor.StyleSource.ItemAt(0).Runs);
+
+        Tick(driver);
+        driver.Draw();
+        var rendered = root.Editor.StyleSource.ItemAt(0);
+        Assert.Contains(rendered.Runs, run => (run.Style.Attributes & TextAttributes.Underline) != 0);
+        Assert.DoesNotContain("Unexpected", driver.FrameText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TypeSubmitPumpRendersTranscriptCell()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 26);
+
+        Type(driver, "1+2");
+        Assert.Equal(EventResult.Handled, SendKey(driver, Key.Enter));
+        PumpUntilIdle(root, driver);
+        driver.Draw();
+
+        var cell = Assert.Single(engine.Cells);
+        Assert.Equal(3, cell.Value);
+        Assert.Contains("1+2", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("= 3", driver.FrameText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TabExpandsCompletionAndPaletteDoesNotStealColon()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 26);
+
+        root.Editor.Text = "func Greet() string { return \"hi\" }\nGre";
+        root.Editor.Caret = new TextPosition { LineIndex = 1, GraphemeIndex = 3 };
+        SendKey(driver, Key.Tab);
+        Assert.Equal("func Greet() string { return \"hi\" }\nGreet", root.Editor.Text);
+
+        root.Editor.Text = "let value";
+        root.Editor.Caret = new TextPosition { LineIndex = 0, GraphemeIndex = 9 };
+        Text(driver, ":");
+        driver.Draw();
+        Assert.Equal("let value:", root.Editor.Text);
+        Assert.DoesNotContain("command palette", driver.FrameText(), StringComparison.Ordinal);
+
+        Control(driver, "p");
+        driver.Draw();
+        Assert.Contains("command palette", driver.FrameText(), StringComparison.Ordinal);
+        Type(driver, "show t");
+        driver.Draw();
+        SendKey(driver, Key.Tab);
+        driver.Draw();
+        Assert.Contains("show tree", driver.FrameText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TypingWhileCompletionIsOpenContinuesEditingAndRefilters()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 26);
+
+        Type(driver, "Con");
+        Control(driver, " ");
+        driver.Draw();
+        Assert.Contains("completions", driver.FrameText(), StringComparison.Ordinal);
+
+        Text(driver, "t");
+        Assert.Equal("Cont", root.Editor.Text);
+        driver.Draw();
+        Assert.Contains("continue", driver.FrameText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PageUpFromEditorScrollsTranscriptAndKeepsEditorFocus()
+    {
+        using var engine = new EmittedSessionEngine();
         for (var i = 0; i < 12; i++)
         {
-            engine.Evaluate($"var x{i} = {i}");
+            engine.Evaluate(i.ToString());
         }
 
-        var screen = new ReplScreen(engine);
-        Assert.Equal(height, LineCount(screen.Render(width, height), width));
+        var (root, driver) = Create(engine, 70, 18);
+        driver.Draw();
+        var before = root.Transcript.FirstVisibleRowOffset;
+
+        SendKey(driver, Key.PageUp);
+        driver.Draw();
+
+        Assert.True(root.Transcript.FirstVisibleRowOffset < before);
+        Assert.Same(root.Editor, driver.FocusedElement);
+        var afterPageUp = root.Transcript.FirstVisibleRowOffset;
+
+        SendKey(driver, Key.PageDown);
+        driver.Draw();
+        Assert.True(root.Transcript.FirstVisibleRowOffset > afterPageUp);
+        Assert.True(root.Transcript.FollowTail);
+        Assert.Contains("[12]", driver.FrameText(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Screen_Render_FillsExactHeight_WithMultiLineInput()
+    public void ProgressiveControlCClearsThenExits()
     {
         using var engine = new EmittedSessionEngine();
-        var screen = new ReplScreen(engine);
-        foreach (var ch in "func F() {")
-        {
-            screen.HandleKey(new ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false));
-        }
+        var (root, driver) = Create(engine, 80, 24);
 
-        // Shift+Enter inserts newlines, growing the input box upward.
-        for (var i = 0; i < 4; i++)
-        {
-            screen.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, true, false, false));
-        }
-
-        Assert.Equal(26, LineCount(screen.Render(100, 26), 100));
+        Type(driver, "discard me");
+        Assert.Equal(EventResult.Handled, Control(driver, "c"));
+        Assert.Equal(string.Empty, root.Editor.Text);
+        Assert.Equal(EventResult.Handled, Control(driver, "c"));
+        Assert.Equal(EventResult.Exit, Control(driver, "c"));
     }
 
     [Fact]
-    public void Dock_DocksFooterAtBottom_AndFillsExactHeight()
+    public void EmptyEditorTabPreservesKeyboardFocusTraversal()
     {
-        var tall = new Rows(Enumerable.Range(0, 50).Select(i => (Spectre.Console.Rendering.IRenderable)new Markup($"line {i}")).ToArray());
-        var footer = new Rows(new Markup("footer-a"), new Markup("footer-b"));
-        var dock = new Dock(tall, footer, 20, new ScrollState());
-
-        var lines = RenderToAnsi(dock, 40).Split(Environment.NewLine);
-        Assert.Equal(20, lines.Length);
-
-        // Footer occupies the final two lines, pinned to the bottom.
-        Assert.Contains("footer-a", lines[18]);
-        Assert.Contains("footer-b", lines[19]);
-    }
-
-    [Fact]
-    public void Dock_Scroll_RevealsOlderContent_AndClampsOffset()
-    {
-        var tall = new Rows(Enumerable.Range(0, 50).Select(i => (Spectre.Console.Rendering.IRenderable)new Markup($"line{i}")).ToArray());
-        var footer = new Markup("footer");
-        var scroll = new ScrollState();
-        var dock = new Dock(tall, footer, 10, scroll);
-
-        // Pinned to the bottom: newest line visible, oldest not.
-        var bottom = RenderToAnsi(dock, 40);
-        Assert.Contains("line49", bottom);
-
-        // Scroll up beyond the content; the offset is clamped and older lines appear.
-        scroll.ScrollUp(1000);
-        var top = RenderToAnsi(dock, 40);
-        Assert.Contains("line0", top);
-        Assert.True(scroll.Offset <= 50, "Offset should be clamped to available scrollback.");
-    }
-
-    [Fact]
-    public void Overlay_KeepsBaseHeight_AndDrawsModalOnTop()
-    {
-        var baseFrame = new Rows(Enumerable.Range(0, 20).Select(i => (Spectre.Console.Rendering.IRenderable)new Markup($"base{i}")).ToArray());
-        var modal = new Rows(new Markup("MODAL-ROW"));
-        var overlay = new Overlay(baseFrame, modal, 20);
-
-        var lines = RenderToAnsi(overlay, 60).Split(Environment.NewLine);
-        Assert.Equal(20, lines.Length);
-        Assert.Contains(lines, l => l.Contains("MODAL-ROW"));
-
-        // Base chrome above and below the modal band is still present.
-        Assert.Contains(lines, l => l.Contains("base0"));
-        Assert.Contains(lines, l => l.Contains("base19"));
-    }
-
-    private static int LineCount(Spectre.Console.Rendering.IRenderable renderable, int width)
-        => RenderToAnsi(renderable, width).Split(Environment.NewLine).Length;
-
-    [Fact]
-    public void Screen_MouseScroll_RevealsOlderCells()
-    {
-        // A dozen cells already overflows an 18-row viewport, which is all this test needs to
-        // exercise scrolling. Evaluating many more submissions would be dominated by the
-        // incremental compiler's (unrelated) per-submission cost rather than the scroll logic
-        // under test, so keep the count modest.
-        const int count = 12;
         using var engine = new EmittedSessionEngine();
-        for (var i = 0; i < count; i++)
-        {
-            engine.Evaluate($"var x{i} = {i}");
-        }
+        var (root, driver) = Create(engine, 80, 24);
 
-        var screen = new ReplScreen(engine);
-        var newest = $"x{count - 1}";
-
-        // Pinned to the bottom: newest cell visible, oldest scrolled off.
-        var bottom = Plain(RenderToAnsi(screen.Render(70, 18), 70));
-        Assert.Contains(newest, bottom);
-        Assert.DoesNotContain("x0 ", bottom);
-
-        // Scroll the wheel up repeatedly; older cells come into view.
-        for (var i = 0; i < 40; i++)
-        {
-            Assert.True(screen.HandleScroll(ScrollDirection.Up, 3));
-        }
-
-        var top = Plain(RenderToAnsi(screen.Render(70, 18), 70));
-        Assert.Contains("x0 ", top);
-
-        // Scrolling back down returns to the newest content.
-        for (var i = 0; i < 40; i++)
-        {
-            screen.HandleScroll(ScrollDirection.Down, 3);
-        }
-
-        Assert.Contains(newest, Plain(RenderToAnsi(screen.Render(70, 18), 70)));
-    }
-
-    private static string Plain(string ansi)
-        => System.Text.RegularExpressions.Regex.Replace(ansi, "\u001b\\[[0-9;]*m", string.Empty);
-
-    [Fact]
-    public void AppShell_DispatchScroll_RoutesToActiveTab_ButNotWhenModalOpen()
-    {
-        var tab = new RecordingTab();
-        var shell = new AppShell(NullConsole(), new[] { (ITabScreen)tab });
-
-        shell.DispatchScroll(ScrollDirection.Up);
-        shell.DispatchScroll(ScrollDirection.Down);
-        Assert.Equal(2, tab.Scrolls.Count);
-        Assert.Equal(ScrollDirection.Up, tab.Scrolls[0]);
-        Assert.Equal(ScrollDirection.Down, tab.Scrolls[1]);
-
-        // A modal swallows scroll so the palette list isn't scrolled behind it.
-        shell.ShowModal(new CommandPalette(new[] { ("theme", "cycle") }, _ => { }));
-        shell.DispatchScroll(ScrollDirection.Up);
-        Assert.Equal(2, tab.Scrolls.Count);
+        SendKey(driver, Key.Tab);
+        Assert.NotSame(root.Editor, driver.FocusedElement);
+        driver.Draw();
+        Assert.Contains("focus:", driver.FrameText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("editor [focus]", driver.FrameText(), StringComparison.Ordinal);
+        SendKey(driver, Key.BackTab);
+        Assert.Same(root.Editor, driver.FocusedElement);
+        driver.Draw();
+        Assert.Contains("editor [focus]", driver.FrameText(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AppShell_CtrlC_DoesNotExit()
+    public void ChangingFocusedTabKeepsTabFocusUntilPanelTraversal()
     {
-        var shell = new AppShell(NullConsole(), new[] { (ITabScreen)new RecordingTab() });
-        var ctrlC = new ConsoleKeyInfo('\x03', ConsoleKey.C, false, false, true);
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 80, 24);
 
-        Assert.Equal(ShellAction.Continue, shell.Dispatch(ctrlC));
-        Assert.Equal(ShellAction.Continue, shell.Dispatch(ctrlC));
+        SendKey(driver, Key.Tab);
+        Assert.Same(root.TabStrip, driver.FocusedElement);
+        driver.Draw();
+        Assert.Contains("[1 REPL]", driver.FrameText(), StringComparison.Ordinal);
+
+        SendKey(driver, Key.Right);
+        Assert.Equal(1, root.ActiveTab);
+        Assert.Same(root.TabStrip, driver.FocusedElement);
+        driver.Draw();
+        Assert.Contains("[2 Hist]", driver.FrameText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("[1 REPL]", driver.FrameText(), StringComparison.Ordinal);
+
+        SendKey(driver, Key.Right);
+        Assert.Equal(2, root.ActiveTab);
+        Assert.Same(root.TabStrip, driver.FocusedElement);
+
+        driver.Draw();
+        Assert.Contains("[3 Vars]", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("live variables", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("focus: tabs", driver.FrameText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("live variables [focus]", driver.FrameText(), StringComparison.Ordinal);
+
+        SendKey(driver, Key.Tab);
+        Assert.IsType<TableView>(driver.FocusedElement);
+
+        driver.Draw();
+        Assert.DoesNotContain("[3 Vars]", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("live variables [focus]", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("focus: variables", driver.FrameText(), StringComparison.Ordinal);
     }
 
-    private static IAnsiConsole NullConsole()
+    [Fact]
+    public void HoverShortcutExplainsItsEditorCaretRequirement()
     {
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.No,
-            ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter { NewLine = Environment.NewLine }),
-            Interactive = InteractionSupport.No,
-        });
-        console.Profile.Width = 80;
-        console.Profile.Height = 24;
-        return console;
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 26);
+
+        Control(driver, "k");
+        driver.Draw();
+
+        var frame = driver.FrameText();
+        Assert.Contains("hover help", frame, StringComparison.Ordinal);
+        Assert.Contains("place the caret on a symbol", frame, StringComparison.Ordinal);
+        Assert.Contains("focus: hover", frame, StringComparison.Ordinal);
+
+        SendKey(driver, Key.Escape);
+        root.Editor.Text = "func Greet() string { return \"hi\" }";
+        root.Editor.Caret = new TextPosition { LineIndex = 0, GraphemeIndex = 5 };
+        Control(driver, "k");
+        driver.Draw();
+
+        frame = driver.FrameText();
+        Assert.Contains("hover at editor caret", frame, StringComparison.Ordinal);
+        Assert.Contains("Greet", frame, StringComparison.Ordinal);
     }
 
-    private sealed class RecordingTab : ITabScreen
+    [Fact]
+    public void StandardInputRequestUsesModalAndCompletesCell()
     {
-        public System.Collections.Generic.List<ScrollDirection> Scrolls { get; } = new();
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 30);
 
-        public string Title => "Rec";
-
-        public char NumberKey => '1';
-
-        public Spectre.Console.Rendering.IRenderable Render(int width, int height) => new Markup(string.Empty);
-
-        public bool HandleKey(ConsoleKeyInfo key) => false;
-
-        public bool HandleScroll(ScrollDirection direction, int lines)
+        Type(driver, "Console.ReadLine()");
+        SendKey(driver, Key.Enter);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var frame = string.Empty;
+        while (!frame.Contains("standard input", StringComparison.Ordinal) && DateTime.UtcNow < deadline)
         {
-            Scrolls.Add(direction);
-            return true;
+            Thread.Sleep(5);
+            driver.Pump();
+            driver.Draw();
+            frame = driver.FrameText();
+        }
+
+        Assert.Contains("standard input", frame, StringComparison.Ordinal);
+        Type(driver, "hello");
+        SendKey(driver, Key.Enter);
+        PumpUntilIdle(root, driver);
+        Assert.Equal("hello", Assert.Single(engine.Cells).Value);
+    }
+
+    [Fact]
+    public void TreeAndIlCaptureUseEmittedCellArtifacts()
+    {
+        using var engine = new EmittedSessionEngine
+        {
+            CaptureSyntaxTree = true,
+            CaptureIntermediateLanguage = true,
+        };
+
+        var cell = engine.Evaluate("1+2");
+
+        Assert.Contains("CompilationUnit", cell.SyntaxTree, StringComparison.Ordinal);
+        Assert.Contains("method", cell.IntermediateLanguage, StringComparison.Ordinal);
+        Assert.Contains("IL_", cell.IntermediateLanguage, StringComparison.Ordinal);
+    }
+
+    private static (ReplApp Root, TestDriver Driver) Create(EmittedSessionEngine engine, int width, int height)
+    {
+        var root = new ReplApp(engine);
+        var driver = new TestDriver(root, width, height);
+        root.Configure(driver.App);
+        return (root, driver);
+    }
+
+    private static void PumpUntilIdle(ReplApp root, TestDriver driver)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (root.IsBusy && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(5);
+            driver.Pump();
+        }
+
+        Assert.False(root.IsBusy);
+    }
+
+    private static void Type(TestDriver driver, string text)
+    {
+        foreach (var value in text)
+        {
+            Text(driver, value.ToString());
         }
     }
 
-    private static string RenderToAnsi(Spectre.Console.Rendering.IRenderable renderable, int width)
-    {
-        var sw = new StringWriter { NewLine = Environment.NewLine };
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
+    private static EventResult Text(TestDriver driver, string text)
+        => driver.Send(new UiEvent
         {
-            Ansi = AnsiSupport.Yes,
-            ColorSystem = ColorSystemSupport.TrueColor,
-            Out = new AnsiConsoleOutput(sw),
-            Interactive = InteractionSupport.No,
+            Kind = UiEventKind.TextInput,
+            Key = Key.Character,
+            Phase = KeyPhase.Press,
+            Text = text,
         });
-        console.Profile.Width = width;
-        console.Write(renderable);
-        return sw.ToString();
-    }
+
+    private static EventResult SendKey(TestDriver driver, Key key)
+        => driver.Send(new UiEvent
+        {
+            Kind = UiEventKind.Key,
+            Key = key,
+            Phase = KeyPhase.Press,
+        });
+
+    private static EventResult Control(TestDriver driver, string text)
+        => driver.Send(new UiEvent
+        {
+            Kind = UiEventKind.Key,
+            Key = Key.Character,
+            Phase = KeyPhase.Press,
+            Modifiers = KeyModifiers.Ctrl,
+            Text = text,
+        });
+
+    private static EventResult Tick(TestDriver driver)
+        => driver.Send(new UiEvent
+        {
+            Kind = UiEventKind.Tick,
+            Phase = KeyPhase.Press,
+        });
 }

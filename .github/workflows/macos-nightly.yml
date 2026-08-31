@@ -108,7 +108,7 @@ jobs:
           set +e
           ./build/run-e2e-tests.sh \
             debug-info foreign-cs gsanalyzer gsgen hot-reload multifile \
-            multitarget nuget-pack packageref projectref property sdk \
+            multitarget nuget-pack packageref projectref property repl-tui sdk \
             templates \
             | tee e2e-tests.log
           exit_code=${PIPESTATUS[0]}

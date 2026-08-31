@@ -18,7 +18,9 @@ public sealed record Cell(
     ImmutableArray<Diagnostic> Diagnostics,
     bool HasError,
     string Output = "",
-    string StandardError = "");
+    string StandardError = "",
+    string SyntaxTree = "",
+    string IntermediateLanguage = "");
 
 /// <summary>A single entry in the REPL state sidebar, rendered via the shared <c>SymbolDisplay</c> service.</summary>
 public sealed record ReplSymbol(string Display);
