@@ -24,6 +24,100 @@ public static class NullAssertionPolishPass
     public const string DiagnosticId = "GS0536";
 
     /// <summary>
+    /// Issue #3723: the round cap <see cref="RunToFixedPoint"/> stops at. One
+    /// round can only strip what the compile it followed actually reported,
+    /// and a compile reports nothing past the first project it fails on — so a
+    /// deep project graph spends one round per level before the app's own
+    /// sources are ever bound, and nested assertions (<c>a!!.b!!</c>) add
+    /// further generations on top of that. The cap only exists so a
+    /// pathological non-converging case cannot loop forever; hitting it is
+    /// reported, never silent.
+    /// </summary>
+    public const int DefaultMaxRounds = 12;
+
+    /// <summary>
+    /// Issue #3723: strips the GS0536 spans of <paramref name="initial"/>,
+    /// recompiles, and repeats until a compile reports no redundant <c>!!</c>
+    /// (or a round finds nothing left it can strip). The recompile is what
+    /// validates each round: a round is only kept when the polished build is
+    /// no worse than the one before it, and otherwise the round's text is
+    /// rolled back and the prior result stands — a <c>!!</c> the compiler
+    /// still needs therefore survives, because the file it was removed from is
+    /// restored wholesale.
+    /// </summary>
+    /// <param name="initial">The first compile's result.</param>
+    /// <param name="recompile">Reruns the same compile over the rewritten files.</param>
+    /// <param name="emittedGsFiles">The emitted .gs file paths owned by this app.</param>
+    /// <param name="strippableRoot">The optional shared emitted-output root.</param>
+    /// <param name="maxRounds">The round cap (see <see cref="DefaultMaxRounds"/>).</param>
+    /// <returns>The final compile result and what the loop did to reach it.</returns>
+    public static PolishLoopOutcome RunToFixedPoint(
+        SdkCompileResult initial,
+        Func<SdkCompileResult> recompile,
+        IReadOnlyCollection<string> emittedGsFiles,
+        string strippableRoot = null,
+        int maxRounds = DefaultMaxRounds)
+    {
+        if (initial is null)
+        {
+            throw new ArgumentNullException(nameof(initial));
+        }
+
+        if (recompile is null)
+        {
+            throw new ArgumentNullException(nameof(recompile));
+        }
+
+        SdkCompileResult result = initial;
+        var rounds = 0;
+        var stripped = 0;
+        while (result.IsAvailable
+            && result.Diagnostics.Any(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal)))
+        {
+            if (rounds >= maxRounds)
+            {
+                return new PolishLoopOutcome(result, rounds, stripped, capExhausted: true);
+            }
+
+            rounds++;
+            Dictionary<string, string> backups = CandidateFiles(result.Diagnostics, emittedGsFiles, strippableRoot)
+                .Concat(emittedGsFiles ?? Array.Empty<string>())
+                .Where(File.Exists)
+                .Distinct(StringComparer.Ordinal)
+                .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
+
+            int roundStripped = Strip(result.Diagnostics, emittedGsFiles, strippableRoot);
+            if (roundStripped == 0)
+            {
+                // Every reported span was one this pass declines to touch
+                // (a stale coordinate, or a file outside the strippable set):
+                // another round would report the same thing.
+                break;
+            }
+
+            stripped += roundStripped;
+            SdkCompileResult polished = recompile();
+            if (polished.IsAvailable && (polished.Succeeded || !result.Succeeded))
+            {
+                result = polished;
+                continue;
+            }
+
+            // The polished build regressed a previously passing one (or could
+            // not run at all): restore the round's text and keep the result
+            // that stood before it.
+            foreach (KeyValuePair<string, string> backup in backups)
+            {
+                File.WriteAllText(backup.Key, backup.Value);
+            }
+
+            break;
+        }
+
+        return new PolishLoopOutcome(result, rounds, stripped, capExhausted: false);
+    }
+
+    /// <summary>
     /// Deletes every GS0536-flagged <c>!!</c> span from the given emitted
     /// files. Spans are applied bottom-up per file so earlier deletions never
     /// shift later coordinates, and each span is verified to hold exactly
@@ -249,6 +343,45 @@ public static class NullAssertionPolishPass
         }
 
         return directory;
+    }
+
+    /// <summary>
+    /// Issue #3723: what a <see cref="RunToFixedPoint"/> call did — enough for
+    /// the caller to say out loud that the loop gave up, which is how the
+    /// old three-round cap stayed invisible for several nightly runs.
+    /// </summary>
+    public sealed class PolishLoopOutcome
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PolishLoopOutcome"/> class.
+        /// </summary>
+        /// <param name="result">The final compile result.</param>
+        /// <param name="rounds">The number of strip-and-recompile rounds run.</param>
+        /// <param name="stripped">The total number of assertions removed.</param>
+        /// <param name="capExhausted">Whether the round cap stopped the loop.</param>
+        public PolishLoopOutcome(SdkCompileResult result, int rounds, int stripped, bool capExhausted)
+        {
+            this.Result = result;
+            this.Rounds = rounds;
+            this.Stripped = stripped;
+            this.CapExhausted = capExhausted;
+        }
+
+        /// <summary>Gets the final compile result.</summary>
+        public SdkCompileResult Result { get; }
+
+        /// <summary>Gets the number of strip-and-recompile rounds run.</summary>
+        public int Rounds { get; }
+
+        /// <summary>Gets the total number of assertions removed.</summary>
+        public int Stripped { get; }
+
+        /// <summary>Gets a value indicating whether the round cap stopped the loop.</summary>
+        public bool CapExhausted { get; }
+
+        /// <summary>Gets the number of redundant-<c>!!</c> reports still standing.</summary>
+        public int RemainingReports => this.Result.Diagnostics
+            .Count(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal));
     }
 
     private sealed class SpanComparer : IEqualityComparer<GscDiagnostic>
