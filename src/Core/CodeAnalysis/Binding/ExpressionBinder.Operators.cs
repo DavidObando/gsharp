@@ -1989,6 +1989,20 @@ internal sealed partial class ExpressionBinder
 
     private static bool IsExplicitlyNonNullImportedResult(BoundExpression expression)
     {
+        // Issue #3727: the metadata answer describes the DECLARED return type,
+        // which for a generic method is the open type parameter — `T Read<T>(ref
+        // T location)` carries no nullable annotation there, because its
+        // nullability is supplied by the type argument at each call site. The
+        // binder has already substituted it: `Volatile.Read(&x)` over an `x C?`
+        // really does produce a `C?`, and comparing that against `nil` is the
+        // whole point of the call. So an operand the binder itself typed
+        // nullable is never an "explicitly non-null" result, whatever the open
+        // declaration says.
+        if (expression.Type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
         MethodInfo? method = expression switch
         {
             BoundImportedInstanceCallExpression instanceCall => instanceCall.Method,

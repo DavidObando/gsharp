@@ -292,6 +292,71 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     /// <summary>
+    /// Issue #3726: whether <paramref name="symbol"/> is a parameter some
+    /// DATA-DRIVING attribute on its own method supplies <c>null</c> for. An
+    /// xunit theory's <c>[InlineData(null, "x")]</c> states outright that the
+    /// theory really is invoked with <c>null</c> for its first parameter, so
+    /// the parameter is nullable however its type is spelled — and cs2gs emits
+    /// the attribute with a literal <c>nil</c> beside the declaration it
+    /// renders, so leaving the parameter non-nullable makes the two sides of
+    /// one file contradict each other (gsc GS0274).
+    ///
+    /// <para>
+    /// The match is mechanical rather than xunit-specific: an attribute whose
+    /// constructor is a single <c>params</c> array, applied to a method, lines
+    /// its arguments up with that method's parameters positionally — the shape
+    /// every data-row attribute has. <c>[MemberData]</c>/<c>[ClassData]</c>
+    /// carry no literal arguments and are unaffected. A whole-array <c>null</c>
+    /// (<c>[InlineData(null)]</c>, which C# binds as "the array itself is
+    /// null") names no position and is likewise no evidence.
+    /// </para>
+    ///
+    /// <para>
+    /// Like <see cref="HasAllowNullWriteContract"/> this is a property of the
+    /// DECLARATION alone — no consumer evidence, no taint fixpoint — so every
+    /// compilation in a run computes the same answer for it.
+    /// </para>
+    /// </summary>
+    /// <param name="symbol">The declaration symbol to test.</param>
+    /// <returns><see langword="true"/> when a data attribute supplies null for the parameter.</returns>
+    public static bool HasNullDataRowArgument(ISymbol symbol)
+    {
+        // Scoped to declarations this migration EMITS, for the same reason
+        // HasAllowNullWriteContract is: a metadata-only method keeps whatever
+        // contract its assembly already carries.
+        if (symbol is not IParameterSymbol { ContainingSymbol: IMethodSymbol method } parameter
+            || method.OriginalDefinition.DeclaringSyntaxReferences.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (AttributeData attribute in method.GetAttributes())
+        {
+            if (attribute.AttributeConstructor is not { Parameters.Length: 1 } constructor
+                || !constructor.Parameters[0].IsParams
+                || attribute.ConstructorArguments.Length != 1)
+            {
+                continue;
+            }
+
+            TypedConstant row = attribute.ConstructorArguments[0];
+            if (row.Kind != TypedConstantKind.Array
+                || row.IsNull
+                || parameter.Ordinal >= row.Values.Length)
+            {
+                continue;
+            }
+
+            if (row.Values[parameter.Ordinal].IsNull)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Whether <paramref name="tree"/> opens with an <c>&lt;auto-generated&gt;</c>
     /// marker, matching the leading-trivia test the C# compiler itself uses to
     /// decide a tree is generated code. Memoized per tree.

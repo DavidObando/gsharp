@@ -870,6 +870,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #3726: a data-driving attribute is a null-WRITING site. An
+            // xunit theory declared `[InlineData(null, …)] void T(string a, …)`
+            // genuinely receives `null` for `a` at runtime, and cs2gs emits the
+            // attribute — `@InlineData(nil, …)` — right beside the parameter
+            // list it renders, so a non-nullable `a` contradicts the file's own
+            // attribute (gsc GS0274). Attribute-driven and therefore decided by
+            // the DECLARATION alone, exactly like `[AllowNull]` above.
+            if (ObliviousNullabilityAnalyzer.HasNullDataRowArgument(symbol))
+            {
+                return true;
+            }
+
             // EF Core treats reference properties from nullable-oblivious C#
             // entity types as optional. Preserve that model when translating
             // DbSet<T> entities; emitting a non-nullable G# property would make
