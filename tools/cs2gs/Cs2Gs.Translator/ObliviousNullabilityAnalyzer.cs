@@ -3915,6 +3915,29 @@ internal static class ObliviousNullabilityAnalyzer
                     when (node == ternary.WhenFalse && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: true))
                         || (node == ternary.WhenTrue && IsNullTestOf(ternary.Condition, symbol, whenTrueIsNull: false)):
                     return true;
+
+                // Issue #3714: a LOOP condition guards its body exactly as an
+                // `if` condition guards its consequence. The canonical shape is
+                // the base-declaration walk `for (T current = Overridden(m);
+                // current != null; current = Overridden(current)) { yield
+                // return current; }` — the local is `T?` because the step
+                // function returns null at the top of the chain, but the body
+                // only ever runs on a non-null one, so the sequence's ELEMENT
+                // is `T`. Promoting it anyway left the iterator's declared
+                // `sequence[T?]` disagreeing with a `sequence[T]` consumer that
+                // yields the `foreach` variable straight through (GS0155).
+                // `do`/`while` is deliberately excluded: its condition is
+                // tested AFTER the body, so it proves nothing on entry.
+                case WhileStatementSyntax whileStatement
+                    when node == whileStatement.Statement
+                        && IsNullTestOf(whileStatement.Condition, symbol, whenTrueIsNull: false):
+                    return true;
+
+                case ForStatementSyntax forStatement
+                    when node == forStatement.Statement
+                        && forStatement.Condition is { } forCondition
+                        && IsNullTestOf(forCondition, symbol, whenTrueIsNull: false):
+                    return true;
             }
 
             // A preceding sibling `if (x == null) <always-exits>` in an
