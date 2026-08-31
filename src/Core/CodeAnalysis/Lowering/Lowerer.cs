@@ -1220,13 +1220,26 @@ public sealed class Lowerer : BoundTreeRewriter
             // interfaces since .NET 9), but the interface dispatch below
             // boxes — invalid IL for a byref-like type. Roslyn likewise
             // emits no disposal for the span pattern enumerator.
-            if (ClrTypeUtilities.IsByRefLike(clrType)
-                || !typeof(System.IDisposable).IsAssignableFrom(clrType))
+            if (ClrTypeUtilities.IsByRefLike(clrType))
             {
                 return null;
             }
 
-            disposeMethod = typeof(System.IDisposable).GetMethod("Dispose", System.Type.EmptyTypes);
+            // Issue #3708: `typeof(IDisposable).IsAssignableFrom(clrType)` is
+            // unconditionally false when `clrType` comes from a
+            // MetadataLoadContext — i.e. for every imported enumerator in a
+            // `/reference:`-based compile — so this guard used to suppress the
+            // `finally` for `File.ReadLines(...)`, `Directory.EnumerateFiles(...)`,
+            // `xs.Where(...)` and friends, leaking the handle. Resolve
+            // `IDisposable` (and its `Dispose`) out of the receiver's own
+            // reflection context instead, matching the MLC-safe sibling arm above.
+            var disposableInterface = FindDisposableInterface(clrType);
+            if (disposableInterface == null)
+            {
+                return null;
+            }
+
+            disposeMethod = disposableInterface.GetMethodSafe("Dispose", System.Type.EmptyTypes);
         }
 
         if (disposeMethod == null)
@@ -1241,6 +1254,37 @@ public sealed class Lowerer : BoundTreeRewriter
             disposeMethod,
             TypeSymbol.Void,
             ImmutableArray<BoundExpression>.Empty);
+    }
+
+    /// <summary>
+    /// Issue #3708: returns the <c>System.IDisposable</c> interface as seen from
+    /// <paramref name="clrType"/>'s own reflection context, or <see langword="null"/>
+    /// when the type does not implement it. Walking the receiver's transitive
+    /// interface set by name is safe across the live-runtime /
+    /// <see cref="System.Reflection.MetadataLoadContext"/> boundary, where
+    /// <c>typeof(IDisposable).IsAssignableFrom(...)</c> always answers
+    /// <see langword="false"/>, and it yields the interface handle that the
+    /// <c>Dispose</c> lookup must be rooted in so the emitted member reference
+    /// resolves in the same context as the receiver.
+    /// </summary>
+    /// <param name="clrType">The enumerator's CLR type (live or MLC).</param>
+    /// <returns>The context-matched <c>System.IDisposable</c>, or <see langword="null"/>.</returns>
+    private static System.Type? FindDisposableInterface(System.Type clrType)
+    {
+        if (clrType.IsInterface && clrType.FullName == "System.IDisposable")
+        {
+            return clrType;
+        }
+
+        foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
+        {
+            if (iface.FullName == "System.IDisposable")
+            {
+                return iface;
+            }
+        }
+
+        return null;
     }
 
     private static bool BodyContainsYieldOrAwait(BoundStatement body)
