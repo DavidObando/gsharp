@@ -1976,6 +1976,12 @@ public sealed class CSharpTypeMapper
     /// the same namespace set the file will actually end up importing,
     /// regardless of visit order.
     /// </para>
+    /// <para>
+    /// Issue #3725 closes the other half of that blindspot: a lambda parameter
+    /// has NO name node at all in C#, yet cs2gs manufactures one, so its
+    /// inferred type's namespaces are collected from the symbol instead of the
+    /// syntax.
+    /// </para>
     /// Cached per mapper instance: one mapper translates one file, so the
     /// import set never changes across calls.
     /// </summary>
@@ -2013,6 +2019,33 @@ public sealed class CSharpTypeMapper
             // one (see the ordering note above).
             foreach (SyntaxNode node in root.DescendantNodes())
             {
+                // Issue #3725: a lambda parameter is the one type position cs2gs
+                // MANUFACTURES. C# infers it from the delegate target and writes
+                // no name at all (`d => d.Message`), while the canonical G# arrow
+                // lambda always spells it (ADR-0074), so `MapLambdaParameter`
+                // maps the inferred symbol, `TrackShortenedNamespace` records its
+                // namespace, and `Translate` synthesizes the matching `import` —
+                // all without a single name node for the scan below to find.
+                // Left out of this set, the homonym check cannot see that import:
+                // two same-named types reached ONLY through inferred lambda
+                // parameters both printed bare, and gsc's first-import-wins
+                // resolution silently bound both to whichever landed first
+                // (`GSharp.Core.CodeAnalysis.Diagnostic` shadowing
+                // `GSharp.LanguageServer.Protocol.Diagnostic`, surfacing as
+                // GS0159 on the enclosing generic call, never as an ambiguity).
+                if (node is AnonymousFunctionExpressionSyntax lambda)
+                {
+                    foreach (ParameterSyntax parameter in EnumerateLambdaParameters(lambda))
+                    {
+                        if (context.SemanticModel.GetDeclaredSymbol(parameter) is IParameterSymbol { Type: { } parameterType })
+                        {
+                            AddReferencedNamespaces(parameterType, names);
+                        }
+                    }
+
+                    continue;
+                }
+
                 if (node is not (NameSyntax or MemberAccessExpressionSyntax))
                 {
                     continue;
@@ -2038,6 +2071,71 @@ public sealed class CSharpTypeMapper
 
         this.importedNamespaceNames = names;
         return names;
+    }
+
+    /// <summary>
+    /// Issue #3725: the parameters an anonymous function declares, whatever
+    /// spelling it uses. A simple lambda (<c>d =&gt; …</c>) carries one bare
+    /// parameter with no list; parenthesized lambdas and anonymous methods
+    /// carry a (possibly absent) list.
+    /// </summary>
+    /// <param name="lambda">The anonymous function to inspect.</param>
+    /// <returns>The declared parameter syntax nodes.</returns>
+    private static IEnumerable<ParameterSyntax> EnumerateLambdaParameters(AnonymousFunctionExpressionSyntax lambda)
+        => lambda switch
+        {
+            SimpleLambdaExpressionSyntax simple => new[] { simple.Parameter },
+            ParenthesizedLambdaExpressionSyntax parenthesized =>
+                (IEnumerable<ParameterSyntax>)parenthesized.ParameterList.Parameters,
+            AnonymousMethodExpressionSyntax anonymousMethod when anonymousMethod.ParameterList != null =>
+                anonymousMethod.ParameterList.Parameters,
+            _ => System.Array.Empty<ParameterSyntax>(),
+        };
+
+    /// <summary>
+    /// Issue #3725: records the namespace of every top-level named type
+    /// <paramref name="type"/> is spelled out of — itself, its enclosing
+    /// type chain, its type arguments, and the element type of an array or
+    /// pointer. An inferred lambda-parameter type has no name nodes of its
+    /// own, so its constituents are unreachable from the syntactic scan and
+    /// have to be walked here instead.
+    /// </summary>
+    /// <param name="type">The type to walk.</param>
+    /// <param name="names">The namespace-name set to add to.</param>
+    private static void AddReferencedNamespaces(ITypeSymbol type, HashSet<string> names)
+    {
+        switch (type)
+        {
+            case IArrayTypeSymbol array:
+                AddReferencedNamespaces(array.ElementType, names);
+                return;
+
+            case IPointerTypeSymbol pointer:
+                AddReferencedNamespaces(pointer.PointedAtType, names);
+                return;
+
+            case INamedTypeSymbol named:
+                INamedTypeSymbol outermost = named;
+                while (outermost.ContainingType != null)
+                {
+                    outermost = outermost.ContainingType;
+                }
+
+                if (outermost.ContainingNamespace is { IsGlobalNamespace: false } ns)
+                {
+                    names.Add(ns.ToDisplayString());
+                }
+
+                foreach (ITypeSymbol argument in named.TypeArguments)
+                {
+                    AddReferencedNamespaces(argument, names);
+                }
+
+                return;
+
+            default:
+                return;
+        }
     }
 
     private static INamespaceSymbol ResolveNamespace(Compilation compilation, string dottedName)
