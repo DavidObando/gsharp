@@ -1302,7 +1302,12 @@ internal sealed partial class MethodBodyEmitter
             && idx.Target.Type.ClrType is System.Type erasedClr
             && idx.Arguments.Length == 1)
         {
-            if (typeof(System.Collections.IList).IsAssignableFrom(erasedClr)
+            // Issue #3705 (family 3): `erasedClr` is an imported type, so it is
+            // a MetadataLoadContext type on every `/reference:` compile — a
+            // host `typeof(IList).IsAssignableFrom(...)` is silently false
+            // there and the erasure below is skipped, emitting a
+            // `callvirt List<object>::get_Item` that cannot bind at runtime.
+            if (ClrLoadContext.Satisfies(erasedClr, typeof(System.Collections.IList))
                 && idx.Arguments[0].Type == TypeSymbol.Int32)
             {
                 this.EmitInstanceReceiver(idx.Target);
@@ -1316,7 +1321,7 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            if (typeof(System.Collections.IDictionary).IsAssignableFrom(erasedClr))
+            if (ClrLoadContext.Satisfies(erasedClr, typeof(System.Collections.IDictionary)))
             {
                 this.EmitInstanceReceiver(idx.Target);
                 this.il.OpCode(ILOpCode.Castclass);

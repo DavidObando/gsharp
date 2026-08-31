@@ -911,8 +911,12 @@ internal sealed class MemberLookup
             }
         }
 
-        // Non-generic IEnumerable falls back to object.
-        if (typeof(System.Collections.IEnumerable).IsAssignableFrom(clrType))
+        // Non-generic IEnumerable falls back to object. Issue #3705 (family 3):
+        // the generic arm above walks the interface closure by FullName (#2859)
+        // but this fallback used `typeof(IEnumerable).IsAssignableFrom`, which
+        // is unconditionally false for a MetadataLoadContext type — i.e. for
+        // every `/reference:`-compiled program. Ask the load-context funnel.
+        if (ClrLoadContext.Satisfies(clrType, typeof(System.Collections.IEnumerable)))
         {
             elementType = typeof(object);
             return true;

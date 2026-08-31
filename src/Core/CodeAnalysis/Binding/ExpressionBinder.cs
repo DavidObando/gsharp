@@ -1240,20 +1240,38 @@ internal sealed partial class ExpressionBinder
         return BindNameExpression(syntax);
     }
 
+    /// <summary>
+    /// Issue #3705 (family 3): whether a structural function type has exactly
+    /// the signature of <paramref name="delegateType"/>.
+    /// <para>
+    /// Every operand here can come from the compilation's
+    /// <see cref="System.Reflection.MetadataLoadContext"/> — both callers pass
+    /// an <c>EventInfo.EventHandlerType</c>, which is always imported metadata
+    /// — so all three questions must be asked across load contexts:
+    /// <c>typeof(Delegate).IsAssignableFrom</c> answers <see langword="false"/>
+    /// for an MLC delegate (<see cref="ClrTypeUtilities.IsDelegateType"/> is
+    /// the by-name walk that does not), the constructed <c>Invoke</c> may be
+    /// unreachable (#3697 — <see cref="ClrLoadContext.TryGetDelegateSignature"/>
+    /// carries the open-definition fallback), and a raw <c>!=</c> on
+    /// <see cref="Type"/> is reference identity, never true across contexts
+    /// (#835 — <see cref="ClrTypeUtilities.IsSameAs"/> compares structurally).
+    /// </para>
+    /// </summary>
+    /// <param name="fn">The structural function type.</param>
+    /// <param name="delegateType">The candidate delegate type, typically imported.</param>
+    /// <returns><see langword="true"/> when the signatures match exactly.</returns>
     private static bool IsSignatureCompatibleWithDelegate(FunctionTypeSymbol fn, Type delegateType)
     {
-        if (delegateType == null || !typeof(Delegate).IsAssignableFrom(delegateType))
+        if (!ClrTypeUtilities.IsDelegateType(delegateType))
         {
             return false;
         }
 
-        var invoke = delegateType.GetMethodSafe("Invoke");
-        if (invoke == null)
+        if (!ClrLoadContext.TryGetDelegateSignature(delegateType, out var parms, out var invokeReturn))
         {
             return false;
         }
 
-        var parms = invoke.GetParameters();
         if (parms.Length != fn.ParameterTypes.Length)
         {
             return false;
@@ -1261,14 +1279,14 @@ internal sealed partial class ExpressionBinder
 
         for (var i = 0; i < parms.Length; i++)
         {
-            if (fn.ParameterTypes[i]?.ClrType != parms[i].ParameterType)
+            if (!ClrTypeUtilities.IsSameAs(fn.ParameterTypes[i]?.ClrType, parms[i]))
             {
                 return false;
             }
         }
 
         var fnRetClr = fn.ReturnType == TypeSymbol.Void ? typeof(void) : fn.ReturnType?.ClrType;
-        return fnRetClr == invoke.ReturnType;
+        return ClrTypeUtilities.IsSameAs(fnRetClr, invokeReturn);
     }
 
     private bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable)
