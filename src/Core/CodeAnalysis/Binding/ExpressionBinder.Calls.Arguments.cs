@@ -1711,10 +1711,21 @@ internal sealed partial class ExpressionBinder
         // method-type-args may then surface a symbolic return like
         // `[]T` from `[]T{}.ToArray()` instead of the erased
         // `object[]`.
+        // Issue #3712: an OVERLOADED user method group has no natural type, so
+        // the pre-resolution symbolic vector above kept the argument's erased
+        // shape. Now that `best` is known its delegate parameter pins the
+        // group's arity — refine the vector so the symbolic type arguments
+        // (and therefore the emitted generic instantiation) recover the
+        // same-compilation return type instead of its `object` erasure.
+        var refinedExtensionSymbolicArgs = RefineSymbolicArgsForMethodGroups(
+            best,
+            arguments,
+            extensionSymbolicArgs,
+            receiverArgCount: 1);
         var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
             best,
             typeArgSymbols,
-            extensionSymbolicArgs,
+            refinedExtensionSymbolicArgs,
             resolution.IsExpanded);
         var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault
             ? extensionSymbolicTypeArgs

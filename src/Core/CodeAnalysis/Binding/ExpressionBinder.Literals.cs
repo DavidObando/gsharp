@@ -1014,13 +1014,27 @@ internal sealed partial class ExpressionBinder
         => TryGetSymbolicUserMethodGroupType(group, out naturalType)
             && naturalType.ClrType != null;
 
+    /// <summary>
+    /// Issue #3712: recovers the symbolic (pre-erasure) function type of a
+    /// user-declared method group. When <paramref name="expectedParameterCount"/>
+    /// is supplied the group's candidates are first narrowed to the single
+    /// candidate of that arity, so an OVERLOADED group still yields a symbolic
+    /// type once the target delegate's shape is known. Without the filter an
+    /// overloaded group has no natural type and the symbolic argument vector
+    /// falls back to the erased CLR shape, which silently instantiates a
+    /// generic call over <c>object</c>.
+    /// </summary>
+    /// <param name="group">The bound method group.</param>
+    /// <param name="naturalType">The recovered symbolic function type, on success.</param>
+    /// <param name="expectedParameterCount">Optional target-delegate arity used to disambiguate an overloaded group.</param>
+    /// <returns><see langword="true"/> when a single symbolic candidate was recovered.</returns>
     private bool TryGetSymbolicUserMethodGroupType(
         BoundMethodGroupExpression group,
-        [NotNullWhen(true)] out FunctionTypeSymbol? naturalType)
+        [NotNullWhen(true)] out FunctionTypeSymbol? naturalType,
+        int? expectedParameterCount = null)
     {
         naturalType = null;
-        if (group.Candidates.Length != 1
-            || group.Candidates[0] is not { IsGeneric: false } candidate)
+        if (!TryGetUniqueSymbolicMethodGroupCandidate(group, expectedParameterCount, out var candidate))
         {
             return false;
         }
@@ -1041,6 +1055,120 @@ internal sealed partial class ExpressionBinder
             parameterTypes.MoveToImmutable(),
             MethodGroupObservableReturnType(candidate));
         return true;
+    }
+
+    /// <summary>
+    /// Issue #3712: refines a pre-resolution symbolic argument vector once the
+    /// winning CLR overload is known, replacing each overloaded user
+    /// method-group slot with the symbolic function type of the candidate whose
+    /// arity matches the target delegate parameter. The erased CLR vector
+    /// resolves such a group's return type to <c>object</c> when the return type
+    /// is a same-compilation user type; without this refinement the generic
+    /// method is emitted closed over <c>object</c> and the assembly fails IL
+    /// verification with <c>StackUnexpected</c>.
+    /// </summary>
+    /// <param name="resolved">The winning (possibly closed generic) CLR method.</param>
+    /// <param name="arguments">The bound user arguments, in source order.</param>
+    /// <param name="symbolicArgs">The pre-resolution symbolic vector, receiver-first when <paramref name="receiverArgCount"/> is 1.</param>
+    /// <param name="receiverArgCount">Number of leading receiver slots in <paramref name="symbolicArgs"/>.</param>
+    /// <returns>The refined vector, or <paramref name="symbolicArgs"/> when nothing changed.</returns>
+    private ImmutableArray<TypeSymbol> RefineSymbolicArgsForMethodGroups(
+        MethodInfo resolved,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        int receiverArgCount)
+    {
+        if (symbolicArgs.IsDefaultOrEmpty || arguments.IsDefaultOrEmpty)
+        {
+            return symbolicArgs;
+        }
+
+        var parameters = resolved.GetParameters();
+        ImmutableArray<TypeSymbol>.Builder? refined = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var slot = i + receiverArgCount;
+            if (slot >= symbolicArgs.Length || slot >= parameters.Length)
+            {
+                continue;
+            }
+
+            if (arguments[i] is not BoundMethodGroupExpression group || group.Candidates.Length <= 1)
+            {
+                continue;
+            }
+
+            if (symbolicArgs[slot] is FunctionTypeSymbol)
+            {
+                continue;
+            }
+
+            var invoke = parameters[slot].ParameterType.GetMethodSafe("Invoke");
+            if (invoke == null
+                || !TryGetSymbolicUserMethodGroupType(group, out var symbolicGroupType, invoke.GetParameters().Length))
+            {
+                continue;
+            }
+
+            refined ??= symbolicArgs.ToBuilder();
+            refined[slot] = symbolicGroupType;
+        }
+
+        return refined?.ToImmutable() ?? symbolicArgs;
+    }
+
+    /// <summary>
+    /// Issue #3712: picks the single non-generic candidate of a user method
+    /// group. A group with one candidate resolves unconditionally; an
+    /// overloaded group resolves only when <paramref name="expectedParameterCount"/>
+    /// selects exactly one candidate by arity.
+    /// </summary>
+    /// <param name="group">The bound method group.</param>
+    /// <param name="expectedParameterCount">Optional target-delegate arity.</param>
+    /// <param name="candidate">The selected candidate, on success.</param>
+    /// <returns><see langword="true"/> when exactly one candidate was selected.</returns>
+    private static bool TryGetUniqueSymbolicMethodGroupCandidate(
+        BoundMethodGroupExpression group,
+        int? expectedParameterCount,
+        [NotNullWhen(true)] out FunctionSymbol? candidate)
+    {
+        candidate = null;
+        if (group.Candidates.Length == 1)
+        {
+            candidate = group.Candidates[0] is { IsGeneric: false } single ? single : null;
+            return candidate != null;
+        }
+
+        if (expectedParameterCount is not { } arity)
+        {
+            return false;
+        }
+
+        foreach (var groupCandidate in group.Candidates)
+        {
+            if (groupCandidate.IsGeneric)
+            {
+                continue;
+            }
+
+            var offset = groupCandidate.IsExtension && group.Receiver != null ? 1 : 0;
+            if (groupCandidate.Parameters.Length - offset != arity)
+            {
+                continue;
+            }
+
+            if (candidate != null)
+            {
+                // Ambiguous by arity alone — leave the group unresolved so the
+                // existing erasure path decides.
+                candidate = null;
+                return false;
+            }
+
+            candidate = groupCandidate;
+        }
+
+        return candidate != null;
     }
 
     /// <summary>
