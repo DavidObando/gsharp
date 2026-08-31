@@ -97,50 +97,28 @@ public sealed class CompileStage : IMigrationStage
             // Issue #3501 (!! reduction): gsc reports GS0536 on every `!!`
             // whose operand is already non-null — the compiler's own
             // narrowing is the single source of truth. Strip exactly those
-            // spans from the emitted files and recompile, iterating to a
-            // small fixpoint: removing one round of assertions can extend
-            // binding far enough to surface the next round. Defensive: if a
-            // polished recompile regresses a previously passing build,
-            // restore the round's text and keep the prior result.
-            for (var polishRound = 0; polishRound < 3; polishRound++)
-            {
-                if (!sdkResult.IsAvailable
-                    || !sdkResult.Diagnostics.Any(d => d.Id == NullAssertionPolishPass.DiagnosticId))
-                {
-                    break;
-                }
-
-                // The SDK build also compiles project references, so a
-                // dependency whose own compile stage never ran can surface
-                // GS0536 in files outside this app's emitted set — anything
-                // under the shared output root is fair game for the polish.
-                string strippableRoot = context.Options.OutputRoot;
-                Dictionary<string, string> backups = NullAssertionPolishPass
-                    .CandidateFiles(sdkResult.Diagnostics, gsFiles, strippableRoot)
-                    .Concat(gsFiles)
-                    .Where(File.Exists)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
-                if (NullAssertionPolishPass.Strip(sdkResult.Diagnostics, gsFiles, strippableRoot) == 0)
-                {
-                    break;
-                }
-
-                SdkCompileResult polished = RunSdkCompile();
-                if (polished.IsAvailable && (polished.Succeeded || !sdkResult.Succeeded))
-                {
-                    sdkResult = polished;
-                }
-                else
-                {
-                    foreach (KeyValuePair<string, string> backup in backups)
-                    {
-                        File.WriteAllText(backup.Key, backup.Value);
-                    }
-
-                    break;
-                }
-            }
+            // spans from the emitted files and recompile, repeating until a
+            // compile stops reporting them.
+            //
+            // Issue #3723: this used to stop after three rounds, which is not
+            // a fixed point. A compile reports nothing past the first project
+            // it fails on, so a deep reference graph spends a round per level
+            // before the app's own sources are ever bound; nested assertions
+            // (`a!!.b!!`) then add generations on top. Four apps were red on
+            // the nightly gate with GS0536 as their ONLY diagnostic because
+            // the loop ran out of rounds and said nothing about it.
+            //
+            // The SDK build also compiles project references, so a dependency
+            // whose own compile stage never ran can surface GS0536 in files
+            // outside this app's emitted set — anything under the shared
+            // output root is fair game for the polish.
+            NullAssertionPolishPass.PolishLoopOutcome polish = NullAssertionPolishPass.RunToFixedPoint(
+                sdkResult,
+                RunSdkCompile,
+                gsFiles,
+                context.Options.OutputRoot);
+            sdkResult = polish.Result;
+            ReportPolishOutcome(context, polish);
 
             if (sdkResult.IsAvailable)
             {
@@ -274,6 +252,45 @@ public sealed class CompileStage : IMigrationStage
 
     private static string NormalizeSeparators(string path) =>
         path.Replace('\\', '/');
+
+    /// <summary>
+    /// Issue #3723: records what the redundant-<c>!!</c> polish loop did, and
+    /// says so on stderr when it stopped short of a fixed point. Silently
+    /// giving up is how the non-convergence stayed invisible across several
+    /// nightly runs, so an app that is still reporting GS0536 after the loop
+    /// now always leaves a trace next to its build log.
+    /// </summary>
+    /// <param name="context">The stage context (for the artifact directory and app id).</param>
+    /// <param name="polish">The loop outcome.</param>
+    private static void ReportPolishOutcome(
+        StageExecutionContext context, NullAssertionPolishPass.PolishLoopOutcome polish)
+    {
+        if (polish.Rounds == 0)
+        {
+            return;
+        }
+
+        string summary = $"polish rounds: {polish.Rounds} (cap {NullAssertionPolishPass.DefaultMaxRounds}), " +
+            $"assertions stripped: {polish.Stripped}, " +
+            $"{NullAssertionPolishPass.DiagnosticId} still reported: {polish.RemainingReports}, " +
+            $"cap exhausted: {polish.CapExhausted}";
+
+        try
+        {
+            Directory.CreateDirectory(context.ArtifactDir);
+            File.WriteAllText(Path.Combine(context.ArtifactDir, "polish.log"), summary + Environment.NewLine);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // The artifact is advisory; never fail the stage over it.
+        }
+
+        if (polish.RemainingReports > 0)
+        {
+            Console.Error.WriteLine(
+                $"cs2gs: {context.App.Id}: the redundant-'!!' polish pass did not converge — {summary}.");
+        }
+    }
 
     private static StageOutcome BuildFailureOutcome(
         StageExecutionContext context, IReadOnlyList<GscDiagnostic> errors, string syntheticMessageOnNoDiagnostics)

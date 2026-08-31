@@ -157,6 +157,9 @@ jobs:
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/*.json
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/report.html
             /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/sdk.build.log
+            # Issue #3723: what the redundant-`!!` polish loop did per app
+            # (rounds, assertions stripped, whether it hit its round cap).
+            /tmp/gsharp-cs2gs-selfmig/shard-${{ matrix.name }}/runs/**/polish.log
 
   gate:
     runs-on: ubuntu-latest
