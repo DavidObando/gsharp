@@ -111,6 +111,23 @@ public class DocumentationValidatorTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0231");
     }
 
+    [Fact]
+    public void DocCommentOnDeinit_DoesNotProduceGS0227()
+    {
+        var result = Compile(
+            """
+            package Lib
+
+            class Widget {
+                /// Finalizes an instance of the Widget class.
+                deinit {
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0227");
+    }
+
     private static EmitResult Compile(string source, bool warnOnMissingDocs = false)
     {
         var tree = SyntaxTree.Parse(source);

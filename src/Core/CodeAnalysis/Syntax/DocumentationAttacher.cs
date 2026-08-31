@@ -227,6 +227,14 @@ internal static class DocumentationAttacher
             }
         }
 
+        // A `deinit` block is a member declaration in its own right (the CLR
+        // finalizer), so a `///` block above it attaches to it rather than
+        // floating (GS0227).
+        if (structDecl.Deinitializer != null)
+        {
+            result.Add(structDecl.Deinitializer);
+        }
+
         // ADR-0053: members declared inside a `shared { … }` block are still
         // documentable. The block itself is not a documentable declaration,
         // but each contained field/property/event/method is.
