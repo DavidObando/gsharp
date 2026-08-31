@@ -748,99 +748,17 @@ public class XunitAssertOverloadResolutionTests
     /// through the MetadataLoadContext (e.g. <c>Nullable&lt;bool&gt;</c>) carry
     /// assembly-qualified type-arg names that diverge from the host's. This is
     /// the exact configuration where the binder's identity-by-FullName check
-    /// silently fails. Skips the test gracefully when the ref-pack is absent.
+    /// silently fails. Fails with a clear prerequisite message when the
+    /// ref-pack is absent.
     /// </summary>
     /// <returns>The set of reference assemblies to pass to gsc.</returns>
     private static IEnumerable<string> RefPackReferences()
-    {
-        var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
-        Skip.IfNull(runtimeDir, "host runtime directory not resolvable");
-        var sharedDir = Directory.GetParent(runtimeDir)?.Parent;
-        var dotnetRoot = sharedDir?.Parent?.FullName;
-        Skip.IfNullOrEmpty(dotnetRoot, "dotnet root not resolvable");
-        var tfm = $"net{Environment.Version.Major}.0";
-        var packsRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
-        Skip.IfFalse(Directory.Exists(packsRoot), $"ref pack root '{packsRoot}' missing");
-
-        // Match the targeting-pack version to the running runtime (e.g. 10.0.X).
-        var version = Environment.Version.ToString(3);
-        var refDir = Path.Combine(packsRoot, version, "ref", tfm);
-        if (!Directory.Exists(refDir))
-        {
-            // Fall back to the newest installed ref-pack matching the major version.
-            var major = Environment.Version.Major.ToString();
-            var candidate = Directory.EnumerateDirectories(packsRoot, major + ".*")
-                .OrderByDescending(d => d, StringComparer.Ordinal)
-                .Select(d => Path.Combine(d, "ref", tfm))
-                .FirstOrDefault(Directory.Exists);
-            Skip.IfNullOrEmpty(candidate, $"no ref pack for net{major}.0 under '{packsRoot}'");
-            refDir = candidate;
-        }
-
-        foreach (var path in Directory.EnumerateFiles(refDir, "*.dll"))
-        {
-            yield return path;
-        }
-
-        // xUnit is consumed from the host's TPA — its identity is stable across
-        // both reflection contexts and is not what the bug is exercising.
-        foreach (var path in TrustedPlatformAssemblies())
-        {
-            var name = Path.GetFileName(path);
-            if (name.StartsWith("xunit.", StringComparison.OrdinalIgnoreCase))
-            {
-                yield return path;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Tiny in-test skip-if helper. xUnit's <c>SkipException</c> is not part
-    /// of the v2 runner used here, so use <see cref="Xunit.Sdk.XunitException"/>
-    /// to surface a missing-prerequisite condition as a test failure with a
-    /// clear message rather than a silent pass.
-    /// </summary>
-    private static class Skip
-    {
-        public static void IfNull(object value, string reason)
-        {
-            if (value == null)
-            {
-                throw new Xunit.Sdk.XunitException($"prerequisite missing: {reason}");
-            }
-        }
-
-        public static void IfNullOrEmpty(string value, string reason)
-        {
-            if (string.IsNullOrEmpty(value))
-            {
-                throw new Xunit.Sdk.XunitException($"prerequisite missing: {reason}");
-            }
-        }
-
-        public static void IfFalse(bool condition, string reason)
-        {
-            if (!condition)
-            {
-                throw new Xunit.Sdk.XunitException($"prerequisite missing: {reason}");
-            }
-        }
-    }
+        => ReferenceClosure.RefPackAssemblies()
+            // xUnit is consumed from the host's TPA — its identity is stable
+            // across both reflection contexts and is not what the bug is
+            // exercising.
+            .Concat(ReferenceClosure.TrustedPlatformAssembliesStartingWith("xunit."));
 
     private static IEnumerable<string> TrustedPlatformAssemblies()
-    {
-        var tpa = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
-        if (string.IsNullOrEmpty(tpa))
-        {
-            yield break;
-        }
-
-        foreach (var path in tpa.Split(Path.PathSeparator))
-        {
-            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-            {
-                yield return path;
-            }
-        }
-    }
+        => ReferenceClosure.TrustedPlatformAssemblies();
 }

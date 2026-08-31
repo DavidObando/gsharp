@@ -1,0 +1,77 @@
+name: differential-conformance-nightly
+
+# Issue #3717: the full-corpus differential TPA-versus-reference-closure run.
+#
+# Every sample is compiled twice — once with no `/reference:` closure (gsc
+# resolves imports from the host's trusted platform assemblies, so imported
+# types are live runtime types) and once against the whole
+# `Microsoft.NETCore.App.Ref` targeting pack (gsc builds a
+# MetadataLoadContext, as every real SDK build does) — and the two are
+# required to agree on diagnostics, on normalised IL and on runtime output.
+# A load-context defect (#3708/#3715, #3697, #3637, #3636, #3666) is by
+# definition a disagreement between those compiles.
+#
+# The PR gate (build.yml) runs the same suite with the environment variable
+# unset, which restricts it to the curated `AlwaysOnSamples` subset — about
+# seven samples, ~7 s. Setting GSHARP_DIFFERENTIAL_CONFORMANCE=1 widens it to
+# the whole single-file corpus (~130 samples, ~2 min of test time on top of
+# the solution build), which is why it lives here rather than on every PR.
+
+on:
+  schedule:
+    - cron: '43 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Parallel MSBuild nodes corrupt $GITHUB_ENV via Nerdbank.GitVersioning's
+  # GitBuildVersion* emission; nothing consumes those variables, so disable
+  # it (see build.yml for the full rationale).
+  NBGV_SetCloudBuildVersionVars: false
+
+jobs:
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Differential conformance (full corpus)
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+          GSHARP_DIFFERENTIAL_CONFORMANCE: '1'
+        run: |
+          dotnet test test/Compiler.Tests/Compiler.Tests.csproj \
+            --configuration Release \
+            --no-build \
+            --no-restore \
+            --filter "FullyQualifiedName~DifferentialReferenceClosureTests" \
+            --logger "trx" \
+            --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: differential-conformance-results
+          path: TestResults
+          if-no-files-found: ignore
