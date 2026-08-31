@@ -567,6 +567,52 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Issue #3724: returns <see langword="true"/> when <paramref name="type"/>
+        /// declares a <c>virtual</c> or <c>abstract</c> member that another assembly
+        /// could override.
+        /// <para>
+        /// <c>CollectSubclassedBaseTypes</c> only walks
+        /// <c>compilation.Assembly.GlobalNamespace</c>, so a base class whose only
+        /// subclass lives in a *referencing* project — the
+        /// <c>src/LanguageServer</c> / <c>test/LanguageServer.Tests</c> split, and
+        /// every other "the test project derives a fake from the production type"
+        /// pattern — was emitted as a plain (that is, CLR-sealed) <c>class</c> with
+        /// non-<c>open</c> members. The derived project then failed to compile:
+        /// GS0157 on the base clause, GS0183 on the <c>override</c>.
+        /// </para>
+        /// <para>
+        /// A C# author who writes <c>virtual</c> on a non-sealed type has already
+        /// declared the inheritance intent explicitly, so carry that intent across
+        /// the assembly boundary rather than re-deriving it from the in-project
+        /// subclasses that happen to be visible. Only members that are already
+        /// virtual in C# gain <c>open</c> (<see cref="IsMemberEmittedOpen"/> gates on
+        /// the same predicate), so the emitted vtable shape is unchanged.
+        /// </para>
+        /// </summary>
+        private static bool DeclaresOverridableMember(INamedTypeSymbol type)
+        {
+            foreach (ISymbol member in type.GetMembers())
+            {
+                if (member.IsSealed
+                    || member.DeclaredAccessibility == Accessibility.Private
+                    || !(member.IsVirtual || member.IsAbstract))
+                {
+                    continue;
+                }
+
+                switch (member.Kind)
+                {
+                    case SymbolKind.Method:
+                    case SymbolKind.Property:
+                    case SymbolKind.Event:
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Determines whether <paramref name="type"/> will be emitted as an
         /// <c>open class</c> in G#. Mirrors the class-declaration openness logic in
         /// <see cref="VisitAggregate"/> so member-level <c>open</c> is only emitted
@@ -586,7 +632,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            return !type.IsSealed && this.subclassedBases.Contains(type.OriginalDefinition);
+            return !type.IsSealed
+                && (this.subclassedBases.Contains(type.OriginalDefinition)
+                    || DeclaresOverridableMember(type));
         }
 
         /// <summary>
@@ -1407,6 +1455,11 @@ public sealed partial class CSharpToGSharpTranslator
                 !symbol.IsStatic &&
                 ((!symbol.IsSealed && this.subclassedBases.Contains(symbol.OriginalDefinition))
                     || HasProtectedMember(symbol)
+
+                    // Issue #3724: a `virtual`/`abstract` member declares inheritance
+                    // intent that `subclassedBases` cannot see when the only subclass
+                    // lives in a referencing project — see DeclaresOverridableMember.
+                    || (!symbol.IsSealed && DeclaresOverridableMember(symbol))
                     || (!symbol.IsSealed && this.efEntityTypes.Contains(symbol.OriginalDefinition)));
 
             // G# has no `abstract` class modifier (the keyword is not recognized by
