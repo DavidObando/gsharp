@@ -131,6 +131,42 @@ namespace Demo
         TranslationTestValidation.AssertBinds(declarations, printed);
     }
 
+    [Fact]
+    public void ANullDataRowValue_WidensAnArrayLiteralElementInsteadOfBridgingIt()
+    {
+        // The #3704 shape the promotion could otherwise create: the row really
+        // does pass null, and the C# filters it out afterwards, so bridging the
+        // array element with `!!` would throw before the filter ever ran. An
+        // array literal's element type is inferred AT the literal (#3682), so
+        // widening it is the faithful repair.
+        string printed = Translate(
+            @"
+using System.Linq;
+
+namespace Demo
+{
+    public class ProgramTests
+    {
+        [Theory]
+        [InlineData(null, ""/target:library"")]
+        [InlineData(""/optimize+"", ""/target:library"")]
+        public void Check(string flag, string target)
+        {
+            var arguments = new[] { target, flag }
+                .Where(argument => argument is not null)
+                .ToArray();
+            System.Console.WriteLine(arguments.Length);
+        }
+    }
+}",
+            out string declarations);
+
+        Assert.Contains("Check(flag string?, target string)", printed);
+        Assert.Contains("[]string?{", printed);
+        Assert.DoesNotContain("flag!!", printed);
+        TranslationTestValidation.AssertBinds(declarations, printed);
+    }
+
     // Returns the printed consumer file, and hands back the printed attribute
     // declarations too so callers can bind the pair.
     private static string Translate(string source, out string printedDeclarations)

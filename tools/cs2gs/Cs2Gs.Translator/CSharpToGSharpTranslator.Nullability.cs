@@ -671,13 +671,36 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (ExpressionSyntax element in elements)
             {
-                if (element != null && IsNullOrDefaultLiteral(element))
+                if (element != null
+                    && (IsNullOrDefaultLiteral(element) || this.IsNullDataRowRead(element)))
                 {
                     return MakeNullable(elementType);
                 }
             }
 
             return elementType;
+        }
+
+        // Issue #3726: #3682's rule stated for a value that is KNOWN nil rather
+        // than the literal `nil`. A theory parameter a data row supplies `null`
+        // for (`[InlineData(null, …)]`) really does arrive nil on that row, and
+        // the element type is still inferred AT the literal — so widening it is
+        // the same faithful repair #3682 makes. Bridging with `!!` instead is
+        // exactly the "clean C# turned into a runtime throw" that rule rejects:
+        // `new[] { flag, … }.Where(a => a is not null)` deliberately tolerates
+        // the null, and `flag!!` would throw before the filter ever ran.
+        //
+        // Deliberately scoped to that attribute-stated evidence rather than to
+        // every promoted declaration: generalizing it to the whole taint
+        // fixpoint rewrites ~50 files across the corpus (an array literal's
+        // element type is load-bearing for what the literal converts to), which
+        // is its own decision.
+        private bool IsNullDataRowRead(ExpressionSyntax expression)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            return symbol is IParameterSymbol
+                && ObliviousNullabilityAnalyzer.HasNullDataRowArgument(symbol)
+                && this.ShouldPromoteToNullableReference(symbol);
         }
 
         // Issue #914: whether <paramref name="expression"/> is a bare `null` /

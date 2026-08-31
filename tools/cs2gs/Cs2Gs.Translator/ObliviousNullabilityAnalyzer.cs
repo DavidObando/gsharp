@@ -340,8 +340,15 @@ internal static class ObliviousNullabilityAnalyzer
             }
 
             TypedConstant row = attribute.ConstructorArguments[0];
+
+            // A data ROW never supplies more values than the method has
+            // parameters; a params attribute that means something else — e.g.
+            // `[MemberNotNull("Field")]`, whose strings name members rather
+            // than line up with parameters — is filtered out by that shape
+            // check plus the "the value must be a literal null" test below.
             if (row.Kind != TypedConstantKind.Array
                 || row.IsNull
+                || row.Values.Length > method.Parameters.Length
                 || parameter.Ordinal >= row.Values.Length)
             {
                 continue;
