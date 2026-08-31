@@ -2178,15 +2178,21 @@ internal sealed partial class StatementBinder
 
             for (var i = 0; i < identifiers.Count; i++)
             {
+                // Issue #3705 (family 2): the extension-`Deconstruct` arm used a
+                // bare `FromClrType`, so a synthesised deconstruction local took
+                // its type from an `out T` parameter with the declaration's
+                // `[Nullable]` metadata dropped — while the instance arm reads it
+                // through MemberLookup. `GetParameterTypeSymbol` peels `ByRef`
+                // itself, so the element type falls out of both arms directly.
                 var parameterType = receiverOffset == 0
                     ? MemberLookup.GetClrMethodParameterTypeSymbol(
                         Invariant.Required(receiver.Type, "a deconstruction receiver has a type"),
                         method,
                         i)
-                    : TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType);
+                    : ClrNullability.GetParameterTypeSymbol(parameters[i + receiverOffset]);
                 var elementType = parameterType is ByRefTypeSymbol byRef
                     ? byRef.PointeeType
-                    : TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType.GetElementType());
+                    : parameterType;
                 var temp = new LocalVariableSymbol(
                     $"<deconstruct{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: false,

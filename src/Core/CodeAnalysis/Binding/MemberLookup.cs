@@ -4106,14 +4106,34 @@ internal sealed class MemberLookup
             var openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod);
             if (openMethod != null)
             {
-                return MapOpenClrTypeToSymbolic(
+                // Issue #3705 (family 2): the symbolic branch returned the
+                // receiver-substituted type RAW. Substitution recovers the
+                // shape but not the declaration's `[Nullable]` metadata, so an
+                // imported `string?` return reached the binder as non-null
+                // `string`. GetClrFieldTypeSymbol's symbolic branch folds the
+                // declaration flags back in; this one now does the same.
+                var mapped = MapOpenClrTypeToSymbolic(
                     openMethod.ReturnType,
                     openDefinition,
                     declaringTypeArguments);
+                var declarationFlags = ClrNullability.ReadNullableFlags(
+                    openMethod.ReturnParameter,
+                    openMethod);
+                return NullableFlagsBuilder.MergeDeclarationNullability(
+                    mapped,
+                    openMethod.ReturnType,
+                    declarationFlags);
             }
         }
 
-        return TypeSymbol.FromClrType(closedMethod.ReturnType);
+        // Issue #3705 (family 2, the #3703 shape): the reflected fallback slot
+        // of the three sibling helpers above — GetClrPropertyTypeSymbol,
+        // GetClrFieldTypeSymbol and GetClrIndexerParameterTypeSymbol — each end
+        // in a `ClrNullability` read. This one ended in a bare `FromClrType`,
+        // which drops the declaration's `[Nullable]` metadata and binds an
+        // imported `string?` return as non-null `string` — the unsound
+        // direction. Route it through the same reader the siblings use.
+        return ClrNullability.GetReturnTypeSymbol(closedMethod);
     }
 
     /// <summary>Resolves an imported method parameter through a symbolic receiver.</summary>
@@ -4138,23 +4158,50 @@ internal sealed class MemberLookup
             var openParameters = openMethod?.GetParameters();
             if (openParameters != null && (uint)parameterIndex < (uint)openParameters.Length)
             {
-                var openParameterType = openParameters[parameterIndex].ParameterType;
+                // Issue #3705 (family 2): as with the return slot above, the
+                // receiver substitution recovers the shape but drops the
+                // declaration's `[Nullable]` metadata. `[Nullable]` on a by-ref
+                // parameter annotates the POINTEE (by-ref contributes no
+                // nullability byte), which is why the flags are merged after
+                // peeling and before re-wrapping.
+                var openParameter = openParameters[parameterIndex];
+                var openParameterType = openParameter.ParameterType;
+                var parameterFlags = ClrNullability.ReadNullableFlags(openParameter, openMethod);
                 if (openParameterType.IsByRef)
                 {
-                    return ByRefTypeSymbol.Get(MapOpenClrTypeToSymbolic(
+                    var pointeeType = Invariant.Required(
                         openParameterType.GetElementType(),
-                        openDefinition,
-                        declaringTypeArguments));
+                        "a by-ref parameter type has an element type");
+                    return ByRefTypeSymbol.Get(NullableFlagsBuilder.MergeDeclarationNullability(
+                        MapOpenClrTypeToSymbolic(
+                            pointeeType,
+                            openDefinition,
+                            declaringTypeArguments),
+                        pointeeType,
+                        parameterFlags));
                 }
 
-                return MapOpenClrTypeToSymbolic(
+                return NullableFlagsBuilder.MergeDeclarationNullability(
+                    MapOpenClrTypeToSymbolic(
+                        openParameterType,
+                        openDefinition,
+                        declaringTypeArguments),
                     openParameterType,
-                    openDefinition,
-                    declaringTypeArguments);
+                    parameterFlags);
             }
         }
 
-        return TypeSymbol.FromClrType(closedMethod.GetParameters()[parameterIndex].ParameterType);
+        // Issue #3705 (family 2): same omission as GetClrMethodReturnTypeSymbol,
+        // compounded — the bare `FromClrType` also failed to peel `ByRef`, so an
+        // `out T` parameter reached callers as an `ImportedTypeSymbol` wrapping
+        // `T&` rather than the `ByRefTypeSymbol` the symbolic branch above
+        // returns. Callers that switch on `ByRefTypeSymbol` therefore took the
+        // wrong arm on the reflected path only.
+        var reflectedParameter = closedMethod.GetParameters()[parameterIndex];
+        var reflectedType = ClrNullability.GetParameterTypeSymbol(reflectedParameter);
+        return reflectedParameter.ParameterType.IsByRef
+            ? ByRefTypeSymbol.Get(reflectedType)
+            : reflectedType;
     }
 
     internal static MethodInfo GetImportedMethodForEmission(MethodInfo method)
