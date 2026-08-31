@@ -6362,7 +6362,11 @@ public sealed class Binder
         {
             if (typeArgument.ClrType is { } argClr)
             {
-                return constraintClr.IsAssignableFrom(argClr);
+                // Issue #3705 (family 3): the constraint comes from imported
+                // metadata (MetadataLoadContext) while the argument may be a
+                // well-known TypeSymbol singleton wrapping a host `typeof(T)`.
+                // Raw IsAssignableFrom is silently false across that boundary.
+                return ClrLoadContext.IsAssignable(constraintClr, argClr);
             }
 
             // Issue #3501: a SOURCE class deriving (possibly through source
@@ -6375,7 +6379,7 @@ public sealed class Binder
                 for (var current = sourceClass; current != null; current = current.BaseClass)
                 {
                     if (current.ImportedBaseType?.ClrType is { } importedBaseClr
-                        && constraintClr.IsAssignableFrom(importedBaseClr))
+                        && ClrLoadContext.IsAssignable(constraintClr, importedBaseClr))
                     {
                         return true;
                     }

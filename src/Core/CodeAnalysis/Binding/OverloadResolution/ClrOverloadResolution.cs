@@ -1478,7 +1478,7 @@ internal static class ClrOverloadResolution
         Dictionary<string, Type> bounds,
         Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?> methodGroupInference)
     {
-        if (!TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn))
+        if (!ClrLoadContext.TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn))
         {
             return false;
         }
@@ -1919,7 +1919,7 @@ internal static class ClrOverloadResolution
     /// types are compared by name to remain safe across reflection contexts
     /// (the target may be loaded through a <c>MetadataLoadContext</c> while the
     /// literal's natural <c>Func&lt;...&gt;</c> is a live-runtime type), and
-    /// both signatures are read through <see cref="TryGetDelegateSignature"/>
+    /// both signatures are read through <see cref="ClrLoadContext.TryGetDelegateSignature"/>
     /// so a constructed delegate whose <c>Invoke</c> is unreachable across
     /// those contexts still decomposes (issue #3681).
     /// </summary>
@@ -1950,8 +1950,8 @@ internal static class ClrOverloadResolution
         // closed generic delegate through its open definition, and the two
         // sibling delegate predicates (#908 covariance, #1150 return
         // widening) already go through it — this one was the outlier.
-        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
-            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        if (!ClrLoadContext.TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !ClrLoadContext.TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
         {
             return false;
         }
@@ -2008,8 +2008,8 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
-            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        if (!ClrLoadContext.TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !ClrLoadContext.TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
         {
             return false;
         }
@@ -2035,7 +2035,7 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        if (!IsReferencePreservingUpcast(targetReturn, sourceReturn))
+        if (!ClrLoadContext.Satisfies(sourceReturn, targetReturn))
         {
             return false;
         }
@@ -2082,8 +2082,8 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
-            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        if (!ClrLoadContext.TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !ClrLoadContext.TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
         {
             return false;
         }
@@ -2160,8 +2160,8 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        if (!TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
-            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
+        if (!ClrLoadContext.TryGetDelegateSignature(target, out var targetParams, out var targetReturn)
+            || !ClrLoadContext.TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn))
         {
             return false;
         }
@@ -2291,8 +2291,8 @@ internal static class ClrOverloadResolution
     /// </summary>
     private static bool IsLambdaBodyConvertibleToDelegate(Type targetDelegate, Type source, Func<Type, Type, bool>? supplementaryInterfaceCheck)
     {
-        if (!TryGetDelegateSignature(targetDelegate, out var targetParams, out var targetReturn)
-            || !TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn)
+        if (!ClrLoadContext.TryGetDelegateSignature(targetDelegate, out var targetParams, out var targetReturn)
+            || !ClrLoadContext.TryGetDelegateSignature(source, out var sourceParams, out var sourceReturn)
             || targetReturn is null
             || sourceReturn is null
             || targetParams.Length != sourceParams.Length)
@@ -2318,223 +2318,6 @@ internal static class ClrOverloadResolution
 
         var returnConversion = ClassifyImplicit(targetReturn, sourceReturn, supplementaryInterfaceCheck);
         return returnConversion != ImplicitConversionKind.None;
-    }
-
-    /// <summary>
-    /// Issue #908: extracts a delegate type's parameter types and return type.
-    /// Prefers the <c>Invoke</c> method, but falls back to decomposing the
-    /// generic arguments of a closed <c>System.Func`N</c> / <c>System.Action`N</c>
-    /// shape. The fallback is required because a <c>func</c>/arrow literal's
-    /// natural delegate type is built by <c>FunctionTypeSymbol.BuildClrType</c>
-    /// as a host-runtime <c>Func&lt;&gt;</c> closed over
-    /// <see cref="System.Reflection.MetadataLoadContext"/> type arguments, on
-    /// which <see cref="Type.GetMethod(string)"/> throws.
-    /// </summary>
-    private static bool TryGetDelegateSignature(Type delegateType, out Type[] parameterTypes, [NotNullWhen(true)] out Type? returnType)
-    {
-        parameterTypes = Array.Empty<Type>();
-        returnType = null;
-
-        try
-        {
-            var invoke = delegateType.GetMethodSafe("Invoke");
-            if (invoke != null)
-            {
-                var ps = invoke.GetParameters();
-                var result = new Type[ps.Length];
-                for (var i = 0; i < ps.Length; i++)
-                {
-                    var parameterType = GetDelegateCompatibilityParameterType(ps[i]);
-                    if (parameterType is null)
-                    {
-                        return false;
-                    }
-
-                    result[i] = parameterType;
-                }
-
-                parameterTypes = result;
-                returnType = invoke.ReturnType;
-                return true;
-            }
-        }
-        catch (Exception)
-        {
-            // Cross-context constructed Func<>/Action<> — fall back to the
-            // generic-argument decomposition below.
-        }
-
-        var fullName = delegateType.FullName;
-        if (fullName == null || !delegateType.IsGenericType)
-        {
-            return false;
-        }
-
-        Type[] genericArgs;
-        try
-        {
-            genericArgs = delegateType.GetGenericArguments();
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-
-        if (fullName.StartsWith("System.Func`", StringComparison.Ordinal) && genericArgs.Length >= 1)
-        {
-            // Func<T1,...,Tn,TResult>: trailing argument is the return type.
-            var ps = new Type[genericArgs.Length - 1];
-            Array.Copy(genericArgs, ps, ps.Length);
-            parameterTypes = ps;
-            returnType = genericArgs[genericArgs.Length - 1];
-            return true;
-        }
-
-        if (fullName.StartsWith("System.Action`", StringComparison.Ordinal))
-        {
-            // Action<T1,...,Tn>: void return, all generic arguments are parameters.
-            parameterTypes = genericArgs;
-            returnType = typeof(void);
-            return true;
-        }
-
-        // Issue #932: any other closed generic delegate (e.g.
-        // System.Predicate<T>, System.Comparison<T>, System.Converter<TIn,TOut>)
-        // whose constructed Invoke is unreachable across reflection contexts.
-        // Read the Invoke signature off the open generic definition — which is
-        // always in metadata — then substitute the closed type arguments into
-        // each generic-parameter slot. This generalises the Func/Action special
-        // cases above to the whole delegate surface a func/arrow literal may
-        // target.
-        try
-        {
-            var definition = delegateType.GetGenericTypeDefinition();
-            var defInvoke = definition.GetMethodSafe("Invoke");
-            if (defInvoke == null)
-            {
-                return false;
-            }
-
-            var defParams = defInvoke.GetParameters();
-            var resolvedParams = new Type[defParams.Length];
-            for (var i = 0; i < defParams.Length; i++)
-            {
-                var resolved = SubstituteGenericParameter(
-                    GetDelegateCompatibilityParameterType(defParams[i]),
-                    genericArgs);
-                if (resolved is null)
-                {
-                    return false;
-                }
-
-                resolvedParams[i] = resolved;
-            }
-
-            parameterTypes = resolvedParams;
-            var resolvedReturn = SubstituteGenericParameter(defInvoke.ReturnType, genericArgs);
-            if (resolvedReturn is null)
-            {
-                return false;
-            }
-
-            returnType = resolvedReturn;
-            return true;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    private static Type? GetDelegateCompatibilityParameterType(ParameterInfo parameter)
-    {
-        var parameterType = parameter.ParameterType;
-
-        // Issue #2802: a by-ref slot's function shape is its pointee type;
-        // ref/out/in remain parameter metadata, not managed-pointer value types.
-        if (!parameterType.IsByRef)
-        {
-            return parameterType;
-        }
-
-        return parameterType.GetElementType();
-    }
-
-    /// <summary>
-    /// Issue #932: maps a (possibly generic-parameter) type drawn from a
-    /// delegate's open-definition <c>Invoke</c> signature to the corresponding
-    /// closed type argument. A bare generic parameter <c>T</c> is replaced by
-    /// <paramref name="genericArgs"/> at its <see cref="Type.GenericParameterPosition"/>;
-    /// every other type is returned unchanged. Only the direct-parameter case
-    /// is needed for the BCL delegates a func/arrow literal targets
-    /// (<c>Predicate&lt;T&gt;</c>, <c>Comparison&lt;T&gt;</c>,
-    /// <c>Converter&lt;TIn,TOut&gt;</c>).
-    /// </summary>
-    /// <param name="type">A type from the open definition's Invoke signature.</param>
-    /// <param name="genericArgs">The closed delegate's type arguments.</param>
-    /// <returns>The substituted type.</returns>
-    private static Type? SubstituteGenericParameter(Type? type, Type[] genericArgs)
-    {
-        if (type != null && type.IsGenericParameter
-            && type.GenericParameterPosition >= 0
-            && type.GenericParameterPosition < genericArgs.Length)
-        {
-            return genericArgs[type.GenericParameterPosition];
-        }
-
-        return type;
-    }
-
-    /// <summary>
-    /// Issue #908: determines whether <paramref name="source"/> is
-    /// reference-convertible (an upcast) to <paramref name="target"/> — i.e.
-    /// <paramref name="target"/> is the same type, an interface implemented by
-    /// <paramref name="source"/>, or a base class of <paramref name="source"/>.
-    /// Compared by name so it is robust across reflection contexts.
-    /// </summary>
-    private static bool IsReferencePreservingUpcast(Type target, Type source)
-    {
-        if (ClrTypeUtilities.AreSame(target, source))
-        {
-            return true;
-        }
-
-        if (string.Equals(target.FullName, "System.Object", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        if (target.IsInterface && ClrTypeUtilities.ImplementsInterfaceByName(source, target))
-        {
-            return true;
-        }
-
-        for (var baseType = SafeBaseType(source); baseType != null; baseType = SafeBaseType(baseType))
-        {
-            if (ClrTypeUtilities.AreSame(baseType, target))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Issue #908: returns <see cref="Type.BaseType"/>, swallowing the reflection
-    /// load failures that cross-context constructed generics can throw during a
-    /// base-type walk.
-    /// </summary>
-    private static Type? SafeBaseType(Type type)
-    {
-        try
-        {
-            return type.BaseType;
-        }
-        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
-        {
-            return null;
-        }
     }
 
     /// <summary>
@@ -2860,7 +2643,7 @@ internal static class ClrOverloadResolution
                     && methodGroupInference != null
                     && methodGroupArgumentCheck?.Invoke(i) == true)
                 {
-                    if (!TryGetDelegateSignature(paramTypes[i], out var delegateParameters, out var delegateReturn)
+                    if (!ClrLoadContext.TryGetDelegateSignature(paramTypes[i], out var delegateParameters, out var delegateReturn)
                         || !IsMethodGroupSignatureCompatible(
                             methodGroupInference(i, delegateParameters),
                             delegateParameters,
@@ -3982,7 +3765,7 @@ internal static class ClrOverloadResolution
             return TaskLambdaDelegateShape.Other;
         }
 
-        if (!TryGetDelegateSignature(openParamType, out _, out var openReturn) || openReturn == null)
+        if (!ClrLoadContext.TryGetDelegateSignature(openParamType, out _, out var openReturn) || openReturn == null)
         {
             return TaskLambdaDelegateShape.Other;
         }
@@ -4012,7 +3795,7 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        return TryGetDelegateSignature(type, out _, out var returnType)
+        return ClrLoadContext.TryGetDelegateSignature(type, out _, out var returnType)
             && IsTaskType(returnType);
     }
 
@@ -4233,9 +4016,9 @@ internal static class ClrOverloadResolution
             // this tiebreak yields no preference -- the same `return 0` the
             // TryGetDelegateSignature failures below already produce.
             if (source is not null
-                && TryGetDelegateSignature(paramA, out _, out var retA)
-                && TryGetDelegateSignature(paramB, out _, out var retB)
-                && TryGetDelegateSignature(source, out _, out var retSource)
+                && ClrLoadContext.TryGetDelegateSignature(paramA, out _, out var retA)
+                && ClrLoadContext.TryGetDelegateSignature(paramB, out _, out var retB)
+                && ClrLoadContext.TryGetDelegateSignature(source, out _, out var retSource)
                 && retA != null && retB != null && retSource != null)
             {
                 return CompareNumericTargets(retA, retB, retSource);
@@ -5294,14 +5077,12 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        try
-        {
-            return target.IsAssignableFrom(source);
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
+        // Issue #3705 (family 3): both operands are method-group / delegate
+        // signature slots, so one can be a host `typeof(...)` while the other
+        // came from the compilation's MetadataLoadContext. Raw
+        // IsAssignableFrom answers a silent `false` there, dropping the
+        // candidate; the funnel falls back to the by-name walk.
+        return ClrLoadContext.IsAssignable(target, source);
     }
 
     /// <summary>
@@ -5456,8 +5237,8 @@ internal static class ClrOverloadResolution
 
         if (IsStructurallyInferrableDelegate(parameterType, argumentType))
         {
-            if (!TryGetDelegateSignature(parameterType, out var parameterDelegateParameters, out var parameterDelegateReturn)
-                || !TryGetDelegateSignature(argumentType, out var argumentDelegateParameters, out var argumentDelegateReturn)
+            if (!ClrLoadContext.TryGetDelegateSignature(parameterType, out var parameterDelegateParameters, out var parameterDelegateReturn)
+                || !ClrLoadContext.TryGetDelegateSignature(argumentType, out var argumentDelegateParameters, out var argumentDelegateReturn)
                 || parameterDelegateParameters.Length != argumentDelegateParameters.Length)
             {
                 return true;
