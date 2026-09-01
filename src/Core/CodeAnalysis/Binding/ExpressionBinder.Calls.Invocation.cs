@@ -414,9 +414,50 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, imp.OpenDefinition, imp.TypeArguments);
+        // Issue #3712 follow-up: the receiver only closes the DECLARING TYPE's
+        // parameters. When the selected method is itself generic its own
+        // (method-level) parameters must be substituted from the closed method,
+        // or the projection returns the open shape — `List<TOutput>` for
+        // `List[Token].ConvertAll(...)` — and, because this override is
+        // consulted BEFORE the plain CLR return type, that open shape became
+        // the call's bound type and every use of it reported GS0156.
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+            openReturn,
+            imp.OpenDefinition,
+            imp.TypeArguments,
+            openMethod,
+            BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
 
         return mapped;
+    }
+
+    /// <summary>
+    /// Issue #3712 follow-up: projects a closed generic method's own CLR type
+    /// arguments onto symbols, for use as the method-level substitution vector
+    /// of <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, System.Reflection.MethodInfo, ImmutableArray{TypeSymbol})"/>.
+    /// Returns <see langword="default"/> for a non-generic (or still open)
+    /// method, which leaves the method-level substitution disabled exactly as
+    /// before.
+    /// </summary>
+    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
+    /// <returns>The per-MVar symbol vector, or default when there is nothing to substitute.</returns>
+    private static ImmutableArray<TypeSymbol?> BuildMethodTypeArgSymbolsFromClosedMethod(System.Reflection.MethodInfo? closedMethod)
+    {
+        if (closedMethod == null
+            || !closedMethod.IsGenericMethod
+            || closedMethod.IsGenericMethodDefinition)
+        {
+            return default;
+        }
+
+        var closedTypeArgs = closedMethod.GetGenericArguments();
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol?>(closedTypeArgs.Length);
+        foreach (var closedTypeArg in closedTypeArgs)
+        {
+            builder.Add(MemberLookup.MapOpenClrTypeToSymbolic(closedTypeArg, openDefinition: null, typeArguments: default));
+        }
+
+        return builder.MoveToImmutable();
     }
 
     /// <summary>
@@ -471,10 +512,18 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
+        // Issue #3712 follow-up (sibling of
+        // `ResolveInstanceReturnTypeFromReceiver`, #3705): substitute the
+        // method's OWN generic parameters too, so an `out` parameter of a
+        // generic method on a symbolically-constructed receiver (e.g.
+        // `Dictionary[K, V].TryAdd`-shaped generic members) does not project to
+        // the open method type parameter.
         return MemberLookup.MapOpenClrTypeToSymbolic(
             openPointee,
             imp.OpenDefinition,
-            imp.TypeArguments);
+            imp.TypeArguments,
+            openMethod,
+            BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
     }
 
     /// <summary>
@@ -2909,7 +2958,7 @@ internal sealed partial class ExpressionBinder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames, (closed, vector) => RefineSymbolicArgsForMethodGroups(closed, arguments, vector, receiverArgCount: 0)))
             {
                 // Issue #1538: now that the imported static overload is chosen,
                 // re-bind any inline `out var`/`out let`/`out _` placeholders
@@ -2950,10 +2999,22 @@ internal sealed partial class ExpressionBinder
                 var staticSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
                     receiverType: null,
                     ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
+
+                // Issue #3712 (static calls): the same method-group refinement
+                // the extension- and instance-call paths apply — a user method
+                // group reaches the vector without a natural type, so its
+                // same-compilation return type would otherwise be lost and the
+                // call closed over `object` (`Array.ConvertAll` then reports
+                // GS0155 against the real element type).
+                var refinedStaticSymbolicArgs = RefineSymbolicArgsForMethodGroups(
+                    staticFn.Method,
+                    arguments,
+                    staticSymbolicArgs,
+                    receiverArgCount: 0);
                 var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     staticFn.Method,
                     typeArgSymbols,
-                    staticSymbolicArgs,
+                    refinedStaticSymbolicArgs,
                     staticIsExpanded);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                 var staticParameters = staticFn.Method.GetParameters();
@@ -3660,10 +3721,22 @@ internal sealed partial class ExpressionBinder
                         // never unified and the call collapsed to `<object>`. The
                         // receiver still drives return-type Var substitution via
                         // `ResolveCallReturnTypeFromSymbolicTypeArgs` below.
+                        // Issue #3712 (instance calls): a user method group has
+                        // no natural type until the target delegate is known,
+                        // so the pre-resolution vector above reached here as
+                        // `Error` and the group's same-compilation return type
+                        // was never recovered. Now that `method` is known its
+                        // delegate parameter pins the group's arity — refine
+                        // the vector exactly as the extension-call path does.
+                        var refinedInstSymbolicArgs = RefineSymbolicArgsForMethodGroups(
+                            method,
+                            arguments,
+                            instSymbolicArgs,
+                            receiverArgCount: 0);
                         var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                             method,
                             typeArgSymbols,
-                            instSymbolicArgs,
+                            refinedInstSymbolicArgs,
                             resolution.IsExpanded);
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                         var returnType = ResolveImportedGenericReturnType(method, typeArgSymbols)

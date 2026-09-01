@@ -1246,10 +1246,19 @@ internal sealed partial class ExpressionBinder
                 // parameter list, so the method-type-argument inference vector must
                 // not carry the receiver as slot 0 — otherwise lambda-only-inferable
                 // method type parameters never unify and erase to `<object>`.
+                // Issue #3712 (instance calls): refine the pre-resolution vector
+                // for method-group arguments now that the winning overload pins
+                // each group's target delegate — the same refinement the
+                // extension-call and direct-instance paths apply.
+                var refinedInheritedSymbolicArgs = RefineSymbolicArgsForMethodGroups(
+                    best,
+                    arguments,
+                    inheritedSymbolicArgs,
+                    receiverArgCount: 0);
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     best,
                     typeArgSymbols,
-                    inheritedSymbolicArgs,
+                    refinedInheritedSymbolicArgs,
                     resolution.IsExpanded);
                 var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault
                     ? inheritedSymbolicTypeArgs

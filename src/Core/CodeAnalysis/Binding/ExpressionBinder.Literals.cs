@@ -1059,13 +1059,22 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Issue #3712: refines a pre-resolution symbolic argument vector once the
-    /// winning CLR overload is known, replacing each overloaded user
-    /// method-group slot with the symbolic function type of the candidate whose
-    /// arity matches the target delegate parameter. The erased CLR vector
-    /// resolves such a group's return type to <c>object</c> when the return type
-    /// is a same-compilation user type; without this refinement the generic
-    /// method is emitted closed over <c>object</c> and the assembly fails IL
-    /// verification with <c>StackUnexpected</c>.
+    /// winning CLR overload is known, replacing each user method-group slot that
+    /// carries no symbolic function type with the symbolic function type of the
+    /// candidate whose arity matches the target delegate parameter. The erased
+    /// CLR vector resolves such a group's return type to <c>object</c> when the
+    /// return type is a same-compilation user type; without this refinement the
+    /// generic method is emitted closed over <c>object</c> and the assembly
+    /// fails IL verification with <c>StackUnexpected</c>.
+    /// <para>
+    /// Issue #3712 follow-up (instance calls): the slot is refined for a
+    /// SINGLE-candidate group too. A single-candidate group only acquires a
+    /// natural type when that type is expressible in CLR terms, so a group
+    /// returning a same-compilation user class reaches this vector as
+    /// <see cref="TypeSymbol.Error"/> exactly like an overloaded one. The
+    /// <see cref="FunctionTypeSymbol"/> guard below keeps every slot that
+    /// already carries symbolic information untouched.
+    /// </para>
     /// </summary>
     /// <param name="resolved">The winning (possibly closed generic) CLR method.</param>
     /// <param name="arguments">The bound user arguments, in source order.</param>
@@ -1093,7 +1102,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (arguments[i] is not BoundMethodGroupExpression group || group.Candidates.Length <= 1)
+            if (arguments[i] is not BoundMethodGroupExpression group)
             {
                 continue;
             }
@@ -1103,9 +1112,14 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var invoke = parameters[slot].ParameterType.GetMethodSafe("Invoke");
-            if (invoke == null
-                || !TryGetSymbolicUserMethodGroupType(group, out var symbolicGroupType, invoke.GetParameters().Length))
+            // Issue #3752/#3753: read the target delegate's shape through the
+            // load-context funnel rather than a bare `Invoke` probe — the
+            // direct probe throws (and would silently skip the refinement)
+            // whenever the closed delegate is a `TypeBuilderInstantiation`,
+            // which is exactly what closing `Converter`/`Func` over a
+            // MetadataLoadContext type argument produces.
+            if (!ClrLoadContext.TryGetDelegateSignature(parameters[slot].ParameterType, out var delegateParameters, out _)
+                || !TryGetSymbolicUserMethodGroupType(group, out var symbolicGroupType, delegateParameters.Length))
             {
                 continue;
             }
