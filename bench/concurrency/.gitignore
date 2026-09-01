@@ -1,0 +1,4 @@
+# Built harness binaries
+go/baseline
+clr/bin/
+clr/obj/

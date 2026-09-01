@@ -1,0 +1,13 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Measurement harnesses are not part of the production nullable
+         migration; keep their oblivious build, as tools/ does. They ship
+         nothing, are not in GSharp.sln, and exist to reproduce runtime call
+         sequences rather than to model a domain. -->
+    <IsToolingProject>true</IsToolingProject>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props" />
+
+</Project>
