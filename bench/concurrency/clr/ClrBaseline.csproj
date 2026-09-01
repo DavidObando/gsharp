@@ -4,7 +4,10 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <!-- Tooling project (see ../../Directory.Build.props), so nullable
+         warnings are off; `annotations` keeps the `T?` spellings in the
+         source legal and meaningful as documentation. -->
+    <Nullable>annotations</Nullable>
     <AssemblyName>ClrBaseline</AssemblyName>
     <RootNamespace>Gsharp.Bench.Concurrency</RootNamespace>
     <ServerGarbageCollection>true</ServerGarbageCollection>
