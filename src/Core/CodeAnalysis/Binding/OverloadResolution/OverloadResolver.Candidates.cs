@@ -1185,9 +1185,11 @@ internal sealed partial class OverloadResolver
 
             // A single trailing argument already typed as the slice itself is a
             // pass-through (`f(existingSlice)`); accept it as-is.
+            var carrierType = candidate.Parameters[candidate.Parameters.Length - 1].Type;
             var isSlicePassThrough = argumentCount - tailStart == 1
                 && tailStart < boundArguments.Count
-                && boundArguments[tailStart]?.Type == candidate.Parameters[candidate.Parameters.Length - 1].Type;
+                && boundArguments[tailStart]?.Type is { } passThroughArgumentType
+                && IsVariadicCarrierPassThrough(passThroughArgumentType, carrierType);
 
             if (!isSlicePassThrough && !(elementType is TypeParameterSymbol))
             {
@@ -1221,6 +1223,42 @@ internal sealed partial class OverloadResolver
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// True when a single trailing argument already IS the variadic carrier
+    /// (`f(existingSlice)`), so the call binds in NORMAL form and the
+    /// per-element tail check must not run.
+    /// </summary>
+    /// <remarks>
+    /// This was a <c>==</c> test on the two <see cref="TypeSymbol"/>s. Neither
+    /// <see cref="TypeSymbol"/> nor <see cref="Symbol"/> declares an
+    /// <c>operator ==</c>, so that is REFERENCE identity — it only ever
+    /// succeeded when the argument's type symbol was literally the same
+    /// instance as the parameter's. The <c>[]string</c> a carrier is declared
+    /// with and the <c>string[]</c> read back from CLR metadata denote the same
+    /// runtime type but are built on different paths, so
+    /// `f(Environment.GetCommandLineArgs())` failed the pass-through test, fell
+    /// into the element loop, failed `string[] -> string`, and the candidate was
+    /// dropped as non-convertible. When EVERY candidate is dropped the caller
+    /// keeps the unfiltered set and ranks it, so two variadic siblings tie and
+    /// the call is reported ambiguous (GS0266) instead of binding.
+    /// Classify the conversion instead: an identity or implicit conversion to
+    /// the carrier is exactly what "the argument already is the carrier" means,
+    /// and it is the same test the final argument coercion applies.
+    /// </remarks>
+    /// <param name="argumentType">The single trailing argument's type.</param>
+    /// <param name="carrierType">The candidate's variadic carrier parameter type.</param>
+    /// <returns><see langword="true"/> when the argument binds as the carrier itself.</returns>
+    private static bool IsVariadicCarrierPassThrough(TypeSymbol argumentType, TypeSymbol carrierType)
+    {
+        if (ReferenceEquals(argumentType, carrierType))
+        {
+            return true;
+        }
+
+        var conversion = Conversion.Classify(argumentType, carrierType);
+        return conversion.Exists && (conversion.IsIdentity || conversion.IsImplicit);
     }
 
     private bool IsContextuallyApplicableAsyncLambda(
