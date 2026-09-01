@@ -105,6 +105,16 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <summary>Gets or sets the comma-separated list of diagnostic IDs to promote to errors (WarningsAsErrors MSBuild property).</summary>
     public string? WarningsAsErrors { get; set; }
 
+    /// <summary>
+    /// Gets or sets the comma-separated list of diagnostic IDs that stay
+    /// warnings even under <see cref="TreatWarningsAsErrors"/> — the standard
+    /// <c>WarningsNotAsErrors</c> MSBuild property, forwarded as
+    /// <c>gsc /warnaserror-:</c>. Issue #3782: cs2gs's redundant-<c>!!</c>
+    /// polish loop sets it to survey a whole project graph in one build
+    /// instead of one project per round.
+    /// </summary>
+    public string? WarningsNotAsErrors { get; set; }
+
     /// <summary>Gets or sets the Compile item group (the .gs sources).</summary>
     public ITaskItem[] Compile { get; set; } = Array.Empty<ITaskItem>();
 
@@ -230,6 +240,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         if (string.Equals(this.TreatWarningsAsErrors, "true", StringComparison.OrdinalIgnoreCase))
         {
             args.Add("/warnaserror");
+        }
+
+        if (!string.IsNullOrEmpty(this.WarningsNotAsErrors))
+        {
+            args.Add($"/warnaserror-:{this.WarningsNotAsErrors}");
         }
 
         foreach (var r in this.References)

@@ -24,14 +24,36 @@ public static class NullAssertionPolishPass
     public const string DiagnosticId = "GS0536";
 
     /// <summary>
-    /// Issue #3723: the round cap <see cref="RunToFixedPoint"/> stops at. One
-    /// round can only strip what the compile it followed actually reported,
-    /// and a compile reports nothing past the first project it fails on — so a
-    /// deep project graph spends one round per level before the app's own
-    /// sources are ever bound, and nested assertions (<c>a!!.b!!</c>) add
-    /// further generations on top of that. The cap only exists so a
-    /// pathological non-converging case cannot loop forever; hitting it is
-    /// reported, never silent.
+    /// The MSBuild property, and its value, that demotes <see cref="DiagnosticId"/>
+    /// back to a warning for the duration of a survey round (issue #3782). The
+    /// migrated tree inherits the repository's <c>TreatWarningsAsErrors</c>, so
+    /// without this a build stops at the first project holding a redundant
+    /// <c>!!</c> and reports nothing about the projects behind it.
+    /// </summary>
+    public const string SurveyWarningsNotAsErrors = DiagnosticId;
+
+    /// <summary>
+    /// Issue #3723: the round cap <c>RunToFixedPoint</c> stops at.
+    /// <para>
+    /// The loop cannot actually run forever — <see cref="Strip"/> only ever
+    /// DELETES <c>!!</c> tokens and a round that strips none breaks out, so the
+    /// number of rounds is bounded by the number of assertions in the tree. The
+    /// cap is a cost guard, not a termination guard, and hitting it is reported
+    /// rather than silent.
+    /// </para>
+    /// <para>
+    /// Issue #3782: it used to be the binding constraint on any deep graph. One
+    /// round can only strip what the compile it followed reported, and a
+    /// warnings-as-errors compile reports nothing past the first project it
+    /// fails on — so <c>tools/cs2gs/Cs2Gs.Tests</c>, which pulls twelve
+    /// projects into its build, needed roughly one round per project (~40) and
+    /// exhausted the cap with 14752 <c>GS0536</c> still standing. The loop now
+    /// SURVEYS instead: every round after the first demotes <c>GS0536</c> to a
+    /// warning (<see cref="SurveyWarningsNotAsErrors"/>), so a single build
+    /// walks the whole graph and reports every redundant assertion in it at
+    /// once. Convergence is then a function of assertion NESTING
+    /// (<c>a!!.b!!</c>), not of graph depth, and the cap stops being reachable.
+    /// </para>
     /// </summary>
     public const int DefaultMaxRounds = 12;
 
@@ -44,9 +66,43 @@ public static class NullAssertionPolishPass
     /// rolled back and the prior result stands — a <c>!!</c> the compiler
     /// still needs therefore survives, because the file it was removed from is
     /// restored wholesale.
+    /// <para>
+    /// Issue #3782: the first round's recompile is strict, exactly as before,
+    /// so an app that converges in one round does exactly one build and nothing
+    /// changes for it. Only when that round leaves reports standing — the
+    /// signature of a build that stopped part-way up a project graph — do
+    /// subsequent rounds switch to survey mode, and a final STRICT build then
+    /// produces the result the caller acts on. A survey build's verdict is
+    /// never returned: it saw GS0536 as a warning, so its success would mean
+    /// nothing.
+    /// </para>
     /// </summary>
     /// <param name="initial">The first compile's result.</param>
-    /// <param name="recompile">Reruns the same compile over the rewritten files.</param>
+    /// <param name="recompile">
+    /// Reruns the same compile over the rewritten files. The argument asks for
+    /// SURVEY mode: <see langword="true"/> demotes <see cref="DiagnosticId"/>
+    /// to a warning (see <see cref="SurveyWarningsNotAsErrors"/>) so the build
+    /// reports the whole project graph instead of stopping at the first
+    /// offender; <see langword="false"/> is the gate's own strict compile.
+    /// </param>
+    /// <param name="emittedGsFiles">The emitted .gs file paths owned by this app.</param>
+    /// <param name="strippableRoot">The optional shared emitted-output root.</param>
+    /// <param name="maxRounds">The round cap (see <see cref="DefaultMaxRounds"/>).</param>
+    /// <returns>The final compile result and what the loop did to reach it.</returns>
+    public static PolishLoopOutcome RunToFixedPoint(
+        SdkCompileResult initial,
+        Func<bool, SdkCompileResult> recompile,
+        IReadOnlyCollection<string> emittedGsFiles,
+        string strippableRoot = null,
+        int maxRounds = DefaultMaxRounds) =>
+        Run(initial, recompile, emittedGsFiles, strippableRoot, maxRounds, surveyAvailable: true);
+
+    /// <summary>
+    /// Convenience overload for callers with no survey-mode compile to offer
+    /// (the unit tests, and any direct-gsc path): every round compiles strictly.
+    /// </summary>
+    /// <param name="initial">The first compile's result.</param>
+    /// <param name="recompile">Reruns the same strict compile.</param>
     /// <param name="emittedGsFiles">The emitted .gs file paths owned by this app.</param>
     /// <param name="strippableRoot">The optional shared emitted-output root.</param>
     /// <param name="maxRounds">The round cap (see <see cref="DefaultMaxRounds"/>).</param>
@@ -58,63 +114,12 @@ public static class NullAssertionPolishPass
         string strippableRoot = null,
         int maxRounds = DefaultMaxRounds)
     {
-        if (initial is null)
-        {
-            throw new ArgumentNullException(nameof(initial));
-        }
-
         if (recompile is null)
         {
             throw new ArgumentNullException(nameof(recompile));
         }
 
-        SdkCompileResult result = initial;
-        var rounds = 0;
-        var stripped = 0;
-        while (result.IsAvailable
-            && result.Diagnostics.Any(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal)))
-        {
-            if (rounds >= maxRounds)
-            {
-                return new PolishLoopOutcome(result, rounds, stripped, capExhausted: true);
-            }
-
-            rounds++;
-            Dictionary<string, string> backups = CandidateFiles(result.Diagnostics, emittedGsFiles, strippableRoot)
-                .Concat(emittedGsFiles ?? Array.Empty<string>())
-                .Where(File.Exists)
-                .Distinct(StringComparer.Ordinal)
-                .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
-
-            int roundStripped = Strip(result.Diagnostics, emittedGsFiles, strippableRoot);
-            if (roundStripped == 0)
-            {
-                // Every reported span was one this pass declines to touch
-                // (a stale coordinate, or a file outside the strippable set):
-                // another round would report the same thing.
-                break;
-            }
-
-            stripped += roundStripped;
-            SdkCompileResult polished = recompile();
-            if (polished.IsAvailable && (polished.Succeeded || !result.Succeeded))
-            {
-                result = polished;
-                continue;
-            }
-
-            // The polished build regressed a previously passing one (or could
-            // not run at all): restore the round's text and keep the result
-            // that stood before it.
-            foreach (KeyValuePair<string, string> backup in backups)
-            {
-                File.WriteAllText(backup.Key, backup.Value);
-            }
-
-            break;
-        }
-
-        return new PolishLoopOutcome(result, rounds, stripped, capExhausted: false);
+        return Run(initial, _ => recompile(), emittedGsFiles, strippableRoot, maxRounds, surveyAvailable: false);
     }
 
     /// <summary>
@@ -218,6 +223,123 @@ public static class NullAssertionPolishPass
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    private static PolishLoopOutcome Run(
+        SdkCompileResult initial,
+        Func<bool, SdkCompileResult> recompile,
+        IReadOnlyCollection<string> emittedGsFiles,
+        string strippableRoot,
+        int maxRounds,
+        bool surveyAvailable)
+    {
+        if (initial is null)
+        {
+            throw new ArgumentNullException(nameof(initial));
+        }
+
+        if (recompile is null)
+        {
+            throw new ArgumentNullException(nameof(recompile));
+        }
+
+        SdkCompileResult result = initial;
+        var rounds = 0;
+        var stripped = 0;
+        var builds = 0;
+        var surveyBuilds = 0;
+
+        // Set once a round has been kept, so round 2 onwards surveys. Cleared
+        // for good if a strict confirmation proves surveying changed nothing —
+        // an SDK too old to understand WarningsNotAsErrors degrades to the
+        // pre-#3782 strict loop rather than paying for a confirmation per round.
+        var survey = false;
+        bool surveyWorks = surveyAvailable;
+        var capExhausted = false;
+        var abandoned = false;
+
+        while (true)
+        {
+            while (result.IsAvailable && Reports(result.Diagnostics))
+            {
+                if (rounds >= maxRounds)
+                {
+                    capExhausted = true;
+                    break;
+                }
+
+                rounds++;
+                Dictionary<string, string> backups = CandidateFiles(result.Diagnostics, emittedGsFiles, strippableRoot)
+                    .Concat(emittedGsFiles ?? Array.Empty<string>())
+                    .Where(File.Exists)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToDictionary(f => f, File.ReadAllText, StringComparer.Ordinal);
+
+                int roundStripped = Strip(result.Diagnostics, emittedGsFiles, strippableRoot);
+                if (roundStripped == 0)
+                {
+                    // Every reported span was one this pass declines to touch
+                    // (a stale coordinate, or a file outside the strippable set):
+                    // another round would report the same thing.
+                    break;
+                }
+
+                stripped += roundStripped;
+                bool surveyThisRound = survey && surveyWorks;
+                SdkCompileResult polished = recompile(surveyThisRound);
+                builds++;
+                if (surveyThisRound)
+                {
+                    surveyBuilds++;
+                }
+
+                if (polished.IsAvailable && (polished.Succeeded || !result.Succeeded))
+                {
+                    result = polished;
+                    survey = true;
+                    continue;
+                }
+
+                // The polished build regressed a previously passing one (or could
+                // not run at all): restore the round's text and keep the result
+                // that stood before it.
+                foreach (KeyValuePair<string, string> backup in backups)
+                {
+                    File.WriteAllText(backup.Key, backup.Value);
+                }
+
+                abandoned = true;
+                break;
+            }
+
+            if (surveyBuilds == 0 || !result.IsAvailable)
+            {
+                break;
+            }
+
+            // `result` came from a build that saw GS0536 as a warning, so it is
+            // not a verdict. Recompile strictly over the same text; that build
+            // is what the caller gets, and it is also the proof that the polish
+            // converged.
+            result = recompile(false);
+            builds++;
+            surveyBuilds = 0;
+            survey = false;
+            if (abandoned || capExhausted || !result.IsAvailable || !Reports(result.Diagnostics))
+            {
+                break;
+            }
+
+            // Surveying bought nothing (the property never reached gsc): fall
+            // back to the strict round-per-project loop for whatever budget is
+            // left, and never pay for another confirmation.
+            surveyWorks = false;
+        }
+
+        return new PolishLoopOutcome(result, rounds, stripped, capExhausted, builds);
+    }
+
+    private static bool Reports(IReadOnlyList<GscDiagnostic> diagnostics) =>
+        diagnostics.Any(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal));
 
     // Indexes the app-owned emitted files by BOTH the raw full path and the
     // symlink-canonical path, so a diagnostic echoing either spelling matches.
@@ -346,7 +468,7 @@ public static class NullAssertionPolishPass
     }
 
     /// <summary>
-    /// Issue #3723: what a <see cref="RunToFixedPoint"/> call did — enough for
+    /// Issue #3723: what a <c>RunToFixedPoint</c> call did — enough for
     /// the caller to say out loud that the loop gave up, which is how the
     /// old three-round cap stayed invisible for several nightly runs.
     /// </summary>
@@ -359,12 +481,15 @@ public static class NullAssertionPolishPass
         /// <param name="rounds">The number of strip-and-recompile rounds run.</param>
         /// <param name="stripped">The total number of assertions removed.</param>
         /// <param name="capExhausted">Whether the round cap stopped the loop.</param>
-        public PolishLoopOutcome(SdkCompileResult result, int rounds, int stripped, bool capExhausted)
+        /// <param name="builds">The number of recompiles the loop paid for.</param>
+        public PolishLoopOutcome(
+            SdkCompileResult result, int rounds, int stripped, bool capExhausted, int builds = 0)
         {
             this.Result = result;
             this.Rounds = rounds;
             this.Stripped = stripped;
             this.CapExhausted = capExhausted;
+            this.Builds = builds;
         }
 
         /// <summary>Gets the final compile result.</summary>
@@ -379,9 +504,23 @@ public static class NullAssertionPolishPass
         /// <summary>Gets a value indicating whether the round cap stopped the loop.</summary>
         public bool CapExhausted { get; }
 
-        /// <summary>Gets the number of redundant-<c>!!</c> reports still standing.</summary>
+        /// <summary>
+        /// Gets the number of recompiles the loop paid for — the honest cost
+        /// unit, since a round and a build stopped being the same thing when
+        /// #3782 added the strict confirmation compile.
+        /// </summary>
+        public int Builds { get; }
+
+        /// <summary>
+        /// Gets the number of redundant-<c>!!</c> reports still standing,
+        /// counted by distinct source span: MSBuild echoes each diagnostic
+        /// again in its end-of-build summary, so the raw count double-counts.
+        /// </summary>
         public int RemainingReports => this.Result.Diagnostics
-            .Count(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal));
+            .Where(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal))
+            .Select(d => (d.File, d.Line, d.Column))
+            .Distinct()
+            .Count();
     }
 
     private sealed class SpanComparer : IEqualityComparer<GscDiagnostic>

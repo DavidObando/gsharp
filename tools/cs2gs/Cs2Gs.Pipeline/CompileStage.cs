@@ -67,14 +67,22 @@ public sealed class CompileStage : IMigrationStage
         if (context.Options.CompileViaSdk)
         {
             var runner = new SdkCompileRunner();
-            SdkCompileResult RunSdkCompile() =>
+
+            // Issue #3782: `survey` demotes GS0536 to a warning for this build
+            // only, so one compile walks the WHOLE project graph and reports
+            // every redundant `!!` in it. Without it a warnings-as-errors build
+            // stops at the first project holding one and the polish loop
+            // advances a single project per round. The gate's verdict always
+            // comes from a survey: false build.
+            SdkCompileResult RunSdkCompile(bool survey) =>
                 context.Options.OutputLayout == MigrationOutputLayout.Repository
                     ? runner.CompileMirroredProject(
                         context.App.ProjectPath,
                         context.Options.GeneratedProjectPaths[Path.GetFullPath(context.App.ProjectPath)],
                         context.ArtifactDir,
                         context.Options.Config,
-                        context.Options.GeneratedProjectPaths)
+                        context.Options.GeneratedProjectPaths,
+                        survey ? NullAssertionPolishPass.SurveyWarningsNotAsErrors : null)
                     : runner.Compile(
                         context.ProjectOutputDir,
                         Path.GetFileNameWithoutExtension(context.App.ProjectPath),
@@ -90,9 +98,10 @@ public sealed class CompileStage : IMigrationStage
                         context.ProjectReferences,
                         context.Options.GeneratedProjectPaths,
                         context.UsesCentralPackageManagement,
-                        assemblyName: context.AssemblyName);
+                        assemblyName: context.AssemblyName,
+                        warningsNotAsErrors: survey ? NullAssertionPolishPass.SurveyWarningsNotAsErrors : null);
 
-            SdkCompileResult sdkResult = RunSdkCompile();
+            SdkCompileResult sdkResult = RunSdkCompile(survey: false);
 
             // Issue #3501 (!! reduction): gsc reports GS0536 on every `!!`
             // whose operand is already non-null — the compiler's own
@@ -112,6 +121,14 @@ public sealed class CompileStage : IMigrationStage
             // whose own compile stage never ran can surface GS0536 in files
             // outside this app's emitted set — anything under the shared
             // output root is fair game for the polish.
+            //
+            // Issue #3782: raising the cap was the wrong lever — one round per
+            // project is a ~40-build bill for `tools/cs2gs/Cs2Gs.Tests` and its
+            // twelve-project graph, and it made the corpus-wide `!!` count
+            // depend on how the gate happened to pack its shards. The rounds
+            // after the first now SURVEY (GS0536 demoted to a warning) so a
+            // single build reports the whole graph at once; the loop then ends
+            // on a strict build, which is the verdict below.
             NullAssertionPolishPass.PolishLoopOutcome polish = NullAssertionPolishPass.RunToFixedPoint(
                 sdkResult,
                 RunSdkCompile,
@@ -270,7 +287,11 @@ public sealed class CompileStage : IMigrationStage
             return;
         }
 
+        // Issue #3782: `builds` is the cost the gate actually pays (the strip
+        // recompiles plus the closing strict confirmation); it stopped equalling
+        // `rounds` when survey mode landed, so both are recorded.
         string summary = $"polish rounds: {polish.Rounds} (cap {NullAssertionPolishPass.DefaultMaxRounds}), " +
+            $"polish builds: {polish.Builds}, " +
             $"assertions stripped: {polish.Stripped}, " +
             $"{NullAssertionPolishPass.DiagnosticId} still reported: {polish.RemainingReports}, " +
             $"cap exhausted: {polish.CapExhausted}";
