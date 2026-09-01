@@ -65,7 +65,7 @@ The single principle: **only an explicit `1` (NotAnnotated) means non-null `T`;
 `[NullableContext(1)]` makes **all** nested reference positions non-null, and a
 `[Nullable(2)]` makes them all nullable — matching Roslyn's compaction.
 
-The rule is applied uniformly in both reading paths:
+The rule is applied uniformly in all three reading paths:
 
 - `ApplyReferenceNullabilityFull` — top-level field / property / parameter /
   return reading (previously keyed off `topFlag == 2`).
@@ -74,6 +74,38 @@ The rule is applied uniformly in both reading paths:
   beyond-length positions to `0`). Beyond-length handling now follows the same
   rule: length-1 flags apply `flags[0]` to all positions, empty flags are
   nullable, otherwise index directly.
+- `NullableFlagsBuilder.MergeDeclarationNullability` — the receiver-substituting
+  path (issue #3705 family 2), which folds a declaration's flags back onto a type
+  recovered by generic substitution. It reaches imported fields, constrained
+  calls, `Deconstruct` out-parameters and event handler types.
+
+`IsFlagNonNull(byte)` is the single predicate all three defer to. It exists
+because the two open-codings of this one-line rule are what let the paths drift:
+C# reads "nullable iff the byte is `2`", G# reads "non-null iff the byte is `1`",
+and the two agree on `1` and `2` while disagreeing on `0` and on absence. A
+reader that spells the rule itself will sooner or later spell C#'s.
+
+#### The scope of "reference position": open type parameters are excluded
+
+The rule above is about **concrete** reference positions. An **open type-parameter**
+position is not one, and issue #3705 family 2 makes that explicit after a first
+attempt at uniformity made `map[K, V].Keys` iterate as `K?`:
+
+- A type parameter's nullability arrives with the type **argument** at
+  substitution, and the argument carries its own annotation. Applying the
+  declaration's *missing* byte overwrites the caller's answer with a guess.
+- It is unsound in a way the concrete case is not. An unconstrained `K` may be
+  substituted with a **value type**, where `K?` silently means `Nullable<K>` and
+  changes the contract.
+
+So an open parameter slot keeps the pre-#1354 reading: widen only for an
+explicit `[Nullable(2)]`, which is the declarer genuinely writing `K?`. Absent
+and oblivious leave the projected type alone.
+
+This distinction needs care because `ExpandNullableFlags` fills absent positions
+with `2` — that fill *is* the rule above — so the expanded array cannot tell
+"declared `T?`" from "declared nothing". The `absentFill` overload gives the
+literal reading; only the type-parameter arm uses it.
 
 **Value types are unaffected.** A value-type position contributes no byte and
 stays non-null; `Nullable<T>` value types are already lowered in
@@ -207,3 +239,19 @@ its flag byte), which is a deeper change than this fix warrants. The common case
 (a non-generic instance method returning a plain reference type) is fully fixed;
 the generic-substituted-return nullability is the only remaining call-return gap
 and is tracked here as best-effort follow-up.
+
+**Resolved.** That threading is `NullableFlagsBuilder.MergeDeclarationNullability`,
+which walks the open declaration's layout and the substituted symbol in lockstep
+so each substituted position recovers its flag byte. Issue #3695 applied it to
+fields and event handlers, #3741 (issue #3705 family 2) to constrained-call
+returns and `Deconstruct` out-parameters, and #3705 family 2's second half to the
+oblivious column: `MergeDeclarationNullability` used to return the projected type
+unchanged when the declaration's flags were empty, and to key its annotation off
+`flag == 2` when they were not — so a member reached through a substituting
+receiver kept the pre-#1354 answer for *both* shapes of oblivious. Both are gone;
+the path now defers to `IsFlagNonNull` like the other two.
+
+`Issue3705MemberKindNullabilityDifferentialTests` is the standing gate: six
+signature-position kinds × four annotation states, with the expectation computed
+from the annotation state alone, so the table *is* this ADR's uniformity claim
+rather than a restatement of the current implementation.

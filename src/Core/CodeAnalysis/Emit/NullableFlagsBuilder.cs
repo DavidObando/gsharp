@@ -78,14 +78,27 @@ internal static class NullableFlagsBuilder
         Type layoutType,
         ImmutableArray<byte> declarationFlags)
     {
-        if (declarationFlags.IsDefaultOrEmpty)
-        {
-            return projectedType;
-        }
-
+        // Issue #3705 family 2: no short-circuit on empty flags. An absent
+        // `[Nullable]` is not "no information" in G# — issue #1354 makes it
+        // mean `T?`, and `ExpandNullableFlags` already expands empty metadata
+        // to a full array of `2`s for exactly that reason. Returning
+        // `projectedType` here is what made a member reached through a
+        // receiver-substituting reader (field, constrained call, deconstruct
+        // out-parameter) keep the pre-#1354 non-null answer while its
+        // ClrNullability-read siblings said `T?`.
         var declaredFlags = ClrNullability.ExpandNullableFlags(
             layoutType,
             declarationFlags);
+
+        // The same expansion read LITERALLY: absent positions stay oblivious
+        // instead of defaulting to `2`. Only the open-type-parameter carve-out
+        // below consults this, because it is the one position where "the
+        // declaration was silent" must not be read as "the declaration said
+        // `T?`" — and the default expansion cannot tell those apart.
+        var literalFlags = ClrNullability.ExpandNullableFlags(
+            layoutType,
+            declarationFlags,
+            absentFill: Oblivious);
         var position = 0;
         return Merge(projectedType, layoutType);
 
@@ -98,7 +111,36 @@ internal static class NullableFlagsBuilder
 
             if (layout.IsGenericParameter)
             {
-                return ApplyRootAnnotation(projected, declaredFlags[position++]);
+                // Issue #3705 family 2 — the ONE carve-out from the #1354 rule,
+                // and it is principled rather than pragmatic.
+                //
+                // #1354 is a statement about CONCRETE reference positions in
+                // imported metadata: "unannotated means the declarer told us
+                // nothing, so assume `T?`". An OPEN type-parameter position is
+                // not such a position. Its nullability is supplied by the type
+                // ARGUMENT at substitution — which carries its own annotation —
+                // so reading the declaration's missing byte as `K?` would
+                // overwrite the caller's answer with a guess.
+                //
+                // It is also unsound in a way the concrete case is not: an
+                // unconstrained `K` may be substituted with a VALUE type, where
+                // `K?` silently means `Nullable<K>` and changes the contract.
+                // (`ApplyRootAnnotation`'s value-type guard cannot catch this —
+                // it inspects the still-open parameter, which has no `struct`
+                // constraint to see.) This is what `Issue3311…GenericFunc_Keys_
+                // FullyOpen_ReturnsFirstKey_As_K` pins: `map[K, V].Keys` must
+                // iterate as `K`, not `K?`.
+                //
+                // So an open parameter slot keeps the pre-#1354 reading: widen
+                // only for an EXPLICIT `[Nullable(2)]`, which is the declarer
+                // genuinely saying `K?`. Absent and oblivious leave it alone.
+                // Read LITERALLY: `declaredFlags` would show a fabricated `2`
+                // here for a declaration that said nothing at all, which is the
+                // very case the carve-out exists to leave alone.
+                var parameterFlag = literalFlags[position++];
+                return parameterFlag == Annotated
+                    ? ApplyRootAnnotation(projected, parameterFlag)
+                    : projected;
             }
 
             if (layout.IsArray)
@@ -204,7 +246,12 @@ internal static class NullableFlagsBuilder
 
         static TypeSymbol ApplyRootAnnotation(TypeSymbol projected, byte flag)
         {
-            if (flag != Annotated || projected is NullableTypeSymbol)
+            // Issue #3705 family 2: ask the single #1354 predicate rather than
+            // open-coding `flag != Annotated`. The two differ on the oblivious
+            // byte `0`, which csc emits explicitly for a `#nullable disable`
+            // member of a `[NullableContext(1)]` type — a NON-empty flags array
+            // the removed short-circuit above never even saw.
+            if (ClrNullability.IsFlagNonNull(flag) || projected is NullableTypeSymbol)
             {
                 return projected;
             }
