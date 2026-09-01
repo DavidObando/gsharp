@@ -64,4 +64,4 @@ green=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
 
 selfmig_measure "$migrated_dir"
-selfmig_apply_baseline "$baseline" "$green" "$total"
+selfmig_apply_baseline "$baseline" "$green" "$total" "$run_json"

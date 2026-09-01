@@ -92,4 +92,4 @@ green=$(jq '[.apps[] | select(.succeeded)] | length' "$merged")
 total=$(jq '.apps | length' "$merged")
 
 selfmig_measure "$migrated_dir"
-selfmig_apply_baseline "$baseline" "$green" "$total"
+selfmig_apply_baseline "$baseline" "$green" "$total" "$merged"

@@ -424,6 +424,95 @@ public static class ClrTypeUtilities
     }
 
     /// <summary>
+    /// Issue #3764: returns whether <paramref name="type"/> is a CLR value type,
+    /// answering correctly for types that reached the compiler from
+    /// <em>outside</em> the reflection context asking the question.
+    /// <para>
+    /// <see cref="Type.IsValueType"/> is not a metadata predicate: every
+    /// implementation answers it by comparing the type's
+    /// <see cref="Type.BaseType"/> against <em>its own context's</em>
+    /// <c>System.ValueType</c>. Inside a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> that identity is the
+    /// <c>System.ValueType</c> of the context's <em>core assembly</em>, so a
+    /// type whose base comes from some other assembly compares unequal and the
+    /// property answers <see langword="false"/> for a genuine struct — silently,
+    /// with no exception.
+    /// </para>
+    /// <para>
+    /// That is not hypothetical. Compiling a <c>netstandard2.0</c> target whose
+    /// reference closure does not declare
+    /// <c>DefaultInterpolatedStringHandler</c>, the resolver's fallback
+    /// assembly loader supplies the host's <c>System.Private.CoreLib</c>
+    /// definition; the context's core assembly is <c>netstandard</c>, so the
+    /// handler answers <c>IsValueType == false</c> while simultaneously
+    /// answering <c>IsByRefLike == true</c> and reporting
+    /// <c>BaseType == System.ValueType</c> — a contradiction only a value type
+    /// can produce. Emit decisions keyed on the raw property then chose
+    /// <c>callvirt</c> plus a by-value receiver for a struct's instance call
+    /// and produced IL that only ILVerify rejected.
+    /// </para>
+    /// <para>
+    /// The fallback is exact rather than heuristic: in ECMA-335 a value type is
+    /// precisely a type whose immediate base is <c>System.ValueType</c> (or
+    /// <c>System.Enum</c>, itself the base of enums). Structs never have deeper
+    /// hierarchies, so one <see cref="Type.BaseType"/> hop by name settles it.
+    /// <c>System.Enum</c> is excluded explicitly: it is a <em>class</em> that
+    /// derives from <c>System.ValueType</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="type">The candidate type. May be <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is a CLR value type.</returns>
+    public static bool IsValueTypeSafe(this Type? type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        // The property is asked exactly as before — including letting its
+        // exceptions escape — so a `true` answer, and every throwing shape,
+        // behave identically to the raw call this helper replaced. Only the
+        // `false` answer gets a second opinion.
+        if (type.IsValueType)
+        {
+            return true;
+        }
+
+        // Only a type definition can be a cross-context struct answering
+        // wrongly; constructed shapes (arrays, byrefs, pointers), interfaces
+        // and open generic parameters are settled by the property above.
+        if (type.IsGenericParameter || type.IsArray || type.IsByRef || type.IsPointer || type.IsInterface)
+        {
+            return false;
+        }
+
+        // `System.Enum` is a class that derives from `System.ValueType`; the
+        // base-name test below would otherwise call it a value type.
+        if (string.Equals(type.FullName, "System.Enum", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            string? baseName = type.BaseType?.FullName;
+            return string.Equals(baseName, "System.ValueType", StringComparison.Ordinal)
+                || string.Equals(baseName, "System.Enum", StringComparison.Ordinal);
+        }
+        catch (NotSupportedException)
+        {
+            // Issue #2327's shape: a `TypeBuilderInstantiation` closed over an
+            // in-flight definition refuses base-chain questions. Such a type is
+            // never one of the cross-context strays this fallback exists for.
+            return false;
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Issue #367: returns whether <paramref name="type"/> is a CLR by-ref-like
     /// (<c>ref struct</c>) type — one carrying
     /// <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c>, such as

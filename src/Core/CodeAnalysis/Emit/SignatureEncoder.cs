@@ -152,7 +152,7 @@ internal sealed class SignatureEncoder
             var inner = nullable.UnderlyingType;
 
             if (inner is ImportedTypeSymbol symbolicValueType
-                && symbolicValueType.OpenDefinition?.IsValueType == true
+                && ClrTypeUtilities.IsValueTypeSafe(symbolicValueType.OpenDefinition)
                 && !symbolicValueType.TypeArguments.IsDefaultOrEmpty)
             {
                 var nullableOpen = typeof(System.Nullable<>);
@@ -167,7 +167,7 @@ internal sealed class SignatureEncoder
             // P2-7 / Issue #421: nullable over a value type encodes as
             // System.Nullable<T> (generic instantiation). We support inner
             // types backed by a CLR value type (primitives, BCL value types).
-            if (inner?.ClrType is { IsValueType: true } innerClrVt)
+            if (inner?.ClrType is { } innerClrVt && ClrTypeUtilities.IsValueTypeSafe(innerClrVt))
             {
                 // Issue #571: build Nullable<T> from the open `System.Nullable`1`
                 // discovered through the ReferenceResolver so it shares the load
@@ -340,7 +340,7 @@ internal sealed class SignatureEncoder
             var genericInst = encoder.GenericInstantiation(
                 this.outer.memberRefs.GetTypeReference(constructedImported.OpenDefinition),
                 constructedImported.TypeArguments.Length,
-                isValueType: constructedImported.OpenDefinition.IsValueType);
+                isValueType: ClrTypeUtilities.IsValueTypeSafe(constructedImported.OpenDefinition));
             foreach (var arg in constructedImported.TypeArguments)
             {
                 this.EncodeTypeSymbol(genericInst.AddArgument(), arg);
@@ -876,7 +876,7 @@ internal sealed class SignatureEncoder
                     var genericInst = encoder.GenericInstantiation(
                         this.outer.memberRefs.GetTypeReference(openDef),
                         typeArgs.Length,
-                        isValueType: openDef.IsValueType);
+                        isValueType: ClrTypeUtilities.IsValueTypeSafe(openDef));
                     foreach (var arg in typeArgs)
                     {
                         EncodeClrType(genericInst.AddArgument(), arg);
@@ -896,7 +896,7 @@ internal sealed class SignatureEncoder
                     var genericInst = encoder.GenericInstantiation(
                         this.outer.memberRefs.GetTypeReference(type),
                         typeParams.Length,
-                        isValueType: type.IsValueType);
+                        isValueType: ClrTypeUtilities.IsValueTypeSafe(type));
                     foreach (var tp in typeParams)
                     {
                         EncodeClrType(genericInst.AddArgument(), tp);
@@ -905,7 +905,15 @@ internal sealed class SignatureEncoder
                     break;
                 }
 
-                encoder.Type(this.outer.memberRefs.GetTypeReference(type), isValueType: type.IsValueType);
+                // Issue #3764: the value-type flag written here is the
+                // difference between ELEMENT_TYPE_VALUETYPE and
+                // ELEMENT_TYPE_CLASS in the emitted signature, and the raw
+                // `Type.IsValueType` answers `false` for a struct that reached
+                // the compilation from outside its MetadataLoadContext's core
+                // assembly. ILVerify resolves the TypeRef by name and accepts
+                // the result; the runtime does not, and rejects the assembly
+                // with "value type mismatch" at first use.
+                encoder.Type(this.outer.memberRefs.GetTypeReference(type), isValueType: ClrTypeUtilities.IsValueTypeSafe(type));
                 break;
         }
     }
@@ -1071,7 +1079,7 @@ internal sealed class SignatureEncoder
         var openDef = this.emitCtx.References.GetCoreType(typeName);
         var openHandle = this.outer.memberRefs.GetTypeReference(openDef);
         int typeArgCount = arity + (isVoid ? 0 : 1);
-        var gi = encoder.GenericInstantiation(openHandle, typeArgCount, isValueType: openDef.IsValueType);
+        var gi = encoder.GenericInstantiation(openHandle, typeArgCount, isValueType: ClrTypeUtilities.IsValueTypeSafe(openDef));
         for (int i = 0; i < arity; i++)
         {
             this.EncodeTypeSymbol(gi.AddArgument(), fnType.ParameterTypes[i]);

@@ -97,7 +97,7 @@ selfmig_measure() {
 #
 # The output format is a contract: humans and tooling parse these exact lines.
 selfmig_apply_baseline() {
-  local baseline=$1 green=$2 total=$3
+  local baseline=$1 green=$2 total=$3 run_json=${4:-}
 
   local green_floor label_ceiling lift_ceiling long_ceiling bang_ceiling
   green_floor=$(jq -r '.greenFloor' "$baseline")
@@ -143,6 +143,40 @@ selfmig_apply_baseline() {
   if (( bangs > bang_ceiling )); then
     echo "GATE: !! null-assertion count $bangs exceeded ceiling $bang_ceiling." >&2
     status=1
+  fi
+
+  # Issue #3764: the COUNT is not the composition. src/Sdk/Gsharp.NET.Sdk
+  # regressed green -> ilverify-failure in run 33463929797 while the headline
+  # stayed 41/51, because src/Repl went green in the same range and paid for
+  # it. A silently-emitted-bad-IL regression therefore reached main with a
+  # passing gate. `greenApps` pins the identities: every app listed there must
+  # still be green, whatever the total says.
+  #
+  # The list is a ratchet like the ceilings — when an app goes green, add it in
+  # the same PR. If an app in it proves genuinely flaky (test-parity stages can
+  # be), remove it with a note rather than leaving the gate red.
+  if [[ -n "$run_json" && -f "$run_json" ]]; then
+    local expected_green regressed newly
+    expected_green=$(jq -r '(.greenApps // []) | length' "$baseline")
+    if (( expected_green > 0 )); then
+      regressed=$(jq -r --slurpfile baselineDoc "$baseline" \
+        '[.apps[] | select(.succeeded) | .appId] as $green
+         | (($baselineDoc[0].greenApps // []) - $green) | .[]' "$run_json")
+      newly=$(jq -r --slurpfile baselineDoc "$baseline" \
+        '[.apps[] | select(.succeeded) | .appId] as $green
+         | ($green - ($baselineDoc[0].greenApps // [])) | .[]' "$run_json")
+
+      if [[ -n "$newly" ]]; then
+        echo "self-migration: newly green (add to greenApps to bank it):"
+        echo "$newly" | sed 's/^/  + /'
+      fi
+
+      if [[ -n "$regressed" ]]; then
+        echo "GATE: app(s) listed in greenApps are no longer green:" >&2
+        echo "$regressed" | sed 's/^/  - /' >&2
+        status=1
+      fi
+    fi
   fi
 
   if (( status == 0 )); then

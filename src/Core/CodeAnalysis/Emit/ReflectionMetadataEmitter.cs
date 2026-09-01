@@ -5237,7 +5237,13 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
-        if (type?.ClrType != null && type.ClrType.IsValueType)
+        // Issue #3764: `ClrType.IsValueType` is asked through
+        // `IsValueTypeSafe`, not directly. The raw property compares the type's
+        // base against the *asking context's* `System.ValueType`, so a struct
+        // that reached the compilation from outside its MetadataLoadContext's
+        // core assembly answers `false` — and this predicate then selected
+        // `callvirt` plus a by-value receiver for its instance calls.
+        if (ClrTypeUtilities.IsValueTypeSafe(type?.ClrType))
         {
             return true;
         }
@@ -5252,8 +5258,14 @@ internal sealed class ReflectionMetadataEmitter
             receiverType = byRef.PointeeType;
         }
 
+        // Issue #3764: the declaring-type question goes through the same
+        // cross-context-safe predicate as the receiver one above. Asking the
+        // raw property here would box a value-type receiver before calling a
+        // method the value type declares itself — invalid outright for a
+        // `ref struct` such as `DefaultInterpolatedStringHandler`.
         return IsValueTypeSymbol(receiverType)
-            && method?.DeclaringType is { IsValueType: false };
+            && method?.DeclaringType != null
+            && !ClrTypeUtilities.IsValueTypeSafe(method.DeclaringType);
     }
 
     // Issue #671 (construction-call follow-up): a generic type-argument
