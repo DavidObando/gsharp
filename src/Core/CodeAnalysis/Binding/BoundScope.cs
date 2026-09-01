@@ -654,8 +654,27 @@ public sealed class BoundScope
     /// <param name="type">The resolved open generic <see cref="System.Type"/> on success.</param>
     /// <returns>Whether a matching open generic type was found.</returns>
     public bool TryLookupImportedGenericClass(string name, int arity, [NotNullWhen(true)] out System.Type? type)
+        => TryLookupImportedGenericClass(name, arity, out type, out _);
+
+    /// <summary>
+    /// Issue #3734: same as <see cref="TryLookupImportedGenericClass(string, int, out System.Type)"/>,
+    /// but also reports whether two or more explicitly written imports each
+    /// resolve a DIFFERENT type under this name, so the caller can surface
+    /// GS0547 instead of silently keeping the first-import-wins answer.
+    /// </summary>
+    /// <param name="name">The simple type name as written in source (without the backtick suffix).</param>
+    /// <param name="arity">The number of type parameters.</param>
+    /// <param name="type">The resolved open generic <see cref="System.Type"/> on success.</param>
+    /// <param name="ambiguity">The colliding candidates when the name is ambiguous across imports; otherwise <c>null</c>.</param>
+    /// <returns>Whether a matching open generic type was found.</returns>
+    public bool TryLookupImportedGenericClass(
+        string name,
+        int arity,
+        [NotNullWhen(true)] out System.Type? type,
+        out ImportedTypeAmbiguity? ambiguity)
     {
         type = null;
+        ambiguity = null;
         if (arity <= 0)
         {
             return false;
@@ -678,14 +697,10 @@ public sealed class BoundScope
             return true;
         }
 
-        foreach (var import in EnumerateImports())
+        if (TryScanImportsForClrType(mangled, requireNonGenericDefinition: false, out var scanned, out ambiguity))
         {
-            var typeName = import.Target + "." + mangled;
-            if (References.TryResolveType(typeName, out var t))
-            {
-                type = t;
-                return true;
-            }
+            type = scanned;
+            return true;
         }
 
         // Issue #3595 (#3501): CLR namespaces merge across assemblies, and a
@@ -722,10 +737,33 @@ public sealed class BoundScope
         int preferredArity,
         ExpressionSyntax? declaration,
         [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
+        => TryLookupImportedClassByArity(name, preferredArity, declaration, out importedClass, out _);
+
+    /// <summary>
+    /// Issue #3734: same as
+    /// <see cref="TryLookupImportedClassByArity(string, int, ExpressionSyntax, out ImportedClassSymbol)"/>,
+    /// but also reports whether two or more explicitly written imports each
+    /// resolve a DIFFERENT type under this name. The answer is unchanged —
+    /// first-import-wins — so callers that ignore the ambiguity keep today's
+    /// behavior; callers that surface it report GS0547 at the reference.
+    /// </summary>
+    /// <param name="name">The class name.</param>
+    /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
+    /// <param name="declaration">The declaration.</param>
+    /// <param name="importedClass">The result, if found.</param>
+    /// <param name="ambiguity">The colliding candidates when the name is ambiguous across imports; otherwise <c>null</c>.</param>
+    /// <returns>Whether a class was found or not.</returns>
+    public bool TryLookupImportedClassByArity(
+        string name,
+        int preferredArity,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass,
+        out ImportedTypeAmbiguity? ambiguity)
     {
+        ambiguity = null;
         if (preferredArity > 0)
         {
-            if (TryLookupImportedGenericClass(name, preferredArity, out var importedGeneric))
+            if (TryLookupImportedGenericClass(name, preferredArity, out var importedGeneric, out ambiguity))
             {
                 importedClass = new ImportedClassSymbol(
                     importedGeneric,
@@ -760,18 +798,13 @@ public sealed class BoundScope
             return true;
         }
 
-        foreach (var import in EnumerateImports())
+        if (TryScanImportsForClrType(name, requireNonGenericDefinition: true, out var scanned, out ambiguity))
         {
-            var typeName = import.Target + "." + name;
-            if (References.TryResolveType(typeName, out var type)
-                && !type.IsGenericTypeDefinition)
-            {
-                importedClass = new ImportedClassSymbol(
-                    type,
-                    declaration,
-                    references: References);
-                return true;
-            }
+            importedClass = new ImportedClassSymbol(
+                scanned,
+                declaration,
+                references: References);
+            return true;
         }
 
         // Issue #3595 (#3501): same self-package fallback as
@@ -802,6 +835,23 @@ public sealed class BoundScope
     /// <returns>Whether a class was found or not.</returns>
     public bool TryLookupImportedClass(string name, ExpressionSyntax? declaration, [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
         => TryLookupImportedClassByArity(name, preferredArity: 0, declaration, out importedClass);
+
+    /// <summary>
+    /// Issue #3734: same as
+    /// <see cref="TryLookupImportedClass(string, ExpressionSyntax, out ImportedClassSymbol)"/>,
+    /// but also reports a cross-import homonym collision.
+    /// </summary>
+    /// <param name="name">The class name.</param>
+    /// <param name="declaration">The declaration.</param>
+    /// <param name="importedClass">The result, if found.</param>
+    /// <param name="ambiguity">The colliding candidates when the name is ambiguous across imports; otherwise <c>null</c>.</param>
+    /// <returns>Whether a class was found or not.</returns>
+    public bool TryLookupImportedClass(
+        string name,
+        ExpressionSyntax? declaration,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass,
+        out ImportedTypeAmbiguity? ambiguity)
+        => TryLookupImportedClassByArity(name, preferredArity: 0, declaration, out importedClass, out ambiguity);
 
     /// <summary>
     /// Issue #3334 / ADR-0134: enumerates referenced-assembly CLR types brought
@@ -2901,6 +2951,73 @@ public sealed class BoundScope
     /// tree: ancestor scopes' imports first (outermost first), then this
     /// scope's own. Compiler-synthesized imports are visible everywhere.
     /// </summary>
+    /// <summary>
+    /// Issue #3734: scans the imports visible from the referencing file for a
+    /// CLR type named <paramref name="lookupName"/> (already arity-mangled for
+    /// generic lookups), preserving the historical FIRST-IMPORT-WINS answer
+    /// while detecting whether two or more EXPLICITLY WRITTEN, non-alias
+    /// imports each resolve a DIFFERENT type under that name.
+    /// <para>
+    /// Compiler-synthesized imports (the implicit <c>System</c>) and alias
+    /// imports never make a name ambiguous: the first applies to every file
+    /// and cannot be removed by the author, and the second already names its
+    /// target explicitly. Two imports whose targets resolve to the SAME
+    /// <see cref="System.Type"/> are not a collision either — the choice does
+    /// not matter.
+    /// </para>
+    /// </summary>
+    /// <param name="lookupName">The type name to append to each import target (mangled for generics).</param>
+    /// <param name="requireNonGenericDefinition">Whether an open generic definition must be skipped (the arity-0 lookup).</param>
+    /// <param name="type">The first-import-wins resolved type.</param>
+    /// <param name="ambiguity">The two colliding candidates, or <c>null</c> when the name is unambiguous.</param>
+    /// <returns>Whether any import resolved the name.</returns>
+    private bool TryScanImportsForClrType(
+        string lookupName,
+        bool requireNonGenericDefinition,
+        [NotNullWhen(true)] out System.Type? type,
+        out ImportedTypeAmbiguity? ambiguity)
+    {
+        type = null;
+        ambiguity = null;
+
+        System.Type? firstExplicit = null;
+        foreach (var import in EnumerateImports())
+        {
+            if (!References.TryResolveType(import.Target + "." + lookupName, out var candidate))
+            {
+                continue;
+            }
+
+            if (requireNonGenericDefinition && candidate.IsGenericTypeDefinition)
+            {
+                continue;
+            }
+
+            // First-import-wins: the answer is exactly what it was before
+            // #3734, ambiguous or not.
+            type ??= candidate;
+
+            if (import.IsImplicit || import.IsAlias)
+            {
+                continue;
+            }
+
+            if (firstExplicit == null)
+            {
+                firstExplicit = candidate;
+            }
+            else if (firstExplicit != candidate)
+            {
+                // Both facts are settled — the winner and the collision — so
+                // the remaining imports cannot change the answer.
+                ambiguity = new ImportedTypeAmbiguity(firstExplicit, candidate, type);
+                break;
+            }
+        }
+
+        return type != null;
+    }
+
     private IEnumerable<ImportSymbol> EnumerateImports()
     {
         if (Parent != null)

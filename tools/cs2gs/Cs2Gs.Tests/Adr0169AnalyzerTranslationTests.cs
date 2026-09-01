@@ -1125,6 +1125,22 @@ public static class NotAnAnalyzer
         IReadOnlyList<string> additionalReferencePaths,
         params string[] printedSources)
     {
+        foreach (string printed in printedSources)
+        {
+            // Issue #3734 (found by GS0547): a translated analyzer's references
+            // have all been retargeted onto the G# analyzer API, so it must
+            // import the G# namespaces ONLY. A synthesized import used to
+            // record the C# symbol's own namespace verbatim, adding
+            // `import Microsoft.CodeAnalysis[.CSharp]` alongside the
+            // `GSharp.Core.CodeAnalysis[.Syntax]` the code was translated onto
+            // — and since both export `DiagnosticDescriptor`, `Diagnostic` and
+            // `SyntaxKind`, every bare use of those names bound whichever
+            // import came first. Asserted for every fixture rather than in one
+            // test, because the residue depends on which references a given
+            // analyzer shortens.
+            Assert.DoesNotContain("import Microsoft.", printed, StringComparison.Ordinal);
+        }
+
         var trees = printedSources.Select((printed, index) =>
         {
             var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(

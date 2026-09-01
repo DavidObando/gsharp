@@ -940,6 +940,46 @@ stops here instead.
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0546 | Error | `This construct lowers onto '<member>', which the referenced target framework does not provide. Reference a framework or package that declares it.` | `fixed p *int32 = values { }` compiled with a `netstandard2.1` reference closure |
+## Ambiguous imported type reference (GS0547)
+
+Issue #3734: a bare type name that two or more explicitly written `import`s
+each resolve to a **different** CLR type in referenced metadata. Before #3734
+the first import that resolved the name won silently, so the reference bound a
+type chosen by the order of the import list rather than by anything the author
+wrote — and when the two homonyms had compatible members the program compiled
+and ran against the wrong type with no diagnostic at all. It is now an error,
+matching C#'s `CS0104` and the two collisions gsc already rejected: GS0496 (the
+same collision between two same-named **source** types) and GS0471 (the
+`typeof(Name[_])` open-generic form).
+
+Two imports that resolve the **same** type are not a collision (the choice does
+not matter), and neither the compiler-synthesized `System` import nor an alias
+import can make a name ambiguous: the first applies to every file and cannot be
+removed by the author, and the second already names its target.
+
+Silence it by saying which type you mean, using the spellings G# already has:
+
+```gs
+import Probe.Alpha
+import Probe.Beta
+
+// ambiguous — binds Probe.Alpha.Thing because that import comes first
+Console.WriteLine(Thing.Name())
+
+// either qualify the reference...
+Console.WriteLine(Probe.Beta.Thing.Name())
+
+// ...or alias it (issue #2273)
+import Thing = Probe.Beta.Thing
+```
+
+In *construction* position (`Thing()`) the alias import is the escape hatch: a
+package-qualified construction of an imported CLR type (`Probe.Beta.Thing()`)
+is not a spelling gsc accepts today (GS0157).
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 

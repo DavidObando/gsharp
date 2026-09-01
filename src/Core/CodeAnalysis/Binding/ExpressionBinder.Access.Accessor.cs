@@ -555,8 +555,15 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
             }
-            else if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
+            else if (scope.TryLookupImportedClass(name, leftName, out var importedClass, out var ambiguity))
             {
+                // Issue #3734: the receiver still binds first-import-wins, but
+                // the choice came from import order, not from the source.
+                if (ambiguity != null)
+                {
+                    Diagnostics.ReportAmbiguousImportedTypeReference(leftName.Location, name, ambiguity);
+                }
+
                 classSymbol = importedClass;
             }
             else if (binderCtx.CurrentTypeParameters != null
@@ -1372,7 +1379,7 @@ internal sealed partial class ExpressionBinder
     /// (<c>string</c>, <c>int32</c>, <c>bool</c>, ...) are reserved names that
     /// cannot be redeclared, so resolving them here is unambiguous and mirrors
     /// the capitalized CLR-name form (<c>String</c>, <c>Int32</c>) that already
-    /// binds through <see cref="BoundScope.TryLookupImportedClass"/>.
+    /// binds through <see cref="BoundScope.TryLookupImportedClass(string, ExpressionSyntax, out ImportedClassSymbol)"/>.
     /// </remarks>
     /// <param name="name">The identifier text written as the accessor receiver.</param>
     /// <param name="declaration">The receiver name syntax (for symbol provenance).</param>
@@ -1812,8 +1819,15 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (scope.TryLookupImportedClass(name, leftName, out var importedClass))
+        if (scope.TryLookupImportedClass(name, leftName, out var importedClass, out var ambiguity))
         {
+            // Issue #3734: see BindStaticAccessorStep — report the collision at
+            // the receiver, keep the first-import-wins answer.
+            if (ambiguity != null && leftName != null)
+            {
+                Diagnostics.ReportAmbiguousImportedTypeReference(leftName.Location, name, ambiguity);
+            }
+
             importedClassSymbol = importedClass;
             return true;
         }

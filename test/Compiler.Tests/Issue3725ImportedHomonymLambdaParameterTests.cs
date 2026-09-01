@@ -14,11 +14,12 @@ namespace GSharp.Compiler.Tests;
 /// <summary>
 /// Issue #3725 (#3724 family B): the gsc half of the contract cs2gs must
 /// satisfy. A bare imported type name is resolved by
-/// <c>BoundScope.TryLookupImportedClassByArity</c> with FIRST-IMPORT-WINS and
-/// no ambiguity report, so when two imported packages export the same simple
-/// name the bare spelling silently picks one — and if the picked one is wrong,
-/// the failure surfaces at the enclosing generic call as
-/// <c>GS0159 Cannot find function Where</c> rather than at the name.
+/// <c>BoundScope.TryLookupImportedClassByArity</c> with FIRST-IMPORT-WINS, so
+/// when two imported packages export the same simple name the bare spelling
+/// picks one — and if the picked one is wrong, the failure surfaces at the
+/// enclosing generic call as <c>GS0159 Cannot find function Where</c> rather
+/// than at the name. Issue #3734 added the missing report at the name itself
+/// (GS0547), so a bare homonym now also fails on its own line.
 /// <para>
 /// These tests pin both halves against a real two-package reference assembly
 /// emitted by gsc itself: the bare spelling still fails exactly as the
@@ -87,6 +88,10 @@ public class Issue3725ImportedHomonymLambdaParameterTests
         Assert.True(exitCode != 0, "expected gsc to reject the bare homonym spelling:\n" + output);
         Assert.Contains("GS0159", output, StringComparison.Ordinal);
         Assert.Contains("Where", output, StringComparison.Ordinal);
+
+        // Issue #3734: the collision is now also reported AT the name, three
+        // steps closer to the mistake than the GS0159 above.
+        Assert.Contains("GS0547", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,17 +107,21 @@ public class Issue3725ImportedHomonymLambdaParameterTests
             import System.Linq
             import Probe.Alpha
             import Probe.Beta
+            import AlphaItem = Probe.Alpha.Item
 
             let items = Holder.Make()
             let hits = items.Where((d Probe.Beta.Item) -> d.Label == "beta").ToList()
             Console.WriteLine(hits.Count)
             Console.WriteLine(hits[0].Label)
-            Console.WriteLine(Item().Label)
+            Console.WriteLine(AlphaItem().Label)
             """);
 
         // One of the two Beta items matches, and its label round-trips — while
-        // the bare `Item` construction still resolves to Alpha, proving the two
-        // homonyms really are both in scope.
+        // the Alpha construction proves the two homonyms really are both in
+        // scope. Issue #3734 made the BARE `Item()` spelling this line used to
+        // carry an error (GS0547); an alias import pins it instead, since a
+        // package-qualified CONSTRUCTION of an imported CLR type is not a
+        // spelling gsc accepts today.
         Assert.Equal(
             string.Join(Environment.NewLine, "1", "beta", "alpha") + Environment.NewLine,
             stdout);
