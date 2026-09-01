@@ -68,7 +68,11 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     {
         Receiver = receiver;
         Method = method;
-        Type = returnType;
+
+        // Issue #3802: a `[return: NotNullIfNotNull(nameof(p))]` post-condition
+        // is a fact about THIS call, so it narrows the node's type, never the
+        // declared return type read from metadata.
+        Type = ConditionalReturnNarrowing.Apply(method, arguments, returnType);
         Arguments = arguments;
         ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
         TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
