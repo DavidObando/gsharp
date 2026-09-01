@@ -1533,6 +1533,28 @@ internal sealed partial class ExpressionBinder
                     allowExplicit: true);
                 return true;
             }
+
+            // Issue #3749, fourth shape: an ENUM (or any other) target reached
+            // through the dotted spelling. The three arms above enumerate
+            // particular conversion kinds; the simple-name conversion-call path
+            // in `OverloadResolver.BindCallExpression` instead applies the
+            // ADR-0047 §6 rule generally — a one-argument `T(x)` over a
+            // non-constructible `T` IS the explicit conversion. Mirror that
+            // here so `DebuggableAttribute.DebuggingModes(2)` reads the same as
+            // the unnested `SomeEnum(2)`. Gated on an existing conversion, so a
+            // genuinely unconvertible argument still falls through to the
+            // not-found/overload diagnostics rather than a new one.
+            if (argument.Type is { } sourceType
+                && sourceType != TypeSymbol.Error
+                && Conversion.Classify(sourceType, conversionTarget).Exists)
+            {
+                result = conversions.BindConversion(
+                    syntax.Arguments[0].Location,
+                    argument,
+                    conversionTarget,
+                    allowExplicit: true);
+                return true;
+            }
         }
 
         if (syntax.TypeArgumentList == null)

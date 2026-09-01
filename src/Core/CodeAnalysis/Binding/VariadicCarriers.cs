@@ -107,6 +107,17 @@ internal static class VariadicCarriers
         SliceTypeSymbol slice => slice.ElementType,
         ArrayTypeSymbol array => array.ElementType,
         ImportedTypeSymbol { TypeArguments: [var symbolicElement] } => symbolicElement,
+
+        // Issue #3747 (sibling of the params-array element site in
+        // `OverloadResolver.ExpandParamsArguments`): an imported carrier that
+        // carries `[Nullable]` metadata must yield its element THROUGH that
+        // metadata. The `FromClrType` fallback below sees only the erased CLR
+        // shape, so a `...List[string?]` element would arrive as non-null
+        // `string` — the same annotation loss, one type-shape over.
+        NullabilityAnnotatedTypeSymbol { ClrType: { IsArray: true } annotatedArray } annotatedCarrier
+            => annotatedCarrier.GetTypeArgumentSymbolForClrType(annotatedArray.GetElementType()),
+        NullabilityAnnotatedTypeSymbol { ClrType: { IsGenericType: true, IsGenericTypeDefinition: false } } annotatedGeneric
+            => annotatedGeneric.GetTypeArgumentSymbol(0),
         _ when carrierType.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } clr
             => TypeSymbol.FromClrType(clr.GetGenericArguments()[0]),
         _ => TypeSymbol.Error,

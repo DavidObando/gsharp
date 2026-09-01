@@ -249,6 +249,14 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // Issue #3749: the sibling omission is the final argument below. Every
+        // other caller of `FinishClrConstructorBindingFailure` supplies the
+        // conversion target, which is what lets a one-argument `T(x)` that
+        // matched no constructor fall back to the ADR-0047 §6 conversion-call
+        // reading. This caller — the DOTTED form, and therefore the only route
+        // a NESTED type can take — passed none, so
+        // `DebuggableAttribute.DebuggingModes(2)` had no conversion arm to land
+        // on and reported GS0159 instead.
         var handled = TryBindClrConstructorFromType(
             clrType,
             terminalCall,
@@ -262,7 +270,8 @@ internal sealed partial class ExpressionBinder
                 typeSimpleName,
                 noApplicableOverload,
                 boundArguments,
-                ref result);
+                ref result,
+                TypeSymbol.FromClrType(clrType));
         if (handled && terminalObjectCreation != null)
         {
             result = BindObjectInitializerSuffix(

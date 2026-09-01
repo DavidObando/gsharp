@@ -51,7 +51,7 @@ internal sealed partial class OverloadResolver
         var elementClrType = paramArrayType.GetElementType();
         var elementTypeSymbol = elementClrType == null
             ? TypeSymbol.Object
-            : TypeSymbol.FromClrType(elementClrType);
+            : GetParamsElementTypeSymbol(parameters[paramsIndex], elementClrType);
         if (!symbolicMethodTypeArgs.IsDefaultOrEmpty
             && parameters[paramsIndex].Member is MethodInfo method
             && method.IsGenericMethod)
@@ -142,6 +142,43 @@ internal sealed partial class OverloadResolver
 
         result.Add(arrayExpr);
         return result.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #3747: resolves the ELEMENT type of an imported <c>params T[]</c>
+    /// parameter with the declaration's <c>[Nullable]</c> metadata applied.
+    /// <para>
+    /// The inconsistent-sibling shape of #3705 family 2: this site read the
+    /// element with a bare <see cref="TypeSymbol.FromClrType"/>, which sees only
+    /// the erased CLR shape, so every <c>params T?[]</c> element bound as
+    /// non-null <c>T</c> and <c>nil</c> in an expanded position was rejected
+    /// with GS0155 — while every other element-of-an-imported-position reader in
+    /// the binder (<c>GetArraySliceElementType</c>,
+    /// <c>TryGetCollectionSpreadElementType</c>, the indexer readers) already
+    /// goes through <see cref="NullabilityAnnotatedTypeSymbol"/>. Note this was
+    /// never specific to a nullable params ARRAY (<c>params object?[]?</c>): a
+    /// plain <c>params object?[]</c> lost its element annotation identically.
+    /// </para>
+    /// </summary>
+    /// <param name="parameter">The <c>params</c> parameter.</param>
+    /// <param name="elementClrType">The params array's CLR element type.</param>
+    /// <returns>The element type symbol, nullability-annotated where the declaration says so.</returns>
+    private static TypeSymbol GetParamsElementTypeSymbol(
+        System.Reflection.ParameterInfo parameter,
+        Type elementClrType)
+    {
+        // The parameter's own type carries the flags; the array may itself be
+        // nullable (`params object?[]?`), so peel that wrapper before reading
+        // the element position out of the annotation.
+        var parameterType = ClrNullability.GetParameterTypeSymbol(parameter);
+        if (parameterType is NullableTypeSymbol nullableArray)
+        {
+            parameterType = nullableArray.UnderlyingType;
+        }
+
+        return parameterType is NullabilityAnnotatedTypeSymbol annotated
+            ? annotated.GetTypeArgumentSymbolForClrType(elementClrType)
+            : TypeSymbol.FromClrType(elementClrType);
     }
 
     /// <summary>
