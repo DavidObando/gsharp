@@ -45,8 +45,12 @@ public static class GSharpAnalyzerVerifier
         string markedSource,
         params string[] diagnosticIds)
     {
-        var expectedLocations = new List<(int Line, int Column)>();
+        var expectedLocations = new List<MarkerSpan>();
         var cleanSource = StripMarkers(markedSource, expectedLocations);
+
+        // Markers are recorded when they CLOSE, so a nested pair would land out
+        // of order; produced diagnostics are compared in span order.
+        expectedLocations.Sort((left, right) => left.Start.CompareTo(right.Start));
         if (expectedLocations.Count != diagnosticIds.Length)
         {
             throw new GSharpAnalyzerVerificationException(
@@ -80,12 +84,25 @@ public static class GSharpAnalyzerVerifier
 
         for (var i = 0; i < expectedLocations.Count; i++)
         {
-            var actualLine = produced[i].Location.StartLine + 1;
-            var actualColumn = produced[i].Location.StartCharacter + 1;
-            if ((actualLine, actualColumn) != expectedLocations[i])
+            MarkerSpan expected = expectedLocations[i];
+            if (produced[i].Location.Text is null)
             {
                 throw new GSharpAnalyzerVerificationException(
-                    $"Diagnostic {i} ({produced[i].Id}) was reported at ({actualLine},{actualColumn}) but the marker expects ({expectedLocations[i].Line},{expectedLocations[i].Column}).");
+                    $"Diagnostic {i} ({produced[i].Id}) carries no source location, so the marker at "
+                    + $"({expected.Line},{expected.Column}) cannot be checked. An analyzer that reports "
+                    + "on a symbol must attribute the diagnostic to one of its declaring syntax nodes.");
+            }
+
+            var actualStart = produced[i].Location.Span.Start;
+            var actualEnd = produced[i].Location.Span.End;
+            if (actualStart < expected.Start || actualEnd > expected.End)
+            {
+                var actualLine = produced[i].Location.StartLine + 1;
+                var actualColumn = produced[i].Location.StartCharacter + 1;
+                throw new GSharpAnalyzerVerificationException(
+                    $"Diagnostic {i} ({produced[i].Id}) spans [{actualStart}..{actualEnd}) — reported at "
+                    + $"({actualLine},{actualColumn}) — which is not inside the marked region "
+                    + $"[{expected.Start}..{expected.End}) starting at ({expected.Line},{expected.Column}).");
             }
         }
     }
@@ -95,22 +112,30 @@ public static class GSharpAnalyzerVerifier
             ? $"{diagnostic.Id}: {diagnostic.Message}"
             : $"{diagnostic.Id} at ({diagnostic.Location.StartLine + 1},{diagnostic.Location.StartCharacter + 1}): {diagnostic.Message}";
 
-    private static string StripMarkers(string source, List<(int Line, int Column)> expectedLocations)
+    private static string StripMarkers(string source, List<MarkerSpan> expectedLocations)
     {
         var result = new StringBuilder(source.Length);
+        var open = new Stack<(int Start, int Line, int Column)>();
         var line = 1;
         var column = 1;
         for (var i = 0; i < source.Length; i++)
         {
             if (i + 1 < source.Length && source[i] == '[' && source[i + 1] == '|')
             {
-                expectedLocations.Add((line, column));
+                open.Push((result.Length, line, column));
                 i++;
                 continue;
             }
 
             if (i + 1 < source.Length && source[i] == '|' && source[i + 1] == ']')
             {
+                if (open.Count > 0)
+                {
+                    (int start, int startLine, int startColumn) = open.Pop();
+                    expectedLocations.Add(
+                        new MarkerSpan(start, result.Length, startLine, startColumn));
+                }
+
                 i++;
                 continue;
             }
@@ -129,6 +154,30 @@ public static class GSharpAnalyzerVerifier
 
         return result.ToString();
     }
+
+    /// <summary>
+    /// One <c>[|…|]</c> marker: the marked REGION, plus the 1-based
+    /// line/column of its first character for readable failure messages.
+    /// </summary>
+    /// <remarks>
+    /// The region, not the start point, is the assertion (ADR-0169, issue
+    /// #3778). A hand-written G# test brackets exactly the construct it
+    /// expects the diagnostic on, and a diagnostic on that construct is
+    /// span-equal to the marker, so nothing about those tests relaxes. What
+    /// the region admits is the cross-language case: a snippet TRANSLATED from
+    /// C# keeps the C# marker's extent, and G#'s syntax shapes are not always
+    /// span-identical — its index node is narrower than C#'s element access,
+    /// so <c>[|this.cache.Defs[field]|]</c> yields a diagnostic that starts
+    /// inside the marker. Requiring the diagnostic to be CONTAINED in the
+    /// marker keeps the assertion falsifiable — a diagnostic on a neighbouring
+    /// construct, or on an enclosing one, still fails — while not asserting a
+    /// span identity that does not survive translation.
+    /// </remarks>
+    /// <param name="Start">The marked region's start offset in the clean source.</param>
+    /// <param name="End">The marked region's end offset in the clean source.</param>
+    /// <param name="Line">The 1-based line of the region's first character.</param>
+    /// <param name="Column">The 1-based column of the region's first character.</param>
+    private readonly record struct MarkerSpan(int Start, int End, int Line, int Column);
 }
 
 /// <summary>

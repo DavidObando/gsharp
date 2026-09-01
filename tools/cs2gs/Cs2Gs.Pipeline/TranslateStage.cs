@@ -383,6 +383,14 @@ public sealed class TranslateStage : IMigrationStage
                         document.FilePath,
                         siblingCompilations,
                         repositoryCompilations);
+
+                    // ADR-0169 M5 / issue #3778: analyzer-test snippets are C#
+                    // source embedded in the tests, and the migrated verifier
+                    // compiles them as G#. The snippet translator needs a C#
+                    // project loader, so it lives one assembly above the
+                    // translator and is injected here.
+                    translationContext.TranslateAnalyzerSnippet =
+                        Cs2Gs.Translator.Analyzers.SnippetTranslator.Translate;
                     CSharpToGSharpTranslator unitTranslator = package is null
                         ? translator
                         : new CSharpToGSharpTranslator(
@@ -451,6 +459,22 @@ public sealed class TranslateStage : IMigrationStage
                         .Where(d => d.Severity == TranslationSeverity.Unsupported))
                     {
                         artifacts.Add(context.Triage.TranslationUnsupported(diagnostic));
+                    }
+
+                    // Issue #3778: an analyzer-mode adaptation that is NOT a
+                    // gate failure — a snippet whose [|…|] marker could not be
+                    // re-placed, a multi-namespace snippet collapsed into one
+                    // G# package — still changes what the migrated test
+                    // asserts, so it must reach the human running the
+                    // migration. Warnings are otherwise dropped here, which
+                    // would make "reported, never silent" untrue.
+                    foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
+                        .Where(d => d.Severity == TranslationSeverity.Warning
+                            && d.DiagnosticId == "CS2GS-ANALYZER-SNIPPET"))
+                    {
+                        Console.WriteLine(
+                            $"cs2gs: {diagnostic.DiagnosticId}: {diagnostic.Message} "
+                            + $"[{document.FilePath}]");
                     }
 
                     RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);

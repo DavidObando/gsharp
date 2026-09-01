@@ -29,6 +29,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return hoistedValue;
             }
 
+            // ADR-0169 M5 / issue #3778: in an analyzer TEST project, the
+            // constant string that reaches the harness's source parameter is
+            // not data — it is C# source the migrated verifier will compile as
+            // G#. It is intercepted here, above the ordinary literal and
+            // string-concatenation paths, because a composed
+            // `Model + """…"""` must translate as ONE compilation unit and
+            // neither operand compiles alone.
+            if (this.TryTranslateAnalyzerSnippet(expression, out GExpression snippet))
+            {
+                return snippet;
+            }
+
             switch (expression)
             {
                 case LiteralExpressionSyntax literal:

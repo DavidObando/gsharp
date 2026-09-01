@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using Cs2Gs.Translator.Analyzers;
 using Cs2Gs.Translator.Coverage;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -112,6 +113,20 @@ public sealed class TranslationContext
 
     /// <summary>Gets the originating file path.</summary>
     public string FilePath { get; }
+
+    /// <summary>
+    /// Gets or sets the analyzer-test snippet translator (ADR-0169 M5, issue
+    /// #3778): given a marked C# snippet it returns the equivalent G# snippet
+    /// with its <c>[|…|]</c> markers re-placed. The implementation
+    /// (<c>Cs2Gs.Translator.Analyzers.SnippetTranslator</c>) needs a C# project
+    /// loader and therefore lives in <c>Cs2Gs.ProjectLoading</c>, which
+    /// references this assembly — so the pipeline injects it here rather than
+    /// the translator taking a dependency the wrong way round. Left
+    /// <see langword="null"/> (the default, and every in-memory unit test that
+    /// does not opt in) snippet dispatch is disabled and marked sources are
+    /// translated as ordinary string literals, exactly as before.
+    /// </summary>
+    public Func<string, SnippetTranslationResult> TranslateAnalyzerSnippet { get; set; }
 
     /// <summary>Gets the diagnostics recorded so far, in insertion order.</summary>
     public IReadOnlyList<TranslationDiagnostic> Diagnostics => this.diagnostics.ToImmutableArray();
