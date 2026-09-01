@@ -18,7 +18,11 @@
 # permanently-C# extension via linked sources. Gsharp.Extensions is excluded
 # because it is ALREADY G# (all-.gs sources bootstrapped by the latest
 # compiler without a gsproj) — there is nothing to migrate, and feeding its
-# .gs sources through the C# parser only produces phantom gaps.
+# .gs sources through the C# parser only produces phantom gaps. Excluded from
+# TRANSLATION is not excluded from the MIRROR: issue #3772 keeps its .csproj in
+# the migrated tree (with references retargeted), because its .gs sources are
+# mirrored verbatim and four migrated projects — Extensions.Tests,
+# Compiler.Tests, Interpreter.Tests and Repl — project-reference it.
 #
 # INVARIANT (issue #3668): --exclude is NOT a sharding mechanism. Excluding a
 # project that another app project-references breaks reference resolution and

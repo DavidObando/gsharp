@@ -34,8 +34,11 @@ Build `cs2gs` as a **Roslyn-based, offline, deterministic** translator feeding a
 `cs2gs migrate` produces a maintainable repository mirror by default. The
 destination preserves repository-relative directories and non-C# files,
 translates each checked-in `.cs` to the corresponding `.gs`, transforms each
-`.csproj` to a same-location `.gsproj`, and replaces `.sln` files with `.slnx`
-while preserving project coverage. Literal Nerdbank.GitVersioning versions
+`.csproj` to a same-location `.gsproj`, and mirrors each `.sln` under its own
+name with a `.slnx` conversion beside it, all while preserving project coverage
+(issue #3772: the mirror is a repository, so code in it that walks up to a
+repository root named `GSharp.sln` finds one, and a project excluded from
+translation because it has nothing to translate keeps its project file). Literal Nerdbank.GitVersioning versions
 below the G#-compatible `3.11.13-beta` floor are upgraded in transformed
 projects and shared MSBuild props. Validation still runs through the four-stage
 pipeline, but logs, triage records, reports, and build intermediates are written
