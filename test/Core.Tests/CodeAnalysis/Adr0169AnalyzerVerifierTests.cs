@@ -151,7 +151,8 @@ func Leak(index int32) int32 {
     /// translated from C# keep the C# marker's extent: G#'s syntax shapes are
     /// not always span-identical (its index node is narrower than C#'s element
     /// access), so a translated marker is sometimes wider than the diagnostic.
-    /// Here the marker takes in one extra character.
+    /// The marker here is wider on BOTH sides, so it also fails the old
+    /// exact-start rule rather than only the end check.
     /// </summary>
     [Fact]
     public void MarkerWiderThanTheDiagnostic_IsAccepted()
@@ -162,7 +163,7 @@ func Leak(index int32) int32 {
 var structFieldDefs = []int32{1, 2, 3}
 
 func Leak(index int32) int32 {
-    return [|structFieldDefs[index] |]
+    return[| structFieldDefs[index] |]
 }
 ",
             "TESTGSA0001");
