@@ -79,13 +79,20 @@ public sealed class SdkCompileRunner
     /// <param name="artifactDirectory">The external build and log directory.</param>
     /// <param name="config">The build configuration.</param>
     /// <param name="generatedProjectPaths">The complete source-to-generated project map.</param>
+    /// <param name="warningsNotAsErrors">
+    /// Issue #3782: diagnostic ids to keep at warning severity for this build
+    /// despite the mirror's <c>TreatWarningsAsErrors</c>. The redundant-<c>!!</c>
+    /// polish loop passes <c>GS0536</c> so one build surveys the whole project
+    /// graph; <see langword="null"/> is the gate's own strict compile.
+    /// </param>
     /// <returns>The SDK compile result.</returns>
     public SdkCompileResult CompileMirroredProject(
         string sourceProjectPath,
         string generatedProjectPath,
         string artifactDirectory,
         string config,
-        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        string warningsNotAsErrors = null)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
         string sdkMoniker = ResolveSdkMoniker(config);
@@ -125,7 +132,8 @@ public sealed class SdkCompileRunner
                 generatedProjectPath,
                 artifactDirectory,
                 config,
-                projectNugetConfig);
+                projectNugetConfig,
+                warningsNotAsErrors);
             ProcessRunResult result = ProcessRunner.Run(
                 "dotnet",
                 args,
@@ -224,6 +232,11 @@ public sealed class SdkCompileRunner
     /// NuGet's restore fails (NU1008) if both are present.
     /// </param>
     /// <param name="assemblyName">The source project's assembly name.</param>
+    /// <param name="warningsNotAsErrors">
+    /// Issue #3782: diagnostic ids to keep at warning severity for this build
+    /// despite <c>TreatWarningsAsErrors</c> — the redundant-<c>!!</c> polish
+    /// loop's survey mode. <see langword="null"/> is the strict compile.
+    /// </param>
     /// <returns>The compile result, or an unavailable result when no local SDK nupkg can be found.</returns>
     public SdkCompileResult Compile(
         string appRunDir,
@@ -240,7 +253,8 @@ public sealed class SdkCompileRunner
         IReadOnlyList<DeclaredProjectItem> projectReferences = null,
         IReadOnlyDictionary<string, string> generatedProjectPaths = null,
         bool usesCentralPackageManagement = false,
-        string assemblyName = null)
+        string assemblyName = null,
+        string warningsNotAsErrors = null)
     {
         if (string.IsNullOrEmpty(appRunDir))
         {
@@ -368,6 +382,11 @@ public sealed class SdkCompileRunner
 
         var args = new List<string> { "build", projectPath, "-c", config ?? "Release" };
         args.Add("-p:RestorePackagesPath=" + Path.Combine(appRunDir, ".nuget-packages"));
+        if (!string.IsNullOrEmpty(warningsNotAsErrors))
+        {
+            args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors);
+        }
+
         string repoNugetConfig = Path.Combine(repoRoot, "nuget.config");
         if (File.Exists(repoNugetConfig))
         {
@@ -1054,13 +1073,24 @@ public sealed class SdkCompileRunner
     /// <param name="artifactDirectory">The external build and log directory.</param>
     /// <param name="config">The build configuration.</param>
     /// <param name="projectNugetConfig">The nuget.config written beside the generated project.</param>
+    /// <param name="warningsNotAsErrors">
+    /// Issue #3782: diagnostic ids to keep at warning severity despite the
+    /// mirror's <c>TreatWarningsAsErrors</c>. The property is global, so it
+    /// applies to every project in the graph — which is the point: the
+    /// redundant-<c>!!</c> polish loop uses it to make ONE build report the
+    /// whole graph's <c>GS0536</c> instead of stopping at the first project
+    /// that would otherwise error out. <see langword="null"/> (the default)
+    /// leaves the mirror's strict settings exactly as they are.
+    /// </param>
     /// <returns>The <c>dotnet</c> arguments.</returns>
     internal static IReadOnlyList<string> BuildMirroredBuildArguments(
         string generatedProjectPath,
         string artifactDirectory,
         string config,
-        string projectNugetConfig) =>
-        new List<string>
+        string projectNugetConfig,
+        string warningsNotAsErrors = null)
+    {
+        var args = new List<string>
         {
             "build",
             generatedProjectPath,
@@ -1071,6 +1101,14 @@ public sealed class SdkCompileRunner
             "-p:Cs2GsArtifactRoot=" + artifactDirectory,
             "-p:GeneratePackageOnBuild=false",
         };
+
+        if (!string.IsNullOrEmpty(warningsNotAsErrors))
+        {
+            args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors);
+        }
+
+        return args;
+    }
 
     private static IReadOnlyList<GscDiagnostic> ParseRelayedErrors(string output, Regex pattern)
     {

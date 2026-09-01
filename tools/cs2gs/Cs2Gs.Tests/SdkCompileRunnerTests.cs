@@ -643,6 +643,27 @@ public class SdkCompileRunnerTests
         Assert.Contains("-p:GeneratePackageOnBuild=false", args);
         Assert.Contains("-p:Cs2GsArtifactRoot=/artifacts/app", args);
         Assert.Contains("-p:RestoreConfigFile=/out/nuget.config", args);
+
+        // Issue #3782: the strict compile — the one whose verdict the gate acts
+        // on — must not carry the polish loop's demotion.
+        Assert.DoesNotContain(args, a => a.StartsWith("-p:WarningsNotAsErrors=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildMirroredBuildArguments_DemotesTheRequestedWarnings()
+    {
+        // Issue #3782: survey mode. WarningsNotAsErrors is a GLOBAL property, so
+        // it reaches every project in the graph — which is the whole point: one
+        // build then reports every redundant `!!` instead of erroring out at the
+        // first project that holds one.
+        IReadOnlyList<string> args = SdkCompileRunner.BuildMirroredBuildArguments(
+            "/out/App.gsproj",
+            "/artifacts/app",
+            "Release",
+            "/out/nuget.config",
+            NullAssertionPolishPass.SurveyWarningsNotAsErrors);
+
+        Assert.Contains("-p:WarningsNotAsErrors=GS0536", args);
     }
 
     /// <summary>

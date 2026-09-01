@@ -17,7 +17,7 @@ namespace Cs2Gs.Tests;
 /// first project that fails, and a nested assertion only becomes visibly
 /// redundant once the one outside it is gone — so a fixed round budget leaves
 /// the app red with GS0536 as its only diagnostic. These tests drive
-/// <see cref="NullAssertionPolishPass.RunToFixedPoint"/> with a stand-in
+/// <c>NullAssertionPolishPass.RunToFixedPoint</c>'s strict overload with a stand-in
 /// compiler so the multi-generation and per-project shapes are exercised
 /// without a real <c>dotnet build</c>.
 /// </summary>

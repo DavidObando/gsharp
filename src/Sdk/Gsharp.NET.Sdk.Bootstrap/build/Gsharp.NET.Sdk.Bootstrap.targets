@@ -68,6 +68,7 @@
       <_GsharpCoreCompileInputsToHash Include="$(NoWarn)" />
       <_GsharpCoreCompileInputsToHash Include="$(TreatWarningsAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(WarningsAsErrors)" />
+      <_GsharpCoreCompileInputsToHash Include="$(WarningsNotAsErrors)" />
       <_GsharpCoreCompileInputsToHash Include="$(OutputType)" />
       <_GsharpCoreCompileInputsToHash Include="$(Optimize)" />
       <_GsharpCoreCompileInputsToHash Include="$(SourceLink)" />
@@ -131,6 +132,7 @@
         NoWarn="$(NoWarn)"
         TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
         WarningsAsErrors="$(WarningsAsErrors)"
+        WarningsNotAsErrors="$(WarningsNotAsErrors)"
         Compile="@(Compile)"
         References="@(ReferencePathWithRefAssemblies)"
         ResponseFilePath="$(IntermediateOutputPath)$(TargetName).rsp" />
