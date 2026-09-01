@@ -45,6 +45,203 @@ internal sealed partial class OverloadResolver
         return false;
     }
 
+    /// <summary>
+    /// Issue #3760: whether at least one of <paramref name="typeParameters"/>
+    /// is still without a bound after the positional inference pass.
+    /// </summary>
+    private static bool HasUnboundTypeParameter(
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        foreach (var typeParameter in typeParameters)
+        {
+            if (!substitution.ContainsKey(typeParameter))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3760: the user-generic counterpart of
+    /// <c>ClrOverloadResolution.TryInferMethodGroupArgument</c>. A method group
+    /// argument carries no type, so a type parameter reachable only through
+    /// the target delegate's RETURN position never receives a bound from the
+    /// positional pass. Close the delegate's input types from the bounds
+    /// gathered so far, resolve the group against that closed input list, and
+    /// unify the selected candidate's return type back into
+    /// <paramref name="substitution"/>. A group that stays ambiguous under the
+    /// closed inputs contributes nothing, leaving the established GS0151.
+    /// </summary>
+    private void InferFromUserMethodGroupArgument(
+        TypeSymbol parameterType,
+        BoundExpression argument,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+    {
+        if (argument is not BoundMethodGroupExpression and not BoundClrMethodGroupExpression
+            || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target)
+            || !TypeSymbol.ContainsTypeParameter(target.ReturnType))
+        {
+            return;
+        }
+
+        var closedInputs = new TypeSymbol[target.ParameterTypes.Length];
+        for (var i = 0; i < closedInputs.Length; i++)
+        {
+            var closedInput = substituteType(target.ParameterTypes[i], substitution);
+            if (closedInput == null
+                || closedInput == TypeSymbol.Error
+                || TypeSymbol.ContainsTypeParameter(closedInput))
+            {
+                // An input the first pass could not close gives the group no
+                // signature to resolve against.
+                return;
+            }
+
+            closedInputs[i] = closedInput;
+        }
+
+        var selectedReturn = argument is BoundClrMethodGroupExpression clrGroup
+            ? ResolveClrMethodGroupReturn(clrGroup, closedInputs)
+            : ResolveUserMethodGroupReturn((BoundMethodGroupExpression)argument, closedInputs);
+
+        if (selectedReturn != null)
+        {
+            inferTypeArguments(target.ReturnType, selectedReturn, substitution);
+        }
+    }
+
+    /// <summary>
+    /// Issue #3760: resolves a user method group against a fully closed input
+    /// list, returning the single applicable candidate's return type (or
+    /// <see langword="null"/> when none or several apply).
+    /// </summary>
+    private static TypeSymbol? ResolveUserMethodGroupReturn(
+        BoundMethodGroupExpression group,
+        TypeSymbol[] closedInputs)
+    {
+        if (group.Candidates.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        TypeSymbol? selectedReturn = null;
+        foreach (var candidate in group.Candidates)
+        {
+            var candidateOwner = group.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
+                ? TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+                : null;
+            if (!ExpressionBinder.TryCloseMethodGroupCandidate(
+                    candidate,
+                    group.Receiver,
+                    candidateOwner,
+                    closedInputs,
+                    out var closedParameters,
+                    out var closedReturn,
+                    out _))
+            {
+                continue;
+            }
+
+            // The candidate must ACCEPT what the delegate provides — the same
+            // contravariant admissibility the CLR sibling applies (#3501 A5).
+            var applicable = true;
+            for (var i = 0; i < closedInputs.Length; i++)
+            {
+                if (closedParameters[i] != closedInputs[i]
+                    && !Conversion.Classify(closedInputs[i], closedParameters[i]).IsImplicit)
+                {
+                    applicable = false;
+                    break;
+                }
+            }
+
+            if (!applicable || closedReturn == TypeSymbol.Void || closedReturn == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            if (selectedReturn != null && selectedReturn != closedReturn)
+            {
+                // Two applicable candidates disagree on the return type: the
+                // group is ambiguous at this slot, so it must not bind.
+                return null;
+            }
+
+            selectedReturn = closedReturn;
+        }
+
+        return selectedReturn;
+    }
+
+    /// <summary>
+    /// Issue #3760: the imported (CLR) sibling of
+    /// <see cref="ResolveUserMethodGroupReturn"/>. Projects the closed input
+    /// types to CLR, runs the ordinary CLR overload selection over the group's
+    /// candidates, and maps the winner's return type back to a symbol.
+    /// </summary>
+    private TypeSymbol? ResolveClrMethodGroupReturn(
+        BoundClrMethodGroupExpression group,
+        TypeSymbol[] closedInputs)
+    {
+        if (group.Candidates.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        // A group whose receiver is present but whose candidates are all
+        // static is an extension group: slot 0 of the CLR signature is the
+        // receiver, and the delegate's inputs start at slot 1.
+        var closesExtensionReceiver = group.Receiver != null;
+        foreach (var candidate in group.Candidates)
+        {
+            closesExtensionReceiver &= candidate.IsStatic;
+        }
+
+        var offset = closesExtensionReceiver ? 1 : 0;
+        var resolutionArguments = new Type[closedInputs.Length + offset];
+        if (closesExtensionReceiver)
+        {
+            var receiverType = Invariant.Required(
+                group.Receiver,
+                "an extension method group has a receiver").Type;
+            if (receiverType.ClrType is not { } receiverClr)
+            {
+                return null;
+            }
+
+            resolutionArguments[0] = binderCtx.References.MapClrTypeToReferences(receiverClr);
+        }
+
+        for (var i = 0; i < closedInputs.Length; i++)
+        {
+            if (closedInputs[i].ClrType is not { } inputClr)
+            {
+                // A same-compilation input has no CLR backing to resolve an
+                // imported overload against.
+                return null;
+            }
+
+            resolutionArguments[i + offset] = binderCtx.References.MapClrTypeToReferences(inputClr);
+        }
+
+        // #835/#3753: `IsSameAs` rather than reference identity — the
+        // candidate may come from a MetadataLoadContext, where the host
+        // `typeof(void)` is a different Type instance.
+        var resolution = ClrOverloadResolution.Resolve(group.Candidates, resolutionArguments);
+        if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
+            || resolution.Best is not { } best
+            || best.IsGenericMethodDefinition
+            || best.ReturnType.IsSameAs(typeof(void)))
+        {
+            return null;
+        }
+
+        return TypeSymbol.FromClrType(binderCtx.References.MapClrTypeToReferences(best.ReturnType));
+    }
+
     private bool TryResolveImplicitInheritedTypeArguments(
         TypeArgumentListSyntax? typeArgumentList,
         out Type[]? clrTypeArguments,
@@ -1657,6 +1854,30 @@ internal sealed partial class OverloadResolver
                     inferTypeArguments(paramType, boundArguments[i].Type, substitution);
                 }
 
+                // Issue #3760: a method group has no type of its own, so the
+                // loop above contributes nothing from a `f Func[int32, TOut]`
+                // slot and `TOut` — reachable ONLY through the group's return
+                // type — never receives a bound (GS0151). The imported-call
+                // binder already runs this second step
+                // (ClrOverloadResolution.TryInferMethodGroupArgument); the
+                // user-generic path had no equivalent (the #3705
+                // "inconsistent sibling probe" class). Mirror it here: close
+                // the target delegate's INPUT types from the bounds the first
+                // pass established, resolve the group against them, and unify
+                // the resulting return type back in. Per #3756 this runs ONLY
+                // when the first pass left a type parameter unbound, so no
+                // call that already infers can change shape.
+                if (HasUnboundTypeParameter(function.TypeParameters, substitution))
+                {
+                    for (var i = 0; i < function.Parameters.Length && i < boundArguments.Count; i++)
+                    {
+                        InferFromUserMethodGroupArgument(
+                            function.Parameters[i].Type,
+                            boundArguments[i],
+                            substitution);
+                    }
+                }
+
                 foreach (var tp in function.TypeParameters)
                 {
                     if (!substitution.ContainsKey(tp))
@@ -1950,9 +2171,22 @@ internal sealed partial class OverloadResolver
             // selection. Route it through BindConversion — which performs the
             // signature-directed pick — instead of the type-equality / implicit
             // conversion checks below (which would reject the Error-typed group).
+            // Issue #3760: the generic guard below must look at the SUBSTITUTED
+            // target (`expectedType`), not the declared `parameter.Type`. A
+            // generic callee's delegate parameter — `func Map[TOut](value
+            // int32, f Func[int32, TOut])` — always mentions a type parameter
+            // in its declared form, so testing the declared type skipped this
+            // branch even when the call site had already pinned `TOut` (by
+            // inference or an explicit `[string]`) and `expectedType` was the
+            // fully closed `Func[int32, string]`. The group then fell through
+            // every branch below still unresolved and Error-typed, and reached
+            // the emitter as GS9998 (internal compiler error). Only a target
+            // that is STILL open after substitution has no signature to drive
+            // the pick, and only that case may skip.
             if ((argument is BoundMethodGroupExpression { FunctionType: null }
                     || argument is BoundClrMethodGroupExpression { ResolvedMethod: null })
-                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type)))
+                && !(substitution != null
+                    && (expectedType == null || TypeSymbol.ContainsTypeParameter(expectedType))))
             {
                 var groupLoc = i < parameterSyntax.Length
                     ? Invariant.Required(parameterSyntax[i], "a method group argument has source syntax").Location
