@@ -71,13 +71,15 @@ internal static class RepositoryMirror
     /// <param name="sourceFiles">The repository inventory, relative to <paramref name="sourceRoot"/>.</param>
     /// <param name="excludedScope">The run's excluded scope.</param>
     /// <param name="generatedProjectPaths">Source project path to generated project path.</param>
+    /// <param name="sdkMoniker">The pinned <c>Gsharp.NET.Sdk</c> moniker every mirrored project builds with.</param>
     /// <returns>The mirror-relative paths of the project files written.</returns>
     internal static IReadOnlyList<string> MirrorExcludedProjects(
         string sourceRoot,
         string destinationRoot,
         IReadOnlyList<string> sourceFiles,
         RepositoryExcludedScope excludedScope,
-        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        string sdkMoniker)
     {
         excludedScope ??= RepositoryExcludedScope.None;
         string source = Path.GetFullPath(sourceRoot);
@@ -117,6 +119,7 @@ internal static class RepositoryMirror
                 Path.Combine(source, path.Replace('/', Path.DirectorySeparatorChar)),
                 LoadOptions.PreserveWhitespace);
             RetargetProjectReferences(project, source, destination, path, generatedProjectPaths);
+            RebindToPinnedSdk(project, sdkMoniker);
             project.Save(target, SaveOptions.DisableFormatting);
             written.Add(path.Replace('/', Path.DirectorySeparatorChar));
         }
@@ -274,6 +277,61 @@ internal static class RepositoryMirror
                 include.Value = Path.GetRelativePath(destinationDirectory, generated)
                     .Replace('\\', '/');
             }
+        }
+    }
+
+    /// <summary>
+    /// Rebinds a mirrored project onto the pinned <c>Gsharp.NET.Sdk</c>, the way
+    /// every other project in the mirror is built.
+    /// </summary>
+    /// <remarks>
+    /// The one project this applies to today, <c>src/Sdk/Gsharp.Extensions</c>,
+    /// is built in the source repository by the BOOTSTRAP SDK: it resolves
+    /// <c>gsc.dll</c> and the build task out of <c>out/bin/&lt;cfg&gt;/</c> at
+    /// project-evaluation time, which exists there only because the repo build
+    /// orders the compiler first. A mirror has no such ordering — the shards
+    /// build one app each on a clean runner — so the bootstrap's
+    /// <c>UsingTask</c> condition is false and the build dies with MSB4036
+    /// before anything is compiled. The mirror does not need the bootstrap at
+    /// all: it exists to break a cycle (an assembly cannot reference itself
+    /// while being built) that a PINNED SDK package does not have. Rebinding
+    /// costs the toolchain-only project references, which are exactly the
+    /// bootstrap's build-ordering arrows.
+    /// </remarks>
+    private static void RebindToPinnedSdk(XDocument project, string sdkMoniker)
+    {
+        if (string.IsNullOrEmpty(sdkMoniker) || project.Root is null)
+        {
+            return;
+        }
+
+        if (project.Root.Attribute("Sdk") is not null)
+        {
+            return;
+        }
+
+        // The Sdk ATTRIBUTE, not <Import Sdk="…"/>: only the attribute form
+        // carries a "Name/Version" moniker, and the mirror has to pin the exact
+        // package it built the rest of the tree against.
+        project.Root.SetAttributeValue("Sdk", sdkMoniker);
+
+        foreach (XElement import in project.Root.Descendants()
+            .Where(element => element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase))
+            .ToList())
+        {
+            import.Remove();
+        }
+
+        foreach (XElement reference in project.Root.Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(
+                    element.Attribute("ReferenceOutputAssembly")?.Value?.Trim(),
+                    "false",
+                    StringComparison.OrdinalIgnoreCase))
+            .ToList())
+        {
+            reference.Remove();
         }
     }
 

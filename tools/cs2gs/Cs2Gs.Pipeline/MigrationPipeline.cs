@@ -227,7 +227,8 @@ public sealed class MigrationPipeline
                 destinationRoot,
                 repositoryFiles,
                 excludedScope,
-                this.options.GeneratedProjectPaths))
+                this.options.GeneratedProjectPaths,
+                sdkMoniker))
             {
                 this.options.RepositoryAdditionalFiles.Add(mirroredProject);
             }

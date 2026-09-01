@@ -57,9 +57,15 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             """
             <Project>
               <!-- keep me -->
+              <PropertyGroup>
+                <AssemblyName>Gsharp.Extensions</AssemblyName>
+              </PropertyGroup>
               <ItemGroup>
                 <ProjectReference Include="..\..\Compiler\Compiler.csproj" />
+                <ProjectReference Include="..\Gsharp.NET.Sdk\Gsharp.NET.Sdk.csproj" ReferenceOutputAssembly="false" />
               </ItemGroup>
+              <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" />
+              <Import Project="..\Gsharp.NET.Sdk.Bootstrap\build\Gsharp.NET.Sdk.Bootstrap.targets" />
             </Project>
             """);
 
@@ -78,7 +84,8 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             {
                 [Path.Combine(source, "src", "Compiler", "Compiler.csproj")] =
                     Path.Combine(destination, "src", "Compiler", "Compiler.gsproj"),
-            });
+            },
+            "Gsharp.NET.Sdk/9.9.9-test");
 
         Assert.Equal(
             new[] { Path.Combine("src", "Sdk", "Gsharp.Extensions", "Gsharp.Extensions.csproj") },
@@ -90,6 +97,14 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             "../../Compiler/Compiler.gsproj",
             document.Descendants("ProjectReference").Single().Attribute("Include").Value);
         Assert.Contains("keep me", File.ReadAllText(mirrored), StringComparison.Ordinal);
+
+        // Rebound onto the pinned SDK: no bootstrap imports and none of the
+        // bootstrap's toolchain-only build-ordering references.
+        Assert.Equal("Gsharp.NET.Sdk/9.9.9-test", document.Root.Attribute("Sdk").Value);
+        Assert.Empty(document.Descendants("Import"));
+        Assert.Equal(
+            "Gsharp.Extensions",
+            document.Descendants("AssemblyName").Single().Value);
     }
 
     /// <summary>
@@ -116,7 +131,8 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
                 "src/vs-gsharp/src/VsGsharp/VsGsharp.csproj",
             },
             scope,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            "Gsharp.NET.Sdk/9.9.9-test");
 
         Assert.Empty(written);
     }

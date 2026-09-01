@@ -210,6 +210,16 @@ internal static class GSharpProjectTransformer
                 Path.Combine(sourceProjectDirectory, NormalizeDirectorySeparators(include.Value)));
             if (!generatedProjectPaths.TryGetValue(sourceReferencePath, out string generatedProjectPath))
             {
+                // Issue #3772: the run translated no project here, so the mirror
+                // carries the ORIGINAL project (when it had nothing to
+                // translate) or nothing at all. Either way its output is not
+                // this project's reference: the pinned SDK already supplies the
+                // assembly, and taking a second copy from the mirrored build
+                // hands gsc two assemblies with one identity (GS9200). Keep the
+                // reference so the project still gets BUILT — repository code
+                // looks for the built assembly on disk — and drop only its
+                // contribution to the reference set.
+                projectReference.SetAttributeValue("ReferenceOutputAssembly", "false");
                 continue;
             }
 
