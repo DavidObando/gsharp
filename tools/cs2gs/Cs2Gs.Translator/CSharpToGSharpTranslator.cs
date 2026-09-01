@@ -459,9 +459,30 @@ public sealed partial class CSharpToGSharpTranslator
             allImports.Where(import => import.Alias == null).Select(import => import.Name));
         foreach (string ns in typeMapper.ShortenedNamespaces.OrderBy(n => n, System.StringComparer.Ordinal))
         {
-            if (ns != package && alreadyImported.Add(ns))
+            string importName = ns;
+
+            // ADR-0169 analyzer mode / issue #3734: a synthesized import goes
+            // through the SAME Roslyn→G# namespace mapping the `using`
+            // directives above already get. Some shortened references record
+            // their C# symbol's own namespace (an attribute type, an extension
+            // method's declaring namespace), so without this a translated
+            // analyzer emitted `import Microsoft.CodeAnalysis` ALONGSIDE the
+            // `import GSharp.Core.CodeAnalysis` its references were retargeted
+            // onto — two namespaces exporting `DiagnosticDescriptor`,
+            // `SyntaxKind`, `Diagnostic`, ... and the bare name silently
+            // binding whichever came first (now GS0547). The reference is G#'s;
+            // the Roslyn namespace it was translated away from must not be
+            // imported at all.
+            if (this.analyzerApiMode
+                && Analyzers.RoslynAnalyzerApiMap.IsRoslynNamespace(importName)
+                && !Analyzers.RoslynAnalyzerApiMap.TryMapNamespace(importName, out importName))
             {
-                allImports.Add(new ImportDirective(ns));
+                continue;
+            }
+
+            if (importName != package && alreadyImported.Add(importName))
+            {
+                allImports.Add(new ImportDirective(importName));
             }
         }
 
