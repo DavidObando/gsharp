@@ -2418,9 +2418,27 @@ public sealed partial class CSharpToGSharpTranslator
                     target,
                     this.TranslateAssignmentValue(assignment)),
                 current);
+
+            // Issue #3774: G# `!!` is a CHECKED assertion that THROWS on nil, not
+            // C#'s erased `!`, so an assertion here is faithful only when the
+            // `??=` expression's value genuinely cannot be nil — and its value is
+            // nil exactly when the right-hand side is. Roslyn's flow state proves
+            // that in a nullable-ENABLED compilation, and
+            // `NullableReferenceValueMayBeNull` reads the C# annotations. Neither
+            // says anything in an OBLIVIOUS compilation, where a same-project
+            // member the whole-program taint analysis promoted to `T?` still reads
+            // as non-null — so `cache ??= Make()` (C#: yields null) gained a
+            // guaranteed throw. Consult the promotion result too in that mode,
+            // which is the same "can this be nil at runtime in G#" question the
+            // rest of the bridge already asks; a literal / provably non-null RHS
+            // keeps its assertion.
+            bool rightHandSideMayBeNil =
+                this.NullableReferenceValueMayBeNull(assignment.Right)
+                || (this.IsObliviousCompilation()
+                    && this.IsNullablePromotedValue(assignment.Right));
             GExpression result =
                 this.context.GetTypeInfo(assignment).Nullability.FlowState == NullableFlowState.NotNull
-                || !this.NullableReferenceValueMayBeNull(assignment.Right)
+                || !rightHandSideMayBeNil
                 ? EnsureNonNullAssertion(value)
                 : value;
             return statements.Count == 0
