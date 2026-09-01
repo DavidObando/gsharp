@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
@@ -28,6 +29,16 @@ public static class ClrNullability
     private const string MaybeNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute";
     private const string MemberNotNullAttributeFullName = "System.Diagnostics.CodeAnalysis.MemberNotNullAttribute";
     private const string MemberNotNullWhenAttributeFullName = "System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute";
+    private const string NotNullIfNotNullAttributeFullName = "System.Diagnostics.CodeAnalysis.NotNullIfNotNullAttribute";
+
+    /// <summary>
+    /// Issue #3802: cache of the parameter names carried by
+    /// <c>[return: NotNullIfNotNull(...)]</c> per method. Reading custom
+    /// attribute data through a <see cref="MetadataLoadContext"/> is expensive
+    /// and every imported call site asks the same question, so the answer is
+    /// memoised. An empty array means "no conditional post-condition".
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MethodInfo, string[]> NotNullIfNotNullCache = new();
 
     /// <summary>
     /// Returns the GSharp <see cref="TypeSymbol"/> for a property's
@@ -163,6 +174,35 @@ public static class ClrNullability
             && mapped is not NullableTypeSymbol
                 ? NullableTypeSymbol.Get(mapped)
                 : mapped;
+    }
+
+    /// <summary>
+    /// Issue #3802: collects the parameter names named by every
+    /// <c>[return: NotNullIfNotNull(name)]</c> on <paramref name="method"/>.
+    /// The attribute states a CONDITIONAL post-condition — the (declared
+    /// nullable) return value is non-null whenever the named argument is
+    /// non-null — so this reader deliberately reports only the names. Deciding
+    /// whether the post-condition actually holds is a fact about a particular
+    /// call site's arguments and belongs with the binder's narrowing
+    /// machinery, not with the declaration reader: narrowing the DECLARED
+    /// return type here would restore the very unsoundness that #3705 family 2
+    /// removed.
+    /// </summary>
+    /// <param name="method">The method to inspect.</param>
+    /// <returns>
+    /// The named parameters, in attribute order; empty when the method carries
+    /// no conditional return post-condition.
+    /// </returns>
+    internal static IReadOnlyList<string> GetNotNullIfNotNullParameters(MethodInfo method)
+    {
+        if (NotNullIfNotNullCache.TryGetValue(method, out var cached))
+        {
+            return cached;
+        }
+
+        var names = ReadNotNullIfNotNullParameters(method);
+        NotNullIfNotNullCache.AddOrUpdate(method, names);
+        return names;
     }
 
     internal static bool TryGetNotNullWhen(ParameterInfo parameter, out bool returnValue)
@@ -821,6 +861,51 @@ public static class ClrNullability
 
             layoutOffset += layoutCount;
         }
+    }
+
+    private static string[] ReadNotNullIfNotNullParameters(MethodInfo method)
+    {
+        // Prefer the open metadata definition: on a constructed generic the
+        // reflected `ReturnParameter` may not surface the attribute data.
+        var definition = GetMetadataDefinition(method) as MethodInfo ?? method;
+        var names = ReadNotNullIfNotNullParameters(definition.ReturnParameter);
+        if (names.Length == 0 && !ReferenceEquals(definition, method))
+        {
+            names = ReadNotNullIfNotNullParameters(method.ReturnParameter);
+        }
+
+        return names;
+    }
+
+    private static string[] ReadNotNullIfNotNullParameters(ParameterInfo? returnParameter)
+    {
+        if (returnParameter == null)
+        {
+            return Array.Empty<string>();
+        }
+
+        var attrs = SafeGetCustomAttributesData(returnParameter);
+        if (attrs == null)
+        {
+            return Array.Empty<string>();
+        }
+
+        ImmutableArray<string>.Builder? builder = null;
+        foreach (var ad in attrs)
+        {
+            if (ad.AttributeType?.FullName != NotNullIfNotNullAttributeFullName
+                || ad.ConstructorArguments.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var arg in ad.ConstructorArguments)
+            {
+                CollectStringOrArray(arg, ref builder);
+            }
+        }
+
+        return builder == null ? Array.Empty<string>() : builder.ToArray();
     }
 
     private static MethodBase? GetMetadataDefinition(MethodBase method)

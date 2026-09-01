@@ -42,13 +42,18 @@ public sealed class BoundImportedCallExpression : BoundExpression
         ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
         TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
         StaticContainerType = staticContainerType;
+
+        // Issue #3802: a `[return: NotNullIfNotNull(nameof(p))]` post-condition
+        // is a fact about THIS call, so it narrows the node's type, never the
+        // declared `Function.Type`.
+        Type = ConditionalReturnNarrowing.Apply(function.Method, arguments, function.Type);
     }
 
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.ImportedCallExpression;
 
     /// <inheritdoc/>
-    public override TypeSymbol Type => Function.Type;
+    public override TypeSymbol Type { get; }
 
     /// <summary>
     /// Gets the imported function symbol.
