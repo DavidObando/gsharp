@@ -128,7 +128,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Ldelema);
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType));
-        this.EmitManagedPointerAsUnmanagedPointer(elementType);
+        this.EmitManagedPointerAsUnmanagedPointer(elementType, node.Syntax);
         this.il.StoreLocal(pointerSlot);
 
         this.il.MarkLabel(afterLabel);
@@ -148,16 +148,28 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Brfalse, nullLabel);
 
         this.il.LoadLocal(pinnedSlot);
-        var getPinnableReference = Invariant.Required(
-            typeof(string).GetMethod(
-                "GetPinnableReference",
-                BindingFlags.Public | BindingFlags.Instance,
-                binder: null,
-                types: Type.EmptyTypes,
-                modifiers: null),
-            "System.String declares the public instance GetPinnableReference()");
+
+        // Issue #3755: probe the TARGET framework's `System.String`, not the
+        // host's. `EmitContext.CoreStringType` is already resolved from the
+        // reference closure; only this member probe still read off the host —
+        // the #3705 shape, one arm of a pair updated and the other not.
+        //
+        // `String.GetPinnableReference()` is genuinely absent from
+        // NETStandard.Library.Ref/2.1.0 even though `System.String` is present,
+        // so the host probe used to succeed and emit a MemberRef naming a
+        // method the target does not declare: a MissingMethodException at the
+        // target's runtime, with no diagnostic at compile time. #3755 ranked
+        // this site as hygiene on the grounds that its TYPE is never absent,
+        // which is true and beside the point — the member is what varies.
+        if (!PinningShapes.TryGetStringGetPinnableReference(
+                this.outer.emitCtx.CoreStringType, out var getPinnableReference))
+        {
+            EmitDiagnosticException.ThrowTargetFrameworkMemberUnavailable(
+                node.Syntax, PinningShapes.StringGetPinnableReferenceSignature);
+        }
+
         this.il.Call(this.outer.memberRefs.GetMethodReference(getPinnableReference));
-        this.EmitManagedPointerAsUnmanagedPointer(TypeSymbol.Char);
+        this.EmitManagedPointerAsUnmanagedPointer(TypeSymbol.Char, node.Syntax);
         this.il.StoreLocal(pointerSlot);
         this.il.Branch(ILOpCode.Br, afterLabel);
 
@@ -213,26 +225,39 @@ internal sealed partial class MethodBodyEmitter
         this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
         this.il.LoadLocal(pinnedSlot);
         this.EmitManagedPointerAsUnmanagedPointer(
-            ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType);
+            ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType,
+            node.Syntax);
         this.il.StoreLocal(pointerSlot);         // p = (T*)ref
     }
 
-    private void EmitManagedPointerAsUnmanagedPointer(TypeSymbol pointeeType)
+    private void EmitManagedPointerAsUnmanagedPointer(TypeSymbol pointeeType, SyntaxNode? anchor)
     {
-        MethodInfo? openAsPointer = null;
-        foreach (var method in typeof(System.Runtime.CompilerServices.Unsafe).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        // Issue #3755 (issue #3705, family 3): resolve `Unsafe` from the
+        // compilation's reference closure, not from the SDK hosting gsc.
+        //
+        // #3755 ranked this site as hygiene because "none of the types involved
+        // is plausibly absent from a target framework". Measured, that is
+        // false: `System.Runtime.CompilerServices.Unsafe` is absent from
+        // NETStandard.Library.Ref/2.1.0 — it is a NuGet package there, not part
+        // of the framework. With the host `typeof` this probe always succeeded,
+        // #3729's GetTypeReference projection had nothing to project onto, and
+        // EVERY `fixed` statement compiled against a netstandard2.x closure
+        // emitted `System.Runtime.CompilerServices.Unsafe` scoped to the host's
+        // `System.Private.CoreLib` while the compile reported success. That is
+        // #3730's defect, on a different member.
+        if (!PinningShapes.TryGetUnsafeAsPointer(this.outer.emitCtx.References, out var openAsPointer))
         {
-            if (method.Name == "AsPointer"
-                && method.IsGenericMethodDefinition
-                && method.GetParameters().Length == 1)
-            {
-                openAsPointer = method;
-                break;
-            }
+            EmitDiagnosticException.ThrowTargetFrameworkMemberUnavailable(
+                anchor, PinningShapes.UnsafeAsPointerSignature);
         }
 
-        openAsPointer = Invariant.Required(openAsPointer, "Unsafe.AsPointer<T>(ref T) is available");
-        var closedAsPointer = openAsPointer.MakeGenericMethod(pointeeType.ClrType ?? typeof(object));
+        // CloseOver projects the type argument into the resolved definition's
+        // reflection context first: the pointee is frequently a built-in
+        // TypeSymbol wrapping a host RuntimeType while `openAsPointer` now
+        // belongs to the reference closure, and closing across contexts yields
+        // a MethodBuilderInstantiation whose GetParameters() answers the
+        // unsubstituted `T` (the #3752 artefact) instead of failing loudly.
+        var closedAsPointer = PinningShapes.CloseOver(openAsPointer, pointeeType.ClrType ?? typeof(object));
         var symbolicTypeArguments = ImmutableArray.Create<TypeSymbol?>(pointeeType);
         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
             closedAsPointer,

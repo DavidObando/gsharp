@@ -920,6 +920,27 @@ target's runtime cannot resolve.
 |---|---|---|---|
 | GS0545 | Error | `Interpolated strings require '<member>', which the referenced target framework does not provide. Reference a framework that declares it, or build the string explicitly.` | `let s = "v=$x"` compiled with a `netstandard2.1` reference closure |
 
+## Emit-time well-known member missing from the target framework (GS0546)
+
+Issue #3755 (issue #3705, family 3): the `fixed` / pointer lowering emits calls
+to two well-known members — `System.Runtime.CompilerServices.Unsafe.AsPointer<T>`
+for every pin, and `System.String.GetPinnableReference()` for the string-pin
+form. Both are resolved from the compilation's **reference closure**, so they
+describe the framework being compiled against rather than the SDK hosting `gsc`.
+
+Neither is universally available. `Unsafe` is absent from `netstandard2.x`
+altogether (it ships there as a NuGet package), and `String.GetPinnableReference()`
+is absent from `netstandard2.1` even though `System.String` is present. Before
+#3755 the probes read off the host, so a `fixed` statement compiled against such
+a target reported success and emitted either a `TypeRef` scoped to the host's
+`System.Private.CoreLib` or a `MemberRef` naming a method the target does not
+declare — a `MissingMethodException` at the target's runtime. The compile now
+stops here instead.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0546 | Error | `This construct lowers onto '<member>', which the referenced target framework does not provide. Reference a framework or package that declares it.` | `fixed p *int32 = values { }` compiled with a `netstandard2.1` reference closure |
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 ADR-0166: a designation in a boolean `is`

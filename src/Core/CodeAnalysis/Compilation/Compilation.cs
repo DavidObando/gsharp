@@ -639,6 +639,29 @@ public class Compilation
         var location = anchor is null
             ? default
             : new TextLocation(anchor.SyntaxTree.Text, anchor.Span);
+
+        // Issue #3755: an emit failure that already knows which diagnostic it
+        // is — today only GS0546, "the referenced target framework does not
+        // declare a member this construct lowers onto" — reports as itself.
+        // Dressing a property of the user's reference closure up as GS9998
+        // ("internal compiler error") would tell the user to file a bug when
+        // the actionable fix is to reference the framework or package that
+        // declares the member. The scan walks the whole inner chain because
+        // the emit pipeline wraps failures as it unwinds.
+        Exception? withId = ex;
+        while (withId is not null)
+        {
+            if (withId is Emit.EmitDiagnosticException { DiagnosticId: { } id } identified)
+            {
+                var identifiedLocation = identified.Anchor is null
+                    ? location
+                    : new TextLocation(identified.Anchor.SyntaxTree.Text, identified.Anchor.Span);
+                return new Diagnostic(identifiedLocation, id, DiagnosticSeverity.Error, identified.Message);
+            }
+
+            withId = withId.InnerException;
+        }
+
         var typeName = rootEx.GetType().Name;
         var message = $"{typeName}: {rootEx.Message}";
 

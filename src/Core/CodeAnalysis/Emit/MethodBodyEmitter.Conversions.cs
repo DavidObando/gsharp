@@ -1042,6 +1042,20 @@ internal sealed partial class MethodBodyEmitter
         return true;
     }
 
+    // Issue #3755 listed the `typeof(decimal)` probes below as residual
+    // host-`typeof` sites. Left as they are, deliberately: `from` and `to`
+    // cannot be MetadataLoadContext types here. `TypeSymbol.FromClrType` maps
+    // every numeric CLR type onto a built-in symbol BY FULL NAME precisely so
+    // MLC primitives normalise (see its `case "System.Decimal": return Decimal`
+    // switch), and `IsNumericClrType` — which the sole caller gates on — admits
+    // nothing else. So `GetMethod(name, new[] { from })`, which could never
+    // match across contexts, is only ever asked a host-to-host question, and
+    // the emitted MemberRef's parent is projected by
+    // `ImportedMemberRefFactory.GetTypeReference` regardless: compiling a
+    // decimal conversion against NETStandard.Library.Ref 2.1.0 emits
+    // `System.Decimal -> netstandard`. `System.Decimal` and its operators are
+    // also present in every target framework, so there is no #3730-shaped
+    // absence to guard. Recorded so a future sweep does not re-derive it.
     private bool TryEmitDecimalConversion(Type from, Type to)
     {
         // To decimal: every numeric source has either an `op_Implicit`
