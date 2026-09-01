@@ -432,6 +432,35 @@ public static class ClrNullability
     /// <param name="flags">Physical nullable flags, possibly scalar or empty.</param>
     /// <returns>One byte per CLR nullable-metadata position.</returns>
     internal static ImmutableArray<byte> ExpandNullableFlags(Type type, ImmutableArray<byte> flags)
+        => ExpandNullableFlags(type, flags, absentFill: 2);
+
+    /// <summary>
+    /// Issue #3705 family 2: <see cref="ExpandNullableFlags(Type, ImmutableArray{byte})"/>
+    /// with an explicit fill for positions the declaration did not supply.
+    /// <para>
+    /// The default fill of <c>2</c> IS the #1354 rule — "the declarer said
+    /// nothing, so assume nullable". That is right for a concrete reference
+    /// position and wrong for an OPEN type-parameter position, whose
+    /// nullability comes from the substituted argument instead. A caller that
+    /// must distinguish "the declaration explicitly said <c>2</c>" from "the
+    /// declaration was silent and we defaulted to <c>2</c>" cannot do it from
+    /// the default expansion, because both look identical. Passing
+    /// <c>absentFill: 0</c> yields the literal reading.
+    /// </para>
+    /// <para>
+    /// A scalar or context byte is a genuine statement about every position and
+    /// is preserved under both fills; only truly absent and beyond-length
+    /// positions differ.
+    /// </para>
+    /// </summary>
+    /// <param name="type">CLR type tree to expand.</param>
+    /// <param name="flags">Physical nullable flags, possibly scalar or empty.</param>
+    /// <param name="absentFill">Byte to use for positions the declaration did not supply.</param>
+    /// <returns>One byte per CLR nullable-metadata position.</returns>
+    internal static ImmutableArray<byte> ExpandNullableFlags(
+        Type type,
+        ImmutableArray<byte> flags,
+        byte absentFill)
     {
         var builder = ImmutableArray.CreateBuilder<byte>(CountNullabilityBytes(type));
         var index = 0;
@@ -484,7 +513,7 @@ public static class ClrNullability
         {
             if (flags.IsDefaultOrEmpty)
             {
-                return 2;
+                return absentFill;
             }
 
             if (flags.Length == 1)
@@ -492,7 +521,7 @@ public static class ClrNullability
                 return flags[0];
             }
 
-            return position < flags.Length ? flags[position] : (byte)2;
+            return position < flags.Length ? flags[position] : absentFill;
         }
     }
 
@@ -526,12 +555,32 @@ public static class ClrNullability
         if (flags.Length == 1)
         {
             // Scalar/context byte applies to every position.
-            return flags[0] == 1;
+            return IsFlagNonNull(flags[0]);
         }
 
         // Per-position array: index directly; beyond-length positions are nullable.
-        return index < flags.Length && flags[index] == 1;
+        return index < flags.Length && IsFlagNonNull(flags[index]);
     }
+
+    /// <summary>
+    /// Issue #1354, issue #3705 family 2 — <b>the</b> predicate that turns one
+    /// C# nullable-metadata byte into G#'s answer, and the only place in the
+    /// compiler allowed to decide it.
+    /// <para>
+    /// G#'s import rule is the inverse of C#'s. C# reads "nullable iff the byte
+    /// is <c>2</c>", so oblivious (<c>0</c>) and absent metadata mean non-null.
+    /// G# reads "non-null iff the byte is <c>1</c>", so oblivious <b>and</b>
+    /// absent both mean <c>T?</c>. Two readers open-coding the two rules is
+    /// exactly how the #3705 nullability family kept producing member kinds
+    /// that disagreed about the same declaration, so the rule lives here and
+    /// <see cref="IsPositionNonNull"/> and
+    /// <c>NullableFlagsBuilder.MergeDeclarationNullability</c> both defer to it
+    /// rather than comparing bytes themselves.
+    /// </para>
+    /// </summary>
+    /// <param name="flag">A single C# nullable-metadata byte (0, 1 or 2).</param>
+    /// <returns><c>true</c> only for <c>1</c> (not-annotated).</returns>
+    internal static bool IsFlagNonNull(byte flag) => flag == 1;
 
     /// <summary>
     /// Constructs a <see cref="TypeSymbol"/> for <paramref name="clrType"/> by

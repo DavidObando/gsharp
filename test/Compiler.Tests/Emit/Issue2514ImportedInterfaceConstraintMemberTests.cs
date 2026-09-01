@@ -20,7 +20,18 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public sealed class Issue2514ImportedInterfaceConstraintMemberTests
 {
+    // Issue #3705 family 2: `#nullable enable` is load-bearing, not tidying.
+    // This fixture is about member REACHABILITY through an imported interface
+    // constraint, and the G# side assigns every read to a non-null `string`. In
+    // an oblivious compilation those members carry no `[Nullable]` metadata, and
+    // per #1354 / ADR-0136 gsc imports an unannotated reference position as
+    // `T?` — so the assignments were only legal while the constrained-receiver
+    // readers still dropped declaration nullability. Annotating the fixture
+    // states the contract the test always meant (these members really are
+    // non-null) instead of relying on that gap. The `EventHandler?` /
+    // `Action<T>?` declarations below were already written in nullable style.
     private const string ContractsSource = """
+        #nullable enable
         using System;
 
         namespace Issue2514.Contracts

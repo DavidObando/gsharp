@@ -94,6 +94,17 @@ public class Issue1418GenericUserElementErasureEmitTests
         // `LinkedListNode[object]`, so `node.Value` bound as `object` and
         // `node.Value.V` failed GS0158. (`LinkedList` itself is enumerable, but
         // the `.First` PROPERTY type — `LinkedListNode<T>` — is not.)
+        //
+        // Issue #3705 family 2: the `nil` guard is new and it is a CORRECTION,
+        // not a workaround. `LinkedList<T>.First` is declared `[Nullable(2)]`
+        // in the BCL — it returns null for an empty list — so the guard is what
+        // the declaration always required. This test used to bind it as non-null
+        // only because `GetClrPropertyTypeSymbol`'s symbolic branch dropped the
+        // declaration's nullability, which is the unsound direction #3705
+        // family 2 exists to close. The test's actual subject — that a
+        // constructed generic property type does not erase to
+        // `LinkedListNode[object]`, so `.Value.V` resolves to the user member —
+        // is unchanged and still asserted by the `11` below.
         var source = """
             package P
             import System
@@ -106,7 +117,11 @@ public class Issue1418GenericUserElementErasureEmitTests
             a.V = 11
             ll.AddLast(a)
             let node = ll.First
-            Console.WriteLine(node.Value.V)
+            if node == nil {
+                Console.WriteLine("empty")
+            } else {
+                Console.WriteLine(node.Value.V)
+            }
             """;
 
         Assert.Equal($"11{Environment.NewLine}", CompileAndRun(source));

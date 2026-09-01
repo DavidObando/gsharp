@@ -3919,7 +3919,23 @@ internal sealed class MemberLookup
                         && (TypeSymbol.RequiresSymbolicProjection(mapped)
                             || TypeSymbol.ContainsNamedTupleElements(mapped))))
                 {
-                    return mapped;
+                    // Issue #3705 (family 2): this branch returned the
+                    // receiver-substituted type RAW, exactly as
+                    // GetClrMethodReturnTypeSymbol's did before #3741 — and
+                    // #3741 fixed the return and parameter branches but not this
+                    // one. Substitution recovers the member's shape and silently
+                    // discards the declaration's `[Nullable]`, so an imported
+                    // `string?` property or indexer read through a constrained
+                    // generic receiver bound as non-null `string` with no
+                    // diagnostic: the unsound direction. Fold the declaration
+                    // flags back in like every sibling reader.
+                    var declarationFlags = ClrNullability.ReadNullableFlags(
+                        openProperty,
+                        openProperty.DeclaringType);
+                    return NullableFlagsBuilder.MergeDeclarationNullability(
+                        mapped,
+                        openProperty.PropertyType,
+                        declarationFlags);
                 }
             }
         }
