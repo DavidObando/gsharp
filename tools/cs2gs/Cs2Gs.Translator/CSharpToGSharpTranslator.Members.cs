@@ -63,6 +63,16 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
                     }
 
+                    // ADR-0169 M5 / issue #3686: private plumbing of a Roslyn
+                    // analyzer test harness whose body is being replaced by a
+                    // delegation to the G# verifier is dead code that would
+                    // otherwise drag unmapped Roslyn types into the migrated
+                    // project (MetadataReference, CSharpCompilationOptions).
+                    if (this.IsAnalyzerHarnessSupportMember(method))
+                    {
+                        break;
+                    }
+
                     (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(
                         method,
                         ownerKind,
@@ -1328,7 +1338,24 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
             BlockStatement body;
+            bool isAnalyzerHarness = false;
             if (hasBody
+                && this.TryBuildAnalyzerHarnessBody(symbol, parameters, node, out BlockStatement harnessBody))
+            {
+                body = harnessBody;
+                isAnalyzerHarness = true;
+
+                // The C# harness was `async Task`, which G# spells as an
+                // `async func` with NO declared return type (the modifier
+                // synthesizes the envelope). The rewrite drops `async`, so the
+                // Task envelope has to come back explicitly — the migrated
+                // [Fact] methods `return` this call.
+                if (returnType is null && ReturnsTask(symbol))
+                {
+                    returnType = this.typeMapper.Map(symbol.ReturnType, this.context, node.GetLocation());
+                }
+            }
+            else if (hasBody
                 && forceExtensionReceiver
                 && RequiresOwnerScopedExtension(symbol))
             {
@@ -1462,6 +1489,11 @@ public sealed partial class CSharpToGSharpTranslator
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 
+            // A rewritten analyzer test harness (#3686) delegates to the
+            // synchronous G# verifier: there is nothing left to await, and an
+            // `async` func returning `Task` cannot `return` a value.
+            bool isEmittedAsync = !isAsyncVoidHandler && !isAnalyzerHarness && symbol != null && symbol.IsAsync;
+
             var method = new MethodDeclaration(
                 this.EmittedName(symbol, node.Identifier.ValueText),
                 parameters: parameters,
@@ -1472,7 +1504,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: explicitInterfaceVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
-                isAsync: !isAsyncVoidHandler && symbol != null && symbol.IsAsync,
+                isAsync: isEmittedAsync,
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceType,

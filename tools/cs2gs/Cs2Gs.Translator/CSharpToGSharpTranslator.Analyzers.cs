@@ -24,6 +24,12 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        /// <summary>
+        /// The G# namespace holding the ADR-0169 verifier package that a
+        /// migrated Roslyn analyzer test harness delegates to.
+        /// </summary>
+        private const string AnalyzerVerifierNamespace = "GSharp.CodeAnalysis.Analyzers.Testing";
+
         private bool InAnalyzerApiMode => this.typeMapper.AnalyzerApiMode;
 
         private static string RoslynTypeMetadataName(INamedTypeSymbol type)
@@ -935,6 +941,153 @@ public sealed partial class CSharpToGSharpTranslator
             this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Analyzers");
             result = new AttributeUse("GSharpDiagnosticAnalyzer", System.Array.Empty<AttributeArgument>(), target: null);
             return true;
+        }
+
+        /// <summary>
+        /// Recognizes the entry point of a Roslyn analyzer TEST harness
+        /// (ADR-0169 M5, issue #3686): a static method that takes an analyzer
+        /// and a source string, i.e. the repo's
+        /// <c>AnalyzerTestHelper.AssertDiagnosticsAsync</c> shape.
+        /// </summary>
+        /// <remarks>
+        /// The harness body is the one place where a statement-by-statement
+        /// translation would be WRONG rather than merely hard. It builds a
+        /// Roslyn <c>CSharpCompilation</c> over metadata references pulled from
+        /// <c>TRUSTED_PLATFORM_ASSEMBLIES</c> and drives it with Roslyn's
+        /// analyzer driver — a pipeline whose G# counterpart takes NO metadata
+        /// references at all, so the faithful translation of
+        /// <c>GetReferences()</c> is deletion, not mapping. Translating each
+        /// call in isolation would reimplement, inside the migrated test
+        /// project, the marker-stripping and assertion logic that
+        /// <c>GSharpAnalyzerVerifier</c> already owns and tests. The rewrite
+        /// therefore replaces the whole body with a delegation to that
+        /// verifier, keeping the harness's own signature — so every call site
+        /// in the migrated tests is untouched — and reports the substitution as
+        /// a shape adaptation.
+        /// </remarks>
+        /// <param name="symbol">The method being translated.</param>
+        /// <returns>True when this method is the harness entry point.</returns>
+        private bool IsAnalyzerHarnessEntry(IMethodSymbol symbol)
+            => this.InAnalyzerApiMode
+               && symbol is { IsStatic: true }
+               && symbol.Parameters.Length >= 2
+               && DerivesFromDiagnosticAnalyzer(symbol.Parameters[0].Type)
+               && symbol.Parameters[1].Type.SpecialType == SpecialType.System_String;
+
+        /// <summary>
+        /// True when <paramref name="method"/> is private plumbing that exists
+        /// only to serve the harness entry point rewritten above — so once the
+        /// body is a one-line delegation, the member is dead code that would
+        /// still drag unmapped Roslyn types (<c>MetadataReference</c>) into the
+        /// migrated project. Members used from anywhere else are kept.
+        /// </summary>
+        /// <param name="method">The candidate support method.</param>
+        /// <returns>True when the member must not be emitted.</returns>
+        private bool IsAnalyzerHarnessSupportMember(MethodDeclarationSyntax method)
+        {
+            if (!this.InAnalyzerApiMode
+                || this.context.GetDeclaredSymbol(method) is not IMethodSymbol symbol
+                || !symbol.IsStatic
+                || symbol.DeclaredAccessibility != Accessibility.Private
+                || method.Parent is not TypeDeclarationSyntax owner)
+            {
+                return false;
+            }
+
+            var entries = owner.Members
+                .OfType<MethodDeclarationSyntax>()
+                .Where(candidate => this.context.GetDeclaredSymbol(candidate) is IMethodSymbol candidateSymbol
+                    && this.IsAnalyzerHarnessEntry(candidateSymbol))
+                .ToList();
+            if (entries.Count == 0)
+            {
+                return false;
+            }
+
+            var uses = owner.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(invocation => SymbolEqualityComparer.Default.Equals(
+                    this.context.GetSymbolInfo(invocation).Symbol?.OriginalDefinition,
+                    symbol))
+                .ToList();
+
+            return uses.Count > 0
+                && uses.All(use => entries.Any(entry => entry.Span.Contains(use.Span)));
+        }
+
+        /// <summary>
+        /// Builds the delegating body for the harness entry point:
+        /// <c>GSharpAnalyzerVerifier.VerifyAnalyzer(analyzer, source, ids)</c>,
+        /// followed by <c>return Task.CompletedTask</c> when the harness kept
+        /// its Task-returning shape (so the migrated <c>[Fact]</c> methods,
+        /// which <c>return</c> the harness call, need no rewrite of their own).
+        /// </summary>
+        /// <param name="symbol">The harness method.</param>
+        /// <param name="parameters">Its already-mapped G# parameters.</param>
+        /// <param name="site">The syntax node to attribute the shape warning to.</param>
+        /// <param name="body">The synthesized body.</param>
+        /// <returns>True when a body was synthesized.</returns>
+        private bool TryBuildAnalyzerHarnessBody(
+            IMethodSymbol symbol,
+            IReadOnlyList<Parameter> parameters,
+            SyntaxNode site,
+            out BlockStatement body)
+        {
+            body = null;
+            if (!this.IsAnalyzerHarnessEntry(symbol) || parameters.Count < 2)
+            {
+                return false;
+            }
+
+            this.typeMapper.TrackSubstitutedNamespace(AnalyzerVerifierNamespace);
+
+            var call = new InvocationExpression(
+                new MemberAccessExpression(
+                    new IdentifierExpression("GSharpAnalyzerVerifier"),
+                    "VerifyAnalyzer"),
+                parameters.Select(parameter => (GExpression)new IdentifierExpression(parameter.Name)).ToList());
+
+            var statements = new List<GStatement> { new ExpressionStatement(call) };
+            if (ReturnsTask(symbol))
+            {
+                statements.Add(new ReturnStatement(
+                    new MemberAccessExpression(new IdentifierExpression("Task"), "CompletedTask")));
+            }
+
+            body = new BlockStatement(statements);
+            string message = $"analyzer test harness '{symbol.Name}' rewritten to delegate to "
+                + $"{AnalyzerVerifierNamespace}.GSharpAnalyzerVerifier.VerifyAnalyzer: the Roslyn compilation "
+                + "pipeline it drove (CSharpCompilation over TRUSTED_PLATFORM_ASSEMBLIES metadata references) "
+                + "has no G# counterpart — the G# verifier compiles G# source with no reference set. The "
+                + "harness signature and every call site are preserved; verify the expected diagnostic "
+                + "locations still hold over the TRANSLATED snippets (ADR-0169 M5, issue #3686).";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                message,
+                site.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+            return true;
+        }
+
+        private static bool ReturnsTask(IMethodSymbol symbol)
+            => symbol.ReturnType is INamedTypeSymbol { Name: "Task" } returnType
+               && returnType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
+
+        private static bool DerivesFromDiagnosticAnalyzer(ITypeSymbol type)
+        {
+            for (ITypeSymbol current = type; current is not null; current = current.BaseType)
+            {
+                if (current is INamedTypeSymbol named
+                    && RoslynTypeMetadataName(named) == AnalyzerProjectDetector.DiagnosticAnalyzerMetadataName)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void ReportAnalyzerShapeIfAdapted(

@@ -168,9 +168,46 @@ consumer rewrite is a pure value substitution.
 
 ## Test-harness and snippet translation
 
-`AnalyzerTestHelper.cs` is ordinary C# and translates normally (rules 3/22
-rewrite the Roslyn calls; the `[|...|]` marker-stripping logic is plain string
-code). The hard part is the **embedded C# snippets** — raw strings of analyzed
+Status (2026-09-01, issue #3686): the **harness half is implemented**; the
+**snippet half is not** — see "M5 status" below.
+
+The original plan here — "`AnalyzerTestHelper.cs` is ordinary C# and translates
+normally, rules 3/22 rewrite the Roslyn calls" — did not survive contact with
+the harness body, and rule 22 is now implemented differently than that line
+describes. The harness does not merely *call* Roslyn APIs; it builds a
+`CSharpCompilation` over metadata references pulled from
+`TRUSTED_PLATFORM_ASSEMBLIES` and drives Roslyn's analyzer driver. The G#
+verifier takes **no metadata references at all**, so the faithful translation
+of `GetReferences()` is deletion, not mapping — and translating the remaining
+calls one by one would reimplement, inside the migrated test project, the
+marker-stripping and assertion logic `GSharpAnalyzerVerifier` already owns.
+
+Implemented instead (`CSharpToGSharpTranslator.Analyzers.cs`,
+`IsAnalyzerHarnessEntry` / `TryBuildAnalyzerHarnessBody`): the harness entry
+point — a static method taking an analyzer and a source string — keeps its
+**signature**, so no call site changes, and its **body** becomes a single
+delegation to
+`GSharp.CodeAnalysis.Analyzers.Testing.GSharpAnalyzerVerifier.VerifyAnalyzer`.
+Private members that existed only to serve it are dropped. The substitution is
+reported as `CS2GS-ANALYZER-SHAPE`, never silent.
+
+That required one addition to the framework: ADR-0169 shipped
+`GSharpAnalyzerVerifier<TAnalyzer>` (static, generic, `new()`-constrained),
+but a migrated harness holds an analyzer **value** and has no type parameter to
+bind, so an instance-based overload
+`GSharpAnalyzerVerifier.VerifyAnalyzer(analyzer, markedSource, ids…)` was added
+alongside it. Hand-written G# analyzer tests keep using the generic form.
+
+Detection is per project on both halves: `AnalyzerProjectDetector` gained
+`IsAnalyzerTestProject` (a project that instantiates an analyzer declared in a
+referenced, non-Roslyn assembly), and `GSharpProjectTransformer` recognizes the
+structural counterpart (a `ProjectReference` to an analyzer project that is not
+an `OutputItemType="Analyzer"` consumer reference) to inject the two assemblies
+the migrated tests bind — `GSharp.Core` and the verifier — both copied to the
+test output, because a test assembly is loaded by the test host rather than by
+gsc.
+
+The remaining half is the **embedded C# snippets** — raw strings of analyzed
 code inside tests. For functional equivalence they must become G# snippets.
 
 Approach: nested cs2gs invocation at translation time, not manual porting.
@@ -240,6 +277,19 @@ Order: GSA0001 → GSA0003 → GSA0004 → GSA0002 → GSA0005; harness and pari
   lines).
 - **M5 Test project + snippets** — `SnippetTranslator`, CodeModel `Origin`
   provenance, `CS2GS-ANALYZER-SNIPPET`, goldens of all translated GSA tests.
+
+  **M5 status (2026-09-01, issue #3686).** Done: test-project detection,
+  harness rewrite, the instance-based verifier entry point, and the project
+  transform. Measured on `test/InternalAnalyzers.Tests`, the app was walled at
+  16 `GS0154` errors (3 fingerprints) and now translates, **compiles and
+  ilverifies clean**. Not done: snippet translation. `SnippetTranslator` exists
+  and is unit-tested, but nothing dispatches it during a migration, so the
+  migrated tests still hand **C# snippets** to the G# verifier and all 16 fail
+  — loudly, with the verifier's "the test source does not compile" report, not
+  silently. Two shapes make the wiring more than plumbing: the analyzed source
+  arrives via a `const string` local rather than a literal argument, and
+  several tests compose it (`Model + """…"""`), so the unit to translate is the
+  concatenation, which cannot then be split back into its parts.
 - **M6 Parity + self-migration** — `AnalyzerParityStage`; extend the
   Issue3347-style self-migration ratchet to translate
   `InternalAnalyzers.csproj` live. Exit criterion: all five translated

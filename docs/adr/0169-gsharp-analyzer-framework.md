@@ -152,6 +152,15 @@ running the driver — deliberately shaped like the internal
 `AnalyzerTestHelper` so cs2gs can translate existing Roslyn analyzer tests
 mechanically.
 
+Amended 2026-09-01 (issue #3686, M5): the same library also exposes the
+non-generic `GSharpAnalyzerVerifier.VerifyAnalyzer(analyzer, markedSource,
+ids…)`. A translated harness holds an analyzer *value* — its parameter is
+`GSharpDiagnosticAnalyzer` and the concrete analyzer is chosen at the call
+site — so the generic, `new()`-constrained form cannot receive it without
+turning an argument into a type argument. Hand-written G# analyzer tests keep
+using the generic form; the instance overload exists so the cs2gs harness
+rewrite is a body substitution rather than a call-site rewrite.
+
 ## Consequences
 
 - The five GSA analyzers gain a migration target: their cs2gs translation is

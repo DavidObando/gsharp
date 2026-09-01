@@ -26,6 +26,11 @@
          against the cs2gs-translated G# analyzers'. -->
     <ProjectReference Include="..\..\..\src\Analyzers\InternalAnalyzers\InternalAnalyzers.csproj" />
 
+    <!-- ADR-0169 M5 (#3686): the harness-rewrite test binds its translated G#
+         against the real verifier assembly, so a delegation to a signature
+         that does not exist fails the test rather than the migration. -->
+    <ProjectReference Include="..\..\..\src\Analyzers\GSharp.CodeAnalysis.Analyzers.Testing\GSharp.CodeAnalysis.Analyzers.Testing.csproj" />
+
     <!-- Issue #1912 review follow-up: the e2e tests shell out to the built
          gsc.dll (see Issue1912ExplicitEnumValueTranslationTests.FindCompiler)
          rather than referencing it as an assembly. Without this reference,
