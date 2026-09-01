@@ -2581,7 +2581,75 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return new ArrayLiteralExpression(sliceElementType, elements);
+            var slice = new ArrayLiteralExpression(sliceElementType, elements);
+
+            // Issue #3684 (F16): a `[CollectionBuilder]` target that is not a
+            // constructible CLASS — `ImmutableArray<T>` and friends are STRUCTS,
+            // so the collection-initializer path above never sees them — has no
+            // conversion from the slice literal either (GS0155). C# itself
+            // lowers such a collection expression to a call of the declared
+            // builder factory, so emit that call directly, handing it the slice
+            // (gsc's existing `[]T` → `ReadOnlySpan[T]` implicit conversion
+            // covers the factory's span parameter).
+            if (TryGetCollectionBuilder(target, out INamedTypeSymbol builderType, out string builderMethodName)
+                && this.typeMapper.Map(builderType, this.context, collection.GetLocation())
+                    is NamedTypeReference builderRef)
+            {
+                return new InvocationExpression(
+                    new MemberAccessExpression(
+                        new IdentifierExpression(builderRef.Name),
+                        builderMethodName),
+                    new List<GExpression> { slice },
+                    new List<GTypeReference> { sliceElementType });
+            }
+
+            return slice;
+        }
+
+        /// <summary>
+        /// The <c>[CollectionBuilder(typeof(B), "M")]</c> factory declared on a
+        /// collection-expression target, when the target carries one and the
+        /// named factory is a single-type-parameter generic method (the only
+        /// shape whose call cs2gs can spell without inferring anything).
+        /// </summary>
+        /// <param name="target">The collection expression's target type.</param>
+        /// <param name="builderType">Receives the builder type.</param>
+        /// <param name="methodName">Receives the factory method name.</param>
+        /// <returns><see langword="true"/> when a usable builder was found.</returns>
+        private static bool TryGetCollectionBuilder(
+            ITypeSymbol target,
+            out INamedTypeSymbol builderType,
+            out string methodName)
+        {
+            builderType = null;
+            methodName = null;
+            if (target is not INamedTypeSymbol named)
+            {
+                return false;
+            }
+
+            foreach (AttributeData attribute in named.OriginalDefinition.GetAttributes())
+            {
+                if (attribute.AttributeClass?.Name != "CollectionBuilderAttribute"
+                    || attribute.ConstructorArguments is not
+                        [{ Value: INamedTypeSymbol declaredBuilder }, { Value: string declaredMethod }])
+                {
+                    continue;
+                }
+
+                if (!declaredBuilder.GetMembers(declaredMethod)
+                    .OfType<IMethodSymbol>()
+                    .Any(m => m.IsStatic && m.Arity == 1))
+                {
+                    continue;
+                }
+
+                builderType = declaredBuilder;
+                methodName = declaredMethod;
+                return true;
+            }
+
+            return false;
         }
 
         private GExpression CoerceCollectionElement(
