@@ -70,6 +70,19 @@ public sealed partial class CSharpToGSharpTranslator
     // files (including partial target declarations).
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, OwnedExtensionRegistry> OwnedExtensionsCache = new();
 
+    // Issue #3750: every type named by a `typeof(...)` anywhere in the
+    // compilation, mapped to the source files that name it. A `static class`
+    // holding only extension methods is normally ELIDED (its members lift to
+    // top-level receiver-clause funcs, ADR-0115 §B.5) — but `typeof` observes
+    // the holder's IDENTITY, which the lifted funcs cannot carry, so a holder
+    // that is named this way must survive. `typeof` is the only surviving
+    // reference form: `nameof` constant-folds to a string literal before it
+    // reaches the printer, and a static-form/bare call through the holder is
+    // already rewritten to the receiver form (see `TranslateInvocation`).
+    // Computed once per compilation — `typeof` nodes are rare, so the scan is
+    // cheap and only resolves symbols for those nodes.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, HashSet<string>>> TypeOfReferencedTypesCache = new();
+
     // ADR-0145 (§C/§D) / issue #3410: preserve each C# `partial` declaration as
     // a standalone G# `partial` part by default. This keeps members in the G#
     // file corresponding to their declaring C# file and lets the G# compiler's
@@ -328,7 +341,8 @@ public sealed partial class CSharpToGSharpTranslator
             nameAllocator,
             this.preservePartialParts,
             this.markMergedTypePartial,
-            this.widenObliviousReferenceFields);
+            this.widenObliviousReferenceFields,
+            this.retainedFilePaths);
 
         IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
             ? visitor.MapFileAttributes(
@@ -526,6 +540,71 @@ public sealed partial class CSharpToGSharpTranslator
     private static OwnedExtensionRegistry GetOrCollectOwnedExtensions(Compilation compilation)
     {
         return OwnedExtensionsCache.GetValue(compilation, CollectOwnedExtensions);
+    }
+
+    /// <summary>
+    /// Issue #3750: reports whether <paramref name="type"/> is named by a
+    /// <c>typeof(...)</c> in a source file this translation still emits. Used
+    /// to decide whether an extension-method holder <c>static class</c> whose
+    /// members all lifted to top-level receiver-clause funcs may be elided:
+    /// eliding a type whose identity is still observed leaves the reference
+    /// dangling (GS0113).
+    /// </summary>
+    private static bool IsTypeOfReferenced(
+        Compilation compilation,
+        INamedTypeSymbol type,
+        HashSet<string> retainedFilePaths)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        Dictionary<INamedTypeSymbol, HashSet<string>> references =
+            TypeOfReferencedTypesCache.GetValue(compilation, CollectTypeOfReferencedTypes);
+        if (!references.TryGetValue(type.OriginalDefinition, out HashSet<string> filePaths))
+        {
+            return false;
+        }
+
+        return retainedFilePaths is null || filePaths.Overlaps(retainedFilePaths);
+    }
+
+    private static Dictionary<INamedTypeSymbol, HashSet<string>> CollectTypeOfReferencedTypes(
+        Compilation compilation)
+    {
+        var result = new Dictionary<INamedTypeSymbol, HashSet<string>>(SymbolEqualityComparer.Default);
+        foreach (Microsoft.CodeAnalysis.SyntaxTree tree in compilation.SyntaxTrees)
+        {
+            List<TypeOfExpressionSyntax> typeOfExpressions = tree.GetRoot()
+                .DescendantNodes()
+                .OfType<TypeOfExpressionSyntax>()
+                .ToList();
+            if (typeOfExpressions.Count == 0)
+            {
+                continue;
+            }
+
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (TypeOfExpressionSyntax typeOf in typeOfExpressions)
+            {
+                if (model.GetSymbolInfo(typeOf.Type).Symbol is not INamedTypeSymbol referenced)
+                {
+                    continue;
+                }
+
+                INamedTypeSymbol definition = referenced.OriginalDefinition;
+                if (!result.TryGetValue(definition, out HashSet<string> filePaths))
+                {
+                    filePaths = new HashSet<string>(StringComparer.Ordinal);
+                    result.Add(definition, filePaths);
+                }
+
+                filePaths.Add(tree.FilePath);
+            }
+        }
+
+        return result;
     }
 
     private static OwnedExtensionRegistry CollectOwnedExtensions(Compilation compilation)
@@ -1366,6 +1445,12 @@ public sealed partial class CSharpToGSharpTranslator
         private readonly OwnedExtensionRegistry ownedExtensions;
         private readonly EmittedNameAllocator nameAllocator;
 
+        // Issue #3750: the source files this translation still emits (null when
+        // the whole compilation is translated). A `typeof` in a file that is not
+        // retained cannot keep an elided extension holder alive — that file
+        // produces no G# output.
+        private readonly HashSet<string> retainedFilePaths;
+
         // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
         // part is emitted as its own standalone G# `partial` declaration (using
         // only its own members), so a generated part augments the user's real G#
@@ -1434,8 +1519,10 @@ public sealed partial class CSharpToGSharpTranslator
             EmittedNameAllocator nameAllocator,
             bool preservePartialParts = false,
             bool markMergedTypePartial = false,
-            bool widenObliviousReferenceFields = false)
+            bool widenObliviousReferenceFields = false,
+            HashSet<string> retainedFilePaths = null)
         {
+            this.retainedFilePaths = retainedFilePaths;
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;

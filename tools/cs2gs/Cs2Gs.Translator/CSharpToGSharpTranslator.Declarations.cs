@@ -1428,7 +1428,22 @@ public sealed partial class CSharpToGSharpTranslator
 
             // A `static class` whose every member was an extension method lifted to
             // top level has no remaining body; drop the class entirely (ADR-0115 §B.5).
-            if (isStaticClass && members.Count == 0)
+            //
+            // Issue #3750: unless something still observes the holder's IDENTITY.
+            // The lifted receiver-clause funcs carry the holder's BEHAVIOUR but not
+            // its name, so a surviving `typeof(Holder)` would name a type that no
+            // longer exists (GS0113) — and, where the result feeds a member lookup,
+            // cascade into GS0159. Keeping the (now empty) declaration is what makes
+            // the reference resolve, and it is the honest translation: the C# source
+            // declared a type, and the migrated code still names it. `typeof` is the
+            // only reference form that can survive here — `nameof(Holder)` folds to a
+            // string literal, and `Holder.M(recv, args)` / bare `M(recv, args)` are
+            // rewritten to the receiver form (see `TranslateInvocation`) — so a
+            // holder nothing `typeof`s is still elided and the common case keeps the
+            // idiomatic extension-only output.
+            if (isStaticClass &&
+                members.Count == 0 &&
+                !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {
                 return null;
             }
