@@ -20,6 +20,11 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
 {
     private readonly ImmutableArray<Diagnostic>.Builder diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
     private readonly Stack<List<Diagnostic>> duplicateSuppressions = new();
+
+    // Issue #3734: one GS0547 per (file, offset, name) — a bare imported
+    // homonym is looked up many times while binding a single reference.
+    private readonly HashSet<string> reportedImportedTypeAmbiguities = new(StringComparer.Ordinal);
+
     private readonly Stack<List<Diagnostic>> transactions = new();
 
     /// <summary>

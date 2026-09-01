@@ -3893,7 +3893,23 @@ public sealed class Binder
             // list, prefer the matching generic definition; without one, prefer
             // the arity-0 type.
             var requestedArity = syntax.HasTypeArguments ? Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count : 0;
-            element = LookupType(identifierToken.ValueText, requestedArity, out var ambiguousAcrossImportedPackages);
+            element = LookupType(
+                identifierToken.ValueText,
+                requestedArity,
+                out var ambiguousAcrossImportedPackages,
+                out var importedTypeAmbiguity);
+
+            // Issue #3734: unlike the source-type collision below, an imported
+            // homonym still RESOLVES — first-import-wins — so the reference is
+            // reported and binding continues with the chosen candidate.
+            if (importedTypeAmbiguity != null)
+            {
+                Diagnostics.ReportAmbiguousImportedTypeReference(
+                    identifierToken.Location,
+                    identifierToken.ValueText,
+                    importedTypeAmbiguity);
+            }
+
             if (element == null)
             {
                 // Issue #2455: "ambiguous between imported packages" and "no
@@ -7062,6 +7078,9 @@ public sealed class Binder
     private TypeSymbol? LookupType(string name, int preferredArity)
         => LookupType(name, preferredArity, out _);
 
+    private TypeSymbol? LookupType(string name, int preferredArity, out bool ambiguousAcrossImportedPackages)
+        => LookupType(name, preferredArity, out ambiguousAcrossImportedPackages, out _);
+
     /// <summary>
     /// Issue #2455: same as <see cref="LookupType(string, int)"/>, but also
     /// reports (via <paramref name="ambiguousAcrossImportedPackages"/>) when
@@ -7076,10 +7095,16 @@ public sealed class Binder
     /// <param name="name">The simple type name.</param>
     /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
     /// <param name="ambiguousAcrossImportedPackages">Whether the miss was specifically a cross-package import ambiguity.</param>
+    /// <param name="importedTypeAmbiguity">Issue #3734: the colliding imported CLR candidates when the name resolved first-import-wins between two different imported types.</param>
     /// <returns>The resolved type, or <c>null</c> when unresolved or ambiguous.</returns>
-    private TypeSymbol? LookupType(string name, int preferredArity, out bool ambiguousAcrossImportedPackages)
+    private TypeSymbol? LookupType(
+        string name,
+        int preferredArity,
+        out bool ambiguousAcrossImportedPackages,
+        out ImportedTypeAmbiguity? importedTypeAmbiguity)
     {
         ambiguousAcrossImportedPackages = false;
+        importedTypeAmbiguity = null;
 
         // Issue #944: a parse-recovery artifact (e.g. a malformed type clause
         // with no identifier) can reach here with a null/empty name. Treat it
@@ -7173,7 +7198,8 @@ public sealed class Binder
                     name,
                     preferredArity,
                     declaration: null,
-                    out var importedType)
+                    out var importedType,
+                    out importedTypeAmbiguity)
                 && binderCtx.ImportedTypeOverridesSourceType(
                     scope,
                     name,
@@ -7193,6 +7219,10 @@ public sealed class Binder
                 return TypeSymbol.FromClrType(importedType.ClassType);
             }
 
+            // Issue #3734: the source type won, so no imported candidate was
+            // chosen and the cross-import collision is not what this reference
+            // means.
+            importedTypeAmbiguity = null;
             return aliased;
         }
 
@@ -7222,7 +7252,7 @@ public sealed class Binder
             return TypeSymbol.FromClrType(submissionClrType);
         }
 
-        if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+        if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass, out importedTypeAmbiguity))
         {
             if (ImportedTypeSymbol.TryCreateSemanticAggregate(importedClass.ClassType, scope.References, out var aggregate))
             {

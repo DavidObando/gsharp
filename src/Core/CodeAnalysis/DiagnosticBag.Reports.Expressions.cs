@@ -37,13 +37,45 @@ public sealed partial class DiagnosticBag
     /// explicit <c>import</c> somewhere in the compilation, so its identity
     /// cannot be determined from the reference alone. Distinct from
     /// <see cref="ReportUndefinedType"/> (which means no type at all matched)
-    /// the same way <see cref="ReportAmbiguousImportedType"/> is distinct for
+    /// the same way <see cref="ReportAmbiguousImportedTypeReference"/> is distinct for
     /// imported CLR types.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="name">The type name.</param>
     public void ReportAmbiguousSourceType(TextLocation location, string name)
     => Report(location, DiagnosticDescriptors.AmbiguousSourceType, name);
+
+    /// <summary>
+    /// Issue #3734: reports a bare type name that two or more explicitly
+    /// written imports each resolve to a different CLR type. The reference
+    /// still binds the first import's candidate, so this is a report about a
+    /// choice the author did not make rather than a resolution failure.
+    /// </summary>
+    /// <param name="location">The text location of the ambiguous name.</param>
+    /// <param name="name">The bare name as written.</param>
+    /// <param name="ambiguity">The colliding candidates.</param>
+    public void ReportAmbiguousImportedTypeReference(
+        TextLocation location,
+        string name,
+        Binding.ImportedTypeAmbiguity ambiguity)
+    {
+        // The same name is looked up repeatedly while binding one reference
+        // (overload resolution, lambda re-binding); the reader should see the
+        // collision once per site.
+        if (!reportedImportedTypeAmbiguities.Add(
+                location.FileName + "|" + location.Span.Start + "|" + name))
+        {
+            return;
+        }
+
+        Report(
+            location,
+            DiagnosticDescriptors.AmbiguousImportedTypeReference,
+            name,
+            ambiguity.First.FullName ?? ambiguity.First.Name,
+            ambiguity.Second.FullName ?? ambiguity.Second.Name,
+            ambiguity.Chosen.FullName ?? ambiguity.Chosen.Name);
+    }
 
     /// <summary>
     /// Issue #526: reports that the outer type exists but does not contain a nested

@@ -1243,9 +1243,20 @@ internal sealed partial class ExpressionBinder
             // `List[int]()`, `Dictionary[string, int]()`, etc. Resolve the open
             // generic via imports (mangled `Name`N`) and construct the closed
             // type via Type.MakeGenericType.
-            if (!scope.TryLookupImportedGenericClass(name, syntax.TypeArgumentList.Arguments.Count, out var openType))
+            if (!scope.TryLookupImportedGenericClass(
+                    name,
+                    syntax.TypeArgumentList.Arguments.Count,
+                    out var openType,
+                    out var openAmbiguity))
             {
                 return false;
+            }
+
+            // Issue #3734: constructing a bare homonym is the same coin flip as
+            // naming one in a type clause.
+            if (openAmbiguity != null)
+            {
+                Diagnostics.ReportAmbiguousImportedTypeReference(syntax.Identifier.Location, name, openAmbiguity);
             }
 
             if (!TryResolveClrConstructionTypeArgs(syntax.TypeArgumentList, out var clrArgs, out symbolicTypeArgs, out var hasSymbolicArg))
@@ -1290,8 +1301,15 @@ internal sealed partial class ExpressionBinder
             {
                 clrType = aliasedType;
             }
-            else if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))
+            else if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass, out var ambiguity))
             {
+                // Issue #3734: `Thing()` with two imports each exporting a
+                // `Thing` constructs whichever import came first.
+                if (ambiguity != null)
+                {
+                    Diagnostics.ReportAmbiguousImportedTypeReference(syntax.Identifier.Location, name, ambiguity);
+                }
+
                 clrType = importedClass.ClassType;
             }
             else
