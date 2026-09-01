@@ -42,27 +42,30 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// </remarks>
 internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter
 {
-    private static readonly System.Type HandlerType = typeof(DefaultInterpolatedStringHandler);
-    private static readonly TypeSymbol HandlerTypeSymbol = TypeSymbol.FromClrType(HandlerType);
-    private static readonly ConstructorInfo HandlerCtor = Invariant.Required(
-        HandlerType.GetConstructor(new[] { typeof(int), typeof(int) }),
-        "DefaultInterpolatedStringHandler declares the (literalLength, formattedCount) constructor");
-
-    private static readonly MethodInfo AppendLiteralMethod = Invariant.Required(
-        HandlerType.GetMethod("AppendLiteral", new[] { typeof(string) }),
-        "DefaultInterpolatedStringHandler declares AppendLiteral(string)");
-
-    private static readonly MethodInfo ToStringAndClearMethod = Invariant.Required(
-        HandlerType.GetMethod("ToStringAndClear", System.Type.EmptyTypes),
-        "DefaultInterpolatedStringHandler declares ToStringAndClear()");
-
-    private static readonly MethodInfo AppendFormattedValue = FindAppendFormatted(genericArity: 1, valueOnly: true);
-    private static readonly MethodInfo AppendFormattedAlign = FindAppendFormatted(secondParam: typeof(int));
-    private static readonly MethodInfo AppendFormattedFormat = FindAppendFormatted(secondParam: typeof(string));
-    private static readonly MethodInfo AppendFormattedAlignFormat = FindAppendFormatted(secondParam: typeof(int), thirdParam: typeof(string));
-
     private readonly DiagnosticBag diagnostics = new();
+
+    // Issue #3730: the DefaultInterpolatedStringHandler surface resolved from
+    // the compilation's reference closure. Null when the target framework does
+    // not declare the required shape; `missingHandlerMember` then names the
+    // first member it failed to provide, and the first interpolation site
+    // reports GS0545 rather than silently lowering onto the host SDK's handler.
+    private readonly DefaultInterpolatedStringHandlerShape? handler;
+    private readonly string? missingHandlerMember;
+
     private int counter;
+    private bool reportedMissingHandler;
+
+    private InterpolatedStringHandlerLowerer(ReferenceResolver references)
+    {
+        if (DefaultInterpolatedStringHandlerShape.TryResolve(references, out var shape, out var missing))
+        {
+            this.handler = shape;
+        }
+        else
+        {
+            this.missingHandlerMember = missing;
+        }
+    }
 
     /// <summary>
     /// Produces a copy of <paramref name="program"/> in which every interpolated
@@ -70,10 +73,15 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     /// instance unchanged when no interpolation is present.
     /// </summary>
     /// <param name="program">The bound program to lower.</param>
+    /// <param name="references">
+    /// The compilation's reference closure. Issue #3730: the handler surface the
+    /// lowering targets is resolved from here, so it describes the framework
+    /// being compiled against rather than the SDK hosting <c>gsc</c>.
+    /// </param>
     /// <returns>The lowered program.</returns>
-    public static BoundProgram Lower(BoundProgram program)
+    public static BoundProgram Lower(BoundProgram program, ReferenceResolver references)
     {
-        var lowerer = new InterpolatedStringHandlerLowerer();
+        var lowerer = new InterpolatedStringHandlerLowerer(references);
         var changed = false;
 
         var functions = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
@@ -163,6 +171,26 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             return this.RewriteUserHandler(node, node.Handler, literalLength, formattedCount);
         }
 
+        // Issue #3730: the target framework does not provide the handler surface
+        // this lowering emits calls against. Report it at the interpolation
+        // instead of lowering onto the host SDK's handler, which produced an
+        // assembly whose TypeRef pointed at the host's System.Private.CoreLib.
+        if (this.handler == null)
+        {
+            // The condition is compilation-wide, and `Lower` walks the same
+            // interpolation through both the function bodies and the top-level
+            // statement, so report it once rather than once per visit.
+            if (!this.reportedMissingHandler)
+            {
+                this.reportedMissingHandler = true;
+                this.diagnostics.ReportInterpolatedStringHandlerUnavailable(
+                    node.Syntax?.Location ?? default,
+                    Invariant.Required(this.missingHandlerMember, "a null handler shape always records the member it could not resolve"));
+            }
+
+            return node;
+        }
+
         foreach (var part in node.Parts)
         {
             if (part.IsHole &&
@@ -176,7 +204,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
 
         var (parts, leading) = this.PrepareParts(node);
 
-        var handlerLocal = new LocalVariableSymbol($"<>interp{this.counter++}", isReadOnly: false, HandlerTypeSymbol);
+        var handlerLocal = new LocalVariableSymbol($"<>interp{this.counter++}", isReadOnly: false, this.handler.HandlerTypeSymbol);
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
         // Issue #368: hole values that contain an await are pre-evaluated into
@@ -186,12 +214,12 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
 
         var construct = new BoundClrConstructorCallExpression(
             node.Syntax,
-            HandlerType,
-            HandlerCtor,
+            this.handler.HandlerType,
+            this.handler.Constructor,
             ImmutableArray.Create<BoundExpression>(
                 new BoundLiteralExpression(null, literalLength),
                 new BoundLiteralExpression(null, formattedCount)),
-            HandlerTypeSymbol);
+            this.handler.HandlerTypeSymbol);
         statements.Add(new BoundVariableDeclaration(node.Syntax, handlerLocal, construct));
 
         foreach (var part in parts)
@@ -206,7 +234,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                 var append = new BoundImportedInstanceCallExpression(
                     node.Syntax,
                     new BoundVariableExpression(null, handlerLocal),
-                    AppendLiteralMethod,
+                    this.handler.AppendLiteral,
                     TypeSymbol.Void,
                     ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, part.Literal)));
                 statements.Add(new BoundExpressionStatement(node.Syntax, append));
@@ -227,7 +255,10 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                     ImmutableArray<BoundExpression>.Empty);
             }
 
-            var (method, typeArguments) = CloseAppendFormatted(part, value.Type);
+            if (!this.TryCloseAppendFormatted(node, part, value.Type, out var method, out var typeArguments))
+            {
+                continue;
+            }
 
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
             arguments.Add(value);
@@ -255,7 +286,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         var result = new BoundImportedInstanceCallExpression(
             node.Syntax,
             new BoundVariableExpression(null, handlerLocal),
-            ToStringAndClearMethod,
+            this.handler.ToStringAndClear,
             TypeSymbol.String,
             ImmutableArray<BoundExpression>.Empty);
 
@@ -700,25 +731,36 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         return false;
     }
 
-    private static (MethodInfo Method, ImmutableArray<TypeSymbol> TypeArguments) CloseAppendFormatted(
-        BoundInterpolatedStringPart part, TypeSymbol holeType)
+    /// <summary>
+    /// Issue #3730: picks the <c>AppendFormatted&lt;T&gt;</c> overload the hole's
+    /// decorations need <em>from the target framework's handler</em> and closes it
+    /// over the hole's CLR type. Returns <see langword="false"/> — having reported
+    /// GS0545 — when the target does not declare that overload, rather than
+    /// emitting a call the target's runtime cannot resolve.
+    /// </summary>
+    /// <param name="node">The interpolation being lowered, for diagnostic anchoring.</param>
+    /// <param name="part">The hole whose alignment/format decorations select the overload.</param>
+    /// <param name="holeType">The hole's type.</param>
+    /// <param name="method">The closed <c>AppendFormatted</c>.</param>
+    /// <param name="typeArguments">The symbolic type arguments the emitter must encode, when the hole has no reflection type.</param>
+    /// <returns><see langword="true"/> when an overload was available.</returns>
+    private bool TryCloseAppendFormatted(
+        BoundInterpolatedStringExpression node,
+        BoundInterpolatedStringPart part,
+        TypeSymbol holeType,
+        [NotNullWhen(true)] out MethodInfo? method,
+        out ImmutableArray<TypeSymbol> typeArguments)
     {
-        MethodInfo open;
-        if (part.Alignment.HasValue && part.Format != null)
+        var shape = Invariant.Required(this.handler, "the handler shape is resolved before any part is lowered");
+        var (open, signature) = shape.GetAppendFormatted(part.Alignment.HasValue, part.Format != null);
+        if (open == null)
         {
-            open = AppendFormattedAlignFormat;
-        }
-        else if (part.Alignment.HasValue)
-        {
-            open = AppendFormattedAlign;
-        }
-        else if (part.Format != null)
-        {
-            open = AppendFormattedFormat;
-        }
-        else
-        {
-            open = AppendFormattedValue;
+            method = null;
+            typeArguments = default;
+            this.diagnostics.ReportInterpolatedStringHandlerUnavailable(
+                part.HoleSyntax?.Location ?? part.Value?.Syntax?.Location ?? node.Syntax?.Location ?? default,
+                signature);
+            return false;
         }
 
         // Issue #1916: a `T?` hole over a value type must close over
@@ -734,75 +776,21 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         {
             // Primitive / BCL / reference holes close over their concrete CLR
             // type, so a value-type hole is passed without boxing.
-            return (open.MakeGenericMethod(clrType), default);
+            method = shape.CloseAppendFormatted(open, clrType);
+            typeArguments = default;
+            return true;
         }
 
         // A user-defined type has no reflection Type; close over an object
         // placeholder and carry the real type-argument symbol so the emitter
         // encodes the user TypeDef into the MethodSpec (issue #320 path).
-        return (open.MakeGenericMethod(typeof(object)), ImmutableArray.Create(holeType));
+        method = shape.CloseAppendFormatted(open, typeof(object));
+        typeArguments = ImmutableArray.Create(holeType);
+        return true;
     }
 
     private static MethodInfo? FindByRefLikeToString(TypeSymbol type)
         => type?.ClrType?.GetMethodSafe("ToString", System.Type.EmptyTypes);
-
-    private static MethodInfo FindAppendFormatted(
-        System.Type? secondParam = null, System.Type? thirdParam = null, int genericArity = 1, bool valueOnly = false)
-    {
-        foreach (var method in HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-        {
-            if (method.Name != "AppendFormatted" || !method.IsGenericMethodDefinition)
-            {
-                continue;
-            }
-
-            if (method.GetGenericArguments().Length != genericArity)
-            {
-                continue;
-            }
-
-            var parameters = method.GetParameters();
-            if (!parameters[0].ParameterType.IsGenericMethodParameter)
-            {
-                continue;
-            }
-
-            if (valueOnly)
-            {
-                if (parameters.Length == 1)
-                {
-                    return method;
-                }
-
-                continue;
-            }
-
-            if (thirdParam != null)
-            {
-                if (parameters.Length == 3 && parameters[1].ParameterType == secondParam && parameters[2].ParameterType == thirdParam)
-                {
-                    return method;
-                }
-
-                continue;
-            }
-
-            if (parameters.Length == 2 && parameters[1].ParameterType == secondParam)
-            {
-                return method;
-            }
-        }
-
-        foreach (var method in HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-        {
-            if (method.Name == "AppendFormatted" && method.IsGenericMethodDefinition)
-            {
-                return method;
-            }
-        }
-
-        throw new InvalidOperationException("DefaultInterpolatedStringHandler.AppendFormatted<T> was not found.");
-    }
 
     private static ImmutableArray<TypeSymbol?> ToNullableTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
         => typeArguments.IsDefault

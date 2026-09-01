@@ -147,6 +147,19 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.ByRefLikeInterpolationUnsupported, type);
 
     /// <summary>
+    /// GS0545 (issue #3730): the framework the compilation references does not
+    /// declare the <c>DefaultInterpolatedStringHandler</c> surface interpolated
+    /// strings lower onto. Previously the lowering read that surface off the
+    /// SDK <em>hosting</em> gsc, so a target lacking the handler still compiled
+    /// — emitting a <c>TypeRef</c> scoped to the host's
+    /// <c>System.Private.CoreLib</c> and reporting success.
+    /// </summary>
+    /// <param name="location">The source location of the interpolated string or hole.</param>
+    /// <param name="missingMember">The handler type or member the target framework does not provide.</param>
+    public void ReportInterpolatedStringHandlerUnavailable(TextLocation location, string missingMember)
+    => Report(location, DiagnosticDescriptors.InterpolatedStringHandlerUnavailable, missingMember);
+
+    /// <summary>
     /// GS0403: a <c>void</c>-element pointer (<c>*void</c>, the faithful mapping
     /// of C# <c>void*</c>; ADR-0122 §3 / issue #1033) was directly dereferenced
     /// (<c>*p</c>), indexed (<c>p[i]</c>), or used in pointer arithmetic

@@ -69,7 +69,7 @@ public class Issue3258BoundSyntaxDiagnosticTests
         Assert.DoesNotContain(compilation.BoundProgram.Diagnostics, diagnostic => diagnostic.IsError);
 
         var program = StripHoleSyntax(compilation.BoundProgram);
-        var lowered = InterpolatedStringHandlerLowerer.Lower(program);
+        var lowered = InterpolatedStringHandlerLowerer.Lower(program, ReferenceResolver.Default());
         var diagnostic = Assert.Single(lowered.Diagnostics, diagnostic => diagnostic.Id == "GS0519");
         var location = diagnostic.Location;
 
