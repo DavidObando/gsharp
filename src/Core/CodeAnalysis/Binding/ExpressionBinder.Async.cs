@@ -629,10 +629,55 @@ internal sealed partial class ExpressionBinder
         // the method-group branches above already apply.
         if (bound.Type != targetDelegateType && bound is not BoundErrorExpression)
         {
-            return conversions.BindConversion(handlerSyntax.Location, bound, targetDelegateType);
+            return conversions.BindConversion(
+                handlerSyntax.Location,
+                bound,
+                NilTolerantHandlerTarget(bound, targetDelegateType));
         }
 
         return bound;
+    }
+
+    /// <summary>
+    /// Issue #3775: <c>e += h</c> / <c>e -= h</c> where <c>h</c> is nil is a
+    /// silent no-op in C# — <c>add_E</c> forwards to
+    /// <see cref="Delegate.Combine(Delegate?, Delegate?)"/>, which returns the
+    /// other operand unchanged — so an <c>EventHandler?</c> handler is a legal
+    /// subscription argument, not a conversion error. Binding the handler
+    /// against the event's bare (non-nilable) delegate type rejected exactly
+    /// that shape with <c>GS0155</c>, which is the same defect class as the
+    /// unguarded <c>using</c> cleanup fixed in #3787: a position where the
+    /// lowering assumes non-nil while C# defines nil-tolerant behaviour. Here
+    /// the divergence surfaces at bind time rather than at run time, because
+    /// the only way to spell the subscription was a <c>!!</c> that throws.
+    /// <para>
+    /// The relaxation is scoped to the subscription argument alone: it widens
+    /// the conversion target to <c>T?</c> only when the handler expression is
+    /// already nilable (or the literal <c>nil</c>) and the delegate type's CLR
+    /// representation is a managed reference. A method group, a lambda, and a
+    /// non-nilable handler are all unaffected, and nothing about the event's
+    /// own declared type changes — the backing delegate stays exactly as
+    /// nilable as it always was.
+    /// </para>
+    /// </summary>
+    /// <param name="handler">The bound handler expression.</param>
+    /// <param name="targetDelegateType">The event's declared delegate type.</param>
+    /// <returns>The conversion target for the handler.</returns>
+    private static TypeSymbol NilTolerantHandlerTarget(BoundExpression handler, TypeSymbol targetDelegateType)
+    {
+        if (targetDelegateType is NullableTypeSymbol
+            || NullableTypeSymbol.GetEffectiveClrType(targetDelegateType) is { IsValueType: true })
+        {
+            // Already nilable, or not a managed reference at all: leave the
+            // target exactly as the caller computed it.
+            return targetDelegateType;
+        }
+
+        var isNilableHandler = handler.Type is NullableTypeSymbol
+            || handler.Type == TypeSymbol.Null
+            || handler is BoundLiteralExpression { Value: null };
+
+        return isNilableHandler ? NullableTypeSymbol.Get(targetDelegateType) : targetDelegateType;
     }
 
     /// <summary>
