@@ -132,11 +132,7 @@ let text = ""$label = $count""
         {
             using (resolver)
             {
-                Assert.True(
-                    DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out var shape, out var missing),
-                    $"closure '{label}' should declare the handler, but '{missing}' was missing");
-
-                Assert.Equal(expected, Ask(query, shape!));
+                Assert.Equal(expected, Ask(query, ResolveOrFail(label, resolver)));
                 contexts++;
             }
         }
@@ -161,13 +157,15 @@ let text = ""$label = $count""
         {
             using (resolver)
             {
-                Assert.True(DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out var shape, out _));
+                var shape = ResolveOrFail(label, resolver);
 
-                var handlerAssembly = shape!.HandlerType.Assembly;
-                Assert.Same(handlerAssembly, shape.Constructor.DeclaringType!.Assembly);
-                Assert.Same(handlerAssembly, shape.AppendLiteral.DeclaringType!.Assembly);
-                Assert.Same(handlerAssembly, shape.ToStringAndClear.DeclaringType!.Assembly);
-                Assert.Same(handlerAssembly, shape.AppendFormattedValue!.DeclaringType!.Assembly);
+                // MemberInfo.Module.Assembly rather than DeclaringType.Assembly:
+                // it asks the same question without a nullable hop (ADR-0155).
+                var handlerAssembly = shape.HandlerType.Assembly;
+                Assert.Same(handlerAssembly, shape.Constructor.Module.Assembly);
+                Assert.Same(handlerAssembly, shape.AppendLiteral.Module.Assembly);
+                Assert.Same(handlerAssembly, shape.ToStringAndClear.Module.Assembly);
+                Assert.Same(handlerAssembly, AppendFormattedValueOf(shape).Module.Assembly);
 
                 if (!ReferenceEquals(handlerAssembly, typeof(object).Assembly))
                 {
@@ -176,8 +174,6 @@ let text = ""$label = $count""
                         "System.Private.CoreLib",
                         handlerAssembly.GetName().Name);
                 }
-
-                _ = label;
             }
         }
 
@@ -203,9 +199,9 @@ let text = ""$label = $count""
                 var (diagnostics, image) = Compile(resolver);
 
                 Assert.DoesNotContain(diagnostics, d => d.Id == "GS0545");
-                Assert.NotNull(image);
 
-                var (assemblyRefs, handlerScopes) = ReadHandlerReferences(image!);
+                var (assemblyRefs, handlerScopes) = ReadHandlerReferences(
+                    Required(image, $"an emitted assembly for closure '{label}'"));
 
                 // Anti-vacuity: the fixture must really have lowered an
                 // interpolation, otherwise "no leaked reference" is trivially
@@ -259,9 +255,49 @@ let text = ""$label = $count""
         Query.AppendFormattedAlign => Signature(shape.AppendFormattedAlign),
         Query.AppendFormattedFormat => Signature(shape.AppendFormattedFormat),
         Query.AppendFormattedAlignFormat => Signature(shape.AppendFormattedAlignFormat),
-        Query.ClosedOverString => Signature(shape.CloseAppendFormatted(shape.AppendFormattedValue!, typeof(string))),
+        Query.ClosedOverString => Signature(shape.CloseAppendFormatted(AppendFormattedValueOf(shape), typeof(string))),
         _ => throw new ArgumentOutOfRangeException(nameof(query)),
     };
+
+    /// <summary>
+    /// Resolves the handler surface from <paramref name="resolver"/> or fails the
+    /// test naming the closure. The narrowing form of the assertion: because
+    /// <c>TryResolve</c> is annotated <c>[NotNullWhen(true)]</c>, callers get a
+    /// non-nullable shape without a null-forgiving operator (ADR-0155).
+    /// </summary>
+    /// <param name="label">The closure's label, for the failure message.</param>
+    /// <param name="resolver">The reference closure to resolve against.</param>
+    /// <returns>The resolved handler surface.</returns>
+    private static DefaultInterpolatedStringHandlerShape ResolveOrFail(string label, ReferenceResolver resolver)
+        => DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out var shape, out var missing)
+            ? shape
+            : throw new Xunit.Sdk.XunitException(
+                $"closure '{label}' should declare the handler, but '{missing}' was missing");
+
+    /// <summary>
+    /// The bare <c>AppendFormatted&lt;T&gt;(T)</c> overload, which every closure
+    /// under test is asserted to declare by the <see cref="Query.AppendFormattedValue"/>
+    /// row. Fails rather than forgiving the null, so the absence is reported as
+    /// a missing overload instead of a <see cref="NullReferenceException"/>.
+    /// </summary>
+    /// <param name="shape">The resolved handler surface.</param>
+    /// <returns>The overload.</returns>
+    private static System.Reflection.MethodInfo AppendFormattedValueOf(DefaultInterpolatedStringHandlerShape shape)
+        => Required(
+            shape.AppendFormattedValue,
+            $"{DefaultInterpolatedStringHandlerShape.HandlerTypeFullName}.AppendFormatted<T>(T)");
+
+    /// <summary>
+    /// Fails the test when <paramref name="value"/> is null, returning it
+    /// non-nullable otherwise.
+    /// </summary>
+    /// <typeparam name="T">The value's type.</typeparam>
+    /// <param name="value">The possibly-null value.</param>
+    /// <param name="what">What was expected, for the failure message.</param>
+    /// <returns>The non-null value.</returns>
+    private static T Required<T>(T? value, string what)
+        where T : class
+        => value ?? throw new Xunit.Sdk.XunitException($"expected {what}, but it was null");
 
     private static string Signature(System.Reflection.MethodInfo? method)
         => method == null
