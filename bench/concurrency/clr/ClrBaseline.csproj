@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ClrBaseline</AssemblyName>
+    <RootNamespace>Gsharp.Bench.Concurrency</RootNamespace>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+
+    <!--
+      Benchmark harness, not product code: it is deliberately written in a
+      dense single-statement-per-line style so each measured sequence reads as
+      one unit, and it reproduces the emitter's exact call sequences rather
+      than idiomatic C#. Style analysis is off here for that reason. This
+      project is intentionally not in GSharp.sln and not in the PR gate; see
+      README.md and ADR-0174 D11 Phase 5.
+    -->
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+</Project>
