@@ -73,18 +73,26 @@ public static class RepositorySolutionGenerator
             projectMapping,
             fullSourceRoot,
             fullDestinationRoot);
-        List<(string SourcePath, string RelativeDestinationPath)> plans =
-            DiscoverSolutions(fullSourceRoot, sourceFiles)
-                .Select(sourcePath =>
-                {
-                    string relativePath = Path.GetRelativePath(fullSourceRoot, sourcePath);
-                    string relativeDestinationPath =
-                        Path.GetExtension(sourcePath).Equals(".sln", StringComparison.OrdinalIgnoreCase)
-                            ? Path.ChangeExtension(relativePath, ".slnx")
-                            : relativePath;
-                    return (sourcePath, relativeDestinationPath);
-                })
-                .ToList();
+
+        // Issue #3772: a legacy `.sln` is MIRRORED as well as converted. The
+        // repository's own sources anchor the repository root by the solution's
+        // file name, so a mirror that renames GSharp.sln to GSharp.slnx is not
+        // the same repository; the `.slnx` conversion is emitted beside it
+        // because only the XML format can type-tag a `.gsproj`.
+        var plans = new List<(string SourcePath, string RelativeDestinationPath)>();
+        foreach (string sourcePath in DiscoverSolutions(fullSourceRoot, sourceFiles))
+        {
+            string relativePath = Path.GetRelativePath(fullSourceRoot, sourcePath);
+            if (Path.GetExtension(sourcePath).Equals(".sln", StringComparison.OrdinalIgnoreCase))
+            {
+                plans.Add((sourcePath, relativePath));
+                plans.Add((sourcePath, Path.ChangeExtension(relativePath, ".slnx")));
+            }
+            else
+            {
+                plans.Add((sourcePath, relativePath));
+            }
+        }
 
         DetectDestinationCollisions(plans);
 
@@ -110,7 +118,11 @@ public static class RepositorySolutionGenerator
             string destinationDirectory = Path.GetDirectoryName(destinationPath);
             Directory.CreateDirectory(destinationDirectory);
 
-            if (Path.GetExtension(sourcePath).Equals(".sln", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetExtension(destinationPath).Equals(".sln", StringComparison.OrdinalIgnoreCase))
+            {
+                MirrorLegacySolution(sourcePath, destinationPath, canonicalMapping);
+            }
+            else if (Path.GetExtension(sourcePath).Equals(".sln", StringComparison.OrdinalIgnoreCase))
             {
                 ConvertLegacySolution(sourcePath, destinationPath, canonicalMapping);
             }
@@ -224,6 +236,62 @@ public static class RepositorySolutionGenerator
 
             destinations.Add(relativeDestinationPath, sourcePath);
         }
+    }
+
+    /// <summary>
+    /// Copies a legacy <c>.sln</c> to the mirror under its own name, retargeting
+    /// its project paths at the generated projects and leaving every other byte —
+    /// GUIDs, folders, configuration blocks — exactly as authored.
+    /// </summary>
+    private static void MirrorLegacySolution(
+        string sourceSolutionPath,
+        string destinationPath,
+        IReadOnlyDictionary<string, string> projectMapping)
+    {
+        string sourceSolutionDirectory = Path.GetDirectoryName(Path.GetFullPath(sourceSolutionPath));
+        string destinationDirectory = Path.GetDirectoryName(Path.GetFullPath(destinationPath));
+        string[] lines = File.ReadAllLines(sourceSolutionPath);
+
+        for (int index = 0; index < lines.Length; index++)
+        {
+            string line = lines[index];
+            if (!line.StartsWith("Project(", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Project("{type-guid}") = "Name", "relative\path.csproj", "{guid}"
+            // The path is the fourth quoted field; solution folders name a
+            // folder there instead of a file, and simply never match the map.
+            List<int> quotes = new List<int>();
+            for (int position = 0; position < line.Length; position++)
+            {
+                if (line[position] == '"')
+                {
+                    quotes.Add(position);
+                }
+            }
+
+            if (quotes.Count < 6)
+            {
+                continue;
+            }
+
+            int start = quotes[4] + 1;
+            int length = quotes[5] - start;
+            string projectPath = line.Substring(start, length);
+            string canonicalSourceProject = CanonicalizePath(projectPath, sourceSolutionDirectory);
+            if (!projectMapping.TryGetValue(canonicalSourceProject, out string generatedProject))
+            {
+                continue;
+            }
+
+            string mirrored = Path.GetRelativePath(destinationDirectory, generatedProject)
+                .Replace('/', '\\');
+            lines[index] = line.Substring(0, start) + mirrored + line.Substring(quotes[5]);
+        }
+
+        File.WriteAllLines(destinationPath, lines);
     }
 
     private static void ConvertLegacySolution(

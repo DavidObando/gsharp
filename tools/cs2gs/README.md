@@ -78,8 +78,21 @@ dotnet out/bin/Release/Cs2Gs.Cli/cs2gs.dll migrate \
 | `--translate-only` | Repository mode: run stage 1 only, then stop (see `validate`). |
 
 Repository mode preserves relative directories, copies non-C# files, translates
-checked-in `.cs` files to `.gs`, transforms `.csproj` files to `.gsproj`, and
-replaces `.sln` files with `.slnx`. As a compatibility rewrite, literal
+checked-in `.cs` files to `.gs`, and transforms `.csproj` files to `.gsproj`.
+The mirror is a repository, not a bag of projects (issue #3772): every `.sln`
+is mirrored under its own name with its project paths retargeted — the
+repository's own sources anchor the repository root by that file name — and the
+`.slnx` conversion is written beside it, because only the XML format can
+type-tag a `.gsproj`. A project `--exclude` removed from the run keeps its
+project file too when it has no `.cs` sources of its own (it was already G#, so
+the mirror carries its complete source set); dropping it would leave a project
+directory whose consumers reference a project that is not there. Such a project
+is rebound onto the same pinned `Gsharp.NET.Sdk` as every other mirrored
+project — a mirror has no in-tree bootstrap toolchain to resolve — and a
+`ProjectReference` the run did not translate becomes
+`ReferenceOutputAssembly="false"`: the reference exists to get the project
+BUILT, while the assembly the consumer compiles against comes from the SDK. As
+a compatibility rewrite, literal
 Nerdbank.GitVersioning versions below `3.11.13-beta` are upgraded in projects
 and shared MSBuild props. Build outputs, logs, triage records,
 `run.json`, `report.html`, and `summary.json` stay outside the destination under
