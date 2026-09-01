@@ -1825,8 +1825,13 @@ internal sealed partial class ExpressionBinder
     /// methods declared on the richer interface remain reachable. Falls back to
     /// the first implemented CLR interface so non-collection extensions can
     /// still match an interface receiver.
+    /// <para>
+    /// Issue #3745: the same projection is reused for ORDINARY arguments by
+    /// <see cref="TryProjectUserClassArgumentInterfaces"/>, but only after
+    /// overload resolution has already failed with the erased shapes.
+    /// </para>
     /// </summary>
-    /// <param name="userClass">The user-declared class receiver.</param>
+    /// <param name="userClass">The user-declared class receiver or argument.</param>
     /// <param name="clrInterface">The projected CLR interface type, on success.</param>
     /// <returns><see langword="true"/> when an implemented CLR interface was found.</returns>
     private static bool TryProjectUserClassReceiverInterface(StructSymbol userClass, [NotNullWhen(true)] out Type? clrInterface)
@@ -1864,6 +1869,50 @@ internal sealed partial class ExpressionBinder
 
         clrInterface = bestEnumerable ?? firstInterface;
         return clrInterface != null;
+    }
+
+    /// <summary>
+    /// Issue #3745: rewrites, IN PLACE, every argument slot holding a
+    /// user-declared class that erased to <c>System.Object</c> so it carries the
+    /// implemented imported interface instead. An imported generic method whose
+    /// type parameter occurs solely inside an interface-typed parameter — e.g.
+    /// <c>MethodDefinition.DecodeSignature&lt;TType, TGenericContext&gt;(
+    /// ISignatureTypeProvider&lt;TType, TGenericContext&gt;, TGenericContext)</c>
+    /// called with a G#-declared <c>NameSignatureProvider :
+    /// ISignatureTypeProvider[string, object]</c> — gets no bound at all from an
+    /// <c>object</c> argument, so inference fails and the call reports
+    /// <c>GS0159 Cannot find function</c>.
+    /// <para>
+    /// This runs ONLY after resolution with the erased shapes has already
+    /// failed. The <c>object</c> ride-through is load-bearing on its own — it is
+    /// what makes a parameter whose type is an erased type parameter applicable
+    /// (issue #2840's <c>Do(ctx T, …)</c> on an imported <c>Jobb[T]</c>) — so a
+    /// caller must restore the original vector when the retry does not resolve.
+    /// </para>
+    /// </summary>
+    /// <param name="arguments">The bound arguments, positionally aligned with <paramref name="argTypes"/>.</param>
+    /// <param name="argTypes">The CLR argument-type vector, rewritten in place.</param>
+    /// <returns><see langword="true"/> when at least one slot was rewritten.</returns>
+    private static bool TryProjectUserClassArgumentInterfaces(
+        ImmutableArray<BoundExpression> arguments,
+        Type?[] argTypes)
+    {
+        var projected = false;
+        for (var i = 0; i < arguments.Length && i < argTypes.Length; i++)
+        {
+            if (arguments[i].Type is not StructSymbol { IsClass: true } userClass
+                || argTypes[i] is not { } erased
+                || !erased.IsSameAs(typeof(object))
+                || !TryProjectUserClassReceiverInterface(userClass, out var clrInterface))
+            {
+                continue;
+            }
+
+            argTypes[i] = clrInterface;
+            projected = true;
+        }
+
+        return projected;
     }
 
     private static bool ImplementsGenericEnumerable(Type clr)

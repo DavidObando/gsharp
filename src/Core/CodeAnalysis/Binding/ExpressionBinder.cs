@@ -2180,6 +2180,13 @@ internal sealed partial class ExpressionBinder
         // and the supplementary interface check handle the rest).
         if (typeSymbol is StructSymbol { IsClass: true } ss)
         {
+            // Issue #3745: the implemented imported INTERFACES a user class
+            // carries are deliberately NOT surfaced here. The `object`
+            // ride-through is what makes an erased type-parameter parameter
+            // (`Do(ctx T, …)` on an imported `Jobb[T]`) applicable, so
+            // projecting an interface unconditionally breaks calls that bind
+            // today (#2840). The projection is applied only on the FAILURE path
+            // — see TryProjectUserClassArgumentInterfaces.
             return ss.ImportedBaseType?.ClrType ?? typeof(object);
         }
 
