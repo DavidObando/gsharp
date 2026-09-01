@@ -964,15 +964,18 @@ public sealed partial class CSharpToGSharpTranslator
         /// verifier, keeping the harness's own signature — so every call site
         /// in the migrated tests is untouched — and reports the substitution as
         /// a shape adaptation.
+        /// <para>
+        /// The shape test itself lives on <see cref="AnalyzerProjectDetector"/>
+        /// (issue #3789): the presence of a harness is also what decides
+        /// whether a project enters analyzer mode at all, and the two must be
+        /// one predicate — a project is claimed exactly when there is a harness
+        /// here to rewrite.
+        /// </para>
         /// </remarks>
         /// <param name="symbol">The method being translated.</param>
         /// <returns>True when this method is the harness entry point.</returns>
         private bool IsAnalyzerHarnessEntry(IMethodSymbol symbol)
-            => this.InAnalyzerApiMode
-               && symbol is { IsStatic: true }
-               && symbol.Parameters.Length >= 2
-               && DerivesFromDiagnosticAnalyzer(symbol.Parameters[0].Type)
-               && symbol.Parameters[1].Type.SpecialType == SpecialType.System_String;
+            => this.InAnalyzerApiMode && AnalyzerProjectDetector.IsAnalyzerTestHarnessEntry(symbol);
 
         /// <summary>
         /// True when <paramref name="method"/> is private plumbing that exists
@@ -1075,20 +1078,6 @@ public sealed partial class CSharpToGSharpTranslator
         private static bool ReturnsTask(IMethodSymbol symbol)
             => symbol.ReturnType is INamedTypeSymbol { Name: "Task" } returnType
                && returnType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
-
-        private static bool DerivesFromDiagnosticAnalyzer(ITypeSymbol type)
-        {
-            for (ITypeSymbol current = type; current is not null; current = current.BaseType)
-            {
-                if (current is INamedTypeSymbol named
-                    && RoslynTypeMetadataName(named) == AnalyzerProjectDetector.DiagnosticAnalyzerMetadataName)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
 
         private void ReportAnalyzerShapeIfAdapted(
             SyntaxNode site,

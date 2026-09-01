@@ -199,13 +199,37 @@ bind, so an instance-based overload
 alongside it. Hand-written G# analyzer tests keep using the generic form.
 
 Detection is per project on both halves: `AnalyzerProjectDetector` gained
-`IsAnalyzerTestProject` (a project that instantiates an analyzer declared in a
-referenced, non-Roslyn assembly), and `GSharpProjectTransformer` recognizes the
+`IsAnalyzerTestProject` — a project that **declares an analyzer test harness**
+(`IsAnalyzerTestHarnessEntry`: a static method taking a `DiagnosticAnalyzer` and
+a source `string`) **and** instantiates an analyzer declared in a referenced,
+non-Roslyn assembly — and `GSharpProjectTransformer` recognizes the
 structural counterpart (a `ProjectReference` to an analyzer project that is not
 an `OutputItemType="Analyzer"` consumer reference) to inject the two assemblies
 the migrated tests bind — `GSharp.Core` and the verifier — both copied to the
 test output, because a test assembly is loaded by the test host rather than by
 gsc.
+
+Why the harness, and not instantiation alone (issue #3789): analyzer mode maps
+a project's **whole** `Microsoft.CodeAnalysis` surface, so it may only claim a
+project whose Roslyn use it can map. Constructing an analyzer is not enough
+evidence of that — `tools/cs2gs/Cs2Gs.Tests` runs the real GSA analyzers as a
+library to diff them against their translated counterparts, and its other
+~256 Roslyn uses are cs2gs machinery (`MetadataReference`, `CSharpCompilation`)
+that has, and should have, no analyzer-API mapping; claiming it turned a
+14-error compile wall into 98 translate gaps. The harness is the one member
+analyzer mode rewrites for a test project, so its presence is exactly the
+condition under which analyzer mode has something to offer, and the detector
+and the rewrite share one predicate. Rejected alternatives: keying on a
+reference to Roslyn's analyzer-testing package (the repo's own harness is
+hand-rolled and does not bind it, so the signal is a dead `PackageReference`
+that a cleanup would silently remove — and both projects reference the *G#*
+verifier, so that variant does not discriminate at all); a proportion
+threshold on analyzer-related surface (no defensible cut point, and any
+project above it still gaps on the remainder); and per-file claiming (it does
+not fix the case — `Cs2Gs.Tests`' analyzer instantiation sits in a file that
+is itself full of unmappable cs2gs machinery — while breaking the working
+case, since `AnalyzerTestHelper.cs` instantiates no analyzer and would stop
+being claimed).
 
 The remaining half is the **embedded C# snippets** — raw strings of analyzed
 code inside tests. For functional equivalence they must become G# snippets.
