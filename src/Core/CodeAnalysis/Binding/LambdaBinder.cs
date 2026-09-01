@@ -1518,7 +1518,22 @@ internal sealed class LambdaBinder
             // `Task<Nullable<int>>` rather than `Task<int>`.
             var elementClr = resolveClrTypeForGenericArg(element) ?? Scope.References.MapClrTypeToReferences(clr);
             var closed = taskOpen.MakeGenericType(elementClr);
-            return ImportedTypeSymbol.Get(closed);
+
+            // Issue #3746 / ADR-0172: tuple element names are metadata over the
+            // positional shape, so `ImportedTypeSymbol.Get(closed)` — which
+            // rebuilds its type arguments by reflecting over `closed` — erases
+            // them: `async func F() Task[(Output string, Count int32)]`
+            // normalizes to the awaited named tuple, is re-widened here, and
+            // came back as `Task[(string, int32)]`, making every `await F()
+            // .Output` / `F().Result.Output` a GS0158. Unlike the symbolic
+            // branch above this keeps the EXACT closed CLR type (the awaiter,
+            // the async method builder and the emitted signature all depend on
+            // it) and only attaches the name-bearing symbolic argument, which
+            // AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType and member
+            // lookup read in preference to the reflected one.
+            return TypeSymbol.ContainsNamedTupleElement(element)
+                ? ImportedTypeSymbol.GetConstructed(closed, taskOpen, ImmutableArray.Create(element))
+                : ImportedTypeSymbol.Get(closed);
         }
 
         return element;

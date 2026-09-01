@@ -1071,6 +1071,42 @@ public class TypeSymbol : Symbol
             || ContainsReferenceNullableAnnotation(type);
 
     /// <summary>
+    /// Issue #3746 / ADR-0172: returns <c>true</c> when <paramref name="type"/>
+    /// carries tuple element names at any structural position. Like reference
+    /// nullability, element names are metadata over the positional shape and
+    /// have no distinct runtime <see cref="Type"/>, so any projection that
+    /// round-trips a type through its CLR <see cref="Type"/> silently erases
+    /// them. Callers that rebuild a type from reflection must consult this and
+    /// take their symbolic path instead.
+    /// </summary>
+    /// <remarks>
+    /// This deliberately is <em>not</em> folded into
+    /// <see cref="RequiresSymbolicProjection(TypeSymbol)"/>: that predicate also
+    /// gates <see cref="TupleTypeSymbol"/>'s own CLR backing, and a named tuple
+    /// must keep its <c>ValueTuple&lt;…&gt;</c> <see cref="ClrType"/> — names
+    /// never change the runtime type (ADR-0172).
+    /// </remarks>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when a named tuple appears anywhere in the type.</returns>
+    public static bool ContainsNamedTupleElement(TypeSymbol type)
+    {
+        if (type is TupleTypeSymbol { HasNames: true })
+        {
+            return true;
+        }
+
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsNamedTupleElement(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns true when <paramref name="type"/> — after unwrapping nullable,
     /// slice and array wrappers — is itself a same-compilation user-defined
     /// type (struct/class/enum/interface/delegate with a null <c>ClrType</c>).

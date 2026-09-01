@@ -923,6 +923,22 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #3748: a tuple is unconditionally a CLR value type
+        // (`System.ValueTuple<…>`) and therefore always boxes to `object`, but
+        // `TupleTypeSymbol.BuildClrType` deliberately leaves `ClrType` null
+        // whenever an element requires symbolic projection — most commonly a
+        // nullable-reference element such as `(A int32, B string?)`, but also a
+        // type parameter or a same-compilation user type. The general
+        // CLR-backed rule above needs a non-null `from.ClrType`, so those
+        // tuples were rejected with GS0155 in every `object` / `object?`
+        // position (argument, return, assignment) while the all-CLR-backed
+        // same-shape tuple boxed fine. Element names are irrelevant here.
+        if (from is TupleTypeSymbol
+            && (to == TypeSymbol.Object || to?.ClrType.IsSameAs(typeof(object)) == true))
+        {
+            return Conversion.Implicit;
+        }
+
         // Issue #3310 / ADR-0159: same-element `[]T → sequence[T]` for the
         // OPEN (null-ClrType) shapes — e.g. `q = []K{}` inside a generic
         // class, and the synthesized empty-sequence zero value for a bare
