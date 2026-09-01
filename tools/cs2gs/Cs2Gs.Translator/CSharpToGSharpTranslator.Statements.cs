@@ -200,9 +200,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 else if (initializer != null &&
                     this.context.GetDeclaredSymbol(declarator) is ILocalSymbol inferredLocal &&
-                    (this.ShouldPromoteToNullableReference(inferredLocal)
-                        || (IsAnnotatedNullableReference(inferredLocal.Type)
-                            && this.IsUsedAsNullable(inferredLocal, this.GetNullabilityScope(inferredLocal)))))
+                    this.InferredLocalDeclarationIsNullable(inferredLocal))
                 {
                     // Issue #1072/#2305 (inferred-type form): a `var x = e` local
                     // whose uses prove it nullable needs an explicit `T?`.
@@ -223,6 +221,22 @@ public sealed partial class CSharpToGSharpTranslator
 
             return results;
         }
+
+        /// <summary>
+        /// Issue #1072/#2305/#3771: whether a <c>var</c> local's emitted G#
+        /// declaration is widened to <c>T?</c>.
+        /// </summary>
+        /// <remarks>
+        /// This is the single rule shared by the declaration site (which emits the
+        /// explicit <c>T?</c> clause) and by the assignment-RHS forgiveness, which
+        /// must NOT bridge an assignment into a target that is nullable in G#:
+        /// unlike C#'s erased <c>!</c>, G#'s <c>!!</c> is a checked assertion that
+        /// THROWS on nil.
+        /// </remarks>
+        private bool InferredLocalDeclarationIsNullable(ILocalSymbol local) =>
+            this.ShouldPromoteToNullableReference(local)
+            || (IsAnnotatedNullableReference(local.Type)
+                && this.IsUsedAsNullable(local, this.GetNullabilityScope(local)));
 
         /// <summary>
         /// Translates every declarator of a ref-local declaration (<c>ref int r =
@@ -2420,6 +2434,22 @@ public sealed partial class CSharpToGSharpTranslator
                 && declarator.Ancestors().OfType<VariableDeclarationSyntax>()
                     .FirstOrDefault()?.Type.IsVar == true)
             {
+                // Issue #3771: substituting the INITIALIZER's type for the
+                // target's and dropping `promotionTarget` also drops the #1072
+                // promotion check, so a `var` local whose emitted G# declaration
+                // was widened to `T?` (TranslateLocalDeclaration's inferred-type
+                // branch) still looks like a non-nullable sink here and the RHS
+                // gets a `!!`. C#'s `!` is erased at compile time; G#'s `!!` is a
+                // CHECKED assertion that THROWS on nil, so the assertion turns
+                // `for (var c = x; c != null; c = Parent(c))` into a guaranteed
+                // NullReferenceException at the loop's normal exit — compiling
+                // and ILVerifying clean the whole way. Keep the promotion target
+                // so a widened declaration vetoes the assertion.
+                if (this.InferredLocalDeclarationIsNullable(inferredAssignmentLocal))
+                {
+                    return value;
+                }
+
                 assignmentTargetType = this.context.GetTypeInfo(initializer).Type;
                 promotionTarget = null;
             }
