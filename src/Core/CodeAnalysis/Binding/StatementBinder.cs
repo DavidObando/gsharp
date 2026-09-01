@@ -355,6 +355,12 @@ internal sealed partial class StatementBinder
                         statements.Add(usingLowering.InitializedDeclaration);
                     }
 
+                    // Issue #3784: read the guard off the declaration before the
+                    // null test below narrows it away.
+                    var usingResource = usingLowering.Declaration is { } usingDeclaration
+                        ? NilGuardedResource(usingDeclaration.Variable)
+                        : null;
+
                     if (usingLowering.Declaration != null)
                     {
                         statements.Add(usingLowering.Declaration);
@@ -375,7 +381,8 @@ internal sealed partial class StatementBinder
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         usingLowering.Cleanup,
-                        usingLowering.Initialized));
+                        usingLowering.Initialized,
+                        usingResource));
                     return;
                 }
 
@@ -386,6 +393,11 @@ internal sealed partial class StatementBinder
                     {
                         statements.Add(awaitUsingLowering.InitializedDeclaration);
                     }
+
+                    // Issue #3784: as above, captured before the null test.
+                    var awaitUsingResource = awaitUsingLowering.Declaration is { } awaitUsingDeclaration
+                        ? NilGuardedResource(awaitUsingDeclaration.Variable)
+                        : null;
 
                     if (awaitUsingLowering.Declaration != null)
                     {
@@ -407,7 +419,8 @@ internal sealed partial class StatementBinder
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         awaitUsingLowering.Cleanup,
-                        awaitUsingLowering.Initialized));
+                        awaitUsingLowering.Initialized,
+                        awaitUsingResource));
                     return;
                 }
 
@@ -493,13 +506,59 @@ internal sealed partial class StatementBinder
                 initialized,
                 new BoundLiteralExpression(null, value)));
 
+    /// <summary>
+    /// Issue #3784: a <c>using</c> resource whose declared type is nilable can
+    /// legitimately hold <c>nil</c> (<c>using let s = if cond { nil } else {
+    /// File.Create(p) }</c>), exactly as C#'s
+    /// <c>using (var s = cond ? null : File.Create(p))</c> can. The cleanup
+    /// must therefore be nil-guarded; without the guard the finally block
+    /// issues an unconditional <c>Dispose()</c> on a nil receiver and the
+    /// statement throws a <see cref="NullReferenceException"/> on the very path
+    /// C# defines as a no-op. Returns the variable to guard on, or
+    /// <see langword="null"/> when the resource cannot be nil.
+    /// </summary>
+    /// <param name="variable">The bound resource variable.</param>
+    /// <returns>The variable to nil-guard the cleanup on, or <see langword="null"/>.</returns>
+    private static VariableSymbol? NilGuardedResource(VariableSymbol variable)
+    {
+        // The guard belongs to resources whose CLR representation is a managed
+        // REFERENCE — those are the ones an initializer can leave holding null,
+        // whatever static nullability the binder inferred for the declaration
+        // (`default(T?)`, a conditional with a nil arm, an interop call). A
+        // value-typed resource — including a `Nullable<T>` local — is never a
+        // nil reference, so its cleanup stays exactly as unconditional as it
+        // was. When the resource's type does not support `!= nil` at all,
+        // BuildCleanupTryStatement drops the guard again.
+        var clrType = NullableTypeSymbol.GetEffectiveClrType(variable.Type);
+        return clrType is { IsValueType: true } ? null : variable;
+    }
+
     private BoundTryStatement BuildCleanupTryStatement(
         ImmutableArray<BoundStatement> protectedStatements,
         BoundExpression cleanup,
-        VariableSymbol? initialized = null)
+        VariableSymbol? initialized = null,
+        VariableSymbol? nilGuardedResource = null)
     {
         var tryBlock = new BoundBlockStatement(null, protectedStatements);
         BoundStatement cleanupStatement = new BoundExpressionStatement(null, cleanup);
+
+        // Issue #3784: `if resource != nil { <cleanup> }`, mirroring how csc
+        // lowers `using` over a reference-typed resource.
+        if (nilGuardedResource is not null
+            && BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, nilGuardedResource.Type, TypeSymbol.Null)
+                is { } nilInequality)
+        {
+            cleanupStatement = new BoundIfStatement(
+                null,
+                new BoundBinaryExpression(
+                    null,
+                    new BoundVariableExpression(null, nilGuardedResource),
+                    nilInequality,
+                    new BoundLiteralExpression(null, null, TypeSymbol.Null)),
+                cleanupStatement,
+                elseStatement: null);
+        }
+
         if (initialized != null)
         {
             cleanupStatement = new BoundBlockStatement(

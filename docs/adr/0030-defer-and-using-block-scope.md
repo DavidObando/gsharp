@@ -19,6 +19,16 @@ Deferred call arguments are evaluated eagerly when the `defer` statement execute
 
 `using` declarations share the same block cleanup lowering. `using let x = expr` binds the declaration at the point it appears, then wraps the remaining statements in the enclosing block in `try/finally` with `x.Dispose()` in the `finally`. Interleaved `defer` and `using` declarations compose as one LIFO cleanup stack.
 
+A `using` resource whose CLR representation is a managed reference may hold
+`nil` — `using let s = if cond { nil } else { File.Create(p) }` is a legal
+declaration, and the migrated `src/Compiler/Program.cs` is built out of exactly
+that shape. Cleanup for such a resource is **nil-guarded**: the `finally` runs
+`if x != nil { x.Dispose() }`, so a nil resource makes the statement a no-op
+rather than a `NullReferenceException`, matching C#'s `using (var s = cond ?
+null : File.Create(p))` (issue #3784). A value-typed resource — including a
+`Nullable[T]` local — is never a nil reference and keeps the unconditional
+cleanup.
+
 `await using let x = expr` (issue #605) is the async sibling: it probes for `DisposeAsync()` returning `ValueTask` (the `IAsyncDisposable` pattern) and lowers to `try/finally` with `await x.DisposeAsync()` in the `finally`. It requires `async func` context and follows the same scope-exit machinery. When a type implements both `IDisposable` and `IAsyncDisposable`, `await using let` calls `DisposeAsync` and plain `using let` calls `Dispose`.
 
 ## Rationale for block scope over function scope

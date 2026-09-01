@@ -473,7 +473,8 @@ internal sealed partial class StatementBinder
         var tryStmt = BuildCleanupTryStatement(
             ImmutableArray<BoundStatement>.Empty,
             cleanup,
-            initialized);
+            initialized,
+            NilGuardedResource(usingLowering.Declaration.Variable));
         return new BoundBlockStatement(
             syntax,
             ImmutableArray.Create<BoundStatement>(
@@ -522,7 +523,8 @@ internal sealed partial class StatementBinder
         var tryStmt = BuildCleanupTryStatement(
             ImmutableArray<BoundStatement>.Empty,
             cleanup,
-            initialized);
+            initialized,
+            NilGuardedResource(declaration.Variable));
         return new BoundBlockStatement(
             syntax,
             ImmutableArray.Create<BoundStatement>(
