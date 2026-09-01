@@ -154,6 +154,49 @@ Run()
             new[] { "tick", "tick", "done" },
         };
 
+        // The other two spellings of the subscription LHS: a bare event name
+        // inside the declaring type, and an event reached through a
+        // member-access chain, each with a nilable field as the handler.
+        yield return new object[]
+        {
+            "bare-name-and-member-access-handlers",
+            @"
+package P
+import System
+
+class Clock {
+    event Ticked EventHandler
+    var Stored EventHandler? = nil
+
+    func SubscribeSelf() {
+        Ticked += Stored
+    }
+
+    func Fire() {
+        Ticked?.Invoke(this, EventArgs.Empty)
+    }
+}
+
+class Holder {
+    var Handler EventHandler? = nil
+}
+
+func Run() {
+    let c = Clock()
+    let h = Holder()
+    c.Ticked += h.Handler
+    Console.WriteLine(""member-access-nil"")
+    c.SubscribeSelf()
+    Console.WriteLine(""bare-name-nil"")
+    c.Fire()
+    Console.WriteLine(""fired"")
+}
+
+Run()
+",
+            new[] { "member-access-nil", "bare-name-nil", "fired" },
+        };
+
         // ANTI-VACUITY (passes on main too): a plain non-nilable handler and a
         // lambda handler must keep binding and firing exactly as before. If
         // the relaxation had widened the handler position generally, these
