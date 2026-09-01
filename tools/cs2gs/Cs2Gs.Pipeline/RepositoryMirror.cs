@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using Cs2Gs.Translator.Loading;
 
 namespace Cs2Gs.Pipeline;
@@ -42,6 +43,87 @@ internal static class RepositoryMirror
         return files;
     }
 
+    /// <summary>
+    /// Issue #3772: mirrors the project files of excluded projects that have
+    /// nothing to translate.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Prepare"/> skips every <c>.csproj</c> because the translated
+    /// <c>.gsproj</c> normally replaces it. For a project the run excluded
+    /// there is no <c>.gsproj</c>, so the mirror ends up with the project's
+    /// directory but no project — a half project. That is fine when the
+    /// sources are missing too (they were <c>.cs</c> files nobody translated),
+    /// but wrong when they are all still there, which is the case for a
+    /// project excluded because it is ALREADY G# (<c>src/Sdk/Gsharp.Extensions</c>):
+    /// the mirror carries its complete <c>.gs</c> source set and drops only the
+    /// file that makes it buildable, breaking every consumer that references it.
+    /// </para>
+    /// <para>
+    /// The rule is therefore "the mirror never contains a half project": an
+    /// excluded project whose sources are all mirrored verbatim (it declares no
+    /// <c>.cs</c> file under its own directory) keeps its project file, with
+    /// project references retargeted to the generated projects.
+    /// </para>
+    /// </remarks>
+    /// <param name="sourceRoot">The repository source root.</param>
+    /// <param name="destinationRoot">The mirror root.</param>
+    /// <param name="sourceFiles">The repository inventory, relative to <paramref name="sourceRoot"/>.</param>
+    /// <param name="excludedScope">The run's excluded scope.</param>
+    /// <param name="generatedProjectPaths">Source project path to generated project path.</param>
+    /// <returns>The mirror-relative paths of the project files written.</returns>
+    internal static IReadOnlyList<string> MirrorExcludedProjects(
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlyList<string> sourceFiles,
+        RepositoryExcludedScope excludedScope,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        excludedScope ??= RepositoryExcludedScope.None;
+        string source = Path.GetFullPath(sourceRoot);
+        string destination = Path.GetFullPath(destinationRoot);
+
+        var csharpSourceDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in sourceFiles)
+        {
+            if (Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                string directory = DirectoryOf(path);
+                while (directory.Length > 0)
+                {
+                    if (!csharpSourceDirectories.Add(directory))
+                    {
+                        break;
+                    }
+
+                    directory = DirectoryOf(directory);
+                }
+            }
+        }
+
+        var written = new List<string>();
+        foreach (string path in sourceFiles)
+        {
+            if (!Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                || !excludedScope.IsExcluded(path)
+                || csharpSourceDirectories.Contains(DirectoryOf(path)))
+            {
+                continue;
+            }
+
+            string target = Path.Combine(destination, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            XDocument project = XDocument.Load(
+                Path.Combine(source, path.Replace('/', Path.DirectorySeparatorChar)),
+                LoadOptions.PreserveWhitespace);
+            RetargetProjectReferences(project, source, destination, path, generatedProjectPaths);
+            project.Save(target, SaveOptions.DisableFormatting);
+            written.Add(path.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        return written;
+    }
+
     internal static void ValidateCompleted(
         string sourceRoot,
         string destinationRoot,
@@ -65,7 +147,7 @@ internal static class RepositoryMirror
                         || extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase);
                     return !translated || !excludedScope.IsExcluded(path);
                 })
-                .Select(DestinationRelativePath),
+                .SelectMany(DestinationRelativePaths),
             StringComparer.OrdinalIgnoreCase);
         if (additionalFiles is not null)
         {
@@ -137,14 +219,61 @@ internal static class RepositoryMirror
         var destinations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string source in files)
         {
-            string destination = DestinationRelativePath(source);
-            if (destinations.TryGetValue(destination, out string prior))
+            foreach (string destination in DestinationRelativePaths(source))
             {
-                throw new InvalidOperationException(
-                    $"Migration output collision: '{prior}' and '{source}' both map to '{destination}'.");
+                if (destinations.TryGetValue(destination, out string prior))
+                {
+                    throw new InvalidOperationException(
+                        $"Migration output collision: '{prior}' and '{source}' both map to '{destination}'.");
+                }
+
+                destinations[destination] = source;
+            }
+        }
+    }
+
+    private static string DirectoryOf(string relativePath)
+    {
+        int separator = relativePath.LastIndexOfAny(new[] { '/', Path.DirectorySeparatorChar });
+        return separator < 0 ? string.Empty : relativePath.Substring(0, separator);
+    }
+
+    private static void RetargetProjectReferences(
+        XDocument project,
+        string sourceRoot,
+        string destinationRoot,
+        string relativeProjectPath,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        if (generatedProjectPaths is null || generatedProjectPaths.Count == 0)
+        {
+            return;
+        }
+
+        string sourceDirectory = Path.GetDirectoryName(
+            Path.Combine(sourceRoot, relativeProjectPath.Replace('/', Path.DirectorySeparatorChar)));
+        string destinationDirectory = Path.GetDirectoryName(
+            Path.Combine(destinationRoot, relativeProjectPath.Replace('/', Path.DirectorySeparatorChar)));
+
+        foreach (XElement reference in project.Descendants()
+            .Where(element => element.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase))
+            .ToList())
+        {
+            XAttribute include = reference.Attribute("Include");
+            if (include is null || include.Value.Contains("$(", StringComparison.Ordinal))
+            {
+                continue;
             }
 
-            destinations[destination] = source;
+            string referenced = Path.GetFullPath(Path.Combine(
+                sourceDirectory,
+                include.Value.Replace('\\', Path.DirectorySeparatorChar)
+                    .Replace('/', Path.DirectorySeparatorChar)));
+            if (generatedProjectPaths.TryGetValue(referenced, out string generated))
+            {
+                include.Value = Path.GetRelativePath(destinationDirectory, generated)
+                    .Replace('\\', '/');
+            }
         }
     }
 
@@ -165,25 +294,34 @@ internal static class RepositoryMirror
         File.Copy(source, destination);
     }
 
-    private static string DestinationRelativePath(string source)
+    // A legacy `.sln` produces TWO mirrored files, not a rename: the solution
+    // keeps its own name (issue #3772 — the repository's own sources anchor
+    // the repository root by that file name, so renaming it makes the mirror
+    // internally inconsistent) and the `.slnx` conversion is emitted beside it
+    // because only the XML format can type-tag a `.gsproj`.
+    private static IEnumerable<string> DestinationRelativePaths(string source)
     {
         string extension = Path.GetExtension(source);
         if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase))
         {
-            return Path.ChangeExtension(source, ".gs");
+            yield return Path.ChangeExtension(source, ".gs");
+            yield break;
         }
 
         if (extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
         {
-            return Path.ChangeExtension(source, ".gsproj");
+            yield return Path.ChangeExtension(source, ".gsproj");
+            yield break;
         }
 
         if (extension.Equals(".sln", StringComparison.OrdinalIgnoreCase))
         {
-            return Path.ChangeExtension(source, ".slnx");
+            yield return source;
+            yield return Path.ChangeExtension(source, ".slnx");
+            yield break;
         }
 
-        return source;
+        yield return source;
     }
 
     private static bool IsUnderDirectory(string path, string directory)

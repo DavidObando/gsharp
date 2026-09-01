@@ -192,6 +192,9 @@ public sealed class MigrationPipeline
                     SanitizeAppId(app.Id),
                     Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
             StringComparer.OrdinalIgnoreCase);
+        RepositoryExcludedScope excludedScope = repositoryLayout
+            ? RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
+            : null;
         if (repositoryLayout)
         {
             string sdkMoniker = SdkCompileRunner.ResolveSdkMoniker(this.options.Config);
@@ -214,6 +217,19 @@ public sealed class MigrationPipeline
                 transformed.Save(
                     generatedProjectPath,
                     System.Xml.Linq.SaveOptions.DisableFormatting);
+            }
+
+            // Issue #3772: an excluded project with nothing to translate still
+            // belongs in the mirror — dropping only its project file leaves a
+            // half project its consumers cannot reference.
+            foreach (string mirroredProject in RepositoryMirror.MirrorExcludedProjects(
+                this.options.SourceRoot,
+                destinationRoot,
+                repositoryFiles,
+                excludedScope,
+                this.options.GeneratedProjectPaths))
+            {
+                this.options.RepositoryAdditionalFiles.Add(mirroredProject);
             }
 
             var loadedProjects = new Dictionary<string, LoadedCSharpProject>(StringComparer.OrdinalIgnoreCase);
@@ -266,9 +282,6 @@ public sealed class MigrationPipeline
 
         if (repositoryLayout)
         {
-            RepositoryExcludedScope excludedScope = RepositoryExcludedScope.Compute(
-                this.options.SourceRoot,
-                this.options.ExcludedProjectPaths);
             if (runResult.Succeeded)
             {
                 // Issue #3580: an orphan-mirror failure marks the run failed
