@@ -65,6 +65,34 @@ public sealed class SampleAnalyzer : DiagnosticAnalyzer
 ";
 
     /// <summary>
+    /// Issue #3789: <c>tools/cs2gs/Cs2Gs.Tests</c>' shape — Roslyn used as a
+    /// LIBRARY, with an analyzer from a referenced assembly constructed
+    /// incidentally to diff its output. The <c>MetadataReference</c> parameter
+    /// is the real project's first analyzer-mode gap.
+    /// </summary>
+    private const string ToolingSource = @"
+using System.Collections.Immutable;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample.Tooling;
+
+public static class ParityCheck
+{
+    public static int CountDiagnostics(string source, MetadataReference[] references)
+    {
+        var tree = CSharpSyntaxTree.ParseText(source);
+        var compilation = CSharpCompilation.Create(""Corpus"", new[] { tree }, references);
+        var withAnalyzers = compilation.WithAnalyzers(
+            ImmutableArray.Create<DiagnosticAnalyzer>(new Sample.SampleAnalyzer()));
+        return withAnalyzers.GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult().Length;
+    }
+}
+";
+
+    /// <summary>
     /// The repo's own <c>AnalyzerTestHelper</c> shape, trimmed to the parts
     /// that matter: the Roslyn compilation pipeline, the metadata-reference
     /// plumbing, and the marker stripping.
@@ -145,7 +173,8 @@ internal static class AnalyzerTestHelper
     /// Anti-vacuity guard, and the real hazard of widening the detector:
     /// analyzer mode rewrites EVERY Microsoft.CodeAnalysis use in a project,
     /// so a project that merely consumes Roslyn (cs2gs itself does) must stay
-    /// out of it. Only instantiating an analyzer from another assembly counts.
+    /// out of it. Instantiating an analyzer from another assembly AND
+    /// declaring a harness for it is what counts (#3789).
     /// </summary>
     [Fact]
     public void ProjectThatOnlyUsesRoslyn_IsNotAnAnalyzerTestProject()
@@ -168,6 +197,95 @@ public static class Tool
 
         Assert.False(AnalyzerProjectDetector.IsAnalyzerProject(plain.Compilation));
         Assert.False(AnalyzerProjectDetector.IsAnalyzerTestProject(plain.Compilation));
+    }
+
+    /// <summary>
+    /// The third guard, issue #3789: <c>tools/cs2gs/Cs2Gs.Tests</c>' shape. It
+    /// runs the repo's real GSA analyzers as a LIBRARY — constructing one from
+    /// the project-referenced InternalAnalyzers to diff its diagnostics against
+    /// the translated analyzer's — while the rest of its ~256
+    /// Microsoft.CodeAnalysis uses are cs2gs's own machinery. Instantiation
+    /// alone therefore cannot be the signal; claiming this project turned its
+    /// 14-error compile wall into 98 translate gaps, the first being
+    /// "Microsoft.CodeAnalysis.MetadataReference has no G# analyzer-API
+    /// mapping". No harness, no claim.
+    /// </summary>
+    [Fact]
+    public void ProjectDrivingAnalyzersAsALibrary_IsNotAnAnalyzerTestProject()
+    {
+        LoadedCSharpProject tooling = LoadToolingProject();
+
+        Assert.False(AnalyzerProjectDetector.IsAnalyzerProject(tooling.Compilation));
+        Assert.False(AnalyzerProjectDetector.IsAnalyzerTestProject(tooling.Compilation));
+    }
+
+    /// <summary>
+    /// The mechanism behind #3789, executed rather than asserted: analyzer mode
+    /// over that project's Roslyn surface really does gap — it maps every
+    /// Microsoft.CodeAnalysis use, and <c>MetadataReference</c> has no
+    /// analyzer-API counterpart and should not have one. Translating it in the
+    /// mode the DETECTOR picks produces no such gap. The forced-mode half is
+    /// the anti-vacuity guard: it fails if the gap ever stops being produced,
+    /// so the clean half cannot pass for the wrong reason.
+    /// </summary>
+    [Fact]
+    public void AnalyzerModeOverALibraryConsumerGaps_TheDetectorsModeDoesNot()
+    {
+        LoadedCSharpProject tooling = LoadToolingProject();
+
+        IReadOnlyList<TranslationDiagnostic> forced = TranslateFile(tooling, "Tooling.cs", analyzerApiMode: true);
+        Assert.Contains(
+            forced,
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("MetadataReference", StringComparison.Ordinal)
+                && d.Message.Contains("no G# analyzer-API mapping", StringComparison.Ordinal));
+
+        IReadOnlyList<TranslationDiagnostic> chosen = TranslateFile(
+            tooling,
+            "Tooling.cs",
+            AnalyzerProjectDetector.IsAnalyzerTestProject(tooling.Compilation));
+        Assert.DoesNotContain(
+            chosen,
+            d => d.Message.Contains("no G# analyzer-API mapping", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The discriminator itself: the SAME library-consumer file, with an
+    /// analyzer test harness added beside it, IS claimed. So the rule keys on
+    /// the harness — the one member analyzer mode rewrites for a test project —
+    /// and not on the absence of unrelated Roslyn code, which would be a
+    /// proportion heuristic with no defensible cut point.
+    /// </summary>
+    [Fact]
+    public void AddingAHarnessToTheSameProject_FlipsTheMode()
+    {
+        LoadedCSharpProject withHarness = Load(
+            new[]
+            {
+                ("Tooling.cs", ToolingSource),
+                ("Harness.cs", HarnessSource),
+                ("Tests.cs", TestsUsing("new Sample.SampleAnalyzer()")),
+            },
+            CSharpProjectLoader.RuntimeReferences().Append(CompileAnalyzerToReference()).ToList());
+
+        Assert.True(AnalyzerProjectDetector.IsAnalyzerTestProject(withHarness.Compilation));
+    }
+
+    private static LoadedCSharpProject LoadToolingProject()
+        => Load(
+            new[] { ("Tooling.cs", ToolingSource) },
+            CSharpProjectLoader.RuntimeReferences().Append(CompileAnalyzerToReference()).ToList());
+
+    private static IReadOnlyList<TranslationDiagnostic> TranslateFile(
+        LoadedCSharpProject project,
+        string fileName,
+        bool analyzerApiMode)
+    {
+        var translator = new CSharpToGSharpTranslator(analyzerApiMode: analyzerApiMode);
+        LoadedDocument document = project.Documents.Single(d => Path.GetFileName(d.FilePath) == fileName);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        translator.TranslateDocument(document, context);
+        return context.Diagnostics;
     }
 
     /// <summary>
