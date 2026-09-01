@@ -1638,6 +1638,24 @@ internal sealed partial class OverloadResolver
                     inferTypeArguments(paramType, permutedArguments[i].Type, substitution);
                 }
 
+                // Issue #3760: sibling of the free-function path — a method
+                // group argument gives the loop above nothing to unify, so a
+                // type parameter reachable only through the target delegate's
+                // return position stays unbound. Retry the unbound ones
+                // through the method group's own signature. Runs ONLY after
+                // the positional pass failed (#3756), so no call that already
+                // infers changes shape.
+                if (HasUnboundTypeParameter(method.TypeParameters, substitution))
+                {
+                    for (var i = 0; i < permutedArguments.Length && i + parameterOffset < method.Parameters.Length; i++)
+                    {
+                        InferFromUserMethodGroupArgument(
+                            method.Parameters[i + parameterOffset].Type,
+                            permutedArguments[i],
+                            substitution);
+                    }
+                }
+
                 foreach (var tp in method.TypeParameters)
                 {
                     if (!substitution.ContainsKey(tp))
