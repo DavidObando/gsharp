@@ -350,7 +350,23 @@ public class Compilation
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
         // untouched and renders the interpolation node directly.
-        program = Lowering.InterpolatedStringHandlerLowerer.Lower(program);
+        program = Lowering.InterpolatedStringHandlerLowerer.Lower(
+            program,
+            References ?? Symbols.ReferenceResolver.Default());
+
+        // Issue #3730: the lowering above resolves the handler surface from the
+        // compilation's reference closure and reports GS0545 when the target
+        // framework does not provide it. That is a hard stop — continuing would
+        // emit calls the target's runtime cannot resolve — and the trailing
+        // result path filters errors out of `allWarnings`, so gate explicitly.
+        // Deliberately scoped to GS0545: GS0519's surfacing is long-established
+        // and tested, and widening this to "any error" would change it.
+        if (program.Diagnostics.Any(d => d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id))
+        {
+            return new EmitResult(
+                success: false,
+                syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray());
+        }
 
         // Issue #452: spill side-effecting sub-expressions that sit in
         // emit-pipeline contexts which historically re-emitted them more
@@ -484,7 +500,23 @@ public class Compilation
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is
         // untouched and renders the interpolation node directly.
-        program = Lowering.InterpolatedStringHandlerLowerer.Lower(program);
+        program = Lowering.InterpolatedStringHandlerLowerer.Lower(
+            program,
+            References ?? Symbols.ReferenceResolver.Default());
+
+        // Issue #3730: the lowering above resolves the handler surface from the
+        // compilation's reference closure and reports GS0545 when the target
+        // framework does not provide it. That is a hard stop — continuing would
+        // emit calls the target's runtime cannot resolve — and the trailing
+        // result path filters errors out of `allWarnings`, so gate explicitly.
+        // Deliberately scoped to GS0545: GS0519's surfacing is long-established
+        // and tested, and widening this to "any error" would change it.
+        if (program.Diagnostics.Any(d => d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id))
+        {
+            return new EmitResult(
+                success: false,
+                syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray());
+        }
 
         // Issue #452: spill side-effecting sub-expressions that sit in
         // emit-pipeline contexts which historically re-emitted them more

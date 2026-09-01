@@ -905,6 +905,21 @@ an existing collection directly.
 |---|---|---|---|
 | GS0544 | Error | `Variadic carrier '<carrier>' cannot be constructed over element type '<element>' at this call site; use an array carrier ('...T') or pass the collection directly.` | `func F(xs ...List[MyLocalClass])` called expanded |
 
+## Interpolated-string handler missing from the target framework (GS0545)
+
+Issue #3730: interpolated strings lower to the C# 10 handler pattern
+(`System.Runtime.CompilerServices.DefaultInterpolatedStringHandler`, ADR-0055).
+The handler type and the `AppendFormatted<T>` overload each hole needs are
+resolved from the compilation's **reference closure**, so they describe the
+framework being compiled against rather than the SDK hosting `gsc`. When the
+referenced framework does not declare the required member — a `netstandard2.x`
+target, for example — the compile stops here instead of emitting a call the
+target's runtime cannot resolve.
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0545 | Error | `Interpolated strings require '<member>', which the referenced target framework does not provide. Reference a framework that declares it, or build the string explicitly.` | `let s = "v=$x"` compiled with a `netstandard2.1` reference closure |
+
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
 ADR-0166: a designation in a boolean `is`
