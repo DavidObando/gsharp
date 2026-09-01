@@ -93,6 +93,8 @@ func (b *MyButton) OnClick() {
 
 The backing field is accessible by name inside the declaring type (like C#). Outside the type, only `+=` / `-=` are permitted — direct invocation or assignment is an error. This access restriction is enforced by the binder.
 
+A user-declared event's `+=` / `-=` accepts a **nilable** handler, and a nil handler is a silent no-op — the synthesized `add_E` / `remove_E` accessors forward to `Delegate.Combine` / `Delegate.Remove`, which are defined on a null operand. The rule and its scope are recorded once, in ADR-0036 §5 (issue #3775); it applies identically to user-declared and imported CLR events.
+
 ### 4. Annotations and use-site targets
 
 Per ADR-0047, the `@event:` use-site target directs an annotation to the event metadata:

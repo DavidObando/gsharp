@@ -23,6 +23,12 @@ Key shape decisions:
 
 4. **Add vs. remove dispatch.** A single bound node carries an `IsAdd` bool. The evaluator dispatches to `EventInfo.AddEventHandler` / `RemoveEventHandler`; the emitter resolves the corresponding `add_X` / `remove_X` accessor via `EventInfo.GetAddMethod()` / `GetRemoveMethod()` and emits `callvirt` for reference receivers (or `call` for static/value-type receivers).
 
+5. **A nil handler is a no-op, not a conversion error** (issue #3775). `add_E` / `remove_E` forward to `Delegate.Combine` / `Delegate.Remove`, both of which are defined on a `null` operand and return the other operand unchanged, so C#'s `e += h` with `h == null` is a *silent no-op*. G# therefore accepts a nilable handler at a subscription site: the conversion target for the handler expression is widened from the event's declared delegate type `T` to `T?` when — and only when — the handler expression is itself nilable (or the literal `nil`) and `T`'s CLR representation is a managed reference. A method group, a lambda, a non-nilable handler, and a value-typed target are all unaffected, and nothing about the event's own declared type changes.
+
+   This mirrors the rule ADR-0030 records for a nil `using` resource (issue #3784 / PR #3787): both are positions where C# defines nil-tolerant behaviour and G# must not assume non-nil. The event case surfaced one step earlier — at bind time, as `GS0155 Cannot convert type 'System.EventHandler?' to 'System.EventHandler'` — which left `e += h!!` as the only spelling and so converted a defined no-op into a run-time throw.
+
+   The relaxation is deliberately *not* a general "nilable is assignable to non-nilable" hole: it is scoped to the subscription argument, where the CLR contract itself is nil-tolerant.
+
 ## Alternatives considered
 
 - **Extend `FieldAssignmentExpressionSyntax` with an operator token.** Rejected: the existing node models a single `Receiver: SyntaxToken`, so multi-segment LHS would still require a parallel shape. A dedicated node keeps both paths clean.
