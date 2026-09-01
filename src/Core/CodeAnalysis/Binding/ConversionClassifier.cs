@@ -1715,8 +1715,61 @@ internal sealed class ConversionClassifier
             return new BoundErrorExpression(null);
         }
 
+        // Issue #3752 (#3705, family 3): the direct `Invoke` probe is the fast
+        // path, but it is unreachable whenever the target's CLR type closed a
+        // live `System.Func`n`/`Action`n` over a type projected from the
+        // compilation's MetadataLoadContext — `(Type) -> Type` under any
+        // `/reference:` compile. `MakeGenericType` then yields a
+        // `TypeBuilderInstantiation`, whose `GetMethod("Invoke")` throws
+        // `NotSupportedException` and whose `GetMethodSafe` wrapper answers
+        // null, so EVERY method-group conversion at a function type over an
+        // imported type failed with GS0218 while the same conversion over
+        // `string`/`int32` (host runtime types) succeeded. `ClrLoadContext`
+        // already carries the cross-context decomposition the sibling delegate
+        // probes (#932, #3681, #3697) go through; this one was the outlier.
         var invoke = delegateClr.GetMethodSafe("Invoke");
-        if (invoke == null)
+        Type[] invokeParameterTypes;
+        Type invokeReturnType;
+        ImmutableArray<RefKind> targetParameterRefKinds;
+        if (invoke != null)
+        {
+            var invokeParams = invoke.GetParameters();
+            invokeParameterTypes = new Type[invokeParams.Length];
+            for (var i = 0; i < invokeParams.Length; i++)
+            {
+                invokeParameterTypes[i] = invokeParams[i].ParameterType;
+            }
+
+            invokeReturnType = invoke.ReturnType;
+            targetParameterRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(invoke);
+        }
+        else if (ClrLoadContext.TryGetDelegateSignature(delegateClr, out var crossContextParams, out var crossContextReturn))
+        {
+            targetParameterRefKinds = DelegateRefKindUtilities.GetDelegateParameterRefKinds(
+                delegateClr,
+                crossContextParams.Length,
+                out _);
+            if (targetParameterRefKinds.Length != crossContextParams.Length)
+            {
+                targetParameterRefKinds = ImmutableArray.CreateRange(
+                    Enumerable.Repeat(RefKind.None, crossContextParams.Length));
+            }
+
+            // TryGetDelegateSignature reduces by-ref slots to their pointee
+            // (#2802); candidate `MethodInfo`s still spell them `T&`, so
+            // re-form the managed-pointer shape for the ref-kind-bearing slots
+            // before overload resolution compares them.
+            invokeParameterTypes = new Type[crossContextParams.Length];
+            for (var i = 0; i < crossContextParams.Length; i++)
+            {
+                invokeParameterTypes[i] = targetParameterRefKinds[i] == RefKind.None
+                    ? crossContextParams[i]
+                    : crossContextParams[i].MakeByRefType();
+            }
+
+            invokeReturnType = crossContextReturn;
+        }
+        else
         {
             Diagnostics.ReportCannotConvertMethodGroup(
                 diagnosticLocation,
@@ -1725,15 +1778,13 @@ internal sealed class ConversionClassifier
             return new BoundErrorExpression(null);
         }
 
-        var invokeParams = invoke.GetParameters();
-        var targetParameterRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(invoke);
         var closesExtensionReceiver = group.Receiver != null;
         foreach (var candidate in group.Candidates)
         {
             closesExtensionReceiver &= candidate.IsStatic;
         }
 
-        var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
+        var argTypes = new Type[invokeParameterTypes.Length + (closesExtensionReceiver ? 1 : 0)];
         if (closesExtensionReceiver)
         {
             var receiver = Invariant.Required(group.Receiver, "a static method-group extension receiver was established");
@@ -1751,9 +1802,9 @@ internal sealed class ConversionClassifier
             argTypes[0] = receiverClr;
         }
 
-        for (var i = 0; i < invokeParams.Length; i++)
+        for (var i = 0; i < invokeParameterTypes.Length; i++)
         {
-            argTypes[i + (closesExtensionReceiver ? 1 : 0)] = invokeParams[i].ParameterType;
+            argTypes[i + (closesExtensionReceiver ? 1 : 0)] = invokeParameterTypes[i];
         }
 
         var applicable = new List<MethodInfo>();
@@ -1764,7 +1815,7 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invoke.ReturnType))
+            if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invokeReturnType))
             {
                 continue;
             }
@@ -3014,28 +3065,21 @@ internal sealed class ConversionClassifier
             return userDelegate.Parameters.Select(parameter => parameter.RefKind).ToImmutableArray();
         }
 
-        var invoke = targetType?.ClrType != null && ClrTypeUtilities.IsDelegateType(targetType.ClrType)
-            ? targetType.ClrType.GetMethodSafe("Invoke")
-            : null;
-        if (invoke == null)
+        // Issue #3752: the sibling of the probe in
+        // `BindClrMethodGroupConversion`, sharing its omission — a direct
+        // `Invoke` reflection that answers null for every cross-reflection-
+        // context closure, here silently degrading a by-ref target signature
+        // to all-by-value rather than failing loudly. Both now read the ref
+        // kinds through the same load-context-tolerant helper.
+        if (targetType?.ClrType == null || !ClrTypeUtilities.IsDelegateType(targetType.ClrType))
         {
             return ImmutableArray.CreateRange(Enumerable.Repeat(RefKind.None, parameterCount));
         }
 
-        returnRefKind = invoke.ReturnType.IsByRef ? RefKind.Ref : RefKind.None;
-        var refKinds = ImmutableArray.CreateBuilder<RefKind>();
-        foreach (var parameter in invoke.GetParameters())
-        {
-            refKinds.Add(!parameter.ParameterType.IsByRef
-                ? RefKind.None
-                : parameter.IsOut
-                    ? RefKind.Out
-                    : parameter.IsIn
-                        ? RefKind.In
-                        : RefKind.Ref);
-        }
-
-        return refKinds.ToImmutable();
+        return DelegateRefKindUtilities.GetDelegateParameterRefKinds(
+            targetType.ClrType,
+            parameterCount,
+            out returnRefKind);
     }
 
     // ADR-0062: an inner ref-kind modifier on a conditional ref-argument branch

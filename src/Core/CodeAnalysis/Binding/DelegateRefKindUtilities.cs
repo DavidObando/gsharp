@@ -41,10 +41,14 @@ internal static class DelegateRefKindUtilities
                 return true;
             case { Type.ClrType: System.Type sourceType }
                 when ClrTypeUtilities.IsDelegateType(sourceType):
-                var sourceInvoke = sourceType.GetMethodSafe("Invoke");
-                if (sourceInvoke != null)
+
+                // Issue #3752: the third sibling of the same probe. A direct
+                // `Invoke` reflection answers null for a delegate closed over
+                // a MetadataLoadContext-projected type, which used to abandon
+                // the source's ref kinds entirely.
+                if (ClrLoadContext.TryGetDelegateSignature(sourceType, out var sourceParameters, out _))
                 {
-                    refKinds = GetParameterRefKinds(sourceInvoke);
+                    refKinds = GetDelegateParameterRefKinds(sourceType, sourceParameters.Length, out _);
                     return true;
                 }
 
@@ -62,6 +66,44 @@ internal static class DelegateRefKindUtilities
 
         refKinds = default;
         return false;
+    }
+
+    /// <summary>
+    /// Issue #3752 (#3705, family 3): reads a delegate type's <c>Invoke</c>
+    /// parameter ref kinds in a way that survives a cross-reflection-context
+    /// closure.
+    /// <para>
+    /// A native function type over a <c>MetadataLoadContext</c>-projected type
+    /// (<c>(Type) -&gt; Type</c> in any compile with <c>/reference:</c>) has a
+    /// <c>System.Reflection.Emit.TypeBuilderInstantiation</c> as its CLR type,
+    /// because <c>typeof(Func&lt;,&gt;).MakeGenericType</c> cannot produce a
+    /// <c>RuntimeType</c> over foreign-context arguments. Reflecting
+    /// <c>Invoke</c> off it throws <see cref="NotSupportedException"/>, so the
+    /// direct probe answers <see langword="null"/>. Ref kinds are stable under
+    /// generic substitution, so the open definition's <c>Invoke</c> — always
+    /// reachable in metadata — answers the same question, exactly as
+    /// <see cref="ClrLoadContext.TryGetDelegateSignature"/> does for the
+    /// parameter and return types.
+    /// </para>
+    /// </summary>
+    /// <param name="delegateType">The delegate (or native function) CLR type.</param>
+    /// <param name="parameterCount">The signature's parameter count, used when no <c>Invoke</c> is reachable at all.</param>
+    /// <param name="returnRefKind">The <c>Invoke</c> return's ref kind.</param>
+    /// <returns>One ref kind per <c>Invoke</c> parameter.</returns>
+    internal static ImmutableArray<RefKind> GetDelegateParameterRefKinds(
+        System.Type? delegateType,
+        int parameterCount,
+        out RefKind returnRefKind)
+    {
+        returnRefKind = RefKind.None;
+        var invoke = delegateType?.GetMethodSafe("Invoke") ?? TryGetOpenDefinitionInvoke(delegateType);
+        if (invoke == null)
+        {
+            return ImmutableArray.CreateRange(Enumerable.Repeat(RefKind.None, parameterCount));
+        }
+
+        returnRefKind = invoke.ReturnType.IsByRef ? RefKind.Ref : RefKind.None;
+        return GetParameterRefKinds(invoke);
     }
 
     internal static ImmutableArray<RefKind> GetParameterRefKinds(
@@ -172,6 +214,30 @@ internal static class DelegateRefKindUtilities
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #3752: the open generic definition's <c>Invoke</c>, the only one
+    /// reachable when the closed type is a cross-context
+    /// <c>TypeBuilderInstantiation</c>.
+    /// </summary>
+    /// <param name="delegateType">The closed delegate type.</param>
+    /// <returns>The open definition's <c>Invoke</c>, or <see langword="null"/>.</returns>
+    private static MethodInfo? TryGetOpenDefinitionInvoke(System.Type? delegateType)
+    {
+        if (delegateType is null || !delegateType.IsGenericType || delegateType.IsGenericTypeDefinition)
+        {
+            return null;
+        }
+
+        try
+        {
+            return delegateType.GetGenericTypeDefinition().GetMethodSafe("Invoke");
+        }
+        catch (System.Exception)
+        {
+            return null;
+        }
     }
 
     private static RefKind GetParameterRefKind(ParameterInfo parameter) =>
