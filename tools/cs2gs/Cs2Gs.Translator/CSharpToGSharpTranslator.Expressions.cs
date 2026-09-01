@@ -789,9 +789,18 @@ public sealed partial class CSharpToGSharpTranslator
                 field.ContainingType is { IsTupleType: true })
             {
                 IFieldSymbol positional = field.CorrespondingTupleField ?? field;
-                if (SymbolEqualityComparer.Default.Equals(positional, field))
+                if (SymbolEqualityComparer.Default.Equals(positional, field)
+                    || IsInferredTupleElementName(field))
                 {
-                    // Default positional access (`item.Item2`) stays positional.
+                    // Default positional access (`item.Item2`) stays positional,
+                    // and so does an INFERRED one (issue #3684 F15): ADR-0172
+                    // deliberately does not adopt C# 7.1 name inference, so a
+                    // name C# derived from an element EXPRESSION
+                    // (`(statement, index)` typing as `(… statement, … index)`)
+                    // exists nowhere in the translated G# — the literal prints
+                    // unlabeled and the tuple type is the unnamed shape. Reading
+                    // it back by that name is GS0158; the positional spelling is
+                    // always valid.
                     memberName = positional.Name;
                     memberSymbol = positional;
                 }
@@ -927,6 +936,36 @@ public sealed partial class CSharpToGSharpTranslator
 
             return unwrapped is CastExpressionSyntax cast
                 && this.CastLowersToNullPreservingSafeCast(cast);
+        }
+
+        /// <summary>
+        /// Whether a named tuple element's name was INFERRED by C# 7.1 from the
+        /// element expression rather than written down. A declared name — in a
+        /// tuple TYPE (<c>(int Line, int Column)</c>) or carried on a metadata
+        /// signature — has a <see cref="TupleElementSyntax"/> declaring
+        /// reference or none at all; an inferred one points back at the tuple
+        /// literal's own <see cref="ArgumentSyntax"/>, the only spelling that
+        /// does not survive translation (ADR-0172 does not infer names).
+        /// </summary>
+        /// <param name="element">The tuple element field symbol.</param>
+        /// <returns><see langword="true"/> when the name exists only by inference.</returns>
+        private static bool IsInferredTupleElementName(IFieldSymbol element)
+        {
+            ImmutableArray<SyntaxReference> references = element.DeclaringSyntaxReferences;
+            if (references.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in references)
+            {
+                if (reference.GetSyntax() is TupleElementSyntax)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private bool ImportedGenericTupleElementRequiresAssertion(ExpressionSyntax receiver)

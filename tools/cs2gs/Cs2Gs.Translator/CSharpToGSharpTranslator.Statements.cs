@@ -1860,8 +1860,12 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.CurrentCatchVariable = variableName;
                 try
                 {
-                    BlockStatement body = this.TranslateBlock(catchClause.Block);
-                    if (catchClause.Filter != null)
+                    BlockStatement body;
+                    if (catchClause.Filter == null)
+                    {
+                        body = this.TranslateBlock(catchClause.Block);
+                    }
+                    else
                     {
                         // No overlapping later sibling here by construction
                         // (loopEnd stops before mergeStartIndex, the first index
@@ -1875,13 +1879,42 @@ public sealed partial class CSharpToGSharpTranslator
                         // silently swallowed (issue #1724). Note: unlike a real
                         // CLR exception filter, this runs after the stack has
                         // already unwound into the handler.
-                        GExpression filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
+                        //
+                        // Issue #3684 (F12): the filter is translated under its
+                        // OWN statement seam. A filter may need hoisted
+                        // statements — a scrutinee spill, or storage for a
+                        // pattern designation it introduces
+                        // (`when (ex.InnerException is AggregateException agg)`)
+                        // — and the ambient seam at this point is the one
+                        // enclosing the whole `try`, which is outside the catch
+                        // where neither the catch binder nor the designation is
+                        // in scope. Those statements belong at the head of the
+                        // catch body, ahead of the rethrow test, which is
+                        // exactly where the filter runs. Translating the filter
+                        // BEFORE the body also registers the designation's
+                        // binding, so body references to it (`throw
+                        // agg.InnerException ?? agg`) see the materialized
+                        // local.
+                        List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+                        var filterPrologue = new List<GStatement>();
+                        this.state.PendingSpillPrologue = filterPrologue;
+                        GExpression filter;
+                        try
+                        {
+                            filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
+                        }
+                        finally
+                        {
+                            this.state.PendingSpillPrologue = outerSpillPrologue;
+                        }
+
+                        BlockStatement filteredBody = this.TranslateBlock(catchClause.Block);
                         var rethrowIfFalse = new IfStatement(
                             new UnaryExpression("!", filter),
                             new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
-                        var statements = new List<GStatement> { rethrowIfFalse };
-                        statements.AddRange(body.Statements);
-                        body = new BlockStatement(statements, body.IsUnsafe);
+                        var statements = new List<GStatement>(filterPrologue) { rethrowIfFalse };
+                        statements.AddRange(filteredBody.Statements);
+                        body = new BlockStatement(statements, filteredBody.IsUnsafe);
                     }
 
                     catches.Add(new CatchClause(variableName, exceptionType, body));
