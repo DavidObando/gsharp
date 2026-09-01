@@ -400,8 +400,23 @@ public sealed class TranslateStage : IMigrationStage
                             includeFileAttributes: unitIndex == 0,
                             analyzerApiMode: analyzerApiMode,
                             preserveEntryType: preserveEntryType);
-                    string printed = GSharpPrinter.Print(
-                        unitTranslator.TranslateDocument(document, translationContext));
+                    string printed;
+                    try
+                    {
+                        printed = GSharpPrinter.Print(
+                            unitTranslator.TranslateDocument(document, translationContext));
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException
+                        and not TranslationCrashException)
+                    {
+                        // Issue #3804: annotate, do NOT absorb. A translator
+                        // crash stays a crash — turning it into a diagnostic
+                        // here would silently drop the file from the migrated
+                        // tree and file a cs2gs defect as a language gap. All
+                        // this adds is the one fact the artifact was missing:
+                        // which source was on the table.
+                        throw new TranslationCrashException(document.FilePath, ex);
+                    }
 
                     string gsRelativePath;
                     if (unitIndex == 0)
@@ -513,8 +528,15 @@ public sealed class TranslateStage : IMigrationStage
                     // and move on to the remaining files.
                     if (!isReferencedProject)
                     {
+                        // Issue #3804: an unreadable .resx is a tooling failure,
+                        // not a C# construct without a G# form — it gets the
+                        // crash category, and names the file it choked on.
                         artifacts.Add(context.Triage.StageCrash(
-                            MigrationStageKind.Translate, TriageCategory.TranslationUnsupported, "CS2GS0003", ex));
+                            MigrationStageKind.Translate,
+                            TriageCategory.PipelineCrash,
+                            "CS2GS0003",
+                            ex,
+                            resxPath));
                     }
 
                     continue;

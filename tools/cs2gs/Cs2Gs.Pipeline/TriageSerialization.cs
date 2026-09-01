@@ -47,7 +47,7 @@ public static class TriageSerialization
 
     /// <summary>
     /// Maps a <see cref="TriageCategory"/> to its schema spelling
-    /// (<c>translation-unsupported</c>, <c>compile-error</c>, …).
+    /// (<c>translation-unsupported</c>, <c>compile-error</c>, <c>pipeline-crash</c>, …).
     /// </summary>
     /// <param name="category">The triage category.</param>
     /// <returns>The schema category string.</returns>
@@ -57,6 +57,7 @@ public static class TriageSerialization
         TriageCategory.CompileError => "compile-error",
         TriageCategory.IlVerifyFailure => "ilverify-failure",
         TriageCategory.TestParityFailure => "test-parity-failure",
+        TriageCategory.PipelineCrash => "pipeline-crash",
         _ => throw new ArgumentOutOfRangeException(nameof(category)),
     };
 }

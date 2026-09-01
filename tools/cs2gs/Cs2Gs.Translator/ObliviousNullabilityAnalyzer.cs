@@ -330,6 +330,22 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        // Issue #3804: not every IParameterSymbol hanging off a method occupies
+        // a position in that method's parameter list. Roslyn models `this` as a
+        // parameter of the enclosing method with Ordinal **-1** — and
+        // SemanticModel.GetSymbolInfo hands back exactly that symbol for a
+        // `this` expression, which the translator asks about whenever it
+        // translates a `this.…` receiver. A data row lines its values up with
+        // the declared parameters positionally, so the receiver is simply not a
+        // row column and there is nothing to look up; without this guard the
+        // row lookup below indexed at -1 and took the whole translate stage
+        // down with an IndexOutOfRangeException (the ordinal test there guards
+        // only the upper bound).
+        if (parameter.Ordinal < 0)
+        {
+            return false;
+        }
+
         foreach (AttributeData attribute in method.GetAttributes())
         {
             if (attribute.AttributeConstructor is not { Parameters.Length: 1 } constructor

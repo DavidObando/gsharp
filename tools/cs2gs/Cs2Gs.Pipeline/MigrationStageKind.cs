@@ -26,7 +26,8 @@ public enum MigrationStageKind
 
 /// <summary>
 /// The triage category recorded on a failure artifact (ADR-0115 §D.1). One
-/// value per stage.
+/// value per stage, plus <see cref="PipelineCrash"/> for "the stage itself
+/// fell over", which belongs to no stage in particular.
 /// </summary>
 public enum TriageCategory
 {
@@ -41,6 +42,18 @@ public enum TriageCategory
 
     /// <summary>A ported-test parity mismatch against the C# baseline (stage 4).</summary>
     TestParityFailure,
+
+    /// <summary>
+    /// Issue #3804: a stage threw an unhandled exception — a DEFECT IN CS2GS,
+    /// not a property of the code being migrated. Crashes used to be filed
+    /// under the category of whatever stage they happened in, so a translator
+    /// <c>IndexOutOfRangeException</c> arrived as
+    /// <c>translation-unsupported</c> with the exception's type name rendered
+    /// as the "offending C# construct" — a language gap that read as triaged
+    /// and sat unexamined for weeks. A crash gets its own category so it can
+    /// never again be mistaken for a construct with no G# form.
+    /// </summary>
+    PipelineCrash,
 }
 
 /// <summary>

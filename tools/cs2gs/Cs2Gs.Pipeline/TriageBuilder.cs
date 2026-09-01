@@ -579,8 +579,21 @@ public sealed class TriageBuilder
     /// <param name="category">The triage category to file the crash artifact under.</param>
     /// <param name="diagnosticId">The diagnostic id to stamp (stage-specific, e.g. <c>GS9999</c>).</param>
     /// <param name="ex">The exception the stage threw.</param>
+    /// <param name="csFile">
+    /// The C# file the stage was working on when it threw, when the stage knows
+    /// it (issue #3804). A crash artifact with no location at all is nearly
+    /// unactionable — "translate stage crashed", no file, no line — so the
+    /// stage annotates the throw with the source it had on the table and it is
+    /// recorded here. Deliberately NOT part of the fingerprint, for the same
+    /// reason the message is not: it is a run-scoped absolute path.
+    /// </param>
     /// <returns>The populated triage artifact.</returns>
-    public TriageArtifact StageCrash(MigrationStageKind stage, TriageCategory category, string diagnosticId, Exception ex)
+    public TriageArtifact StageCrash(
+        MigrationStageKind stage,
+        TriageCategory category,
+        string diagnosticId,
+        Exception ex,
+        string csFile = null)
     {
         if (ex is null)
         {
@@ -602,7 +615,7 @@ public sealed class TriageBuilder
             GsFile = null,
             GsLine = null,
             GsColumn = null,
-            CsFile = null,
+            CsFile = csFile,
             CsLine = null,
             CsColumn = null,
         };
@@ -619,6 +632,7 @@ public sealed class TriageBuilder
             message);
         artifact.SuggestedIssue = category switch
         {
+            TriageCategory.PipelineCrash => this.CrashIssue(artifact, stage),
             TriageCategory.CompileError => this.CompileIssue(artifact),
             TriageCategory.IlVerifyFailure => this.IlVerifyIssue(artifact),
             TriageCategory.TestParityFailure => this.TestParityIssue(artifact),
@@ -757,6 +771,51 @@ public sealed class TriageBuilder
             $"- Snippet: `{artifact.OffendingCSharpConstruct.Snippet}`",
             string.Empty,
             "**Reproduction:** run `cs2gs migrate` over the corpus; stage 1 (translate) gates on this construct.",
+            $"**Fingerprint:** `{artifact.Fingerprint}`",
+        };
+
+        var issue = new TriageSuggestedIssue
+        {
+            Title = title,
+            Body = string.Join("\n", lines),
+        };
+        issue.Labels.Add("Oats");
+        return issue;
+    }
+
+    /// <summary>
+    /// Issue #3804: the suggested issue for a stage that CRASHED. The old
+    /// rendering reused <see cref="UnsupportedIssue"/>, which titles itself
+    /// "Unsupported C# construct '<c>X</c>' has no canonical G# form" with the
+    /// exception's type name in the construct slot — so a cs2gs
+    /// <c>IndexOutOfRangeException</c> was published as a G# language gap and
+    /// read as already-triaged. This one says what actually happened, and
+    /// names the file the stage was on when it happened.
+    /// </summary>
+    /// <param name="artifact">The crash artifact.</param>
+    /// <param name="stage">The stage that crashed.</param>
+    /// <returns>The suggested issue.</returns>
+    private TriageSuggestedIssue CrashIssue(TriageArtifact artifact, MigrationStageKind stage)
+    {
+        string stageName = TriageSerialization.StageName(stage);
+        string title = $"[cs2gs] {stageName} stage crashed " +
+            $"({artifact.OffendingCSharpConstruct.Kind}) migrating {this.CorpusAppId}";
+        string fileLine = string.IsNullOrEmpty(artifact.SourceLocation.CsFile)
+            ? "- C# source: not captured (the stage crashed outside a per-file step)"
+            : $"- C# source: `{artifact.SourceLocation.CsFile}`";
+        string[] lines =
+        {
+            $"`cs2gs` itself threw while migrating **{this.CorpusAppId}** — this is a DEFECT IN THE " +
+                "MIGRATION TOOL, not a C# construct without a G# form. Fix the crash at its cause; if " +
+                "the construct really has no G# form, it needs a proper unsupported-construct report " +
+                "naming the construct, which a crash is not.",
+            string.Empty,
+            $"- Stage: `{stageName}`",
+            $"- Exception: `{artifact.OffendingCSharpConstruct.Kind}`",
+            $"- Detail: {artifact.Diagnostic.Message}",
+            fileLine,
+            string.Empty,
+            "**Reproduction:** run `cs2gs migrate` over the corpus; the stage log carries the stack trace.",
             $"**Fingerprint:** `{artifact.Fingerprint}`",
         };
 
