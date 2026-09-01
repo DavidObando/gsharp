@@ -484,6 +484,27 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
+    // Issue #3755 asked for the `Channel` probes below to be converted to
+    // reference-closure resolution FIRST, on the theory that `Channel`'s shape
+    // moves most between targets. Measured, they must NOT be:
+    //
+    //   * they are already load-context-correct by a different route.
+    //     `ResolveChannelElementClrType` erases any non-runtime (MetadataLoadContext)
+    //     element type to `object` and `ChannelElementNeedsSymbolicType` routes it
+    //     through the symbolic re-encoder, so the host `typeof` here is a SHAPE
+    //     TEMPLATE and never reaches emitted metadata unprojected. Compiling
+    //     `make(chan int32, 1)` against Microsoft.NETCore.App.Ref 8.0.28/10.0.9 and
+    //     NETStandard.Library.Ref 2.1.0 emits `Channel`/`Channel\`1`/
+    //     `BoundedChannelOptions` scoped to `System.Threading.Channels` in all
+    //     three — no `System.Private.CoreLib` leak of the #3730 kind;
+    //   * converting them would REGRESS the default host path. `System.Threading.Channels`
+    //     is not part of `ReferenceResolver.Default()`'s assembly snapshot (it is
+    //     built from the assemblies the gsc process has actually loaded), so
+    //     `TryResolveType("System.Threading.Channels.Channel")` answers "absent" on
+    //     the host while `typeof(Channel)` obviously does not. A mechanical
+    //     conversion would turn every reference-less channel compile into a
+    //     diagnostic — the same shape as PR #3756's regression of #2840, where an
+    //     unconditional rewrite broke a load-bearing ride-through.
     private void EmitMakeChannelExpression(BoundMakeChannelExpression node)
     {
         var elementType = node.ChannelType.ElementType;
