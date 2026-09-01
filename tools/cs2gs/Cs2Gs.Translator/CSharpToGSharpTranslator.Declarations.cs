@@ -841,6 +841,70 @@ public sealed partial class CSharpToGSharpTranslator
         /// the same type via <c>: this(...)</c>. Such a constructor is the place
         /// into which get-only auto-property initializers are injected (OD-T1).
         /// </summary>
+        /// <summary>
+        /// Issue #3770: whether a C# 12 primary constructor's parameters are read
+        /// ONLY by get-only auto-property initializers, so they can move from the
+        /// G# class header onto the synthesized designated <c>init(...)</c> that
+        /// carries those initializers.
+        /// </summary>
+        /// <remarks>
+        /// A capture anywhere else — a method or accessor body, a field or
+        /// non-get-only property initializer, or a <c>: Base(param)</c> forward —
+        /// needs the parameter to remain a primary-constructor parameter field, so
+        /// the move is unsafe. Partial types are refused outright: another part
+        /// this method cannot see may capture the parameter.
+        /// </remarks>
+        private bool CanMovePrimaryParametersToSynthesizedInit(TypeDeclarationSyntax node)
+        {
+            if (node.ParameterList == null || node.Modifiers.Any(SyntaxKind.PartialKeyword))
+            {
+                return false;
+            }
+
+            // `class C(int a) : Base(a)` forwards a parameter to the base
+            // constructor from the header itself, which only a primary
+            // constructor can express.
+            if (node.BaseList?.Types.Any(t => t is PrimaryConstructorBaseTypeSyntax) == true)
+            {
+                return false;
+            }
+
+            var parameters = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            foreach (ParameterSyntax parameter in node.ParameterList.Parameters)
+            {
+                if (this.context.GetDeclaredSymbol(parameter) is not IParameterSymbol symbol)
+                {
+                    return false;
+                }
+
+                parameters.Add(symbol);
+            }
+
+            foreach (MemberDeclarationSyntax member in node.Members)
+            {
+                // The get-only auto-property initializers are exactly what moves
+                // into the `init(...)` body, so reads there are fine.
+                if (member is PropertyDeclarationSyntax property
+                    && property.Initializer != null
+                    && !property.Modifiers.Any(SyntaxKind.StaticKeyword)
+                    && IsGetOnlyAutoProperty(property))
+                {
+                    continue;
+                }
+
+                foreach (IdentifierNameSyntax identifier in member.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+                {
+                    if (this.context.GetSymbolInfo(identifier).Symbol is { } referenced
+                        && parameters.Contains(referenced))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
         private static bool HasDesignatedInstanceConstructor(IReadOnlyList<MemberDeclarationSyntax> members)
         {
             return members
@@ -1404,9 +1468,54 @@ public sealed partial class CSharpToGSharpTranslator
                 var initStatements = propertyCtorInits
                     .Select(p => (GStatement)new AssignmentStatement(new IdentifierExpression(p.Name), p.Value))
                     .ToList();
-                instanceMembers.Insert(0, new ConstructorDeclaration(
-                    new List<Parameter>(),
-                    new BlockStatement(initStatements)));
+
+                // Issue #3770: when the type ALSO carries a C# 12 primary
+                // constructor, a *parameterless* `init()` is unreachable — every
+                // construction goes through the primary constructor, so the
+                // initializer assignments never run and every such property is
+                // silently left at its default (this compiles and ILVerifies
+                // clean, so only a runtime test sees it). The T2 explicit-ctor
+                // lift already refuses to emit this conflicting pair; the
+                // C# 12 primary-ctor path had no such guard.
+                //
+                // The faithful shape is a single designated `init(<primary
+                // parameters>)` carrying the assignments, with the class header
+                // left parameterless — a C# primary constructor whose parameters
+                // are only read by member initializers has exactly that meaning.
+                // When a parameter is captured anywhere else (a method body, a
+                // field initializer, a `: Base(...)` forward), it must stay a
+                // primary-constructor parameter field, so the move is skipped and
+                // the conflict is reported instead of being emitted silently.
+                var initParameters = new List<Parameter>();
+                if (primaryCtor is { Count: > 0 })
+                {
+                    if (this.CanMovePrimaryParametersToSynthesizedInit(node))
+                    {
+                        initParameters.AddRange(primaryCtor);
+                        primaryCtor = null;
+                    }
+                    else
+                    {
+                        string conflictMessage =
+                            $"'{node.Identifier.Text}' has a C# 12 primary constructor and get-only auto-property "
+                            + "initializer(s), but a primary-constructor parameter is also captured elsewhere in "
+                            + "the type, so the initializers cannot be moved into a designated 'init(...)'. The "
+                            + "property initializer(s) are dropped.";
+                        this.context.Report(new TranslationDiagnostic(
+                            nameof(SyntaxKind.PropertyDeclaration),
+                            conflictMessage,
+                            node.Identifier.GetLocation(),
+                            TranslationSeverity.Unsupported));
+                        initStatements = null;
+                    }
+                }
+
+                if (initStatements != null)
+                {
+                    instanceMembers.Insert(0, new ConstructorDeclaration(
+                        initParameters,
+                        new BlockStatement(initStatements)));
+                }
             }
 
             var members = new List<GMember>(instanceMembers);
