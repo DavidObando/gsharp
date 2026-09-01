@@ -299,6 +299,13 @@
           "xunit.extensibility.core": "[2.9.2]"
         }
       },
+      "gsharp.codeanalysis.analyzers.testing": {
+        "type": "Project",
+        "dependencies": {
+          "GSharp.Core": "[1.0.0, )",
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      },
       "GSharp.Core": {
         "type": "Project",
         "dependencies": {

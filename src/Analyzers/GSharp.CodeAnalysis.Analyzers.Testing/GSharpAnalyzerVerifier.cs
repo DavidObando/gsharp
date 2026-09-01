@@ -14,28 +14,36 @@ using GSharp.Core.CodeAnalysis.Text;
 namespace GSharp.CodeAnalysis.Analyzers.Testing;
 
 /// <summary>
-/// Test-framework-agnostic verifier for <see cref="GSharpDiagnosticAnalyzer"/>s
-/// (ADR-0169). G# source is annotated with <c>[|</c>…<c>|]</c> span markers at
-/// each expected diagnostic start; the verifier strips the markers, compiles
-/// the source, runs the analyzer through <see cref="GSharpAnalyzerDriver"/>,
-/// and asserts the produced diagnostic IDs (in span order) and their exact
-/// 1-based line/column positions. Mismatches throw
-/// <see cref="GSharpAnalyzerVerificationException"/>. Deliberately shaped like
-/// the repo's Roslyn-side <c>AnalyzerTestHelper.AssertDiagnosticsAsync</c> so
-/// cs2gs can translate existing analyzer tests mechanically.
+/// The instance-based entry point of the ADR-0169 verifier: it takes the
+/// analyzer as a value rather than as a type argument, which is the shape a
+/// translated Roslyn test harness lands on. A migrated
+/// <c>AnalyzerTestHelper.AssertDiagnosticsAsync(DiagnosticAnalyzer analyzer,
+/// …)</c> has an analyzer *instance* in hand and no type parameter to bind, so
+/// <see cref="GSharpAnalyzerVerifier{TAnalyzer}"/> — static, generic, and
+/// <c>new()</c>-constrained — cannot receive it without turning an argument
+/// into a type argument. Hand-written G# analyzer tests should keep using the
+/// generic form; this one exists so cs2gs's harness rewrite (ADR-0169 M5,
+/// issue #3686) is a body substitution rather than a call-site rewrite.
 /// </summary>
-/// <typeparam name="TAnalyzer">The analyzer under test.</typeparam>
-public static class GSharpAnalyzerVerifier<TAnalyzer>
-    where TAnalyzer : GSharpDiagnosticAnalyzer, new()
+public static class GSharpAnalyzerVerifier
 {
     /// <summary>
     /// Compiles <paramref name="markedSource"/> (after stripping the
-    /// <c>[|…|]</c> markers), runs the analyzer, and asserts the produced
-    /// diagnostics match the markers and <paramref name="diagnosticIds"/>.
+    /// <c>[|…|]</c> markers), runs <paramref name="analyzer"/> over it, and
+    /// asserts the produced diagnostics match the markers and
+    /// <paramref name="diagnosticIds"/>.
     /// </summary>
+    /// <param name="analyzer">The analyzer under test.</param>
     /// <param name="markedSource">G# source with expected-diagnostic markers.</param>
     /// <param name="diagnosticIds">Expected diagnostic IDs, one per marker, in span order.</param>
-    public static void VerifyAnalyzer(string markedSource, params string[] diagnosticIds)
+    /// <exception cref="GSharpAnalyzerVerificationException">
+    /// The source does not compile, or the produced diagnostics differ from
+    /// the markers and ids.
+    /// </exception>
+    public static void VerifyAnalyzer(
+        GSharpDiagnosticAnalyzer analyzer,
+        string markedSource,
+        params string[] diagnosticIds)
     {
         var expectedLocations = new List<(int Line, int Column)>();
         var cleanSource = StripMarkers(markedSource, expectedLocations);
@@ -59,7 +67,7 @@ public static class GSharpAnalyzerVerifier<TAnalyzer>
         }
 
         var produced = GSharpAnalyzerDriver
-            .Run(compilation, ImmutableArray.Create<GSharpDiagnosticAnalyzer>(new TAnalyzer()))
+            .Run(compilation, ImmutableArray.Create(analyzer))
             .OrderBy(d => d.Location.Span.Start)
             .ToImmutableArray();
 
@@ -121,4 +129,30 @@ public static class GSharpAnalyzerVerifier<TAnalyzer>
 
         return result.ToString();
     }
+}
+
+/// <summary>
+/// Test-framework-agnostic verifier for <see cref="GSharpDiagnosticAnalyzer"/>s
+/// (ADR-0169). G# source is annotated with <c>[|</c>…<c>|]</c> span markers at
+/// each expected diagnostic start; the verifier strips the markers, compiles
+/// the source, runs the analyzer through <see cref="GSharpAnalyzerDriver"/>,
+/// and asserts the produced diagnostic IDs (in span order) and their exact
+/// 1-based line/column positions. Mismatches throw
+/// <see cref="GSharpAnalyzerVerificationException"/>. Deliberately shaped like
+/// the repo's Roslyn-side <c>AnalyzerTestHelper.AssertDiagnosticsAsync</c> so
+/// cs2gs can translate existing analyzer tests mechanically.
+/// </summary>
+/// <typeparam name="TAnalyzer">The analyzer under test.</typeparam>
+public static class GSharpAnalyzerVerifier<TAnalyzer>
+    where TAnalyzer : GSharpDiagnosticAnalyzer, new()
+{
+    /// <summary>
+    /// Compiles <paramref name="markedSource"/> (after stripping the
+    /// <c>[|…|]</c> markers), runs the analyzer, and asserts the produced
+    /// diagnostics match the markers and <paramref name="diagnosticIds"/>.
+    /// </summary>
+    /// <param name="markedSource">G# source with expected-diagnostic markers.</param>
+    /// <param name="diagnosticIds">Expected diagnostic IDs, one per marker, in span order.</param>
+    public static void VerifyAnalyzer(string markedSource, params string[] diagnosticIds)
+        => GSharpAnalyzerVerifier.VerifyAnalyzer(new TAnalyzer(), markedSource, diagnosticIds);
 }

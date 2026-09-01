@@ -12,6 +12,15 @@
 
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore)" />
+    <!-- ADR-0169 M5 / issue #3686: the analyzer verifier ships NEXT TO gsc, the
+         same way GSharp.Core does. A migrated analyzer test project references
+         it through $(GsharpCompilerFullPath)'s directory (see
+         GSharpProjectTransformer.CompilerDirectoryExpression), which resolves
+         to the SDK's tools folder for an SDK-driven build and to
+         out/bin/<Config>/Compiler for a direct one. Until the packable
+         GSharp.CodeAnalysis.Analyzers.Testing package is published, co-location
+         with the compiler is the only path that works in both. -->
+    <ProjectReference Include="..\Analyzers\GSharp.CodeAnalysis.Analyzers.Testing\GSharp.CodeAnalysis.Analyzers.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -325,8 +325,14 @@ public sealed class TranslateStage : IMigrationStage
             // ADR-0169: a project declaring Roslyn diagnostic analyzers is
             // translated in analyzer-API mode — Microsoft.CodeAnalysis usage
             // is rewritten to the G# analyzer API instead of passing through.
+            // Issue #3686 (M5): so is its TEST project. The two halves of one
+            // pair must translate against the SAME analyzer API — otherwise
+            // the migrated tests hand a GSharpDiagnosticAnalyzer to a
+            // parameter still typed Microsoft's DiagnosticAnalyzer (GS0154).
             bool analyzerApiMode = Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
-                .IsAnalyzerProject(currentProject.Compilation);
+                .IsAnalyzerProject(currentProject.Compilation)
+                || Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
+                    .IsAnalyzerTestProject(currentProject.Compilation);
             if (!isReferencedProject)
             {
                 context.IsAnalyzerProject = analyzerApiMode;
