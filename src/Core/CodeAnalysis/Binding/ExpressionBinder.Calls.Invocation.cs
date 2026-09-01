@@ -3564,6 +3564,50 @@ internal sealed partial class ExpressionBinder
                     delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                     methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
                     methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+
+                // Issue #3745: a user-declared class argument erases to
+                // `System.Object`, which gives an imported generic method no
+                // evidence for a type parameter that occurs solely inside an
+                // interface-typed parameter (`DecodeSignature<TType,
+                // TGenericContext>(ISignatureTypeProvider<TType,
+                // TGenericContext>, TGenericContext)`), so inference fails and
+                // the call reports GS0159. Retry ONCE with each such argument
+                // projected onto the imported interface it implements. The
+                // retry is on the failure path only, and the original vector is
+                // restored when it does not resolve, because the `object`
+                // ride-through is itself load-bearing for erased type-parameter
+                // parameters (#2840).
+                if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
+                    && hasUserClassArg)
+                {
+                    var erasedArgTypes = (Type?[])argTypes.Clone();
+                    if (TryProjectUserClassArgumentInterfaces(arguments, argTypes))
+                    {
+                        var projectedResolution = ClrOverloadResolution.Resolve(
+                            candidates,
+                            argTypes,
+                            explicitTypeArgs,
+                            scope.References.MapClrTypeToReferences,
+                            ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length),
+                            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                            recoverTypeArgSymbols: recoverTypeArgSymbols,
+                            supplementaryInterfaceCheck: supplementaryInterfaceCheck,
+                            constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
+                            structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+                            delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
+                            methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
+                            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+                        if (projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
+                        {
+                            resolution = projectedResolution;
+                        }
+                        else
+                        {
+                            Array.Copy(erasedArgTypes, argTypes, argTypes.Length);
+                        }
+                    }
+                }
+
                 switch (resolution.Outcome)
                 {
                     case ClrOverloadResolution.ResolutionOutcome.Resolved:
