@@ -146,6 +146,98 @@ func Leak(index int32) int32 {
     }
 
     /// <summary>
+    /// Issue #3778: a <c>[|…|]</c> marker denotes a REGION, and the assertion
+    /// is that the diagnostic falls inside it. That is what lets a snippet
+    /// translated from C# keep the C# marker's extent: G#'s syntax shapes are
+    /// not always span-identical (its index node is narrower than C#'s element
+    /// access), so a translated marker is sometimes wider than the diagnostic.
+    /// The marker here is wider on BOTH sides, so it also fails the old
+    /// exact-start rule rather than only the end check.
+    /// </summary>
+    [Fact]
+    public void MarkerWiderThanTheDiagnostic_IsAccepted()
+    {
+        GSharpAnalyzerVerifier<StructFieldDefsReadAnalogueAnalyzer>.VerifyAnalyzer(
+            @"package App
+
+var structFieldDefs = []int32{1, 2, 3}
+
+func Leak(index int32) int32 {
+    return[| structFieldDefs[index] |]
+}
+",
+            "TESTGSA0001");
+    }
+
+    /// <summary>
+    /// The anti-vacuity guard for the region rule, and the reason it is
+    /// containment rather than "starts inside": a marker NARROWER than the
+    /// diagnostic brackets a different construct — here the receiver rather
+    /// than the index expression — and must still fail. Without the end check,
+    /// this would pass, and a mis-placed marker would be indistinguishable from
+    /// a correct one.
+    /// </summary>
+    [Fact]
+    public void MarkerNarrowerThanTheDiagnostic_IsRejected()
+    {
+        Assert.Throws<GSharpAnalyzerVerificationException>(() =>
+            GSharpAnalyzerVerifier<StructFieldDefsReadAnalogueAnalyzer>.VerifyAnalyzer(
+                @"package App
+
+var structFieldDefs = []int32{1, 2, 3}
+
+func Leak(index int32) int32 {
+    return [|structFieldDefs|][index]
+}
+",
+                "TESTGSA0001"));
+    }
+
+    /// <summary>
+    /// A marker on an unrelated construct fails too: the region rule bounds
+    /// where a diagnostic may land, it does not stop checking placement.
+    /// </summary>
+    [Fact]
+    public void MarkerOnADifferentConstruct_IsRejected()
+    {
+        Assert.Throws<GSharpAnalyzerVerificationException>(() =>
+            GSharpAnalyzerVerifier<StructFieldDefsReadAnalogueAnalyzer>.VerifyAnalyzer(
+                @"package App
+
+var structFieldDefs = []int32{1, 2, 3}
+
+func Leak([|index|] int32) int32 {
+    return structFieldDefs[index]
+}
+",
+                "TESTGSA0001"));
+    }
+
+    /// <summary>
+    /// Issue #3778: an analyzer that reports without a source location used to
+    /// crash the verifier with a NullReferenceException from
+    /// <c>TextLocation.StartLine</c> — a failure that says nothing about the
+    /// analyzer. It now names the cause. (The real case: a migrated
+    /// symbol-action analyzer whose G# symbol carries no declaring location.)
+    /// </summary>
+    [Fact]
+    public void LocationLessDiagnostic_ReportsTheCauseInsteadOfCrashing()
+    {
+        GSharpAnalyzerVerificationException failure =
+            Assert.Throws<GSharpAnalyzerVerificationException>(() =>
+                GSharpAnalyzerVerifier<LocationLessAnalyzer>.VerifyAnalyzer(
+                    @"package App
+
+func Leak() int32 {
+    return [|1|]
+}
+",
+                    "TESTGSA0002"));
+
+        Assert.Contains("no source location", failure.Message, System.StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The G# analogue of GSA0001: direct index reads of a member named
     /// <c>structFieldDefs</c> outside <c>ResolveFieldToken</c> /
     /// <c>ResolveInterfaceFieldToken</c> are flagged. Uses
@@ -196,6 +288,36 @@ func Leak(index int32) int32 {
             }
 
             context.ReportDiagnostic(Diagnostic.Create(Rule, indexExpression.Location));
+        }
+    }
+
+    /// <summary>
+    /// Reports one diagnostic with no source location — the shape that used to
+    /// crash the verifier (issue #3778).
+    /// </summary>
+    [GSharpDiagnosticAnalyzer]
+    public sealed class LocationLessAnalyzer : GSharpDiagnosticAnalyzer
+    {
+        private static readonly DiagnosticDescriptor Rule = new(
+            "TESTGSA0002",
+            "Location-less",
+            "Reported with no source location.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        /// <inheritdoc/>
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+        /// <inheritdoc/>
+        public override void Initialize(AnalysisContext context)
+        {
+            context.RegisterSyntaxNodeAction(Report, SyntaxKind.LiteralExpression);
+        }
+
+        private static void Report(SyntaxNodeAnalysisContext context)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, default(GSharp.Core.CodeAnalysis.Text.TextLocation)));
         }
     }
 }

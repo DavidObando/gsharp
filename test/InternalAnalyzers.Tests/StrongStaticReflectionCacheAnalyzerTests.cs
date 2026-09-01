@@ -39,26 +39,32 @@ class C
     [Fact]
     public Task IgnoresTypeSymbolsInstanceCachesTuplesAndNonMetadataNamespaces()
     {
+        // Two namespaces, so both are block-scoped: a second FILE-scoped
+        // namespace is CS8954, which Roslyn's analyzer driver tolerates (it
+        // only parses) but a verifier that actually COMPILES the snippet — the
+        // G# one this test migrates onto (ADR-0169 M5, issue #3778) — does not.
         const string Source = """
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 
-namespace GSharp.Core.CodeAnalysis.Symbols;
-
-class TypeSymbol { }
-class C
+namespace GSharp.Core.CodeAnalysis.Symbols
 {
-    private static readonly ConcurrentDictionary<TypeSymbol, string> SymbolCache = new();
-    private static readonly ConcurrentDictionary<(Type Source, Type Target), string> TupleCache = new();
-    private readonly Dictionary<Type, string> InstanceCache = new();
+    class TypeSymbol { }
+    class C
+    {
+        private static readonly ConcurrentDictionary<TypeSymbol, string> SymbolCache = new();
+        private static readonly ConcurrentDictionary<(Type Source, Type Target), string> TupleCache = new();
+        private readonly Dictionary<Type, string> InstanceCache = new();
+    }
 }
 
-namespace GSharp.Core.CodeAnalysis.Syntax;
-
-class SyntaxCache
+namespace GSharp.Core.CodeAnalysis.Syntax
 {
-    private static readonly ConcurrentDictionary<Type, string> ChildAccessorsByType = new();
+    class SyntaxCache
+    {
+        private static readonly ConcurrentDictionary<Type, string> ChildAccessorsByType = new();
+    }
 }
 """;
 

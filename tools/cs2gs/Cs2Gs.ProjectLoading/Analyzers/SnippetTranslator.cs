@@ -40,7 +40,7 @@ public static class SnippetTranslator
     /// <returns>The translation result.</returns>
     public static SnippetTranslationResult Translate(string csharpWithMarkers)
     {
-        var markedTexts = new List<string>();
+        var markedTexts = new List<MarkedText>();
         string cleanSource = StripMarkers(csharpWithMarkers, markedTexts);
 
         var diagnostics = new List<TranslationDiagnostic>();
@@ -52,7 +52,10 @@ public static class SnippetTranslator
                 "The C# snippet does not compile: " + string.Join("; ", project.ErrorDiagnostics.Take(3)),
                 location: null,
                 TranslationSeverity.Unsupported));
-            return new SnippetTranslationResult(null, diagnostics, markedTexts);
+            return new SnippetTranslationResult(
+                null,
+                diagnostics,
+                markedTexts.Select(m => m.Text).ToList());
         }
 
         var translator = new CSharpToGSharpTranslator();
@@ -60,22 +63,32 @@ public static class SnippetTranslator
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string printed = GSharpPrinter.Print(translator.TranslateDocument(document, context));
         diagnostics.AddRange(context.Diagnostics);
+        ReportNamespaceCollapse(document, diagnostics);
 
         var unplaced = new List<string>();
-        var result = new StringBuilder(printed);
 
-        // Ordered placement: member order survives translation, so each
-        // marker's text is searched after the previous marker's position.
-        int cursor = 0;
-        foreach (string markedText in markedTexts)
+        // Occurrence-ORDINAL placement (issue #3778). The previous rule —
+        // "search forward from the last marker" — silently mis-places a marker
+        // whose text also occurs EARLIER in the translated unit, and a
+        // composed snippet (`Model + """…"""`) is exactly that case: the
+        // shared model declares `RewriteFieldNode`, so the marker on the
+        // per-test override landed on the base method instead. Member order
+        // survives translation, so the truthful rule is positional: the Nth
+        // occurrence of a marked text in the C# maps to the Nth occurrence of
+        // that same text in the G#. Placements are computed against the
+        // untouched printed text and applied last, back to front, so inserting
+        // one marker cannot move another's index.
+        var placements = new List<(int Index, int Length)>();
+        foreach (MarkedText marked in markedTexts)
         {
-            int index = result.ToString().IndexOf(markedText, cursor, StringComparison.Ordinal);
+            int ordinal = OccurrenceOrdinal(cleanSource, marked.Text, marked.Start);
+            int index = NthOccurrence(printed, marked.Text, ordinal);
             if (index < 0)
             {
-                unplaced.Add(markedText);
+                unplaced.Add(marked.Text);
                 diagnostics.Add(new TranslationDiagnostic(
                     "analyzer-snippet",
-                    $"Marker text '{markedText}' does not survive translation verbatim; re-place the [|…|] marker in the G# snippet by hand.",
+                    $"Marker text '{marked.Text}' does not survive translation verbatim (occurrence {ordinal + 1} not found); re-place the [|…|] marker in the G# snippet by hand.",
                     location: null,
                     TranslationSeverity.Warning)
                 {
@@ -84,15 +97,103 @@ public static class SnippetTranslator
                 continue;
             }
 
-            result.Insert(index + markedText.Length, "|]");
+            placements.Add((index, marked.Text.Length));
+        }
+
+        var result = new StringBuilder(printed);
+        foreach ((int index, int length) in placements.OrderByDescending(p => p.Index))
+        {
+            result.Insert(index + length, "|]");
             result.Insert(index, "[|");
-            cursor = index + markedText.Length + 4;
         }
 
         return new SnippetTranslationResult(result.ToString(), diagnostics, unplaced);
     }
 
-    private static string StripMarkers(string source, List<string> markedTexts)
+    /// <summary>
+    /// A G# compilation unit declares exactly ONE package, so a C# snippet
+    /// spanning several namespaces collapses into the first one — every type
+    /// silently changes namespace, and a namespace-scoped analyzer rule
+    /// (GSA0003, GSA0004) then fires, or fails to fire, on the wrong
+    /// declarations. cs2gs's normal pipeline splits such a file per package;
+    /// a snippet has nowhere to split to because the verifier takes ONE
+    /// source. Surface it as <c>CS2GS-ANALYZER-SNIPPET</c> so the migrated
+    /// test's disagreement has a stated cause rather than looking like an
+    /// analyzer regression.
+    /// </summary>
+    /// <param name="document">The loaded snippet document.</param>
+    /// <param name="diagnostics">The diagnostic list to append to.</param>
+    private static void ReportNamespaceCollapse(
+        LoadedDocument document,
+        List<TranslationDiagnostic> diagnostics)
+    {
+        var names = document.SemanticModel.SyntaxTree.GetRoot()
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.BaseNamespaceDeclarationSyntax>()
+            .Select(declaration => declaration.Name.ToString())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (names.Count < 2)
+        {
+            return;
+        }
+
+        string message = "the snippet declares " + names.Count + " namespaces ("
+            + string.Join(", ", names)
+            + ") but a G# compilation unit declares one package, so they collapse into '"
+            + names[0] + "'. Namespace-scoped analyzer rules will disagree with the C# "
+            + "expectation; split the test or re-express the snippet in one namespace.";
+        diagnostics.Add(new TranslationDiagnostic(
+            "analyzer-snippet",
+            message,
+            location: null,
+            TranslationSeverity.Warning)
+        {
+            DiagnosticId = SnippetDiagnosticId,
+        });
+    }
+
+    /// <summary>
+    /// Counts how many non-overlapping occurrences of <paramref name="text"/>
+    /// start before <paramref name="start"/> in <paramref name="source"/>.
+    /// </summary>
+    /// <param name="source">The text to scan.</param>
+    /// <param name="text">The occurrence text.</param>
+    /// <param name="start">The offset of the occurrence being ranked.</param>
+    /// <returns>The zero-based occurrence ordinal.</returns>
+    private static int OccurrenceOrdinal(string source, string text, int start)
+    {
+        var ordinal = 0;
+        for (int i = source.IndexOf(text, StringComparison.Ordinal);
+             i >= 0 && i < start;
+             i = source.IndexOf(text, i + text.Length, StringComparison.Ordinal))
+        {
+            ordinal++;
+        }
+
+        return ordinal;
+    }
+
+    /// <summary>
+    /// Returns the index of the <paramref name="ordinal"/>-th (zero-based)
+    /// non-overlapping occurrence of <paramref name="text"/>, or -1.
+    /// </summary>
+    /// <param name="source">The text to scan.</param>
+    /// <param name="text">The occurrence text.</param>
+    /// <param name="ordinal">The zero-based occurrence to find.</param>
+    /// <returns>The index, or -1 when there are fewer occurrences.</returns>
+    private static int NthOccurrence(string source, string text, int ordinal)
+    {
+        int index = source.IndexOf(text, StringComparison.Ordinal);
+        for (var seen = 0; index >= 0 && seen < ordinal; seen++)
+        {
+            index = source.IndexOf(text, index + text.Length, StringComparison.Ordinal);
+        }
+
+        return index;
+    }
+
+    private static string StripMarkers(string source, List<MarkedText> markedTexts)
     {
         var result = new StringBuilder(source.Length);
         var markStarts = new Stack<int>();
@@ -110,7 +211,9 @@ public static class SnippetTranslator
                 if (markStarts.Count > 0)
                 {
                     int start = markStarts.Pop();
-                    markedTexts.Add(result.ToString(start, result.Length - start));
+                    markedTexts.Add(new MarkedText(
+                        result.ToString(start, result.Length - start),
+                        start));
                 }
 
                 i++;
@@ -122,15 +225,9 @@ public static class SnippetTranslator
 
         return result.ToString();
     }
-}
 
-/// <summary>
-/// The result of <see cref="SnippetTranslator.Translate"/>.
-/// </summary>
-/// <param name="GsWithMarkers">The G# snippet with re-placed markers, or null when the C# snippet did not compile.</param>
-/// <param name="Diagnostics">Translation and marker-placement diagnostics.</param>
-/// <param name="UnplacedMarkers">The marked texts that could not be re-placed automatically.</param>
-public sealed record SnippetTranslationResult(
-    string GsWithMarkers,
-    IReadOnlyList<TranslationDiagnostic> Diagnostics,
-    IReadOnlyList<string> UnplacedMarkers);
+    /// <summary>One <c>[|…|]</c> marker: its text and its offset in the marker-free C# source.</summary>
+    /// <param name="Text">The marked text.</param>
+    /// <param name="Start">The offset of the marked text in the stripped source.</param>
+    private readonly record struct MarkedText(string Text, int Start);
+}

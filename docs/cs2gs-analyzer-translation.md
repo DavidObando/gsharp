@@ -168,8 +168,9 @@ consumer rewrite is a pure value substitution.
 
 ## Test-harness and snippet translation
 
-Status (2026-09-01, issue #3686): the **harness half is implemented**; the
-**snippet half is not** — see "M5 status" below.
+Status (2026-09-01, issues #3686 / #3778): the **harness half is implemented**
+(#3777) and the **snippet half is dispatched** (#3778) — see "M5 status" below
+for what is still open.
 
 The original plan here — "`AnalyzerTestHelper.cs` is ordinary C# and translates
 normally, rules 3/22 rewrite the Roslyn calls" — did not survive contact with
@@ -231,24 +232,59 @@ is itself full of unmappable cs2gs machinery — while breaking the working
 case, since `AnalyzerTestHelper.cs` instantiates no analyzer and would stop
 being claimed).
 
-The remaining half is the **embedded C# snippets** — raw strings of analyzed
-code inside tests. For functional equivalence they must become G# snippets.
+The other half is the **embedded C# snippets** — raw strings of analyzed code
+inside tests, which the migrated harness now hands to a verifier that compiles
+**G#**. `SnippetTranslator` (nested cs2gs invocation at translation time, not
+manual porting) always existed; issue #3778 is what **dispatches** it.
 
-Approach: nested cs2gs invocation at translation time, not manual porting.
+**The dispatch rule.** An expression is a snippet exactly when it is a
+compile-time constant string that *flows into the source parameter of an
+analyzer test harness entry point* — either as the initializer of a local later
+passed there, or directly as that argument
+(`CSharpToGSharpTranslator.AnalyzerSnippets.cs`). The conjunction is
+load-bearing in both directions:
 
-- New `Cs2Gs.Translator/Analyzers/SnippetTranslator.cs`:
-  `TranslateSnippet(csharpWithMarkers) → (gsharpWithMarkers, diagnostics)`.
-  Triggered by a guard on string literals flowing into a parameter the map
-  marks as analyzed-source (the translated verifier's `source` parameter).
-- Marker preservation: strip markers recording the anchor node (innermost
-  syntax node starting at each marker span), translate, re-place markers via
-  origin provenance — an optional `Origin` (source `SyntaxReference`)
-  annotation on `Cs2Gs.CodeModel` nodes surfaced by `GSharpPrinter` as an
-  origin→output-span table. Anchors with no 1:1 counterpart get a best-guess
-  position plus the new `CS2GS-ANALYZER-SNIPPET` warning → human review.
-- Golden files of translated snippets (via `test/Shared/GoldenFile.cs`) make
-  review diffable. Manual fallback (warning + TODO marker) keeps the milestone
-  shippable if provenance lands partially.
+- "a `const string` local" alone would rewrite every constant in the project;
+- "a string containing `[|…|]`" alone would miss the nine of sixteen snippets in
+  `test/InternalAnalyzers.Tests` that assert *no* diagnostic and so carry no
+  marker, and would fire on any unrelated string containing the digraph.
+
+The harness parameter is the only signal that says "this string will be
+compiled as source", which is what makes translating it correct and leaving it
+alone wrong. Neither shape the ADR originally assumed (a literal argument at the
+call site) occurs in the real tests: every snippet arrives through a local, and
+several are **composed** (`Model + """…"""` with a shared `const string` model).
+Neither operand of a composition compiles on its own, so the guard fires only on
+the *whole initializer* and takes its text from Roslyn's constant folding — the
+migrated test therefore carries the folded, translated whole and loses the
+shared-model factoring. That is the accepted trade.
+
+**Marker preservation.** Markers are re-placed by occurrence ordinal: the Nth
+occurrence of a marked text in the C# is the Nth occurrence of that text in the
+G#. The earlier "search forward from the previous marker" rule silently
+mis-placed a marker whose text also occurred *earlier* in the unit — which is
+precisely what a composed snippet produces, since the shared model declares the
+member the per-test class overrides. A marked text that does not survive
+translation verbatim is **dropped and reported** as `CS2GS-ANALYZER-SNIPPET`
+(printed by `TranslateStage`, not merely recorded); the migrated test then fails
+on a marker/id count mismatch rather than asserting a wrong span.
+
+**Markers are regions.** `GSharpAnalyzerVerifier` asserts the produced
+diagnostic's span is *contained in* the marked region, not that it starts at the
+marker. A hand-written G# test brackets exactly the construct it expects, so its
+diagnostic is span-equal and nothing relaxes; what the region admits is the
+cross-language case, where a translated marker keeps the C# extent and G#'s node
+shapes differ (its index node is narrower than C#'s element access). Containment
+in *both* directions keeps the assertion falsifiable — a marker narrower than
+the diagnostic, or on a neighbouring construct, still fails.
+
+**Known limitation: one package per unit.** A G# compilation unit declares a
+single `package`, so a C# snippet spanning several namespaces collapses into the
+first one and namespace-scoped rules (GSA0003, GSA0004) then judge the wrong
+declarations. Fixing it needs a multi-unit verifier (the harness takes one
+source string). Until then the collapse is reported as
+`CS2GS-ANALYZER-SNIPPET`, because a negative test that passes because its
+subject changed namespace is passing for the wrong reason.
 
 ## Project and consumer transform
 
@@ -273,7 +309,8 @@ Approach: nested cs2gs invocation at translation time, not manual porting.
 Two layers; test-level is the primary signal:
 
 - **Test-level**: the translated `InternalAnalyzers.Tests` run under the G#
-  verifier with exact `[|...|]` locations over translated snippets.
+  verifier, each diagnostic contained in its translated `[|...|]` region
+  (issue #3778 — the region, not an exact start, is what survives translation).
 - **Corpus-level**: a new `Cs2Gs.Pipeline/AnalyzerParityStage.cs` (sibling of
   TestParity) runs the original Roslyn analyzers over the C# corpus and the
   compiled G# analyzers over the translated corpus, diffing diagnostic
@@ -306,14 +343,27 @@ Order: GSA0001 → GSA0003 → GSA0004 → GSA0002 → GSA0005; harness and pari
   harness rewrite, the instance-based verifier entry point, and the project
   transform. Measured on `test/InternalAnalyzers.Tests`, the app was walled at
   16 `GS0154` errors (3 fingerprints) and now translates, **compiles and
-  ilverifies clean**. Not done: snippet translation. `SnippetTranslator` exists
-  and is unit-tested, but nothing dispatches it during a migration, so the
-  migrated tests still hand **C# snippets** to the G# verifier and all 16 fail
-  — loudly, with the verifier's "the test source does not compile" report, not
-  silently. Two shapes make the wiring more than plumbing: the analyzed source
-  arrives via a `const string` local rather than a literal argument, and
-  several tests compose it (`Model + """…"""`), so the unit to translate is the
-  concatenation, which cannot then be split back into its parts.
+  ilverifies clean**.
+
+  **M5 second half (2026-09-01, issue #3778).** `SnippetTranslator` is now
+  dispatched: the constant string reaching the harness's source parameter is
+  translated to G#, markers and all. Measured on the same 2-app migration,
+  test-parity went **16 failing → 6 failing / 10 passing** (translate, compile
+  and ILVerify stay PASS). Each of the six has a stated, printed cause:
+
+  - **2** — a snippet spanning several namespaces collapses into one G#
+    package, so `GSA0003`/`GSA0004` judge the wrong declarations. Reported as
+    `CS2GS-ANALYZER-SNIPPET`. Note this also makes one *negative* test pass
+    vacuously, for the same reason.
+  - **2** — `GSA0005` (rewriter clone preservation) fires on the C# but not on
+    the translated G# shapes: an analyzer-translation parity gap, not a snippet
+    one. The markers are correctly placed.
+  - **1** — the marked text `typeof(int) != type` becomes `typeof(int32) !=
+    type` in G#, so the marker cannot be re-placed by text; dropped and
+    reported.
+  - **1** — the migrated `GSA0003` reports on a G# field symbol whose
+    `Location` is empty, so the verifier cannot check the marker. It now names
+    that cause instead of throwing a `NullReferenceException`.
 - **M6 Parity + self-migration** — `AnalyzerParityStage`; extend the
   Issue3347-style self-migration ratchet to translate
   `InternalAnalyzers.csproj` live. Exit criterion: all five translated
