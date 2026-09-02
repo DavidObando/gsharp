@@ -1,16 +1,59 @@
 # ADR-0082: Gate Go-flavored concurrency behind `import Gsharp.Extensions.Go`
 
-- **Status**: Accepted
+- **Status**: Accepted — supersession proposed by ADR-0174 (see the note below)
 - **Date**: 2026-06-12
 - **Phase**: Phase 6 (cleanup)
 - **Related**: ADR-0022 (go / chan / select lowering — the surface
   this ADR gates), ADR-0002 (concurrency model), ADR-0023
   (async/scope as the production concurrency primitive),
-  ADR-0028 (multi-file compilation units), parent issue #706
+  ADR-0028 (multi-file compilation units), ADR-0174 (goroutines
+  and channels wave 2 — proposes to supersede this ADR), parent issue #706
   (Oats cleanup), implementing issue #722, paired issue #723
   (Go-style built-ins gated by the same import), paired issue
   #724 (`Gsharp.Extensions.Optional` / `.Sequences` namespaces
   in the same shipped assembly).
+
+## Supersession proposed by ADR-0174
+
+**This ADR is still in force.** ADR-0174 is `Proposed`, and none of what
+follows has shipped: `GS0316` and `GS0317` are still defined
+(`DiagnosticDescriptors.cs:242`) and still reported, and the per-file
+`import Gsharp.Extensions.Go` gate is still required by the current compiler.
+If you arrived here from a GS0316 diagnostic, the gate is real and the import
+is the fix. This section records what ADR-0174 *proposes* to do, so the two
+documents do not silently disagree; the status above flips to **Superseded**
+when ADR-0174 is accepted, not before.
+
+**What would be superseded: the gate.** This ADR's central decision — that the
+Go-flavored concurrency surface is opt-in behind
+`import Gsharp.Extensions.Go`, enforced per-file by GS0316 and GS0317 — is
+reversed by ADR-0174 D13. The premise here was that the Go shapes are one
+*flavor* of concurrency alongside `scope`/`async`/`await`, and that a flavor
+should be requested rather than imposed. ADR-0174 D4 makes channel operations
+the language's suspension points and D6 makes `scope` the structure that owns
+them, which merges the two surfaces: what this ADR gated is now the
+infrastructure, and gating infrastructure is not coherent. GS0316 and GS0317
+are retired and their identifiers are not reused.
+
+**What would also be superseded: the built-ins the gate protected.** ADR-0174 D12
+and D13 retire `make`, `close`, `len`, `cap`, `append`, and `delete` as
+top-level functions in favour of ordinary constructors and members
+(`chan[T](…)`, `.Close()`, `.Length()`, `.Capacity`, `.Length` / `.Count`,
+`List[T].Add`, `.Remove(k)`). Much of the argument below for keeping the Go
+built-ins out of the default global scope is answered more directly by not
+having them be global functions at all.
+
+**What would survive.** The packaging decisions in this ADR are retained and
+restated in ADR-0174 D9: the helpers ship in the same assembly as the rest of
+the standard library, are namespaced rather than assembly-separated, and are
+resolved by the ordinary import mechanism with no bespoke lookup path. The
+namespace itself moves to `Gsharp.Concurrency` and joins the implicit import
+list. The reasoning below about *why* a compiler-special-cased namespace would
+have been a mistake is still correct and still binding.
+
+Until that acceptance, read the rest of this document as current guidance.
+After it, read it as the historical record of why the gate existed and what it
+cost.
 
 ## Context
 
