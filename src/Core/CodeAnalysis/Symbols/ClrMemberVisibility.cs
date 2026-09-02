@@ -94,6 +94,42 @@ public static class ClrMemberVisibility
     public static MethodInfo? GetVisibleSetter(PropertyInfo property, bool includeInternal)
         => Visible(property.GetSetMethod(nonPublic: true), includeInternal);
 
+    /// <summary>
+    /// Issue #3813: the setter as seen from <b>inside a type that derives from
+    /// the property's declaring type</b>, where CLR <c>family</c> accessibility
+    /// is reachable and the blanket "protected stays invisible" rule of the
+    /// other overloads does not apply.
+    /// <para>
+    /// A G# class deriving from an imported CLR base is entitled to that base's
+    /// <c>protected</c> members — the inherited-base assignment paths in
+    /// <c>ExpressionBinder</c> say so in as many words (issues #319/#1582) and
+    /// already deliver it for <c>protected</c> <em>fields</em>. Properties went
+    /// through the accessor gate instead, so a <c>{ get; protected set; }</c>
+    /// base property (e.g. <c>System.Threading.Channels.Channel&lt;T&gt;.Reader</c>)
+    /// was reported read-only (<c>GS0127</c>) in a derived type's own
+    /// constructor — a write C# accepts.
+    /// </para>
+    /// </summary>
+    /// <param name="property">The property to inspect.</param>
+    /// <param name="includeInternal">Whether friend internals are visible.</param>
+    /// <returns>The setter callable from a derived type, or <see langword="null"/>.</returns>
+    public static MethodInfo? GetDerivedVisibleSetter(PropertyInfo property, bool includeInternal)
+    {
+        var setter = property.GetSetMethod(nonPublic: true);
+        if (setter == null)
+        {
+            return null;
+        }
+
+        // `family` (protected) and `famorassem` (protected internal) are always
+        // reachable from a derived type; `famandassem` (private protected) only
+        // adds the same-assembly/friend requirement on top.
+        var reachable = setter.IsFamily
+            || setter.IsFamilyOrAssembly
+            || (includeInternal && setter.IsFamilyAndAssembly);
+        return reachable ? setter : Visible(setter, includeInternal);
+    }
+
     /// <summary>Returns the event's <c>add</c> accessor when it is visible here.</summary>
     /// <param name="eventInfo">The event to inspect.</param>
     /// <param name="includeInternal">Whether friend internals are visible.</param>

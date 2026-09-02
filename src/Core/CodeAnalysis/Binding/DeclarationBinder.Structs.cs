@@ -3001,12 +3001,36 @@ internal sealed partial class DeclarationBinder
             // `structSymbol`, mirroring how a `shared` function body (which
             // already works) carries its `StaticOwnerType`.
             setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol));
-            if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
+
+            // Issue #3812: this closure runs long after BindStructDeclarationBody
+            // unwound its type-parameter scope, so the scope has to be rebuilt
+            // from scratch — and it must be rebuilt the SAME way, including the
+            // issue #1537 enclosing-type parameters. Seeding only
+            // `structSymbol.TypeParameters` left a nested type's initializer
+            // unable to name the ENCLOSING type's parameters, so
+            // `class Outer[T] { class Inner { var item T = default(T) } }` bound
+            // the field's declared type fine (that happens inside the body scope)
+            // and then failed on the initializer with GS0113 "Type 'T' doesn't
+            // exist" — an initializer-only asymmetry, invisible to any fixture
+            // whose nested field had no initializer.
+            var initializerEnclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType);
+            if (!structSymbol.TypeParameters.IsDefaultOrEmpty || initializerEnclosingTypeParameters.Count > 0)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-                foreach (var tp in structSymbol.TypeParameters)
+
+                // Outermost-first, so an inner level shadows an outer one on a
+                // name clash — the same precedence BindStructDeclarationBody uses.
+                foreach (var tp in initializerEnclosingTypeParameters)
                 {
                     binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+
+                if (!structSymbol.TypeParameters.IsDefaultOrEmpty)
+                {
+                    foreach (var tp in structSymbol.TypeParameters)
+                    {
+                        binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                    }
                 }
             }
 

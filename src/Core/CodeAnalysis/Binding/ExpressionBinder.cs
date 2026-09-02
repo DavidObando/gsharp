@@ -1289,15 +1289,16 @@ internal sealed partial class ExpressionBinder
         return ClrTypeUtilities.IsSameAs(fnRetClr, invokeReturn);
     }
 
-    private bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable)
-        => TryGetWritableClrMember(member, receiverType: null, out targetType, out targetTypeSymbol, out writable);
+    private bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable, bool fromDerivedType = false)
+        => TryGetWritableClrMember(member, receiverType: null, out targetType, out targetTypeSymbol, out writable, fromDerivedType);
 
     private bool TryGetWritableClrMember(
         MemberInfo? member,
         TypeSymbol? receiverType,
         [NotNullWhen(true)] out Type? targetType,
         [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol,
-        out bool writable)
+        out bool writable,
+        bool fromDerivedType = false)
     {
         switch (member)
         {
@@ -1309,7 +1310,12 @@ internal sealed partial class ExpressionBinder
                         receiverType,
                         p,
                         projectOnlyWhenSymbolicallyRequired: true);
-                writable = p.CanWrite && GetVisibleSetter(p) != null;
+
+                // Issue #3813: `fromDerivedType` marks the inherited-CLR-base
+                // assignment paths (#319/#1582), where a `protected` setter on
+                // the base IS reachable and must not be gated away as if this
+                // were an outside caller.
+                writable = p.CanWrite && GetVisibleSetter(p, fromDerivedType) != null;
                 return writable;
             case FieldInfo f:
                 targetType = f.FieldType;
@@ -1353,6 +1359,19 @@ internal sealed partial class ExpressionBinder
     /// <returns>The callable setter, or <see langword="null"/>.</returns>
     private MethodInfo? GetVisibleSetter(PropertyInfo property)
         => ClrMemberVisibility.GetVisibleSetter(property, CanAccessInternalsOf(property.DeclaringType));
+
+    /// <summary>
+    /// Issue #3813: <see cref="GetVisibleSetter(PropertyInfo)"/>, widened to
+    /// <c>protected</c> accessors when the write is being bound inside a type
+    /// that derives from <paramref name="property"/>'s declaring type.
+    /// </summary>
+    /// <param name="property">The imported CLR property.</param>
+    /// <param name="fromDerivedType">Whether the write site derives from the declaring type.</param>
+    /// <returns>The callable setter, or <see langword="null"/>.</returns>
+    private MethodInfo? GetVisibleSetter(PropertyInfo property, bool fromDerivedType)
+        => fromDerivedType
+            ? ClrMemberVisibility.GetDerivedVisibleSetter(property, CanAccessInternalsOf(property.DeclaringType))
+            : ClrMemberVisibility.GetVisibleSetter(property, CanAccessInternalsOf(property.DeclaringType));
 
     /// <summary>
     /// Issue #3705: the shared instance-property probe for CLR member lookup.
@@ -2719,7 +2738,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
+        if (!TryGetWritableClrMember(member, out _, out var targetSymbol, out _, fromDerivedType: true))
         {
             Diagnostics.ReportCannotAssign(assignLocation, name);
             _ = BindExpression(valueSyntax);
