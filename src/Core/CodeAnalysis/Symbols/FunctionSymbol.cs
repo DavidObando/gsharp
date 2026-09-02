@@ -325,6 +325,22 @@ public sealed class FunctionSymbol : Symbol
     public bool AsyncReturnsValueTask { get; set; }
 
     /// <summary>
+    /// Gets or sets how this function is suspending (ADR-0174 D4). A suspending
+    /// function is compiled through the same state-machine pipeline as an
+    /// <c>async func</c> but returns <c>ValueTask[R]</c> with the pooling
+    /// builder, carries <c>[Suspending]</c>, and is awaited implicitly by every
+    /// G# call site — <see cref="Type"/> stays the logical <c>R</c>. Never set
+    /// together with <see cref="IsAsync"/>.
+    /// </summary>
+    public SuspendingKind SuspendingKind { get; set; }
+
+    /// <summary>Gets a value indicating whether this function is suspending (ADR-0174 D4).</summary>
+    public bool IsSuspending => SuspendingKind != SuspendingKind.None;
+
+    /// <summary>Gets a value indicating whether this function's body is compiled as an async state machine — declared <c>async</c>, or suspending.</summary>
+    public bool IsAsyncOrSuspending => IsAsync || IsSuspending;
+
+    /// <summary>
     /// Gets or sets a value indicating whether this (ADR-0122 / issue #1014)
     /// function constitutes an <c>unsafe</c> context — either because the
     /// declaration carried the <c>unsafe</c> modifier (<c>unsafe func</c>) or

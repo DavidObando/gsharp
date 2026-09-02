@@ -139,6 +139,7 @@ public enum SyntaxKind
     ScopeKeyword,
     SequenceKeyword,
     StructKeyword,
+    SuspendKeyword,
     SwitchKeyword,
     ThrowKeyword,
     TrueKeyword,

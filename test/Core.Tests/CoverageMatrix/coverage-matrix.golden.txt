@@ -241,6 +241,7 @@ StringToken
 StructDeclaration
 StructKeyword
 StructLiteralExpression
+SuspendKeyword
 SwitchCase
 SwitchExpression
 SwitchExpressionArm

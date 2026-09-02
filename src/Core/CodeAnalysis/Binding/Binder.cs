@@ -218,7 +218,7 @@ public sealed class Binder
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
             createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
-                method.IsAsync && !IsAsyncIteratorReturnType(returnType)
+                method.IsAsyncOrSuspending && !IsAsyncIteratorReturnType(returnType)
                     ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
                     : returnType,
             isLvalue: ExpressionBinder.IsLvalue,
@@ -258,6 +258,7 @@ public sealed class Binder
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
             wrapAsTask: (t, useValueTask) => Lambdas.WrapAsTask(t, useValueTask),
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
+            completeSuspendingCall: (call, logicalType, location, calleeName) => Expressions.CompleteSuspendingCall(call, logicalType, location, calleeName),
             tryGetFunctionLiteral: LambdaBinder.TryGetFunctionLiteral,
             inferTypeArguments: InferTypeArguments,
             substituteType: (t, subst) => SubstituteType(t, subst, scope.References.MapClrTypeToReferences),
@@ -2365,6 +2366,21 @@ public sealed class Binder
         // statement that has one. A program with no top-level statements keeps
         // the empty synthetic block unanchored — there is nothing to point at.
         SyntaxAnchoringWalker.Anchor(statement, statement.Statements.FirstOrDefault(s => s.Syntax is not null)?.Syntax);
+
+        // ADR-0174 D4: infer which functions suspend, retype the calls to them,
+        // and complete those calls (implicit await / blocking root bridge).
+        // Runs after every body is bound and anchored, so the fixed point sees
+        // the whole call graph; the entry point's body is one of the bodies.
+        var entryBodyWasTheStatementBlock = globalScope.EntryPoint is { } entryBefore
+            && functionBodies.TryGetValue(entryBefore, out var entryBodyBefore)
+            && ReferenceEquals(entryBodyBefore, statement);
+        Suspension.SuspensionInference.Run(functionBodies, globalScope.EntryPoint, references, diagnostics);
+        if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
+        {
+            // The synthesized top-level block IS the entry point's body; a user
+            // `func Main()` keeps its own body and the (empty) statement block.
+            statement = inferredEntryBody;
+        }
 
         // Issue #3501 A2: union the ref-kind delegates synthesized while
         // binding top-level statements (already in globalScope.Delegates via

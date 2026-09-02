@@ -47,7 +47,7 @@ public static class AsyncEmitPrecheck
         foreach (var pair in program.Functions)
         {
             var function = pair.Key;
-            if (!function.IsAsync)
+            if (!function.IsAsyncOrSuspending)
             {
                 continue;
             }

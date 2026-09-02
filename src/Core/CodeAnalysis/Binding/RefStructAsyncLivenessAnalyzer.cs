@@ -75,7 +75,7 @@ internal static class RefStructAsyncLivenessAnalyzer
             return;
         }
 
-        if (enclosing.IsAsync)
+        if (enclosing.IsAsyncOrSuspending)
         {
             AnalyzeScope(body, diagnostics);
         }
@@ -670,7 +670,7 @@ internal static class RefStructAsyncLivenessAnalyzer
                 // real Body anywhere.
                 var loweredLambdaBody = (BoundBlockStatement)Lowerer.Lower(literal.Body);
 
-                if (literal.Function != null && literal.Function.IsAsync)
+                if (literal.Function != null && literal.Function.IsAsyncOrSuspending)
                 {
                     AnalyzeScope(loweredLambdaBody, diagnostics);
                 }

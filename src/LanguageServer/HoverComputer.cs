@@ -2402,6 +2402,7 @@ public static class CompletionComputer
         yield return "catch";
         yield return "throw";
         yield return "async";
+        yield return "suspend";
         yield return "await";
     }
 }

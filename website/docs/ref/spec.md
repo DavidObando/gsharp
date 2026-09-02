@@ -1584,6 +1584,12 @@ Channels are typed (`chan[T]`, with `in`/`out` directional handles), are rendezv
 
 `async func` declarations and literals are supported. The emitter lowers async methods and lambdas to state machines, including exception handler rewriting, spill management, and capture analysis.
 
+### Suspending functions (`suspend func`)
+
+A `suspend func f(...) R` (ADR-0174 D4) is `async func`'s sibling with **no observable task**: the same state machine, but the emitted CLR method returns `ValueTask[R]` (`ValueTask` for `void`), is built with the pooling `ValueTask` builder, and carries `[Gsharp.Concurrency.Suspending]`. G# call sites see the logical type `R`: inside another suspending function, an `async func`, or an async iterator the call is an **implicit await**; inside a function that is neither, the call has nowhere to await, so it blocks the thread through the runtime's root bridge and reports the warning `GS0558` — except in the synthesized entry point, which is the root where blocking is correct. The body of a `suspend func` may use `await`. A declaration is exactly one of `async` or `suspend`. Channel operations inside any state-machine body (`async func`, `suspend func`, `async sequence[T]`) park the state machine rather than a thread; inside a `lock` body they keep the blocking lowering because the monitor is thread-affine.
+
+**Suspension is inferred.** A plain `func` whose body performs a suspension point — a channel operation outside a `lock` body, or a call to a function that suspends — is compiled as a suspending function too, exactly as if it had been declared `suspend func`; the inference is a fixed point over the assembly's call graph, so mutual recursion converges, and `suspend func` is only ever *needed* at a boundary. Inference stops at: the synthesized entry point (the root, which blocks once), `async func` (its task is observable), `open`/`override`/abstract methods, interface members and the methods that implement them, constructors, property and event accessors, operators, P/Invoke stubs, iterators (`sequence[T]`), `Dispose`, and function literals. A suspension point inside one of those keeps the blocking lowering, and a call from one of those to a suspending function blocks through the root bridge with `GS0558`. A `go` operand does not color its caller: `go f(x)` starts `f` and returns immediately whatever `f` does. Every inferred function is emitted with the `ValueTask` shape and `[Suspending]`, so another assembly reads the coloring from metadata without re-running any analysis.
+
 Iterator functions return `sequence[T]` and contain `yield`. Async sequences use `async sequence[T]` and `await for`. The emitter has synchronous and asynchronous iterator state-machine rewriters.
 
 ## CLR interop semantics
@@ -1741,7 +1747,7 @@ Member            ::= Annotation* Accessibility?
                       | VariableDecl                 (* requires Accessibility *)
                       | GlobalStatement )
 Accessibility     ::= 'public' | 'internal' | 'protected' | 'private'  (* 'protected' is valid only on members of an inheritable 'open class'; see  *)
-Async             ::= 'async'
+Async             ::= 'async' | 'suspend'                            (* ADR-0174 D4: 'suspend func' is a suspending function; see Async and iterators *)
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
 

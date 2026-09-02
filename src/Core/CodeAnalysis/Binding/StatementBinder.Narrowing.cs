@@ -1740,9 +1740,9 @@ internal sealed partial class StatementBinder
             Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, "a top-level variable (it would be emitted as a heap-rooted static field)");
             rhsValid = false;
         }
-        else if (function.IsAsync || isIteratorReturnType(function.Type))
+        else if (function.IsAsyncOrSuspending || isIteratorReturnType(function.Type))
         {
-            var context = function.IsAsync ? "a local in an async function" : "a local in an iterator";
+            var context = function.IsAsyncOrSuspending ? "a local in an async function" : "a local in an iterator";
             Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, context + " (it would be hoisted into the state machine)");
             rhsValid = false;
         }

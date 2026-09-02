@@ -218,6 +218,8 @@ public static class SyntaxFacts
                 return SyntaxKind.SequenceKeyword;
             case "struct":
                 return SyntaxKind.StructKeyword;
+            case "suspend":
+                return SyntaxKind.SuspendKeyword;
             case "switch":
                 return SyntaxKind.SwitchKeyword;
             case "throw":
@@ -594,6 +596,8 @@ public static class SyntaxFacts
                 return "sequence";
             case SyntaxKind.StructKeyword:
                 return "struct";
+            case SyntaxKind.SuspendKeyword:
+                return "suspend";
             case SyntaxKind.SwitchKeyword:
                 return "switch";
             case SyntaxKind.ThrowKeyword:

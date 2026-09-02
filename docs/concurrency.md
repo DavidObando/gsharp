@@ -14,7 +14,12 @@ replaces this with an `IThreadPoolWorkItem`), `chan[T]` **is**
 `System.Threading.Channels.Channel<T>` while `chan[T](…)` constructs the
 G#-owned `Gsharp.Concurrency.Chan<T>` (rendezvous at capacity 0, Go-exact
 close semantics, two-value receive), channel operations lower onto the
-`Gsharp.Runtime.Channels` runtime's `ChannelOps` facade, `select`
+`Gsharp.Runtime.Channels` runtime's `ChannelOps` facade (inside an `async func`
+they are *awaited* — `ReceiveValueAsync` / `ReceiveTupleAsync` / `SendAsync` —
+so a parked operation holds a state machine, not a thread — and since
+suspension is *inferred*, every plain `func` that performs or transitively
+reaches a channel operation is compiled that way too, with `ValueTask[R]` +
+`[Suspending]` as its ABI and `suspend func` reserved for boundaries), `select`
 orchestrates channel operations, and structured `scope { ... }` blocks join
 everything they own.
 The first answer to "how do goroutines share state" is the same as Go's:

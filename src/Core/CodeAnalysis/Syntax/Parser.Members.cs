@@ -148,7 +148,7 @@ public partial class Parser
                     ahead++;
                 }
 
-                if (Peek(ahead).Kind == SyntaxKind.AsyncKeyword && Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword)
+                if (IsFunctionColorModifier(Peek(ahead).Kind) && Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword)
                 {
                     ahead++;
                 }
@@ -164,7 +164,7 @@ public partial class Parser
             // Issue #502: `async` modifier is allowed on static methods inside
             // a `shared` block, mirroring the instance-method path above.
             SyntaxToken? sharedMemberAsyncModifier = null;
-            if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
             {
                 sharedMemberAsyncModifier = NextToken();
             }
@@ -176,10 +176,10 @@ public partial class Parser
             // context too (the binder consults the per-method `IsUnsafe` flag).
             SyntaxToken? sharedMemberUnsafeModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword || Peek(1).Kind == SyntaxKind.AsyncKeyword))
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
             {
                 sharedMemberUnsafeModifier = NextToken();
-                if (sharedMemberAsyncModifier == null && Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                if (sharedMemberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
                 {
                     sharedMemberAsyncModifier = NextToken();
                 }

@@ -402,7 +402,11 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitGoAction(node);
 
-        var closure = this.outer.closures.GoClosureInfos[node];
+        if (!this.outer.closures.TryGetGoClosure(node, out var closure))
+        {
+            throw new InvalidOperationException("Go statement has no synthesized display class.");
+        }
+
         var isAsync = ClosureEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
 
         MethodInfo run;
@@ -438,7 +442,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitGoAction(BoundGoStatement node)
     {
-        if (!this.outer.closures.GoClosureInfos.TryGetValue(node, out var closure))
+        if (!this.outer.closures.TryGetGoClosure(node, out var closure))
         {
             throw new InvalidOperationException("Go statement has no synthesized display class.");
         }

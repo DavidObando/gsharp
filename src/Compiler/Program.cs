@@ -367,7 +367,15 @@ public class Program
             }
 
             var destination = Path.Combine(outputDir, Path.GetFileName(bundled));
-            if (File.Exists(destination) || string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // A copy from an earlier compile into the same folder is refreshed
+            // when the bundled runtime is newer — a stale runtime beside a fresh
+            // program fails at run time with a missing member.
+            if (File.Exists(destination) && File.GetLastWriteTimeUtc(destination) >= File.GetLastWriteTimeUtc(bundled))
             {
                 return;
             }
@@ -385,7 +393,7 @@ public class Program
             {
                 if (string.Equals(reader.GetString(reader.GetAssemblyReference(handle).Name), runtimeName, StringComparison.Ordinal))
                 {
-                    File.Copy(bundled, destination, overwrite: false);
+                    File.Copy(bundled, destination, overwrite: true);
                     return;
                 }
             }

@@ -694,7 +694,7 @@ public class Compilation
 
         var asyncRewriteResult = Lowering.Async.AsyncStateMachineRewriter.Rewrite(program, references);
         var iteratorRewriteResult = IteratorRewriter.Rewrite(program);
-        var asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program);
+        var asyncIteratorRewriteResult = AsyncIteratorRewriter.Rewrite(program, references);
 
         // Gate: fail fast on unsupported async constructs after lowering.
         // This runs after the rewriters because it inspects StateMachineType

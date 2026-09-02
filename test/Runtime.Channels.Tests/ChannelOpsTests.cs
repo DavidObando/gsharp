@@ -34,18 +34,18 @@ public class ChannelOpsTests
     public void Receive_OnChan_FastPath_ReturnsValueAndZeroOnClosed()
     {
         var ch = new Chan<int>(1);
-        ChannelOps.Send<int>(ch, 5, default);
-        Assert.Equal(5, ChannelOps.Receive<int>(ch, default));
+        ChannelOps.Send<int>(ch, 5, CancellationToken.None);
+        Assert.Equal(5, ChannelOps.Receive<int>(ch, CancellationToken.None));
         ch.Close();
-        Assert.Equal(0, ChannelOps.Receive<int>(ch, default));
-        Assert.Equal((0, false), ChannelOps.Receive2<int>(ch, default));
+        Assert.Equal(0, ChannelOps.Receive<int>(ch, CancellationToken.None));
+        Assert.Equal((0, false), ChannelOps.Receive2<int>(ch, CancellationToken.None));
     }
 
     [Fact]
     public async Task Receive_OnChan_BlocksUntilSend_ThenReturns()
     {
         var ch = new Chan<int>();
-        var receive = Task.Run(() => ChannelOps.Receive<int>(ch, default));
+        var receive = Task.Run(() => ChannelOps.Receive<int>(ch, CancellationToken.None));
         await Task.Delay(50);
         Assert.False(receive.IsCompleted);
         await ch.SendAsync(9);
@@ -57,7 +57,7 @@ public class ChannelOpsTests
     {
         var ch = new Chan<int>(1);
         ch.Close();
-        Assert.Throws<ChannelClosedException>(() => ChannelOps.Send<int>(ch, 1, default));
+        Assert.Throws<ChannelClosedException>(() => ChannelOps.Send<int>(ch, 1, CancellationToken.None));
     }
 
     [Fact]
@@ -66,37 +66,37 @@ public class ChannelOpsTests
         var ch = new Chan<string>(2);
         ChannelWriter<string> writer = ch.Writer;
         ChannelReader<string> reader = ch.Reader;
-        ChannelOps.Send(writer, "a", default);
-        ChannelOps.Send(writer, "b", default);
-        Assert.Equal("a", ChannelOps.Receive(reader, default));
-        Assert.Equal(("b", true), ChannelOps.Receive2(reader, default));
+        ChannelOps.Send(writer, "a", CancellationToken.None);
+        ChannelOps.Send(writer, "b", CancellationToken.None);
+        Assert.Equal("a", ChannelOps.Receive(reader, CancellationToken.None));
+        Assert.Equal(("b", true), ChannelOps.Receive2(reader, CancellationToken.None));
         ChannelOps.Close(writer);
-        Assert.Equal((null, false), ChannelOps.Receive2(reader, default));
+        Assert.Equal((null, false), ChannelOps.Receive2(reader, CancellationToken.None));
     }
 
     [Fact]
     public void Foreign_BclChannel_SendReceiveClose_ViaFallback()
     {
         var foreign = Channel.CreateBounded<int>(2);
-        ChannelOps.Send<int>(foreign, 1, default);
-        ChannelOps.Send<int>(foreign, 2, default);
-        Assert.Equal(1, ChannelOps.Receive<int>(foreign, default));
+        ChannelOps.Send<int>(foreign, 1, CancellationToken.None);
+        ChannelOps.Send<int>(foreign, 2, CancellationToken.None);
+        Assert.Equal(1, ChannelOps.Receive<int>(foreign, CancellationToken.None));
         ChannelOps.Close<int>(foreign);
-        Assert.Equal((2, true), ChannelOps.Receive2<int>(foreign, default));
-        Assert.Equal((0, false), ChannelOps.Receive2<int>(foreign, default));
-        Assert.Equal(0, ChannelOps.Receive<int>(foreign, default));
+        Assert.Equal((2, true), ChannelOps.Receive2<int>(foreign, CancellationToken.None));
+        Assert.Equal((0, false), ChannelOps.Receive2<int>(foreign, CancellationToken.None));
+        Assert.Equal(0, ChannelOps.Receive<int>(foreign, CancellationToken.None));
     }
 
     [Fact]
     public async Task Foreign_BclChannel_Async_SendReceive_ViaFallback()
     {
         var foreign = Channel.CreateBounded<int>(1);
-        var receive = ChannelOps.ReceiveAsync<int>(foreign, default).AsTask();
+        var receive = ChannelOps.ReceiveAsync<int>(foreign, CancellationToken.None).AsTask();
         Assert.False(receive.IsCompleted);
-        await ChannelOps.SendAsync<int>(foreign, 7, default);
+        await ChannelOps.SendAsync<int>(foreign, 7, CancellationToken.None);
         Assert.Equal(7, (await receive.WaitAsync(Timeout)).Value);
         foreign.Writer.Complete();
-        Assert.False((await ChannelOps.ReceiveAsync<int>(foreign, default)).Ok);
+        Assert.False((await ChannelOps.ReceiveAsync<int>(foreign, CancellationToken.None)).Ok);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class ChannelOpsTests
         {
             while (true)
             {
-                var (value, ok) = ChannelOps.Receive2(foreign.Reader, default);
+                var (value, ok) = ChannelOps.Receive2(foreign.Reader, CancellationToken.None);
                 if (!ok)
                 {
                     return;
@@ -214,8 +214,8 @@ public class ChannelOpsTests
     {
         var foreign = Channel.CreateUnbounded<int>();
         foreign.Writer.TryComplete(new InvalidOperationException("upstream failed"));
-        Assert.Throws<InvalidOperationException>(() => ChannelOps.Receive<int>(foreign, default));
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => await ChannelOps.ReceiveAsync<int>(foreign, default));
+        Assert.Throws<InvalidOperationException>(() => ChannelOps.Receive<int>(foreign, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await ChannelOps.ReceiveAsync<int>(foreign, CancellationToken.None));
     }
 
     [Fact]

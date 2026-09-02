@@ -318,7 +318,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>Gets the optional <c>override</c> modifier (Phase 3.B.3 sub-step 3). Non-null marks the method as overriding a base method per ADR-0017. Only meaningful on class methods.</summary>
     public SyntaxToken? OverrideModifier { get; }
 
-    /// <summary>Gets the optional <c>async</c> modifier (Phase 5.1 / ADR-0023). When non-null this function is an async function; callers see <c>Task[T]</c> (or <c>Task</c>), and the body may use <c>await</c>.</summary>
+    /// <summary>Gets the optional <c>async</c> or <c>suspend</c> modifier. An <c>async</c> token (Phase 5.1 / ADR-0023) makes this an async function: callers see <c>Task[T]</c> (or <c>Task</c>), and the body may use <c>await</c>. A <c>suspend</c> token (ADR-0174 D4) makes it a suspending function: callers see <c>T</c> and await it implicitly, the body may use <c>await</c>, and the emitted method returns <c>ValueTask[T]</c>.</summary>
     public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets or sets the optional <c>static</c> contextual keyword (ADR-0089 / issue #755). Non-null when the function was declared inside <c>interface { … }</c> as a static-virtual member; the binder rejects this token on non-interface members.</summary>
@@ -337,7 +337,10 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public bool HasStaticModifier => StaticModifier != null;
 
     /// <summary>Gets a value indicating whether this function declares <c>async</c>.</summary>
-    public bool IsAsync => AsyncModifier != null;
+    public bool IsAsync => AsyncModifier?.Kind == SyntaxKind.AsyncKeyword;
+
+    /// <summary>Gets a value indicating whether this function declares <c>suspend</c> (ADR-0174 D4).</summary>
+    public bool IsSuspend => AsyncModifier?.Kind == SyntaxKind.SuspendKeyword;
 
     /// <summary>Gets a value indicating whether this function is marked <c>open</c>.</summary>
     public bool IsOpen => OpenModifier != null;

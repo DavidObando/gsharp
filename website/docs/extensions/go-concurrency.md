@@ -267,6 +267,13 @@ done
 `go` lowers to task-based scheduling in the emitted assembly, which is
 what every driver (including `gsi`) executes.
 
+A helper that only needs to *suspend* — receive from a channel, send, or
+`await` — without handing its caller a `Task` is a
+[`suspend func`](../guide/concurrency#suspend-func--suspension-without-a-task):
+callers inside another suspending function or an `async func` get the value
+directly (the await is implicit), and a channel operation inside any
+`async` or suspending body parks the state machine rather than a thread.
+
 Note that G# maps (`map[K,V]`) are backed by plain `Dictionary<K,V>`
 with no implicit synchronization, so concurrent access from multiple
 goroutines is not goroutine-safe — the same posture as Go maps. For a

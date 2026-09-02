@@ -1429,7 +1429,7 @@ internal sealed class UserTokenResolver
     /// <param name="fn">The function whose emitted return type to encode.</param>
     private void EncodeFunctionReturnSymbol(ReturnTypeEncoder encoder, FunctionSymbol fn)
     {
-        if (fn.IsAsync && fn.StateMachineType != null)
+        if (fn.IsAsyncOrSuspending && fn.StateMachineType != null)
         {
             foreach (var plan in this.outer.stateMachines.AsyncStateMachinePlans)
             {

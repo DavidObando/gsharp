@@ -928,6 +928,7 @@ internal sealed partial class ExpressionBinder
             refKinds,
             typeArgumentSymbols: default,
             staticContainerType: symbolicReceiver);
+        result = CompleteImportedSuspendingCall(result, staticFn.Method, ce.Location);
         return true;
     }
 
@@ -3095,6 +3096,7 @@ internal sealed partial class ExpressionBinder
                     refKinds,
                     staticTypeArgSymbolsForCall,
                     classSymbol.SymbolicReceiver);
+                staticCall = CompleteImportedSuspendingCall(staticCall, staticFn.Method, ce.Location);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
 
@@ -3832,6 +3834,7 @@ internal sealed partial class ExpressionBinder
                         }
 
                         BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, callReceiver, method, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
+                        instCall = CompleteImportedSuspendingCall(instCall, method, ce.Location);
                         return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
                     case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));

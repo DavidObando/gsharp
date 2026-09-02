@@ -4543,6 +4543,32 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     /// <summary>
+    /// ADR-0174 D4. Attaches the parameterless
+    /// <c>[Gsharp.Concurrency.SuspendingAttribute]</c> to a suspending
+    /// function's MethodDef. Skipped silently when the channel runtime is not in
+    /// the reference set (the function still compiles; only cross-assembly
+    /// recognition is lost).
+    /// </summary>
+    /// <param name="parent">The MethodDef row.</param>
+    internal void EmitSuspendingAttribute(EntityHandle parent)
+    {
+        var ctorRef = this.wellKnown.GetSuspendingAttributeCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteUInt16(0);      // NumNamed
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
     /// Issue #792 / ADR-0084. Attaches the parameterless
     /// <c>[System.Runtime.CompilerServices.ExtensionAttribute]</c> to the
     /// supplied entity (MethodDef row for an extension method, or a TypeDef

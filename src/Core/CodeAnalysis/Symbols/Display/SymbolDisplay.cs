@@ -312,6 +312,11 @@ public static class SymbolDisplay
         {
             yield return "async";
         }
+
+        if (function.IsSuspending)
+        {
+            yield return "suspend";
+        }
     }
 
     private static void AppendAggregate(PartBuilder builder, SymbolDisplayFormat format, StructSymbol aggregate)

@@ -4106,6 +4106,11 @@ internal sealed partial class ExpressionBinder
                     return MakeStaticGenericCall(substitutedReturn);
                 }
 
+                if (method.IsSuspending)
+                {
+                    return CompleteSuspendingCall(MakeStaticGenericCall(lambdas.WrapAsTask(substitutedReturn, useValueTask: true)), substitutedReturn, ce.Location, method.Name);
+                }
+
                 if (!ReferenceEquals(substitutedReturn, method.Type))
                 {
                     return MakeStaticGenericCall(substitutedReturn);
@@ -4116,6 +4121,12 @@ internal sealed partial class ExpressionBinder
             {
                 var asyncReturn = lambdas.WrapAsTask(method.Type, method.AsyncReturnsValueTask);
                 return MakeStaticGenericCall(asyncReturn);
+            }
+
+            // ADR-0174 D4: a suspending static method's call is typed ValueTask[R]; the caller sees R.
+            if (method.IsSuspending)
+            {
+                return CompleteSuspendingCall(MakeStaticGenericCall(lambdas.WrapAsTask(method.Type, useValueTask: true)), method.Type, ce.Location, method.Name);
             }
 
             return MakeStaticGenericCall(null);

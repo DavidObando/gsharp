@@ -872,6 +872,7 @@ is not a spelling gsc accepts today (GS0157).
 | GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).` | `func f(ch out chan[int32]) { let v = <-ch }` |
 | GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
 | GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed (ADR-0174 D3).` | `while let v = ch { }` where `ch` is a `chan[int32]` |
+| GS0558 | Warning | `'<name>' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.` | `suspend func take(ch chan[int32]) int32 { return <-ch }` then `func f(ch chan[int32]) int32 { return take(ch) }` |
 | GS0566 | Error | `'<retired form>' has been retired (ADR-0174); <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
 | GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead (ADR-0174 D2).` | `var ch chan int32` |
 
@@ -1470,7 +1471,7 @@ parameterless method is available, preventing a GS9998 reflection exception.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0520 | Error | A `chan T` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`, or declare the slot as `(chan T)?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
+| GS0520 | Error | A `chan[T]` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the empty-instance zero values; initialize with `chan[T]()` (rendezvous) or `chan[T](capacity)`, or declare the slot as `chan[T]?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
 
 The other magic collection types (`map[K, V]`, `[]T`, `[N]T`, `sequence[T]`)
 bind a sound empty instance when declared without an initializer
@@ -1513,7 +1514,7 @@ this analysis applies only to kinds with no usable zero value.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan T`. With sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
+| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan[T]`. With sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
 
 The warning is static-type based and fires for both operand orders. It does
 NOT fire for `?`-typed operands (including interop values surfaced as `T?`,

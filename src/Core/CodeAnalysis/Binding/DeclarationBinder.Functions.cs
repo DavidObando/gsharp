@@ -340,7 +340,8 @@ internal sealed partial class DeclarationBinder
                 || (isAsyncIteratorReturnType(type)
                     && syntax.Body is { } functionBody
                     && IteratorDetection.ContainsYield(functionBody));
-            function.AsyncReturnsValueTask = typeIsValueTask;
+            function.SuspendingKind = syntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
+            function.AsyncReturnsValueTask = typeIsValueTask || syntax.IsSuspend;
             function.IsUnsafe = syntax.IsUnsafe;
             function.ReturnRefKind = returnRefKind;
 
@@ -390,7 +391,8 @@ internal sealed partial class DeclarationBinder
         function.TypeParameters = typeParameters;
         function.IsAsync = syntax.IsAsync
             || (isAsyncIteratorReturnType(type) && syntax.Body is { } body && IteratorDetection.ContainsYield(body));
-        function.AsyncReturnsValueTask = typeIsValueTask;
+        function.SuspendingKind = syntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
+        function.AsyncReturnsValueTask = typeIsValueTask || syntax.IsSuspend;
         function.IsUnsafe = syntax.IsUnsafe;
         function.ReturnRefKind = returnRefKind;
         Binder.AttachDocumentation(function, syntax);
@@ -579,6 +581,7 @@ internal sealed partial class DeclarationBinder
             ? Binder.SubstituteType(externalOverrideContainingType, substitution)
             : null;
         specialized.IsAsync = function.IsAsync;
+        specialized.SuspendingKind = function.SuspendingKind;
         specialized.AsyncReturnsValueTask = function.AsyncReturnsValueTask;
         specialized.IsUnsafe = function.IsUnsafe;
         specialized.ReturnRefKind = function.ReturnRefKind;

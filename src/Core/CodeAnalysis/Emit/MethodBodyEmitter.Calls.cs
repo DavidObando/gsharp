@@ -703,7 +703,7 @@ internal sealed partial class MethodBodyEmitter
             || call.MethodTypeArguments.IsDefaultOrEmpty
             || call.MethodTypeArguments.Length != tps.Length
             || fn.Parameters.Length != call.Arguments.Length
-            || fn.IsAsync
+            || fn.IsAsyncOrSuspending
             || call.StaticGenericOwnerType != null
             || call.StaticGenericInterfaceOwnerType != null)
         {

@@ -47,7 +47,7 @@ public static class AsyncStateMachineRewriter
         foreach (var pair in program.Functions.OrderBy(pair => GetFunctionSortKey(program, pair.Key), StringComparer.Ordinal))
         {
             var function = pair.Key;
-            if (!function.IsAsync)
+            if (!function.IsAsyncOrSuspending)
             {
                 continue;
             }
@@ -60,8 +60,11 @@ public static class AsyncStateMachineRewriter
 
             var ordinal = AllocateTypeOrdinal(program, function, ordinalsByScopeAndName);
 
+            // ADR-0174 D4: channel operations park the state machine, not a thread.
+            var channelAwaited = ChannelOperationRewriter.Rewrite(pair.Value, references);
+
             // Lift awaits out of catch/finally handlers before spilling.
-            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(pair.Value);
+            var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(channelAwaited);
 
             // Run the spill spiller to lift sub-expression awaits to statement top-level.
             var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
@@ -105,7 +108,7 @@ public static class AsyncStateMachineRewriter
         ReferenceResolver? references,
         string packageName)
     {
-        if (function == null || !function.IsAsync)
+        if (function == null || !function.IsAsyncOrSuspending)
         {
             return null;
         }
@@ -115,7 +118,8 @@ public static class AsyncStateMachineRewriter
         ordinalsByScopeAndName.TryGetValue(key, out var ordinal);
         ordinalsByScopeAndName[key] = ordinal + 1;
 
-        var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(body);
+        var channelAwaited = ChannelOperationRewriter.Rewrite(body, references);
+        var exhRewritten = AsyncExceptionHandlerRewriter.Rewrite(channelAwaited);
         var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
         var refHoisted = RefInitializationHoister.Rewrite(spilledBody);
 

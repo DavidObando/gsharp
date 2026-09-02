@@ -541,8 +541,8 @@ internal sealed partial class StatementBinder
         BoundExpression? Cleanup,
         BoundStatement? ErrorStatement) BindAwaitUsingStatementInBlock(AwaitUsingStatementSyntax syntax)
     {
-        // Gate: await using let requires an async context.
-        if (function == null || !function.IsAsync)
+        // Gate: await using let requires an async (or suspending) context.
+        if (function == null || !function.IsAsyncOrSuspending)
         {
             Diagnostics.ReportAwaitUsingOutsideAsyncFunction(syntax.AwaitKeyword.Location);
             return (null, null, null, null, BindErrorStatement());

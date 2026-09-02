@@ -344,7 +344,8 @@ internal sealed partial class DeclarationBinder
                 || (isAsyncIteratorReturnType(returnType)
                     && (methodSyntax.HasSemicolonBody
                         || (methodSyntax.Body is { } body && IteratorDetection.ContainsYield(body))));
-            methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
+            methodSymbol.SuspendingKind = methodSyntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
+            methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend;
             methodSymbol.IsUnsafe = methodSyntax.IsUnsafe;
             methodSymbol.TypeParameters = methodTypeParameters;
             if (isStaticInterfaceMethod)

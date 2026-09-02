@@ -189,6 +189,7 @@ static class Program
             ClosedReceiveCost();
             SpawnCost();
             await SelectCost();
+            await ContextAbiCost();
         }
         await ParkScale();
         if (!quick) Starvation();
@@ -480,6 +481,59 @@ static class Program
     {
         public CountdownEvent? cd;
         public void Execute() => cd!.Signal();
+    }
+
+    // ADR-0174 Phase 3-4a (decision gate G1/G2): how the ambient Context should
+    // reach a suspending call. Three ways to thread it through a 3-deep chain of
+    // synchronously-completing suspending functions (the common, un-parked
+    // case), plus the cost of flowing ExecutionContext into a goroutine spawn,
+    // which D5 proposes NOT to do.
+    static readonly AsyncLocal<Context?> Ambient = new();
+
+    static ValueTask<int> LeafParam(Context ctx, int x) => ctx.IsCancelled ? throw new OperationCanceledException() : new ValueTask<int>(x + 1);
+    static async ValueTask<int> MidParam(Context ctx, int x) => await LeafParam(ctx, x) + 1;
+    static async ValueTask<int> TopParam(Context ctx, int x) => await MidParam(ctx, x) + 1;
+
+    static ValueTask<int> LeafLocal(int x) => (Ambient.Value ?? Context.None).IsCancelled ? throw new OperationCanceledException() : new ValueTask<int>(x + 1);
+    static async ValueTask<int> MidLocal(int x) => await LeafLocal(x) + 1;
+    static async ValueTask<int> TopLocal(int x) => await MidLocal(x) + 1;
+
+    static async Task ContextAbiCost()
+    {
+        const int R = 2_000_000;
+        using var ctx = Context.None.WithCancel();
+        long acc = 0;
+
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < R; i++) acc += await TopParam(ctx, i);
+        sw.Stop(); Report("ctx-param", sw, R);
+
+        Ambient.Value = ctx;
+        var sw2 = Stopwatch.StartNew();
+        for (int i = 0; i < R; i++) acc += await TopLocal(i);
+        sw2.Stop(); Report("ctx-asynclocal", sw2, R);
+        Ambient.Value = null;
+        if (acc == 42) Console.WriteLine();
+
+        const int S = 200_000;
+        var cd = new CountdownEvent(S);
+        var sw3 = Stopwatch.StartNew();
+        for (int i = 0; i < S; i++) ThreadPool.UnsafeQueueUserWorkItem(new Item { cd = cd }, preferLocal: true);
+        cd.Wait(); sw3.Stop(); Report("spawn-noec", sw3, S);
+
+        var cd2 = new CountdownEvent(S);
+        var sw4 = Stopwatch.StartNew();
+        for (int i = 0; i < S; i++)
+        {
+            var captured = ExecutionContext.Capture();
+            var item = new Item { cd = cd2 };
+            ThreadPool.UnsafeQueueUserWorkItem(static state =>
+            {
+                var (ec, it) = ((ExecutionContext?, Item))state!;
+                if (ec == null) it.Execute(); else ExecutionContext.Run(ec, static o => ((Item)o!).Execute(), it);
+            }, (captured, item), preferLocal: true);
+        }
+        cd2.Wait(); sw4.Stop(); Report("spawn-ec", sw4, S);
     }
 
     static void SpawnCost()

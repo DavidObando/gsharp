@@ -53,7 +53,11 @@ internal sealed class ChannelRuntimeBinder
     private readonly Type? chanOpen;
     private readonly Type? channelOps;
     private readonly Type? cancellationToken;
+    private readonly Type? valueTaskOpen;
+    private readonly Type? valueTask;
+    private readonly Type? blockingType;
     private ImportedClassSymbol? channelOpsClass;
+    private ImportedClassSymbol? blockingClass;
 
     /// <summary>Initializes a new instance of the <see cref="ChannelRuntimeBinder"/> class.</summary>
     /// <param name="references">The compilation's reference resolver.</param>
@@ -63,6 +67,9 @@ internal sealed class ChannelRuntimeBinder
         references.TryResolveType(ChanTypeName, out chanOpen);
         references.TryResolveType(ChannelOpsTypeName, out channelOps);
         references.TryResolveType(CancellationTokenTypeName, out cancellationToken);
+        references.TryResolveType("System.Threading.Tasks.ValueTask`1", out valueTaskOpen);
+        references.TryResolveType("System.Threading.Tasks.ValueTask", out valueTask);
+        references.TryResolveType("Gsharp.Concurrency.Blocking", out blockingType);
     }
 
     /// <summary>Gets a value indicating whether the runtime assembly is in the reference set.</summary>
@@ -120,6 +127,156 @@ internal sealed class ChannelRuntimeBinder
             syntax,
             Call(syntax, "Send", CarrierFor(direction), elementType, TypeSymbol.Void, ImmutableArray.Create(channel, value, DefaultToken())));
 
+    /// <summary>
+    /// ADR-0174 D4: the suspending form of <c>&lt;-ch</c> — an awaited
+    /// <c>ChannelOps.ReceiveValueAsync&lt;T&gt;</c> typed as the element.
+    /// Produced by the async lowering for a receive inside a state-machine body.
+    /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
+    /// <param name="channel">The channel operand.</param>
+    /// <param name="elementType">The element type.</param>
+    /// <param name="direction">The operand's direction (never <see cref="ChannelDirection.Out"/>).</param>
+    /// <param name="cancellation">The cancellation argument (a token or, once Phase 3 threads it, the hidden context).</param>
+    /// <returns>An await expression typed as the element.</returns>
+    public BoundExpression BindReceiveAwait(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType, ChannelDirection direction, BoundExpression? cancellation = null)
+    {
+        var call = Call(
+            syntax,
+            "ReceiveValueAsync",
+            CarrierFor(direction),
+            elementType,
+            ValueTaskOf(elementType),
+            ImmutableArray.Create(channel, cancellation ?? DefaultToken()));
+        return Await(syntax, call, elementType);
+    }
+
+    /// <summary>ADR-0174 D4: the suspending two-value receive — an awaited <c>ChannelOps.ReceiveTupleAsync&lt;T&gt;</c> typed <c>(T, bool)</c>.</summary>
+    /// <param name="syntax">The originating syntax.</param>
+    /// <param name="channel">The channel operand.</param>
+    /// <param name="elementType">The element type.</param>
+    /// <param name="direction">The operand's direction (never <see cref="ChannelDirection.Out"/>).</param>
+    /// <param name="cancellation">The cancellation argument.</param>
+    /// <returns>An await expression typed as <c>(T, bool)</c>.</returns>
+    public BoundExpression BindReceive2Await(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType, ChannelDirection direction, BoundExpression? cancellation = null)
+    {
+        var tuple = TupleTypeSymbol.Get(ImmutableArray.Create(elementType, TypeSymbol.Bool));
+        var call = Call(
+            syntax,
+            "ReceiveTupleAsync",
+            CarrierFor(direction),
+            elementType,
+            ValueTaskOf(tuple),
+            ImmutableArray.Create(channel, cancellation ?? DefaultToken()));
+        return Await(syntax, call, tuple);
+    }
+
+    /// <summary>ADR-0174 D4: the suspending send — an awaited <c>ChannelOps.SendAsync&lt;T&gt;</c>.</summary>
+    /// <param name="syntax">The originating syntax.</param>
+    /// <param name="channel">The channel operand.</param>
+    /// <param name="value">The value, already converted to the element type.</param>
+    /// <param name="elementType">The element type.</param>
+    /// <param name="direction">The operand's direction (never <see cref="ChannelDirection.In"/>).</param>
+    /// <param name="cancellation">The cancellation argument.</param>
+    /// <returns>An await expression typed <c>void</c>.</returns>
+    public BoundExpression BindSendAwait(SyntaxNode? syntax, BoundExpression channel, BoundExpression value, TypeSymbol elementType, ChannelDirection direction, BoundExpression? cancellation = null)
+    {
+        var call = Call(
+            syntax,
+            "SendAsync",
+            CarrierFor(direction),
+            elementType,
+            TypeSymbol.FromClrType(Required(valueTask)),
+            ImmutableArray.Create(channel, value, cancellation ?? DefaultToken()));
+        return Await(syntax, call, TypeSymbol.Void);
+    }
+
+    /// <summary>
+    /// ADR-0174 D4: the root boundary. Wraps a call typed <c>ValueTask[R]</c> in
+    /// <c>Blocking.Wait</c> so a non-suspending caller gets <c>R</c> by blocking.
+    /// </summary>
+    /// <param name="valueTaskCall">The suspending call, typed <c>ValueTask</c> or <c>ValueTask[R]</c>.</param>
+    /// <param name="logicalType">The logical result type <c>R</c> (<see cref="TypeSymbol.Void"/> for a bare <c>ValueTask</c>).</param>
+    /// <returns>A call typed <paramref name="logicalType"/>.</returns>
+    public BoundExpression BindBlockingWait(BoundExpression valueTaskCall, TypeSymbol logicalType)
+    {
+        var blocking = Required(blockingType);
+        blockingClass ??= new ImportedClassSymbol(blocking, declaration: null, references: references);
+        if (logicalType == TypeSymbol.Void)
+        {
+            var wait = blocking.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(m => m.Name == "Wait" && !m.IsGenericMethodDefinition);
+            var function = new ImportedFunctionSymbol("Wait", blockingClass, wait, declaration: null, returnTypeOverride: TypeSymbol.Void);
+            return new BoundImportedCallExpression(valueTaskCall.Syntax, function, ImmutableArray.Create(valueTaskCall));
+        }
+
+        var open = blocking.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(m => m.Name == "Wait" && m.IsGenericMethodDefinition);
+        var (closedResult, symbolic) = ProjectElement(logicalType);
+        var closed = open.MakeGenericMethod(closedResult);
+        var generic = new ImportedFunctionSymbol("Wait", blockingClass, closed, declaration: null, returnTypeOverride: logicalType);
+        return new BoundImportedCallExpression(
+            valueTaskCall.Syntax,
+            generic,
+            ImmutableArray.Create(valueTaskCall),
+            argumentRefKinds: default,
+            typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(logicalType) : default);
+    }
+
+    /// <summary>Recognizes a bound call on the facade by name.</summary>
+    /// <param name="call">The call.</param>
+    /// <param name="name">The facade method name.</param>
+    /// <returns><see langword="true"/> when <paramref name="call"/> targets <c>ChannelOps.&lt;name&gt;</c>.</returns>
+    public static bool IsFacadeCall(BoundImportedCallExpression call, string name)
+        => call.Function.Name == name
+            && call.Function.ImportedClass.ClassType.FullName == ChannelOpsTypeName;
+
+    /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>
+    /// <param name="call">A facade call.</param>
+    /// <returns>The direction.</returns>
+    public static ChannelDirection DirectionOf(BoundImportedCallExpression call)
+    {
+        var carrier = call.Function.Method.GetParameters()[0].ParameterType;
+        var name = carrier.IsGenericType ? carrier.GetGenericTypeDefinition().Name : carrier.Name;
+        return name switch
+        {
+            "ChannelReader`1" => ChannelDirection.In,
+            "ChannelWriter`1" => ChannelDirection.Out,
+            _ => ChannelDirection.Both,
+        };
+    }
+
+    /// <summary>Recovers the element type a facade call was bound with: the symbolic type argument when one travelled, else the closed CLR argument.</summary>
+    /// <param name="call">A facade call.</param>
+    /// <returns>The element type.</returns>
+    public static TypeSymbol ElementTypeOf(BoundImportedCallExpression call)
+    {
+        if (!call.TypeArgumentSymbols.IsDefaultOrEmpty && call.TypeArgumentSymbols[0] is { } symbolic)
+        {
+            return symbolic;
+        }
+
+        return TypeSymbol.FromClrType(call.Function.Method.GetGenericArguments()[0]);
+    }
+
+    /// <summary>The <c>ValueTask</c> / <c>ValueTask[R]</c> type a suspending call is typed with; symbolic when <paramref name="resultType"/> is.</summary>
+    /// <param name="resultType">The logical result type.</param>
+    /// <returns>The wrapper type symbol.</returns>
+    internal TypeSymbol ValueTaskOf(TypeSymbol resultType)
+    {
+        if (resultType == TypeSymbol.Void)
+        {
+            return TypeSymbol.FromClrType(Required(valueTask));
+        }
+
+        var open = Required(valueTaskOpen);
+        var (closedResult, symbolic) = ProjectElement(resultType);
+        var closed = open.MakeGenericType(closedResult);
+        return symbolic
+            ? ImportedTypeSymbol.GetConstructed(closed, open, ImmutableArray.Create(resultType))
+            : TypeSymbol.FromClrType(closed);
+    }
+
+    private static BoundExpression Await(SyntaxNode? syntax, BoundExpression call, TypeSymbol resultType)
+        => new BoundAwaitExpression(syntax, call, resultType, ExpressionBinder.TryGetAwaiterTypeSymbol(Required(call.Type)));
+
     private static string CarrierFor(ChannelDirection direction) => direction switch
     {
         ChannelDirection.In => "ChannelReader`1",
@@ -139,13 +296,19 @@ internal sealed class ChannelRuntimeBinder
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments)
     {
+        // The facade overloads every operation on its carrier (Channel<T> /
+        // ChannelReader<T> / ChannelWriter<T>) and on its cancellation
+        // argument (CancellationToken now; the hidden Context once Phase 3
+        // threads it), so both select the method.
         var ops = Required(channelOps);
+        var cancellationTypeName = arguments[^1].Type?.ClrType?.FullName ?? CancellationTokenTypeName;
         var open = ops.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(m =>
             m.Name == name
             && m.IsGenericMethodDefinition
             && m.GetParameters().Length == arguments.Length
             && m.GetParameters()[0].ParameterType is { IsGenericType: true } carrier
-            && carrier.GetGenericTypeDefinition().Name == carrierName);
+            && carrier.GetGenericTypeDefinition().Name == carrierName
+            && m.GetParameters()[^1].ParameterType.FullName == cancellationTypeName);
 
         var (closedElement, symbolic) = ProjectElement(elementType);
         var closed = open.MakeGenericMethod(closedElement);

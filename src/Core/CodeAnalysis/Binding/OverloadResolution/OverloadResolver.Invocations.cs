@@ -1401,6 +1401,12 @@ internal sealed partial class OverloadResolver
                 returnType = wrapAsTask(returnType, extension.AsyncReturnsValueTask);
             }
 
+            if (extension.IsSuspending)
+            {
+                var suspendingCall = new BoundCallExpression(null, extension, finalArguments, wrapAsTask(returnType, true)) { MethodTypeArguments = extensionMethodTypeArguments };
+                return completeSuspendingCall(suspendingCall, returnType, ce.Location, extension.Name);
+            }
+
             return new BoundCallExpression(null, extension, finalArguments, returnType) { MethodTypeArguments = extensionMethodTypeArguments };
         }
 
@@ -1412,6 +1418,13 @@ internal sealed partial class OverloadResolver
         {
             var asyncReturn = wrapAsTask(extension.Type, extension.AsyncReturnsValueTask);
             return new BoundCallExpression(null, extension, finalArguments, asyncReturn) { MethodTypeArguments = extensionMethodTypeArguments };
+        }
+
+        // ADR-0174 D4: a suspending receiver-clause function's call is typed ValueTask[R]; the caller sees R.
+        if (extension.IsSuspending)
+        {
+            var suspendingCall = new BoundCallExpression(null, extension, finalArguments, wrapAsTask(extension.Type, true)) { MethodTypeArguments = extensionMethodTypeArguments };
+            return completeSuspendingCall(suspendingCall, extension.Type, ce.Location, extension.Name);
         }
 
         return new BoundCallExpression(null, extension, finalArguments) { MethodTypeArguments = extensionMethodTypeArguments };
@@ -1896,6 +1909,11 @@ internal sealed partial class OverloadResolver
                 return MakeCall(substitutedReturn);
             }
 
+            if (method.IsSuspending)
+            {
+                return completeSuspendingCall(MakeCall(wrapAsTask(substitutedReturn, true)), substitutedReturn, ce.Location, method.Name);
+            }
+
             if (!ReferenceEquals(substitutedReturn, method.Type))
             {
                 return MakeCall(substitutedReturn);
@@ -1909,6 +1927,12 @@ internal sealed partial class OverloadResolver
         {
             var asyncReturn = wrapAsTask(method.Type, method.AsyncReturnsValueTask);
             return MakeCall(asyncReturn);
+        }
+
+        // ADR-0174 D4: a suspending method's call is typed ValueTask[R]; the caller sees R.
+        if (method.IsSuspending)
+        {
+            return completeSuspendingCall(MakeCall(wrapAsTask(method.Type, true)), method.Type, ce.Location, method.Name);
         }
 
         return MakeCall(returnTypeOverride: null);

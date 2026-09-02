@@ -11,6 +11,14 @@ being asserted without measurement.
 > Phases 2–3 land, and the harness is **not** wired into CI. D11 Phase 5 turns
 > this into the gated suite.
 
+## Phase 3-4a rows (`ctx-param`, `ctx-asynclocal`, `spawn-noec`, `spawn-ec`)
+
+`ContextAbiCost` measures ADR-0174 decision gates G1/G2: how the ambient
+`Context` reaches a suspending call (hidden parameter vs an `AsyncLocal`
+read at every level of a 3-deep synchronously-completing chain), and the cost
+of flowing `ExecutionContext` into a goroutine spawn. Recorded in ADR-0174
+errata 12.
+
 ## Layout
 
 | Path | What it is |

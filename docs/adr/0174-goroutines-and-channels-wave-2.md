@@ -2046,6 +2046,49 @@ implementation had to refine it.
    `while let` shape, so there is no new iteration kind). GS0555 is narrowed
    to the one case the guidance fits: a `while let` whose initializer *is* a
    channel handle rather than a receive from one.
+10. **Phase 3 interim: the blocking root bridge.** Until inference (Phase 3-3)
+    colors plain functions, a call to a `suspend func` from a function that is
+    neither suspending nor `async` binds through `Gsharp.Concurrency.Blocking.Wait`
+    and reports GS0558 as a *warning*; the synthesized entry point is exempt
+    (it is the root that blocks once, per D4). Phase 3-3 narrows GS0558 to the
+    `lock`-body case the ADR names. Channel operations inside `async` and
+    suspending bodies are rewritten to awaited `ChannelOps.ReceiveValueAsync /
+    ReceiveTupleAsync / SendAsync` by a lowering pass (`ChannelOperationRewriter`),
+    the blocking facade forms surviving only for non-state-machine bodies and
+    `lock` regions.
+11. **Inference as implemented (Phase 3-3).** `SuspensionInference` runs at the
+    end of `BindProgram` over the bound bodies: a worklist to a fixed point,
+    seeded by direct suspension points (blocking facade calls outside `lock`
+    bodies and blocking bridges to declared-suspending callees) and by calls
+    to suspending functions outside `go` operands; then a rewrite that retypes
+    calls to newly-inferred callees as `ValueTask[R]` and completes them
+    (implicit await in a suspending/async container, root bridge otherwise),
+    including inside function-literal bodies. Boundaries as implemented: the
+    entry point, `async`, `open`/`override`/abstract, interface members and
+    same-name/same-arity methods on implementing types, `.ctor`, accessors,
+    operators, P/Invoke, iterators, `Dispose`, synthesized functions, and
+    function literals (a lambda is its own boundary in this slice — D4's
+    "inferred silently" for lambdas, and GS0552/GS0553/GS0561 as errors, are
+    follow-ups; a suspension point inside a boundary keeps blocking today).
+    **GS0560 is not emitted by default**: with ADR-0006's public-by-default
+    top-level declarations it would fire on every Go-shaped program the ADR
+    itself shows; it is reserved for the `/strictapi` opt-in. GS0558 is
+    reported by the pass for the residual bridges, never at bind time.
+12. **Phase 3-4a measurements (decision gates G1/G2; `bench/concurrency/clr`,
+    Release, 20 cores, warmed rounds).** Threading the context through a
+    3-deep chain of synchronously-completing `ValueTask<int>` functions:
+    hidden parameter **≈15 ns/chain**, `AsyncLocal<Context>` read at each
+    level **≈24–54 ns/chain** (noisy). Goroutine spawn via
+    `UnsafeQueueUserWorkItem`: **≈290–330 ns** without `ExecutionContext`
+    flow, **≈320–490 ns** with `ExecutionContext.Capture` + `Run` per item.
+    G1: the hidden `Context` parameter stands (D7). G2: not flowing
+    `ExecutionContext` stands as the default (D5); the measured capture cost
+    is small enough that an opt-in host hook restoring it is viable later.
+13. **`go` inside a state-machine body.** Before Phase 3 a `go` statement in an
+    `async func` was a GS9998 (the closure synthesized for it was keyed by
+    bound-node identity, which the async rewriters do not preserve). Inference
+    made that shape common, so the closure is now found by the statement's
+    syntax; the rewriters preserve it.
 
 ## Addendum A — The ten patterns, three ways
 

@@ -789,7 +789,7 @@ internal sealed partial class ExpressionBinder
     {
         var operand = BindExpression(syntax.Expression);
 
-        if (function == null || (!function.IsAsync && !isAsyncIteratorReturnType(function.Type)))
+        if (function == null || (!function.IsAsyncOrSuspending && !isAsyncIteratorReturnType(function.Type)))
         {
             Diagnostics.ReportAwaitOutsideAsyncFunction(syntax.AwaitKeyword.Location);
             return new BoundErrorExpression(null);
@@ -825,7 +825,63 @@ internal sealed partial class ExpressionBinder
     private static bool IsAwaiterTypeArgumentCandidate(TypeSymbol a)
         => TypeSymbol.RequiresSymbolicProjection(a);
 
-    private static TypeSymbol? TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
+    /// <summary>
+    /// ADR-0174 D4: finishes a call to a suspending function. The call itself
+    /// is typed <c>ValueTask[R]</c>; a G# caller sees <c>R</c>. Inside an
+    /// <c>async</c>, suspending, or async-iterator body that is an implicit
+    /// await; anywhere else the caller has nowhere to await, so the call
+    /// blocks through <c>Blocking.Wait</c> and GS0558 says so — except at the
+    /// synthesized entry point, which is the root where blocking is correct.
+    /// </summary>
+    /// <param name="call">The bound call, typed <c>ValueTask</c> or <c>ValueTask[R]</c>.</param>
+    /// <param name="logicalType">The callee's logical return type <c>R</c>.</param>
+    /// <param name="location">The call's location, for GS0558.</param>
+    /// <param name="calleeName">The callee's name, for GS0558.</param>
+    /// <returns>An expression typed <paramref name="logicalType"/>.</returns>
+    internal BoundExpression CompleteSuspendingCall(BoundExpression call, TypeSymbol logicalType, TextLocation location, string calleeName)
+    {
+        if (call is BoundErrorExpression || call.Type == null || call.Type == TypeSymbol.Error)
+        {
+            return call;
+        }
+
+        if (function != null && (function.IsAsyncOrSuspending || isAsyncIteratorReturnType(function.Type)))
+        {
+            return new BoundAwaitExpression(null, call, logicalType, TryGetAwaiterTypeSymbol(call.Type));
+        }
+
+        if (!EnsureChannelRuntime(location))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        // GS0558 is reported by the inference pass (Suspension.SuspensionInference)
+        // for the bridges that remain after the caller's own coloring is known.
+        return binderCtx.ChannelRuntime.BindBlockingWait(call, logicalType);
+    }
+
+    /// <summary>
+    /// ADR-0174 D4, the import side: a CLR method carrying
+    /// <c>[Gsharp.Concurrency.Suspending]</c> was emitted by G# as a suspending
+    /// function, so its call is completed exactly like a same-assembly one —
+    /// the logical type is the awaited element of its <c>ValueTask</c> return.
+    /// </summary>
+    /// <param name="call">The bound imported call.</param>
+    /// <param name="method">The CLR method it targets.</param>
+    /// <param name="location">The call's location, for GS0558.</param>
+    /// <returns>The completed call, or <paramref name="call"/> when the method is not suspending.</returns>
+    internal BoundExpression CompleteImportedSuspendingCall(BoundExpression call, System.Reflection.MethodInfo method, TextLocation location)
+    {
+        if (!ImportedFunctionSymbol.IsSuspendingMethod(method) || call.Type == null)
+        {
+            return call;
+        }
+
+        var logicalType = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(call.Type, out var awaited) ? awaited : TypeSymbol.Void;
+        return CompleteSuspendingCall(call, logicalType, location, method.Name);
+    }
+
+    internal static TypeSymbol? TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
     {
         if (awaitableType is not ImportedTypeSymbol importedAwaitable
             || importedAwaitable.OpenDefinition == null

@@ -102,6 +102,42 @@ var publish async (string) -> void = (msg string) -> Console.WriteLine(msg)
 contexts; using it elsewhere or on a non-awaitable operand is
 diagnosed.
 
+## `suspend func` — suspension without a task
+
+A `suspend func` is the shape a channel-consuming helper wants: it may
+suspend (on a channel operation or an `await`), but callers never see a
+`Task`. Inside another suspending function or an `async func` the call is
+awaited implicitly and yields the value directly:
+
+```gsharp
+suspend func take(ch in chan[int32]) int32 {
+    return <-ch
+}
+
+suspend func sum(ch in chan[int32], n int32) int32 {
+    var total = 0
+    for i in 0 ... n {
+        total = total + take(ch)   // implicit await; `take` yields int32
+    }
+    return total
+}
+```
+
+The emitted method returns `ValueTask[int32]`, so C# callers await it as
+usual. `async func` and `suspend func` are never combined on one declaration.
+
+You rarely need to write `suspend`: **suspension is inferred**. A plain
+`func` that receives, sends, drains a channel, or calls a function that does
+is compiled as a suspending function automatically, so the worker-pool and
+pipeline samples read exactly like Go and still park a state machine rather
+than a thread. The keyword is for the places inference cannot reach — an
+`open` or `override` method, an interface member, a method implementing
+one, a function literal — and for library authors who want to pin the
+contract. Inside those boundaries a call to a suspending function has nowhere
+to await, so it blocks the thread until the callee completes; the compiler
+says so with `GS0558`. Top-level statements are the one place that block is
+right, so the entry point calls suspending functions silently.
+
 ## Sequences and async sequences
 
 A function returning `sequence[T]` can use `yield` to produce values

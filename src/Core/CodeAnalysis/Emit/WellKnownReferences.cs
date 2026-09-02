@@ -92,6 +92,7 @@ internal sealed class WellKnownReferences
     // consumers see them as extension methods at the call site rather than
     // as plain static helpers on `<Program>`.
     private MemberReferenceHandle? extensionAttributeCtorRef;
+    private MemberReferenceHandle? suspendingAttributeCtorRef;
     private MemberReferenceHandle? compilerGeneratedAttributeCtorRef;
     private MemberReferenceHandle? preserveBaseOverridesAttributeCtorRef;
     private MemberReferenceHandle? unsafeValueTypeAttributeCtorRef;
@@ -427,6 +428,33 @@ internal sealed class WellKnownReferences
     /// <see langword="default"/> when the attribute type cannot be resolved
     /// from the reference closure (very old TFMs).
     /// </returns>
+    /// <summary>ADR-0174 D4: the parameterless constructor of <c>Gsharp.Concurrency.SuspendingAttribute</c>, or <c>default</c> when the runtime is not referenced.</summary>
+    /// <returns>The MemberRef, or <c>default</c>.</returns>
+    public MemberReferenceHandle GetSuspendingAttributeCtorRef()
+    {
+        if (this.suspendingAttributeCtorRef.HasValue)
+        {
+            return this.suspendingAttributeCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("Gsharp.Concurrency.SuspendingAttribute", requireExternalVisibility: false, out var attrType) || attrType == null)
+        {
+            this.suspendingAttributeCtorRef = default(MemberReferenceHandle);
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.suspendingAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.suspendingAttributeCtorRef.Value;
+    }
+
     public MemberReferenceHandle GetExtensionAttributeCtorRef()
     {
         if (this.extensionAttributeCtorRef.HasValue)

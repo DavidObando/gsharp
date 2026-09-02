@@ -262,7 +262,7 @@ internal sealed class FunctionEmitter
         // Async kickoff body: replace the user body with the kickoff stub
         // that creates the state machine, initializes it, and calls Start.
         AsyncStateMachinePlan? asyncPlan = null;
-        if (function.IsAsync && function.StateMachineType != null)
+        if (function.IsAsyncOrSuspending && function.StateMachineType != null)
         {
             foreach (var plan in this.outer.stateMachines.AsyncStateMachinePlans)
             {
@@ -919,6 +919,13 @@ internal sealed class FunctionEmitter
         if (function.IsExtension && !function.IsInstanceMethod)
         {
             this.outer.EmitExtensionAttribute(handle);
+        }
+
+        // ADR-0174 D4: a suspending function is labelled so a G# caller in
+        // another assembly reads the logical return type and awaits implicitly.
+        if (function.IsSuspending)
+        {
+            this.outer.EmitSuspendingAttribute(handle);
         }
     }
 

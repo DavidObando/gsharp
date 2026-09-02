@@ -29,7 +29,7 @@ namespace Gsharp.Concurrency;
 /// foreign completion propagates as the thrown fault rather than as an
 /// ordinary close.</para>
 /// </remarks>
-public static class ChannelOps
+public static partial class ChannelOps
 {
     /// <summary>Receives one value, blocking the thread while none is available. The zero value on a closed channel — without an exception.</summary>
     /// <typeparam name="T">The element type.</typeparam>

@@ -263,6 +263,12 @@ public sealed partial class DiagnosticBag
     public void ReportChannelBindingTargetCount(TextLocation location, string form, string expected, int actual)
     => Report(location, DiagnosticDescriptors.ChannelBindingTargetCount, form, expected, actual);
 
+    /// <summary>ADR-0174 D4: GS0558 — a suspending function is called from a non-suspending, non-async function and blocks the thread.</summary>
+    /// <param name="location">The call's location.</param>
+    /// <param name="calleeName">The suspending function's name.</param>
+    public void ReportSuspendingCallBlocks(TextLocation location, string calleeName)
+    => Report(location, DiagnosticDescriptors.SuspendingCallBlocks, calleeName);
+
     /// <summary>ADR-0174 D3: GS0555 — a <c>while let</c> initializer is a channel handle rather than a receive from one.</summary>
     /// <param name="location">The location of the initializer.</param>
     /// <param name="bindingName">The binding's identifier.</param>
