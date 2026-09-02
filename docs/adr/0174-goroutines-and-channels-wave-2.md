@@ -159,6 +159,16 @@ sequence the emitter produces.
 | 200 000 parked receivers — *shallow frame* | *cannot* | **384 B each**, 400 ms | 2669 B each, 407 ms | 7× less memory at this depth |
 | 400 blocked receivers, then spawn one more | **never scheduled (>60 s)** | n/a (suspension) | n/a | correctness failure |
 
+**Phase 1 addendum (2026-09-02).** The runtime assembly `Gsharp.Runtime.Channels`
+landed and two rows were measured on a *different* machine (Linux x64, 20
+cores, .NET 10.0.11 / Go 1.27.0, both sides on the same machine, round 3 of 3,
+single launch — so a baseline, not yet a D11 result):
+
+| Scenario | Phase 1 runtime (`Chan<T>`) | Go 1.27, same machine | Note |
+| --- | --- | --- | --- |
+| **Rendezvous round trip** — two capacity-0 `Chan<int>`, `await SendAsync`/`ReceiveAsync` | 1.18–1.30 µs/op | **617 ns/op** | ≈2× behind. The row the table above lacked. Waiters complete with `RunContinuationsAsynchronously = true` (one pool hop per hand-off); gate G6 measures the synchronous alternative. Go's own number on this machine is 2.8× its Apple-silicon figure — absolute numbers do not travel. |
+| Receive from closed channel — `TryReceive` on a closed, drained `Chan<T>` | **0.7 ns/op** | 32.5 ns/op | lock-free closed-and-drained path (`closed` is monotonic; the buffer can only drain after close). BCL `TryRead` on the same machine: 3.8 ns. |
+
 Four rows carry caveats that must not be lost when they are quoted:
 
 - **Ping-pong.** Wave 1 has no rendezvous channel at all (defect 3), so there
@@ -1087,13 +1097,13 @@ This ADR ships one:
 
 | Scenario | Target vs Go | Status of the evidence |
 | --- | --- | --- |
-| Receive from closed channel | ≤ 1.0× | **supported** — 1949 → 4.4 ns/op vs Go's 5.1 is pure defect removal |
+| Receive from closed channel | ≤ 1.0× | **supported, and met by the Phase 1 runtime** — 1949 → 0.7 ns/op (`Chan<T>.TryReceive`, lock-free closed-and-drained path) vs Go's 32.5 ns on the same machine |
 | Goroutine spawn | ≤ 1.2× | **partial** — 220 vs 202 ns covers queueing only; D4/D5/D6 add capture, state machine, sink, and registration. Re-derive in Phase 3. |
 | Parked-goroutine memory, depth 1 | ≤ 0.5× | **supported at depth 1 only** — measure depths 1/4/16; the target applies per depth, and D4's per-frame cost may fail it at depth |
 | Buffered throughput, per message | ≤ 1.8× | **not yet met by any measured implementation** — best CLR is 44.9/25.5 = 1.76×, so the earlier ≤1.5× target was already refuted by the ADR's own data. 1.8× holds the measured line; tightening requires a result that does not exist yet. |
 | `select`, ready arms | ≤ 1.2× | **not evidence-backed** — the 30.7 vs 53.3 ns result compared deterministic source-order probing against Go's randomized choice, i.e. it partly measured the divergence D8 removes. Re-derive after D8. |
 | `select`, parking path | **to be established** | never measured. Phase 4 establishes the baseline before setting a target. |
-| Rendezvous round trip | **to be established** | never measured — wave 1 has no rendezvous channel; the 1158 ns figure is a capacity-1 channel. Phase 1 must build the real baseline. |
+| Rendezvous round trip | **provisional ≤ 2.0×** | **baseline measured in Phase 1** — 1.18–1.30 µs/op vs Go 617 ns/op on the same Linux 20-core machine (≈2×), single launch. Phase 5 sets the target from multi-launch runs; the known lever is gate G6 (`RunContinuationsAsynchronously`). |
 | Chunked throughput | ≤ 2.0× | plausible; GC write barriers and array bounds are structural |
 | Goroutines schedulable while N are parked | unbounded | **supported** — today fails at 400 |
 

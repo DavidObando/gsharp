@@ -4,11 +4,12 @@ Evidence harness for **ADR-0174** (goroutines and channels, wave 2). It exists
 to make the ADR's performance claims refutable, and to stop new ones from
 being asserted without measurement.
 
-> **Status: baseline only.** This is the Phase-0 spike promoted verbatim from
-> the ADR-0174 design work. It measures *today's* lowering and the CLR
-> primitives the ADR proposes to adopt. It does **not** yet measure G# — there
-> is no G# side until the phases land, and it is **not** wired into CI. D11
-> Phase 5 turns this into the gated suite.
+> **Status: baseline plus the Phase 1 runtime.** The Phase-0 spike measured
+> *today's* lowering and the CLR primitives the ADR proposes to adopt. ADR-0174
+> Phase 1 added two rows over the real `Gsharp.Runtime.Channels` assembly
+> (`gs-rendezvous`, `closed-chan`). There is still no G#-*language* side until
+> Phases 2–3 land, and the harness is **not** wired into CI. D11 Phase 5 turns
+> this into the gated suite.
 
 ## Layout
 
@@ -22,6 +23,8 @@ being asserted without measurement.
 ```sh
 # CLR side — Release is mandatory, Debug numbers are meaningless
 cd clr && dotnet run -c Release
+# --quick skips the 60 s starvation demonstration (a correctness result, not a number)
+cd clr && dotnet run -c Release -- --quick
 
 # Go side
 cd go && go build -o baseline . && ./baseline
@@ -51,10 +54,23 @@ spike:
 
 Carried here so they are not lost when the numbers are quoted:
 
-- **There is no rendezvous row.** Wave 1 has no rendezvous channel, so the
-  ping-pong row uses a capacity-1 bounded channel — *strictly easier* than
-  Go's unbuffered rendezvous, which cannot complete a send before a receiver
-  arrives. The real rendezvous baseline must be built in Phase 1.
+- **The rendezvous row is the Phase 1 runtime, not emitted G#.** `gs-rendezvous`
+  drives two capacity-0 `Chan<int>`s from two tasks with `await SendAsync` /
+  `await ReceiveAsync` — the exact shape the Phase 3 lowering emits — so it is
+  the honest rendezvous number wave 1 could not produce (`gs-pingpong` remains
+  the capacity-1 stand-in for comparison). First same-machine measurement
+  (Linux x64, 20 cores, .NET 10.0.11 / Go 1.27.0, round 3 of 3, single
+  launch): **`gs-rendezvous` 1.18–1.30 µs/op vs `go-pingpong` 617 ns/op ≈ 2×**.
+  The runtime completes waiters with `RunContinuationsAsynchronously = true`
+  (a thread-pool hop per hand-off, stack-safe under ping-pong chains); the
+  ADR's decision gate G6 measures the synchronous alternative before Phase 5
+  sets the budget. Note how machine-dependent the absolute numbers are: the
+  same Go program measured 219 ns/op on the ADR's Apple-silicon reference.
+- **`closed-chan` is the Phase 1 runtime's closed receive**: `TryReceive` on a
+  closed, drained `Chan<T>` takes a lock-free path (`closed` is monotonic and
+  the buffer can only drain after close) and measured **0.7 ns/op** vs
+  `closed-flag` (BCL `TryRead`) 3.8 ns and `go-closed` 32.5 ns on the same
+  machine — the ADR's 382× defect, removed.
 - **The `select` row is fast-path only**, over pre-filled channels, and it
   compares G#'s deterministic source-order probing against Go's randomized
   choice. It partly measures the semantic divergence D8 removes. The parking

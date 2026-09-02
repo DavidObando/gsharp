@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 using System.Threading.Tasks.Sources;
+using Gsharp.Concurrency;
 
 // ---------------------------------------------------------------------------
 // PART 1 — feasibility: can a G#-owned channel type derive from the BCL
@@ -163,8 +164,11 @@ static class Program
 {
     const int N = 1_000_000;
 
-    static async Task Main()
+    static async Task Main(string[] args)
     {
+        // --quick skips the 60 s starvation spike (ADR-0174 Evidence item 3),
+        // which is a correctness demonstration rather than a number to re-measure.
+        var quick = Array.IndexOf(args, "--quick") >= 0;
         Console.WriteLine($"runtime={Environment.Version} cores={Environment.ProcessorCount}");
         Console.WriteLine();
 
@@ -181,12 +185,13 @@ static class Program
             await ThroughputChunkedSimd();
             await ComputeStage();
             PingPongBounded1();
+            await PingPongRendezvous();
             ClosedReceiveCost();
             SpawnCost();
             await SelectCost();
         }
         await ParkScale();
-        Starvation();
+        if (!quick) Starvation();
     }
 
     static async Task Interop()
@@ -427,6 +432,30 @@ static class Program
         Report("gs-pingpong", sw, R);
     }
 
+    // ADR-0174 Phase 1: the TRUE rendezvous baseline the ADR's D11 table was
+    // missing. Two goroutine-shaped tasks alternating over two capacity-0
+    // Chan<T>s — a send completes only when the receiver takes the value.
+    // This is what the Phase 3 lowering emits (await SendAsync/ReceiveAsync),
+    // so it is the honest G# number rather than a capacity-1 stand-in.
+    static async Task PingPongRendezvous()
+    {
+        const int R = 200_000;
+        var a = new Chan<int>();
+        var b = new Chan<int>();
+        var sw = Stopwatch.StartNew();
+        var echo = Task.Run(async () =>
+        {
+            for (int i = 0; i < R; i++)
+            {
+                var v = await a.ReceiveAsync();
+                await b.SendAsync(v.Value);
+            }
+        });
+        for (int i = 0; i < R; i++) { await a.SendAsync(i); await b.ReceiveAsync(); }
+        await echo; sw.Stop();
+        Report("gs-rendezvous", sw, R);
+    }
+
     static void ClosedReceiveCost()
     {
         const int R = 20_000;
@@ -438,6 +467,13 @@ static class Program
         var sw2 = Stopwatch.StartNew();
         for (int i = 0; i < R; i++) { if (!ch.Reader.TryRead(out _)) { } }
         sw2.Stop(); Report("closed-flag", sw2, R);
+
+        // ADR-0174 Phase 1: the real runtime's closed receive — TryReceive on a
+        // closed Chan<T> yields (zero, false) with no exception (D3).
+        var gs = new Chan<int>(1); gs.Close();
+        var sw3 = Stopwatch.StartNew();
+        for (int i = 0; i < R; i++) { gs.TryReceive(out _, out var ok); if (ok) throw new InvalidOperationException(); }
+        sw3.Stop(); Report("closed-chan", sw3, R);
     }
 
     sealed class Item : IThreadPoolWorkItem

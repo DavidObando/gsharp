@@ -115,6 +115,17 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     }
 
     /// <summary>
+    /// Gets a value indicating whether the channel is closed with nothing left
+    /// to drain — decidable without the lock. <c>closed</c> is monotonic; every
+    /// enqueue happens-before the close (sends on a closed channel throw), so
+    /// after acquiring <c>closed == true</c> the count can only fall, and a
+    /// parked sender never contributes a value post-close (it is faulted).
+    /// An observed zero therefore is a true zero. This is the lock-free
+    /// closed-receive path the ADR's 382× defect turns into.
+    /// </summary>
+    private bool IsClosedAndDrained => Volatile.Read(ref closed) && Volatile.Read(ref count) == 0;
+
+    /// <summary>
     /// Returns the number of buffered elements. A snapshot with no
     /// synchronization guarantee — diagnostic, not a control-flow primitive
     /// (which is why it is a method and <see cref="Capacity"/> is a property).
@@ -129,6 +140,13 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryReceive(out T value, out bool ok)
     {
+        if (IsClosedAndDrained)
+        {
+            value = default!;
+            ok = false;
+            return true;
+        }
+
         var completions = default(Completions);
         bool done;
         lock (gate)
@@ -165,6 +183,11 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     /// <returns>The value and whether one was delivered (false: closed and drained).</returns>
     public ValueTask<ReceiveResult<T>> ReceiveAsync(CancellationToken cancellationToken = default)
     {
+        if (IsClosedAndDrained)
+        {
+            return new ValueTask<ReceiveResult<T>>(ReceiveResult<T>.Closed);
+        }
+
         var completions = default(Completions);
         OpReceiveNode<T>? node = null;
         T value;
