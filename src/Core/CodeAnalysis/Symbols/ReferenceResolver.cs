@@ -251,13 +251,13 @@ public sealed class ReferenceResolver : IDisposable
         metadataContext?.Dispose();
         runtimeContext?.Unload();
 
-        // The static ImportedTypeSymbol cache may hold Type instances that
-        // originated from the now-disposed MetadataLoadContext. Those entries
-        // are unreachable from future compilations and pin the disposed
-        // context's managed object graph. Clearing the cache allows them to
-        // be collected. This is safe because each compilation rebuilds the
-        // cache organically; the only cost is a cold cache on the next
-        // compilation that reuses the same process.
+        // Kept as a call site for symmetry with the caches below, but note
+        // that ImportedTypeSymbol.ClearCache is deliberately a NO-OP: that
+        // cache is weakly keyed by assembly, so a disposed context's entries
+        // become collectable on their own (#2341). Cross-compilation IDENTITY
+        // — a symbol from one compilation answering another's lookup — is not
+        // a lifetime question and is not addressed here; it is handled by the
+        // load-context-sensitive key that cache uses (#3826).
         ImportedTypeSymbol.ClearCache();
 
         // FunctionTypeSymbol eagerly closes a host-runtime Func/Action over
