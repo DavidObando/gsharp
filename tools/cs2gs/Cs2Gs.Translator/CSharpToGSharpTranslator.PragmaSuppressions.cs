@@ -46,6 +46,7 @@ public sealed partial class CSharpToGSharpTranslator
                 FieldDeclaration f => f.Attributes,
                 ConstructorDeclaration c => c.Attributes,
                 EventDeclaration e => e.Attributes,
+                DestructorDeclaration d => d.Attributes,
                 _ => null,
             };
 
