@@ -573,7 +573,7 @@ internal sealed partial class ExpressionBinder
                 inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, propertyName);
                 if (inhMember != null)
                 {
-                    if (!TryGetWritableClrMember(inhMember, out _, out var inhTargetSymbol, out _))
+                    if (!TryGetWritableClrMember(inhMember, out _, out var inhTargetSymbol, out _, fromDerivedType: true))
                     {
                         Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
                         _ = BindExpression(initSyntax.Value);
@@ -682,7 +682,7 @@ internal sealed partial class ExpressionBinder
             {
                 var importedBase = new ImportedClassSymbol(importedBaseClr, syntax, references: scope.References);
                 if (importedBase.TryLookupMember(fieldName, ne: null, out var inheritedStaticMember)
-                    && TryGetWritableClrMember(inheritedStaticMember, out _, out var inheritedTarget, out _))
+                    && TryGetWritableClrMember(inheritedStaticMember, out _, out var inheritedTarget, out _, fromDerivedType: true))
                 {
                     var inheritedValue = BindAssignmentRhs(syntax.Value, inheritedTarget);
                     var inheritedConverted = conversions.BindConversion(syntax.Value.Location, inheritedValue, inheritedTarget);
@@ -1079,7 +1079,7 @@ internal sealed partial class ExpressionBinder
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                 if (clrMember != null)
                 {
-                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable))
+                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable, fromDerivedType: true))
                     {
                         Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, memberName);
                         return new BoundErrorExpression(null);
@@ -2706,7 +2706,7 @@ internal sealed partial class ExpressionBinder
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, fieldName);
                 if (clrMember != null)
                 {
-                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable))
+                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable, fromDerivedType: true))
                     {
                         Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                         return new BoundErrorExpression(null);
