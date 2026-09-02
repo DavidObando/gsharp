@@ -23,6 +23,33 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 
 IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms are equivalent.
 
+### Source-level, scoped suppression (ADR-0175)
+
+The flags above are whole-compilation. To turn an **analyzer** diagnostic off
+for one declaration or one range of statements, annotate the source with
+`@SuppressDiagnostic`:
+
+```
+@SuppressDiagnostic("GSA0005")
+func RewriteFieldAssignmentExpression(node BoundFieldAssignmentExpression) BoundExpression {
+    // GSA0005 is suppressed here, and nowhere else.
+}
+
+func Elsewhere() {
+    @SuppressDiagnostic("GSA0005", "GSA0007") {
+        // suppressed only inside these braces
+    }
+
+    // still reported here
+}
+```
+
+The annotation is compiler-intrinsic: it names no type, needs no assembly
+reference, and is never written to metadata. Its scope is the span of the
+declaration or block it precedes; nesting adds identifiers and never removes
+them. An argument that is not a constant string shaped like a diagnostic ID is
+reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
+
 **Example `.gsproj` snippet:**
 ```xml
 <PropertyGroup>
@@ -317,6 +344,7 @@ GS92xx block belongs to the gsgen source-generator host.)
 | GS9302 | Info | An analyzer exceeded its time budget in an interactive host and was disabled for subsequent runs. |
 | GS9303 | Warning | An analyzer was built against a different `GSharp.Core` version than the host; the load is attempted anyway. |
 | GS9304 | Warning | An analyzer reported a diagnostic whose ID is not declared in its `SupportedDiagnostics`; the diagnostic is suppressed. |
+| GS9305 | Error | `@SuppressDiagnostic` (ADR-0175) was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
 
 ### Internal diagnostics (GS9996–GS9999)
 
