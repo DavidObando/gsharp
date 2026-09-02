@@ -113,6 +113,12 @@
                       Private="false"
                       ReferenceOutputAssembly="false"
                       SkipGetTargetFrameworkProperties="true" />
+    <!-- ADR-0174 D1: build-only ordering arrow so the channel runtime exists
+         before the bootstrap CoreCompile forwards it to gsc as /r:. -->
+    <ProjectReference Include="..\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <!-- Reset @(Compile) to only `.gs` files. Microsoft.NET.Sdk adds

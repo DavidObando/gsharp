@@ -28,6 +28,8 @@
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore)" />
     <ProjectReference Include="..\..\src\Analyzers\GSharp.CodeAnalysis.Analyzers.Testing\GSharp.CodeAnalysis.Analyzers.Testing.csproj" />
+    <!-- ADR-0174: EmittedOracle-driven channel tests need the runtime beside the host. -->
+    <ProjectReference Include="..\..\src\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
   </ItemGroup>
 
   <ItemGroup>

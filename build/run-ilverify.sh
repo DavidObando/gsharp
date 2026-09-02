@@ -37,6 +37,7 @@ cd "$ROOT"
 CONFIG=Release
 GSC_DLL="$ROOT/out/bin/$CONFIG/Compiler/gsc.dll"
 EXTENSIONS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Extensions/Gsharp.Extensions.dll"
+CHANNELS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll"
 SAMPLES_DIR="$ROOT/samples"
 BASELINE_FILE="$ROOT/build/ilverify-known-failures.txt"
 TMP_BASE="${TMPDIR:-/tmp}"
@@ -50,7 +51,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Building gsc and Gsharp.Extensions ($CONFIG)"
+echo "==> Building gsc, Gsharp.Runtime.Channels and Gsharp.Extensions ($CONFIG)"
 # Gsharp.Extensions -> Gsharp.NET.Sdk packs gsgen via a raw <MSBuild> task, so
 # its restore does not flow transitively; restore the solution like CI does.
 dotnet restore GSharp.sln --nologo -v:q
@@ -58,6 +59,8 @@ dotnet build src/Compiler/Compiler.csproj -c "$CONFIG" --no-restore --nologo -v:
 dotnet build src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj -c "$CONFIG" --no-restore --nologo -v:q
 [[ -f "$GSC_DLL" ]] || { echo "ERROR: gsc not found at $GSC_DLL"; exit 1; }
 [[ -f "$EXTENSIONS_DLL" ]] || { echo "ERROR: Gsharp.Extensions not found at $EXTENSIONS_DLL"; exit 1; }
+# ADR-0174 D1: the channel runtime is a Compiler ProjectReference, so it is built transitively.
+[[ -f "$CHANNELS_DLL" ]] || { echo "ERROR: Gsharp.Runtime.Channels not found at $CHANNELS_DLL"; exit 1; }
 
 echo "==> Restoring repo-local dotnet tools (dotnet-ilverify)"
 if ! dotnet tool run ilverify --version >/dev/null 2>&1; then

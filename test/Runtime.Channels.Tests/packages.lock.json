@@ -8,23 +8,6 @@
         "resolved": "6.0.2",
         "contentHash": "bJShQ6uWRTQ100ZeyiMqcFlhP7WJ+bCuabUs885dJiBEzMsJMSFr7BOyeCw4rgvQokteGi5rKQTlkhfQPUXg2A=="
       },
-      "Microsoft.Build.Framework": {
-        "type": "Direct",
-        "requested": "[17.13.9, )",
-        "resolved": "17.13.9",
-        "contentHash": "Yc9R6+YdvB7KStBN2SiojR5bsFf+/xklQFhlgRog1wp+2V6rpfOyJftP6WdMwpvRAdy7kWSrvlrbllw62OgtlA=="
-      },
-      "Microsoft.Build.Utilities.Core": {
-        "type": "Direct",
-        "requested": "[17.13.9, )",
-        "resolved": "17.13.9",
-        "contentHash": "8l/iUywD8ARu+9P5J2AUihLF2WAJRhZm3dbphKHBKZgwcJfHpfeVzIbh/4ZT7hnj5D0p6gVdoODs/X5b9aM9Qw==",
-        "dependencies": {
-          "Microsoft.Build.Framework": "17.13.9",
-          "Microsoft.NET.StringTools": "17.13.9",
-          "System.Configuration.ConfigurationManager": "8.0.0"
-        }
-      },
       "Microsoft.NET.Test.Sdk": {
         "type": "Direct",
         "requested": "[17.11.1, )",
@@ -69,11 +52,6 @@
         "resolved": "17.11.1",
         "contentHash": "nPJqrcA5iX+Y0kqoT3a+pD/8lrW/V7ayqnEJQsTonSoPz59J8bmoQhcSN4G8+UJ64Hkuf0zuxnfuj2lkHOq4cA=="
       },
-      "Microsoft.NET.StringTools": {
-        "type": "Transitive",
-        "resolved": "17.13.9",
-        "contentHash": "GjB0YvVu4gamPBYr+iKokahqZIBWds5hVNSFAYUsxk1KZLI5oubs52xmG3sMDTKy1yR7MBxBhi/k9YY6/qw53A=="
-      },
       "Microsoft.TestPlatform.ObjectModel": {
         "type": "Transitive",
         "resolved": "17.11.1",
@@ -92,30 +70,6 @@
         "type": "Transitive",
         "resolved": "13.0.1",
         "contentHash": "ppPFpBcvxdsfUonNcvITKqLl3bqxWbDCZIzDWHzjpdAHRFfZe0Dw9HmA0+za13IdyrgJwpkDTDA9fHaxOrt20A=="
-      },
-      "System.Configuration.ConfigurationManager": {
-        "type": "Transitive",
-        "resolved": "8.0.0",
-        "contentHash": "JlYi9XVvIREURRUlGMr1F6vOFLk7YSY4p1vHo4kX3tQ0AGrjqlRWHDi66ImHhy6qwXBG3BJ6Y1QlYQ+Qz6Xgww==",
-        "dependencies": {
-          "System.Diagnostics.EventLog": "8.0.0",
-          "System.Security.Cryptography.ProtectedData": "8.0.0"
-        }
-      },
-      "System.Diagnostics.EventLog": {
-        "type": "Transitive",
-        "resolved": "8.0.0",
-        "contentHash": "fdYxcRjQqTTacKId/2IECojlDSFvp7LP5N78+0z/xH7v/Tuw5ZAxu23Y6PTCRinqyu2ePx+Gn1098NC6jM6d+A=="
-      },
-      "System.Reflection.MetadataLoadContext": {
-        "type": "Transitive",
-        "resolved": "9.0.0",
-        "contentHash": "nGdCUVhEQ9/CWYqgaibYEDwIJjokgIinQhCnpmtZfSXdMS6ysLZ8p9xvcJ8VPx6Xpv5OsLIUrho4B9FN+VV/tw=="
-      },
-      "System.Security.Cryptography.ProtectedData": {
-        "type": "Transitive",
-        "resolved": "8.0.0",
-        "contentHash": "+TUFINV2q2ifyXauQXRwy4CiBhqvDEDZeVJU7qfxya4aRYOKzVBpN+4acx25VcPB9ywUN6C0n8drWl110PhZEg=="
       },
       "xunit.abstractions": {
         "type": "Transitive",
@@ -155,41 +109,6 @@
         "contentHash": "rKMpq4GsIUIJibXuZoZ8lYp5EpROlnYaRpwu9Zr0sRZXE7JqJfEEbCsUriZqB+ByXCLFBJyjkTRULMdC+U566g==",
         "dependencies": {
           "xunit.extensibility.core": "[2.9.2]"
-        }
-      },
-      "gsc": {
-        "type": "Project",
-        "dependencies": {
-          "GSharp.CodeAnalysis.Analyzers.Testing": "[1.0.0, )",
-          "GSharp.Core": "[1.0.0, )",
-          "Gsharp.Runtime.Channels": "[1.0.0, )",
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
-        }
-      },
-      "gsharp.codeanalysis.analyzers.testing": {
-        "type": "Project",
-        "dependencies": {
-          "GSharp.Core": "[1.0.0, )",
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
-        }
-      },
-      "GSharp.Core": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )",
-          "System.Reflection.MetadataLoadContext": "[9.0.0, )"
-        }
-      },
-      "gsharp.hotreload.runtime": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
-        }
-      },
-      "gsharp.net.sdk": {
-        "type": "Project",
-        "dependencies": {
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },
       "gsharp.runtime.channels": {

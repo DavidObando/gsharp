@@ -32,6 +32,12 @@
     <GsharpToolFullPath Condition=" '$(GsharpToolFullPath)' == '' ">$(GsharpBootstrapBinDir)Gsharp.NET.Sdk\Gsharp.NET.Sdk.dll</GsharpToolFullPath>
     <GsharpCompilerFullPath Condition=" '$(GsharpCompilerFullPath)' == '' ">$(GsharpBootstrapBinDir)Compiler\gsc.dll</GsharpCompilerFullPath>
 
+    <!-- ADR-0174 D1: the C#-authored channel runtime is NOT part of the
+         Extensions cycle (it references nothing G#-authored), so the
+         bootstrap can and must reference it — Gsharp.Extensions' own .gs
+         sources use channels once ADR-0174 Phase 4 lands `merge`/`after`. -->
+    <GsharpChannelsRuntimeAssemblyFullPath Condition=" '$(GsharpChannelsRuntimeAssemblyFullPath)' == '' ">$(GsharpBootstrapBinDir)Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.dll</GsharpChannelsRuntimeAssemblyFullPath>
+
     <!-- Take ownership of CoreCompile; the only dependency is the standard
          _ComputeNonExistentFileProperty helper. -->
     <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
@@ -46,6 +52,12 @@
   <!-- mscorlib resolution — same as the consumer SDK. -->
   <ItemGroup Condition=" '$(NoStdLib)' != 'true' ">
     <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
+  </ItemGroup>
+
+  <!-- ADR-0174 D1: channel runtime — same _ExplicitReference channel as the
+       consumer SDK (build/Gsharp.NET.Sdk.props). -->
+  <ItemGroup Condition="Exists('$(GsharpChannelsRuntimeAssemblyFullPath)')">
+    <_ExplicitReference Include="$(GsharpChannelsRuntimeAssemblyFullPath)" />
   </ItemGroup>
 
   <!-- Issue #1666: same property-only-change hazard as

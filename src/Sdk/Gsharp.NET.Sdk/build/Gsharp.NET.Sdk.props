@@ -43,6 +43,13 @@
          opt-in; the reference is an SDK-private implementation detail. -->
     <GsharpExtensionsAssemblyFullPath Condition=" '$(GsharpExtensionsAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\extensions\Gsharp.Extensions.dll</GsharpExtensionsAssemblyFullPath>
 
+    <!-- ADR-0174 D1. The G#-owned channel runtime (Gsharp.Concurrency.Chan<T>,
+         ChannelOps, Context, ...) ships inside this SDK NuGet under
+         tools/channels/. Emitted programs reference it whenever they
+         construct a channel, so it is auto-referenced like Gsharp.Extensions;
+         it is only loaded by programs that actually use channels. -->
+    <GsharpChannelsRuntimeAssemblyFullPath Condition=" '$(GsharpChannelsRuntimeAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\channels\Gsharp.Runtime.Channels.dll</GsharpChannelsRuntimeAssemblyFullPath>
+
     <!-- Pull in the gsharp language targets (CoreCompile override). -->
     <LanguageTargets>$(MSBuildThisFileDirectory)Gsharp.NET.Current.Sdk.targets</LanguageTargets>
   </PropertyGroup>
@@ -55,6 +62,11 @@
        that BuildTask sends via /r:). -->
   <ItemGroup Condition=" '$(GsharpNoExtensions)' != 'true' and Exists('$(GsharpExtensionsAssemblyFullPath)') ">
     <_ExplicitReference Include="$(GsharpExtensionsAssemblyFullPath)" />
+  </ItemGroup>
+
+  <!-- ADR-0174 D1: same channel for the channel runtime. -->
+  <ItemGroup Condition=" '$(GsharpNoChannelsRuntime)' != 'true' and Exists('$(GsharpChannelsRuntimeAssemblyFullPath)') ">
+    <_ExplicitReference Include="$(GsharpChannelsRuntimeAssemblyFullPath)" />
   </ItemGroup>
 
 </Project>

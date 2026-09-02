@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ADR-0174 D1: the G#-owned channel runtime. C#-authored because it is
+       emitted into and lives on the hot path (IValueTaskSource, Interlocked,
+       Memory<T> marshalling) and must not participate in the Gsharp.Extensions
+       bootstrap cycle. Packaged and referenced by the SDK exactly as
+       Gsharp.HotReload.Runtime is, but auto-referenced by every consumer
+       .gsproj (like Gsharp.Extensions) because emitted programs reference it
+       whenever they construct a channel. -->
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <AssemblyName>Gsharp.Runtime.Channels</AssemblyName>
+    <RootNamespace>Gsharp.Concurrency</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Runtime.Channels.Tests" />
+    <InternalsVisibleTo Include="GSharp.Sdk.Tests" />
+  </ItemGroup>
+
+</Project>

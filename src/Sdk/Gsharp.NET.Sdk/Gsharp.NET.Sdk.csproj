@@ -44,6 +44,12 @@
                       Private="false"
                       ReferenceOutputAssembly="false"
                       SkipGetTargetFrameworkProperties="true" />
+    <!-- ADR-0174 D1: the channel runtime is packed under tools/channels/ and
+         auto-referenced by every consumer .gsproj (build/Gsharp.NET.Sdk.props). -->
+    <ProjectReference Include="..\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <ItemGroup>
@@ -164,6 +170,33 @@
       <None Include="@(_GsharpHotReloadRuntimePayload)"
             Pack="true"
             PackagePath="tools\hotreload\"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- ADR-0174 D1: pack the G#-owned channel runtime (Gsharp.Concurrency.Chan<T>
+       and friends) under tools/channels/. Unlike the hot-reload runtime it is
+       auto-referenced by every consumer project, because emitted programs
+       reference it whenever they construct a channel; it is only *loaded*
+       by programs that do, so the zero-cost property ADR-0082's gate
+       protected is preserved by linking rather than by binding. -->
+  <Target Name="PackGsharpChannelsRuntime" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <PropertyGroup>
+      <_GsharpChannelsRuntimeOutputDir>$(BaseOutputPath)\Gsharp.Runtime.Channels\</_GsharpChannelsRuntimeOutputDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GsharpChannelsRuntimePayload Include="$(_GsharpChannelsRuntimeOutputDir)Gsharp.Runtime.Channels.dll" />
+      <_GsharpChannelsRuntimePayload Include="$(_GsharpChannelsRuntimeOutputDir)Gsharp.Runtime.Channels.pdb"
+                                     Condition="Exists('$(_GsharpChannelsRuntimeOutputDir)Gsharp.Runtime.Channels.pdb')" />
+      <_GsharpChannelsRuntimePayload Include="$(_GsharpChannelsRuntimeOutputDir)Gsharp.Runtime.Channels.xml"
+                                     Condition="Exists('$(_GsharpChannelsRuntimeOutputDir)Gsharp.Runtime.Channels.xml')" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(_GsharpChannelsRuntimeOutputDir)Gsharp.Runtime.Channels.dll')"
+           Text="Expected Gsharp.Runtime.Channels output not found under '$(_GsharpChannelsRuntimeOutputDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsharpChannelsRuntimePayload)"
+            Pack="true"
+            PackagePath="tools\channels\"
             Visible="false" />
     </ItemGroup>
   </Target>

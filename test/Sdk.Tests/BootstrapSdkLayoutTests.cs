@@ -94,6 +94,27 @@ public class BootstrapSdkLayoutTests
     }
 
     [Fact]
+    public void BootstrapTargets_References_Channels_Runtime_But_Not_Extensions()
+    {
+        // ADR-0174 D1: the C#-authored channel runtime has no bootstrap
+        // cycle (it references nothing G#-authored), so the bootstrap MUST
+        // forward it to gsc — Gsharp.Extensions' own .gs sources use channels
+        // once the D9 helpers land — while still never referencing
+        // Gsharp.Extensions.dll itself.
+        var path = Path.Combine(BootstrapSourceDir, "build", "Gsharp.NET.Sdk.Bootstrap.targets");
+        var doc = XDocument.Load(path);
+        var includes = doc.Descendants(MsbuildNs + "_ExplicitReference")
+            .Select(item => (string)item.Attribute("Include") ?? string.Empty)
+            .ToList();
+
+        Assert.Contains("$(GsharpChannelsRuntimeAssemblyFullPath)", includes);
+        Assert.DoesNotContain(includes, include => include.Contains("Gsharp.Extensions", System.StringComparison.Ordinal));
+
+        var property = doc.Descendants(MsbuildNs + "GsharpChannelsRuntimeAssemblyFullPath").Single();
+        Assert.Contains(@"Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.dll", property.Value, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BootstrapTargets_OverridesCoreCompile_WithBuildTask()
     {
         var path = Path.Combine(BootstrapSourceDir, "build", "Gsharp.NET.Sdk.Bootstrap.targets");

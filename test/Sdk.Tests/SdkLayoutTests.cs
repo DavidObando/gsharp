@@ -382,6 +382,55 @@ public class SdkLayoutTests
         Assert.Contains("Microsoft.Build.Utilities.Core", text, System.StringComparison.Ordinal);
         Assert.Contains("tools\\hotreload\\", text, System.StringComparison.Ordinal);
         Assert.Contains("Gsharp.HotReload.Runtime.dll", text, System.StringComparison.Ordinal);
+        // ADR-0174 D1: the channel runtime ships under tools/channels/.
+        Assert.Contains("tools\\channels\\", text, System.StringComparison.Ordinal);
+        Assert.Contains("Gsharp.Runtime.Channels.dll", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sdk_Csproj_Uses_BuildOnly_Channels_Runtime_Reference_And_Packs_Runtime()
+    {
+        // ADR-0174 D1: mirrors the hot-reload runtime wiring — build-only
+        // ProjectReference for ordering, a pack target under tools/channels/.
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj");
+        var doc = XDocument.Load(path);
+        var runtimeReference = doc.Descendants("ProjectReference")
+            .Single(reference =>
+                ((string)reference.Attribute("Include") ?? string.Empty).EndsWith(
+                    @"Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj",
+                    System.StringComparison.Ordinal));
+
+        Assert.Equal("false", (string)runtimeReference.Attribute("Private"));
+        Assert.Equal("false", (string)runtimeReference.Attribute("ReferenceOutputAssembly"));
+        Assert.Equal("true", (string)runtimeReference.Attribute("SkipGetTargetFrameworkProperties"));
+
+        var runtimeTarget = doc.Descendants("Target")
+            .Single(target => (string)target.Attribute("Name") == "PackGsharpChannelsRuntime");
+
+        Assert.Equal("_GetPackageFiles", (string)runtimeTarget.Attribute("BeforeTargets"));
+        Assert.Equal("Build", (string)runtimeTarget.Attribute("DependsOnTargets"));
+        var runtimePayload = runtimeTarget.Descendants("None")
+            .Single(item => (string)item.Attribute("Include") == "@(_GsharpChannelsRuntimePayload)");
+        Assert.Equal("true", (string)runtimePayload.Attribute("Pack"));
+        Assert.Equal("tools\\channels\\", (string)runtimePayload.Attribute("PackagePath"));
+    }
+
+    [Fact]
+    public void Sdk_Props_AutoReferences_Channels_Runtime_Like_Extensions()
+    {
+        // ADR-0174 D1: unlike hot reload (opt-in <Reference>), the channel
+        // runtime rides the same unconditional _ExplicitReference channel as
+        // Gsharp.Extensions so it reaches gsc's /r: list for every consumer.
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Sdk.props");
+        var doc = XDocument.Load(path);
+        var references = doc.Descendants(MsbuildNs + "_ExplicitReference")
+            .Select(item => (string)item.Attribute("Include"))
+            .ToList();
+        Assert.Contains("$(GsharpExtensionsAssemblyFullPath)", references);
+        Assert.Contains("$(GsharpChannelsRuntimeAssemblyFullPath)", references);
+
+        var property = doc.Descendants(MsbuildNs + "GsharpChannelsRuntimeAssemblyFullPath").Single();
+        Assert.Contains(@"tools\channels\Gsharp.Runtime.Channels.dll", property.Value, System.StringComparison.Ordinal);
     }
 
     [Fact]
