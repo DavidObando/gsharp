@@ -51,6 +51,15 @@ public sealed class CSharpTypeMapper
         new(BuildAnalyzerTargetTypeNames);
 
     /// <summary>
+    /// Issue #3805: the linked-source index (see <see cref="LinkedDocumentIndex"/>)
+    /// per repository compilation set, cached weakly so it is built once per
+    /// migration run instead of once per translated document.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        object,
+        Dictionary<string, List<(CSharpCompilation Compilation, SyntaxTree Tree)>>> LinkedDocumentIndexes = new();
+
+    /// <summary>
     /// Issue #2211: every namespace this mapper has shortened a type reference
     /// into (via <see cref="QualifiedTypeName"/>), collected so the translator
     /// can synthesize a matching <c>import</c> for a namespace with no
@@ -135,9 +144,9 @@ public sealed class CSharpTypeMapper
     /// Nested declarations are excluded because they are not imported by their
     /// simple names.
     /// </summary>
-    private Dictionary<string, int> sourceTopLevelSimpleNameCounts;
+    private Dictionary<CSharpCompilation, Dictionary<string, HashSet<string>>> sourceTopLevelSimpleNames;
 
-    private Dictionary<string, int> sourceNestedSimpleNameCounts;
+    private Dictionary<CSharpCompilation, Dictionary<string, HashSet<string>>> sourceNestedSimpleNames;
 
     private HashSet<string> sourceDeclaredTypeNames;
 
@@ -150,6 +159,16 @@ public sealed class CSharpTypeMapper
     /// project) rather than in source.
     /// </summary>
     private HashSet<string> importedNamespaceNames;
+
+    /// <summary>
+    /// Issue #3805: the semantic models of the file being translated, one per
+    /// repository compilation that COMPILES that file. For an ordinary file
+    /// that is just <see cref="TranslationContext.SemanticModel"/>; for a
+    /// LINKED source (<c>&lt;Compile Include="..\Shared\X.cs" /&gt;</c> in
+    /// several projects) it is one model per linking project. See
+    /// <see cref="LinkedDocumentModels(TranslationContext)"/>.
+    /// </summary>
+    private Dictionary<SyntaxTree, IReadOnlyList<SemanticModel>> linkedDocumentModels;
 
     /// <summary>
     /// Issue #2509: constraint slots must disambiguate metadata/metadata
@@ -1816,41 +1835,125 @@ public sealed class CSharpTypeMapper
     /// they are reachable through their containing type, not through an import.
     /// The per-compilation simple-name census is built once and cached on this
     /// mapper instance.
+    /// <para>
+    /// Issue #3805: for a LINKED source the census runs over every compilation
+    /// that compiles the file. The census counts PROJECT-REFERENCED types too
+    /// (a project reference is a source-bearing compilation reference), so its
+    /// answer follows the project's reference graph:
+    /// <c>test/Interpreter.Tests</c> references the Repl and through it
+    /// <c>GSharp.LanguageServer.Protocol.Diagnostic</c>, while
+    /// <c>test/Core.Tests</c> and <c>tools/cs2gs/Cs2Gs.Tests</c> — which link
+    /// the very same <c>test/Shared/EmittedOracle.cs</c> — do not. That made
+    /// one lambda parameter print <c>GSharp.Core.CodeAnalysis.Diagnostic</c>
+    /// in one project and <c>Diagnostic</c> in the others, and the repository
+    /// mirror (one <c>.gs</c> per source file) rejected the divergence.
+    /// </para>
     /// </summary>
     private bool HasSourceHomonym(INamedTypeSymbol named, TranslationContext context)
     {
-        this.sourceTopLevelSimpleNameCounts ??=
-            BuildSourceTopLevelSimpleNameCounts(context.Compilation);
-        if (!this.sourceTopLevelSimpleNameCounts.TryGetValue(named.Name, out var count))
+        foreach (CSharpCompilation compilation in this.LinkedDocumentCompilations(context))
         {
-            return false;
+            if (HasHomonym(
+                this.SourceTopLevelSimpleNames(compilation),
+                named,
+                nested: false))
+            {
+                return true;
+            }
         }
 
-        // Issue #2307: for a source top-level symbol, one census entry is the
-        // symbol itself, so ambiguity starts at two. Metadata and nested source
-        // symbols are not census entries, so one same-named top-level source
-        // declaration is already a distinct homonym.
-        int selfCount = named.ContainingType == null
-            && named.Locations.Any(l => l.IsInSource)
-                ? 1
-                : 0;
-        return count > selfCount;
+        return false;
     }
 
     private bool HasSourceNestedHomonym(INamedTypeSymbol named, TranslationContext context)
     {
-        this.sourceNestedSimpleNameCounts ??=
-            BuildSourceNestedSimpleNameCounts(context.Compilation);
-        if (!this.sourceNestedSimpleNameCounts.TryGetValue(named.Name, out int count))
+        foreach (CSharpCompilation compilation in this.LinkedDocumentCompilations(context))
+        {
+            if (HasHomonym(
+                this.SourceNestedSimpleNames(compilation),
+                named,
+                nested: true))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #2307/#3805: whether <paramref name="census"/> holds a
+    /// source-declared type of <paramref name="named"/>'s simple name that is
+    /// not <paramref name="named"/> itself. Identity is compared by full name
+    /// rather than by counting entries, so the answer is the same whichever
+    /// compilation of a linked source asks it (symbols from two compilations
+    /// are never reference-equal, and the same type is source-declared in one
+    /// project's view and metadata in another's).
+    /// </summary>
+    /// <param name="census">One compilation's simple-name census.</param>
+    /// <param name="named">The type whose bare name is being considered.</param>
+    /// <param name="nested">Whether the census covers nested declarations.</param>
+    /// <returns><see langword="true"/> when a distinct same-named declaration exists.</returns>
+    private static bool HasHomonym(
+        IReadOnlyDictionary<string, HashSet<string>> census,
+        INamedTypeSymbol named,
+        bool nested)
+    {
+        if (!census.TryGetValue(named.Name, out HashSet<string> declarations))
         {
             return false;
         }
 
-        int selfCount = named.ContainingType != null
-            && named.Locations.Any(location => location.IsInSource)
-                ? 1
-                : 0;
-        return count > selfCount;
+        string self = (named.ContainingType != null) == nested
+            ? named.OriginalDefinition.ToDisplayString()
+            : null;
+        foreach (string declaration in declarations)
+        {
+            if (declaration != self)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3805: <paramref name="compilation"/>'s top-level source-declared
+    /// type names, cached per compilation on this mapper (a linked source asks
+    /// once per linking project, an ordinary file only once).
+    /// </summary>
+    /// <param name="compilation">The compilation to census.</param>
+    /// <returns>Simple name to the full names declared under it.</returns>
+    private IReadOnlyDictionary<string, HashSet<string>> SourceTopLevelSimpleNames(CSharpCompilation compilation)
+    {
+        this.sourceTopLevelSimpleNames ??= new Dictionary<CSharpCompilation, Dictionary<string, HashSet<string>>>();
+        if (!this.sourceTopLevelSimpleNames.TryGetValue(compilation, out Dictionary<string, HashSet<string>> census))
+        {
+            census = BuildSourceSimpleNames(compilation, nested: false);
+            this.sourceTopLevelSimpleNames[compilation] = census;
+        }
+
+        return census;
+    }
+
+    /// <summary>
+    /// Issue #3805: <paramref name="compilation"/>'s NESTED source-declared
+    /// type names, the nested-declaration counterpart of
+    /// <see cref="SourceTopLevelSimpleNames"/>.
+    /// </summary>
+    /// <param name="compilation">The compilation to census.</param>
+    /// <returns>Simple name to the full names declared under it.</returns>
+    private IReadOnlyDictionary<string, HashSet<string>> SourceNestedSimpleNames(CSharpCompilation compilation)
+    {
+        this.sourceNestedSimpleNames ??= new Dictionary<CSharpCompilation, Dictionary<string, HashSet<string>>>();
+        if (!this.sourceNestedSimpleNames.TryGetValue(compilation, out Dictionary<string, HashSet<string>> census))
+        {
+            census = BuildSourceSimpleNames(compilation, nested: true);
+            this.sourceNestedSimpleNames[compilation] = census;
+        }
+
+        return census;
     }
 
     private bool HasVisibleSourceNestedHomonym(
@@ -1866,22 +1969,25 @@ public sealed class CSharpTypeMapper
         int position = System.Math.Min(
             location.SourceSpan.Start,
             location.SourceTree.GetRoot().FullSpan.End - 1);
-        SemanticModel semanticModel = ReferenceEquals(
-            context.SemanticModel.SyntaxTree,
-            location.SourceTree)
-                ? context.SemanticModel
-                : context.Compilation.GetSemanticModel(location.SourceTree);
-        foreach (ISymbol symbol in semanticModel.LookupNamespacesAndTypes(position, name: named.Name))
+
+        // Issue #3805: for a LINKED source, ask every linking project's
+        // semantic model — the same lexical position, its own parse of the
+        // file — so the answer does not depend on which project is being
+        // translated. A location in some OTHER file is only the current
+        // compilation's business.
+        foreach (SemanticModel semanticModel in this.LinkedDocumentModels(context, location.SourceTree))
         {
-            if (symbol is INamedTypeSymbol candidate
-                && candidate.Arity == named.Arity
-                && candidate.ContainingType != null
-                && candidate.Locations.Any(candidateLocation => candidateLocation.IsInSource)
-                && !SymbolEqualityComparer.Default.Equals(
-                    candidate.OriginalDefinition,
-                    named.OriginalDefinition))
+            foreach (ISymbol symbol in semanticModel.LookupNamespacesAndTypes(position, name: named.Name))
             {
-                return true;
+                if (symbol is INamedTypeSymbol candidate
+                    && candidate.Arity == named.Arity
+                    && candidate.ContainingType != null
+                    && candidate.Locations.Any(candidateLocation => candidateLocation.IsInSource)
+                    && candidate.OriginalDefinition.ToDisplayString()
+                        != named.OriginalDefinition.ToDisplayString())
+                {
+                    return true;
+                }
             }
         }
 
@@ -1904,48 +2010,90 @@ public sealed class CSharpTypeMapper
     {
         foreach (string namespaceName in this.GetImportedNamespaceNames(context))
         {
-            INamespaceSymbol candidateNamespace = ResolveNamespace(context.Compilation, namespaceName);
-            if (candidateNamespace is null)
+            // Issue #3805: for a LINKED source this scans every compilation
+            // that compiles the file, not just the one being translated. The
+            // mirror writes ONE .gs per source file, so the spelling chosen
+            // here has to bind in every project that links it — and a rival
+            // same-named type may sit in the reference set of only some of
+            // them (`GSharp.LanguageServer.Protocol.Diagnostic` is visible to
+            // test/Interpreter.Tests, which references the Repl, but not to
+            // test/Compiler.Tests, which does not). Answering per-project made
+            // test/Shared/EmittedOracle.cs translate two different ways and
+            // fail the linked-source cross-check; answering over the union is
+            // order-independent and safe in all of them.
+            foreach (CSharpCompilation compilation in this.LinkedDocumentCompilations(context))
+            {
+                if (this.HasImportedNamespaceHomonym(named, compilation, namespaceName))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3805: the single-compilation half of <see
+    /// cref="HasImportedNamespaceHomonym(INamedTypeSymbol, TranslationContext)"/>
+    /// — whether <paramref name="compilation"/> declares a DIFFERENT type of
+    /// <paramref name="named"/>'s simple name in <paramref
+    /// name="namespaceName"/>.
+    /// </summary>
+    /// <param name="named">The type whose bare name is being considered.</param>
+    /// <param name="compilation">The compilation to resolve the namespace in.</param>
+    /// <param name="namespaceName">An imported namespace name.</param>
+    /// <returns><see langword="true"/> when a rival type of the same name and arity lives there.</returns>
+    private bool HasImportedNamespaceHomonym(
+        INamedTypeSymbol named,
+        CSharpCompilation compilation,
+        string namespaceName)
+    {
+        INamespaceSymbol candidateNamespace = ResolveNamespace(compilation, namespaceName);
+        if (candidateNamespace is null)
+        {
+            return false;
+        }
+
+        // `named` may be a CONSTRUCTED generic (e.g. `Box<Label>`), while
+        // `GetTypeMembers` always yields the unbound generic definition
+        // (`Box<T>`). Comparing them directly makes every reference to a
+        // constructed generic type look like a homonym of itself — compare
+        // original definitions so `Box<Label>` correctly matches `Box<T>`.
+        // Symbol identity only answers WITHIN one compilation; across the
+        // linked-document set the namespace comparison below carries that
+        // weight (the same type reached from two compilations has the same
+        // containing namespace).
+        foreach (INamedTypeSymbol candidate in candidateNamespace.GetTypeMembers(named.Name))
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, named.OriginalDefinition))
             {
                 continue;
             }
 
-            // `named` may be a CONSTRUCTED generic (e.g. `Box<Label>`), while
-            // `GetTypeMembers` always yields the unbound generic definition
-            // (`Box<T>`). Comparing them directly makes every reference to a
-            // constructed generic type look like a homonym of itself — compare
-            // original definitions so `Box<Label>` correctly matches `Box<T>`.
-            foreach (INamedTypeSymbol candidate in candidateNamespace.GetTypeMembers(named.Name))
+            // Issue #3554 follow-up: an arity-differing pair
+            // (System.Collections.IEnumerator vs
+            // System.Collections.Generic.IEnumerator<T>) is not a G#
+            // ambiguity — gsc disambiguates a bare name by its type-argument
+            // count, exactly like the same-namespace
+            // IComparable/IComparable<T> case filtered below.
+            if (candidate.Arity != named.Arity)
             {
-                if (SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, named.OriginalDefinition))
-                {
-                    continue;
-                }
-
-                // Issue #3554 follow-up: an arity-differing pair
-                // (System.Collections.IEnumerator vs
-                // System.Collections.Generic.IEnumerator<T>) is not a G#
-                // ambiguity — gsc disambiguates a bare name by its type-argument
-                // count, exactly like the same-namespace
-                // IComparable/IComparable<T> case filtered below.
-                if (candidate.Arity != named.Arity)
-                {
-                    continue;
-                }
-
-                // Types in the same namespace/package are not an import
-                // collision. This also filters facade/implementation symbols
-                // for the same forwarded metadata type, and same-namespace
-                // generic-arity overloads such as IComparable/IComparable<T>
-                // that the type arguments already disambiguate.
-                if (candidate.ContainingNamespace?.ToDisplayString()
-                    == named.ContainingNamespace?.ToDisplayString())
-                {
-                    continue;
-                }
-
-                return true;
+                continue;
             }
+
+            // Types in the same namespace/package are not an import
+            // collision. This also filters facade/implementation symbols
+            // for the same forwarded metadata type, and same-namespace
+            // generic-arity overloads such as IComparable/IComparable<T>
+            // that the type arguments already disambiguate.
+            if (candidate.ContainingNamespace?.ToDisplayString()
+                == named.ContainingNamespace?.ToDisplayString())
+            {
+                continue;
+            }
+
+            return true;
         }
 
         return false;
@@ -1992,8 +2140,33 @@ public sealed class CSharpTypeMapper
             return this.importedNamespaceNames;
         }
 
+        // Issue #3805: a LINKED source is bound once per linking project, and
+        // an inferred type (a lambda parameter, `var`) can name a namespace in
+        // one project's binding that another project never sees. The import
+        // set is therefore the UNION over the linking projects, so the
+        // ambiguity answer — and the emitted spelling — is the same in all of
+        // them.
         var names = new HashSet<string>();
-        if (context.SemanticModel.SyntaxTree.GetRoot() is CompilationUnitSyntax root)
+        foreach (SemanticModel model in this.LinkedDocumentModels(context))
+        {
+            CollectImportedNamespaceNames(model, names);
+        }
+
+        this.importedNamespaceNames = names;
+        return names;
+    }
+
+    /// <summary>
+    /// Issue #2222: adds the namespace names in scope for <paramref
+    /// name="semanticModel"/>'s file to <paramref name="names"/>. Split out of
+    /// <see cref="GetImportedNamespaceNames"/> for issue #3805 so a linked
+    /// source can union the answer over every project that compiles it.
+    /// </summary>
+    /// <param name="semanticModel">One project's semantic model for the file.</param>
+    /// <param name="names">The namespace-name set to add to.</param>
+    private static void CollectImportedNamespaceNames(SemanticModel semanticModel, HashSet<string> names)
+    {
+        if (semanticModel.SyntaxTree.GetRoot() is CompilationUnitSyntax root)
         {
             IEnumerable<UsingDirectiveSyntax> usings = root.Usings
                 .Concat(root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().SelectMany(n => n.Usings));
@@ -2037,7 +2210,7 @@ public sealed class CSharpTypeMapper
                 {
                     foreach (ParameterSyntax parameter in EnumerateLambdaParameters(lambda))
                     {
-                        if (context.SemanticModel.GetDeclaredSymbol(parameter) is IParameterSymbol { Type: { } parameterType })
+                        if (semanticModel.GetDeclaredSymbol(parameter) is IParameterSymbol { Type: { } parameterType })
                         {
                             AddReferencedNamespaces(parameterType, names);
                         }
@@ -2051,7 +2224,7 @@ public sealed class CSharpTypeMapper
                     continue;
                 }
 
-                if (context.SemanticModel.GetSymbolInfo(node).Symbol is not INamedTypeSymbol candidate)
+                if (semanticModel.GetSymbolInfo(node).Symbol is not INamedTypeSymbol candidate)
                 {
                     continue;
                 }
@@ -2068,10 +2241,132 @@ public sealed class CSharpTypeMapper
                 }
             }
         }
-
-        this.importedNamespaceNames = names;
-        return names;
     }
+
+    /// <summary>
+    /// Issue #3805: one semantic model of the file being translated per
+    /// repository compilation that COMPILES it — normally just the context's
+    /// own, but a LINKED source (<c>test/Shared/*.cs</c>, compiled into
+    /// several projects) yields one per linking project.
+    /// <para>
+    /// The repository mirror writes ONE <c>.gs</c> per source file and
+    /// cross-checks that every project translates a linked file identically,
+    /// so any decision that can differ between those projects has to be
+    /// answered over the WHOLE set, converged and order-independent — the same
+    /// rule the shared-document nullability taint already follows (issue
+    /// #3501). Trees are matched by file path because each compilation parses
+    /// the linked file into its own <see cref="SyntaxTree"/> instance.
+    /// </para>
+    /// </summary>
+    /// <param name="context">The translation context.</param>
+    /// <returns>The semantic models, the context's own first.</returns>
+    private IReadOnlyList<SemanticModel> LinkedDocumentModels(TranslationContext context)
+        => this.LinkedDocumentModels(context, context.SemanticModel.SyntaxTree);
+
+    /// <summary>
+    /// Issue #3805: <see cref="LinkedDocumentModels(TranslationContext)"/> for
+    /// a specific tree — a type reference's location is not always in the
+    /// document the context currently points at.
+    /// </summary>
+    /// <param name="context">The translation context.</param>
+    /// <param name="tree">The tree to find linking projects for.</param>
+    /// <returns>The semantic models, this compilation's own first.</returns>
+    private IReadOnlyList<SemanticModel> LinkedDocumentModels(TranslationContext context, SyntaxTree tree)
+    {
+        this.linkedDocumentModels ??= new Dictionary<SyntaxTree, IReadOnlyList<SemanticModel>>();
+        if (this.linkedDocumentModels.TryGetValue(tree, out IReadOnlyList<SemanticModel> cached))
+        {
+            return cached;
+        }
+
+        var models = new List<SemanticModel>
+        {
+            ReferenceEquals(context.SemanticModel.SyntaxTree, tree)
+                ? context.SemanticModel
+                : context.Compilation.GetSemanticModel(tree),
+        };
+        string path = tree.FilePath;
+        if (!string.IsNullOrEmpty(path)
+            && context.RepositoryCompilations is { Count: > 1 } repository
+            && LinkedDocumentIndex(repository).TryGetValue(path, out List<(CSharpCompilation Compilation, SyntaxTree Tree)> linking))
+        {
+            // The same path is not automatically the same FILE: a project can
+            // feed a generated document, or a differently-preprocessed parse,
+            // through a path another project also uses. Only an identical
+            // parse is the same linked source, and only identical text keeps
+            // the position-based lookups below meaningful across compilations.
+            Microsoft.CodeAnalysis.Text.SourceText text = tree.GetText();
+            foreach ((CSharpCompilation compilation, SyntaxTree linkedTree) in linking)
+            {
+                if (!ReferenceEquals(linkedTree, tree)
+                    && !ReferenceEquals(compilation, context.Compilation)
+                    && linkedTree.GetText().ContentEquals(text))
+                {
+                    models.Add(compilation.GetSemanticModel(linkedTree));
+                }
+            }
+        }
+
+        this.linkedDocumentModels[tree] = models;
+        return models;
+    }
+
+    /// <summary>
+    /// Issue #3805: the repository's linked sources — every file path parsed
+    /// by MORE THAN ONE repository compilation, with the compilations (and
+    /// their own parse of the file) that share it. Ordinary files are absent,
+    /// which is what keeps the union lookup free for them.
+    /// <para>
+    /// Built once per repository compilation set rather than once per
+    /// translated document: the index is a whole-run property, and one mapper
+    /// exists per file.
+    /// </para>
+    /// </summary>
+    /// <param name="repository">The run's repository compilations.</param>
+    /// <returns>The linked-source index, keyed by file path.</returns>
+    private static Dictionary<string, List<(CSharpCompilation Compilation, SyntaxTree Tree)>> LinkedDocumentIndex(
+        IReadOnlyList<CSharpCompilation> repository)
+        => LinkedDocumentIndexes.GetValue(repository, static key => BuildLinkedDocumentIndex((IReadOnlyList<CSharpCompilation>)key));
+
+    private static Dictionary<string, List<(CSharpCompilation Compilation, SyntaxTree Tree)>> BuildLinkedDocumentIndex(
+        IReadOnlyList<CSharpCompilation> repository)
+    {
+        var byPath = new Dictionary<string, List<(CSharpCompilation Compilation, SyntaxTree Tree)>>(
+            System.StringComparer.OrdinalIgnoreCase);
+        foreach (CSharpCompilation compilation in repository)
+        {
+            foreach (SyntaxTree tree in compilation.SyntaxTrees)
+            {
+                if (string.IsNullOrEmpty(tree.FilePath))
+                {
+                    continue;
+                }
+
+                if (!byPath.TryGetValue(tree.FilePath, out List<(CSharpCompilation, SyntaxTree)> linking))
+                {
+                    linking = new List<(CSharpCompilation, SyntaxTree)>();
+                    byPath[tree.FilePath] = linking;
+                }
+
+                linking.Add((compilation, tree));
+            }
+        }
+
+        foreach (string path in byPath.Where(entry => entry.Value.Count < 2).Select(entry => entry.Key).ToList())
+        {
+            byPath.Remove(path);
+        }
+
+        return byPath;
+    }
+
+    /// <summary>
+    /// Issue #3805: the compilations behind <see cref="LinkedDocumentModels(TranslationContext)"/>.
+    /// </summary>
+    /// <param name="context">The translation context.</param>
+    /// <returns>The compilations that compile the file being translated.</returns>
+    private IEnumerable<CSharpCompilation> LinkedDocumentCompilations(TranslationContext context)
+        => this.LinkedDocumentModels(context).Select(model => (CSharpCompilation)model.Compilation);
 
     /// <summary>
     /// Issue #3725: the parameters an anonymous function declares, whatever
@@ -2172,40 +2467,40 @@ public sealed class CSharpTypeMapper
         return current;
     }
 
-    private static Dictionary<string, int> BuildSourceTopLevelSimpleNameCounts(Compilation compilation)
+    /// <summary>
+    /// Issue #1174/#3805: <paramref name="compilation"/>'s source-declared
+    /// type names, simple name to the set of full names declared under it.
+    /// Recording full names rather than a count (the pre-#3805 shape) is what
+    /// lets a linked source ask the same question of several compilations: a
+    /// type is identified by what it IS, not by how many entries a particular
+    /// compilation contributed.
+    /// </summary>
+    /// <param name="compilation">The compilation to census.</param>
+    /// <param name="nested">Census nested declarations instead of top-level ones.</param>
+    /// <returns>Simple name to the full names declared under it.</returns>
+    private static Dictionary<string, HashSet<string>> BuildSourceSimpleNames(
+        Compilation compilation,
+        bool nested)
     {
-        var counts = new Dictionary<string, int>();
-        foreach (var type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
-        {
-            if (type.ContainingType != null
-                || !type.Locations.Any(l => l.IsInSource))
-            {
-                continue;
-            }
-
-            counts.TryGetValue(type.Name, out var existing);
-            counts[type.Name] = existing + 1;
-        }
-
-        return counts;
-    }
-
-    private static Dictionary<string, int> BuildSourceNestedSimpleNameCounts(Compilation compilation)
-    {
-        var counts = new Dictionary<string, int>();
+        var names = new Dictionary<string, HashSet<string>>();
         foreach (INamedTypeSymbol type in EnumerateAllNamedTypes(compilation.GlobalNamespace))
         {
-            if (type.ContainingType == null
+            if ((type.ContainingType != null) != nested
                 || !type.Locations.Any(location => location.IsInSource))
             {
                 continue;
             }
 
-            counts.TryGetValue(type.Name, out int existing);
-            counts[type.Name] = existing + 1;
+            if (!names.TryGetValue(type.Name, out HashSet<string> declarations))
+            {
+                declarations = new HashSet<string>(System.StringComparer.Ordinal);
+                names[type.Name] = declarations;
+            }
+
+            declarations.Add(type.OriginalDefinition.ToDisplayString());
         }
 
-        return counts;
+        return names;
     }
 
     private static HashSet<string> BuildSourceDeclaredTypeNames(
