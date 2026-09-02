@@ -188,10 +188,19 @@ public class Issue2891TryRegionFlowEmitTests
             }
             public var result = F(false) + F(true)
             """);
+        // `Origin` carries a loop purely so the JIT will not inline it:
+        // the assertion below reads its frame out of the rethrown stack
+        // trace, and an inlined frame simply is not there. Code loaded into
+        // a collectible context is jitted with full optimizations from the
+        // start, so a one-line thrower would vanish (issue #3828).
         yield return Case("RethrowPreservesOriginStack", 7, """
             import System
             func Origin() {
-                throw Exception("origin")
+                var pad = 0
+                for var i = 0; i < 3; i++ {
+                    pad += i
+                }
+                throw Exception("origin" + pad.ToString())
             }
             func F(replace bool) int32 {
                 try {
