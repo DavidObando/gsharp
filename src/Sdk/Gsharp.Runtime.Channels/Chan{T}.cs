@@ -30,11 +30,9 @@ namespace Gsharp.Concurrency;
 /// with a non-null error is rejected. Close is the only completion it has.</para>
 /// </remarks>
 /// <typeparam name="T">The element type.</typeparam>
-public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, IDisposable
+public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectableCore<T>, IDisposable
 {
     private const int UnboundedInitialCapacity = 16;
-
-    private static long nextId;
 
     private readonly object gate = new();
     private readonly WaiterQueue<T> receivers = new();
@@ -77,7 +75,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, IDisposable
             buffer = new T[capacity];
         }
 
-        Id = Interlocked.Increment(ref nextId);
+        Id = SelectOrder.Next();
         Reader = new ChanReader(this);
         Writer = new ChanWriter(this);
     }
@@ -94,6 +92,12 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, IDisposable
 
     /// <summary>Gets a value indicating whether the channel has been closed (a snapshot).</summary>
     public bool IsClosed => Volatile.Read(ref closed);
+
+    /// <summary>Gets the lock a <c>select</c> must hold to probe and register atomically (ADR-0174 D8).</summary>
+    object ISelectableCore<T>.SelectGate => gate;
+
+    /// <summary>Gets the total-order key a <c>select</c> sorts gates by before acquiring them.</summary>
+    long ISelectableCore<T>.SelectOrder => Id;
 
     /// <summary>Gets the total order key used when a <c>select</c> locks several channels (ADR-0174 D8 step 6).</summary>
     internal long Id { get; }
@@ -272,6 +276,37 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, IDisposable
 
     /// <summary>Closes the channel if it is not already closed. Idempotent, unlike <see cref="Close"/>, so <c>using let</c> is safe.</summary>
     public void Dispose() => TryClose();
+
+    /// <inheritdoc/>
+    bool ISelectableCore<T>.TryReceiveLocked(out T value, out bool ok, ref Completions completions)
+        => TryReceiveLocked(out value, out ok, ref completions);
+
+    /// <inheritdoc/>
+    void ISelectableCore<T>.RegisterReceiveLocked(SelectNode<T> node) => receivers.Enqueue(node);
+
+    /// <inheritdoc/>
+    bool ISendSelectableCore<T>.TrySendLocked(T value, ref Completions completions)
+    {
+        var outcome = TrySendLocked(value, ref completions);
+        if (outcome == SendOutcome.Closed)
+        {
+            throw new ChannelClosedException("send on closed channel");
+        }
+
+        return outcome == SendOutcome.Sent;
+    }
+
+    /// <inheritdoc/>
+    void ISendSelectableCore<T>.RegisterSendLocked(SelectNode<T> node) => senders.Enqueue(node);
+
+    /// <inheritdoc/>
+    void ISelectableCore<T>.Deregister(SelectNode<T> node)
+    {
+        lock (gate)
+        {
+            node.Queue?.Remove(node);
+        }
+    }
 
     /// <summary>Called by a cancellation callback: fails the node if it is still parked, otherwise a no-op (the transfer won).</summary>
     /// <param name="node">The parked node.</param>
@@ -511,35 +546,4 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, IDisposable
 
     private OpSendNode<T> RentSendNode()
         => Interlocked.Exchange(ref sendNodePool, null) ?? new OpSendNode<T>(this);
-
-    /// <summary>Nodes claimed under the lock whose continuations fire after it is released.</summary>
-    private struct Completions
-    {
-        private WaiterNode<T>? first;
-        private List<WaiterNode<T>>? rest;
-
-        public void Add(WaiterNode<T> node)
-        {
-            if (first is null)
-            {
-                first = node;
-                return;
-            }
-
-            rest ??= new List<WaiterNode<T>>();
-            rest.Add(node);
-        }
-
-        public void Publish()
-        {
-            first?.Publish();
-            if (rest is not null)
-            {
-                foreach (var node in rest)
-                {
-                    node.Publish();
-                }
-            }
-        }
-    }
 }

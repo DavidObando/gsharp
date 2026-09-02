@@ -9,10 +9,10 @@ namespace Gsharp.Concurrency;
 /// Nodes are intrusive doubly-linked so loser deregistration is O(1). A
 /// counterpart arriving at the channel pops the head node under the channel
 /// lock and asks it to commit the transfer; the node's continuation is fired
-/// by <see cref="Publish"/> only after the lock has been released.
+/// by <see cref="WaiterNodeBase.Publish"/> only after the lock has been released.
 /// </summary>
 /// <typeparam name="T">The channel element type.</typeparam>
-internal abstract class WaiterNode<T>
+internal abstract class WaiterNode<T> : WaiterNodeBase
 {
     /// <summary>Gets or sets the previous node in the owning queue.</summary>
     internal WaiterNode<T>? Prev { get; set; }
@@ -58,9 +58,6 @@ internal abstract class WaiterNode<T>
     /// <param name="exception">The cancellation to surface.</param>
     /// <returns>True when the node transitioned to cancelled.</returns>
     internal abstract bool TryCancel(OperationCanceledException exception);
-
-    /// <summary>Fires the node's continuation. Idempotent. Must be called outside the channel lock.</summary>
-    internal abstract void Publish();
 }
 
 /// <summary>
