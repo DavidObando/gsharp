@@ -115,4 +115,24 @@ public sealed class BlockStatementSyntax : StatementSyntax
     /// Gets the close brace token.
     /// </summary>
     public SyntaxToken CloseBraceToken { get; }
+
+    /// <summary>
+    /// Gets the ADR-0175 annotations written immediately before this block's
+    /// <c>{</c> (<c>@SuppressDiagnostic("GSA0005") { … }</c>). Assigned by the
+    /// parser; empty for ordinary blocks.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately excluded from the node's children so the block's span stays
+    /// exactly <c>{</c>..<c>}</c>: that span is the suppression scope, and a
+    /// diagnostic reported on the annotation itself must not be inside it.
+    /// </remarks>
+    [SyntaxChildIgnore]
+    public ImmutableArray<AnnotationSyntax> Annotations { get; private set; } = ImmutableArray<AnnotationSyntax>.Empty;
+
+    /// <summary>Attaches parser-collected annotations to this block.</summary>
+    /// <param name="annotations">The annotations preceding the open brace.</param>
+    internal void WithAnnotations(ImmutableArray<AnnotationSyntax> annotations)
+    {
+        Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
+    }
 }

@@ -1388,6 +1388,11 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         AttachSourceComments(translated, member);
                         this.SanitizeDocParamComments(translated, member);
+
+                        // Issues #3820/#3824, ADR-0175: a `#pragma warning
+                        // disable GSA####` region covering this declaration
+                        // becomes an `@SuppressDiagnostic` annotation on it.
+                        AttachPragmaSuppressions(translated, member);
                         attachedMemberComments = true;
                     }
 
