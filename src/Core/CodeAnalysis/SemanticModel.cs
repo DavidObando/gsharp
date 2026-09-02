@@ -66,7 +66,30 @@ public sealed class SemanticModel
     public BoundNode? GetBoundNode(SyntaxNode node, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return index.Value.BoundBySyntax.TryGetValue(node, out var bound) ? bound : null;
+        if (index.Value.BoundBySyntax.TryGetValue(node, out var bound))
+        {
+            return bound;
+        }
+
+        // A qualified call is split across two syntax nodes in G#: the whole
+        // `Receiver.Callee(args)` is an AccessorExpressionSyntax and the binder
+        // anchors the call there, while `Callee(args)` is a nested
+        // CallExpressionSyntax with no anchor of its own. An unqualified call
+        // has no such split, so without this an analyzer that walks for calls
+        // (the only way to find one -- there is no "invocation" node covering
+        // both shapes) resolves the unqualified ones and silently gets nothing
+        // for the qualified ones. Roslyn has one InvocationExpressionSyntax for
+        // both, so a faithful surface answers for the call node in both shapes.
+        // Miss-only, so a node the binder does anchor keeps its own answer.
+        if (node is CallExpressionSyntax
+            && node.Parent is AccessorExpressionSyntax accessor
+            && ReferenceEquals(accessor.RightPart, node)
+            && index.Value.BoundBySyntax.TryGetValue(accessor, out var qualified))
+        {
+            return qualified;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -110,10 +133,15 @@ public sealed class SemanticModel
 
             // No directly referenced symbol here — unwrap a same-syntax child
             // (e.g. an implicit BoundConversionExpression wrapper) and retry.
+            // "Same syntax" is measured against the bound node's own syntax,
+            // not the queried node: a qualified call is queried through its
+            // nested CallExpressionSyntax while every bound node in the wrapper
+            // chain carries the enclosing AccessorExpressionSyntax.
             BoundNode? sameSyntaxChild = null;
+            var boundSyntax = bound.Syntax ?? node;
             foreach (var getter in accessors.BoundNodeProperties)
             {
-                if (getter(bound) is BoundNode child && ReferenceEquals(child.Syntax, node))
+                if (getter(bound) is BoundNode child && ReferenceEquals(child.Syntax, boundSyntax))
                 {
                     sameSyntaxChild = child;
                     break;

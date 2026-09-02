@@ -84,6 +84,94 @@ func Main() {
         Assert.Null(model.GetBoundNode(declaration.Identifier));
     }
 
+    /// <summary>
+    /// A qualified call and an unqualified call to the same functions, so one
+    /// model answers both shapes. G# splits <c>Form.Wrap(x)</c> across an
+    /// <see cref="AccessorExpressionSyntax"/> (which the binder anchors) and a
+    /// nested <see cref="CallExpressionSyntax"/> (which it does not); Roslyn
+    /// has a single <c>InvocationExpressionSyntax</c> for both shapes, so an
+    /// analyzer that walks for call nodes must get the same answer either way
+    /// (issue #3822).
+    /// </summary>
+    private const string QualifiedCallSource = @"package App
+
+class Form {
+    shared {
+        func Wrap(value int32) int32 {
+            return value + 1
+        }
+
+        func Twice(value int32) int32 {
+            return value * 2
+        }
+    }
+}
+
+func Bare(value int32) int32 {
+    return value
+}
+
+func Use(value int32) int32 {
+    return Form.Twice(Form.Wrap(Bare(value)))
+}
+";
+
+    [Fact]
+    public void GetSymbolInfo_OnTheCallNodeOfAQualifiedCall_ResolvesTheInvokedFunction()
+    {
+        var (model, tree) = CreateModel(QualifiedCallSource);
+
+        foreach (var name in new[] { "Wrap", "Twice", "Bare" })
+        {
+            var call = NodesOfType<CallExpressionSyntax>(tree).Single(c => c.Identifier.Text == name);
+
+            var symbol = model.GetSymbolInfo(call).Symbol;
+
+            // Each call node resolves to its OWN function: the qualified ones
+            // must not collapse onto an enclosing call's symbol.
+            var function = Assert.IsType<FunctionSymbol>(symbol);
+            Assert.Equal(name, function.Name);
+            Assert.NotEmpty(function.DeclaringSyntaxNodes);
+        }
+    }
+
+    [Fact]
+    public void GetTypeInfo_AndGetBoundNode_AgreeOnBothCallShapes()
+    {
+        var (model, tree) = CreateModel(QualifiedCallSource);
+        var qualified = NodesOfType<CallExpressionSyntax>(tree).Single(c => c.Identifier.Text == "Wrap");
+        var unqualified = NodesOfType<CallExpressionSyntax>(tree).Single(c => c.Identifier.Text == "Bare");
+
+        Assert.NotNull(model.GetBoundNode(qualified));
+        Assert.NotNull(model.GetBoundNode(unqualified));
+        Assert.Equal("int32", model.GetTypeInfo(qualified).Type?.Name);
+        Assert.Equal("int32", model.GetTypeInfo(unqualified).Type?.Name);
+
+        // The qualified call node borrows the answer of the accessor that
+        // encloses it, and only of that accessor: the accessor's LEFT part is
+        // a different node and keeps its own (absent) answer.
+        var accessor = NodesOfType<AccessorExpressionSyntax>(tree)
+            .Single(a => ReferenceEquals(a.RightPart, qualified));
+        Assert.Same(model.GetBoundNode(accessor), model.GetBoundNode(qualified));
+        Assert.Null(model.GetBoundNode(accessor.LeftPart));
+    }
+
+    [Fact]
+    public void GetBoundNode_DoesNotInventAnAnswerForUnanchoredNodes()
+    {
+        // The guard rail for the qualified-call fallback: it is miss-only and
+        // shape-specific, so nodes the binder does not anchor stay unanchored.
+        var (model, tree) = CreateModel(QualifiedCallSource);
+
+        foreach (var node in AllNodes(tree).OfType<TypeClauseSyntax>())
+        {
+            Assert.Null(model.GetBoundNode(node));
+        }
+
+        var declaration = NodesOfType<FunctionDeclarationSyntax>(tree).First(f => f.Identifier.Text == "Use");
+        Assert.Null(model.GetBoundNode(declaration.Identifier));
+    }
+
     [Fact]
     public void GetSemanticModel_CachesPerTree_AndRejectsForeignTrees()
     {

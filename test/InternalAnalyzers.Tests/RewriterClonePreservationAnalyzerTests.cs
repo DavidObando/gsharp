@@ -156,6 +156,66 @@ class ViaHelper : BoundTreeRewriter
     }
 
     [Fact]
+    public Task AcceptsReadsReachedThroughAQualifiedStaticHelper()
+    {
+        // The shape the compiler actually uses: Lowering/BoundNodeForm.cs is a
+        // separate static class, so the hop is a QUALIFIED call
+        // (`BoundNodeForm.DeclaringType(node)`), not a bare one. Issue #3822 --
+        // G# splits a qualified call across two syntax nodes and the semantic
+        // model answered for only one of them, so the migrated analyzer
+        // reported five methods Roslyn does not.
+        string source = Model + """
+
+static class Form
+{
+    public static string Discriminator(FieldNode node) => node.InterfaceType;
+}
+
+class ViaQualifiedHelper : BoundTreeRewriter
+{
+    protected override Node RewriteFieldNode(FieldNode node)
+    {
+        var owner = Form.Discriminator(node);
+        return owner != null
+            ? new FieldNode(node.Field, owner, node.Value)
+            : new FieldNode(node.Receiver, node.Field, node.Value);
+    }
+}
+""";
+
+        return AnalyzerTestHelper.AssertDiagnosticsAsync(new RewriterClonePreservationAnalyzer(), source);
+    }
+
+    [Fact]
+    public Task AQualifiedStaticHelperThatReadsSomethingElseStillReports()
+    {
+        // The negative's twin, on the same FollowHelper path: the qualified
+        // helper resolves and is followed, but it reads Field rather than the
+        // discriminator, so the drop is still reported. An analyzer that
+        // silenced the qualified-helper shape wholesale -- or that stopped
+        // resolving qualified calls again -- fails here rather than passing
+        // quietly.
+        string source = Model + """
+
+static class OtherForm
+{
+    public static string Label(FieldNode node) => node.Field;
+}
+
+class ViaWrongQualifiedHelper : BoundTreeRewriter
+{
+    protected override Node [|RewriteFieldNode|](FieldNode node)
+    {
+        var label = OtherForm.Label(node);
+        return new FieldNode(node.Receiver, label, node.Value);
+    }
+}
+""";
+
+        return AnalyzerTestHelper.AssertDiagnosticsAsync(new RewriterClonePreservationAnalyzer(), source, "GSA0005");
+    }
+
+    [Fact]
     public Task AcceptsReadsThroughTheRewrittenBaseResult()
     {
         // `var rewritten = (T)base.RewriteX(node);` makes `rewritten` the node's
