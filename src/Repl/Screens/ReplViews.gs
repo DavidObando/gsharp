@@ -7,6 +7,7 @@ import GSharp.Repl.Themes
 
 import System
 import System.Collections.Generic
+import System.Text
 
 public class EditorLineSource : RichLineSource {
   private let lines List[string]
@@ -107,6 +108,7 @@ public class TranscriptSource : VirtualListSource {
   private let engine ISessionEngine
   private let collapsed HashSet[int32]
   private let analyses Dictionary[int32, EditorAnalysis]
+  private let rendered Dictionary[string, List[List[TextRun]]]
   private var palette ReplPalette
   private var showTree bool
   private var showIl bool
@@ -117,6 +119,7 @@ public class TranscriptSource : VirtualListSource {
     this.palette = palette
     collapsed = HashSet[int32]()
     analyses = Dictionary[int32, EditorAnalysis]()
+    rendered = Dictionary[string, List[List[TextRun]]]()
     showTree = false
     showIl = false
     ascii = false
@@ -124,24 +127,43 @@ public class TranscriptSource : VirtualListSource {
 
   public prop ShowTree bool{
     get -> showTree
-    set -> showTree = value
+    set {
+      if showTree != value {
+        showTree = value
+        rendered.Clear()
+      }
+    }
   }
 
   public prop ShowIl bool{
     get -> showIl
-    set -> showIl = value
+    set {
+      if showIl != value {
+        showIl = value
+        rendered.Clear()
+      }
+    }
   }
 
   public prop Ascii bool{
     get -> ascii
-    set -> ascii = value
+    set {
+      if ascii != value {
+        ascii = value
+        rendered.Clear()
+      }
+    }
   }
 
-  public func UsePalette(value ReplPalette) { palette = value }
+  public func UsePalette(value ReplPalette) {
+    palette = value
+    rendered.Clear()
+  }
 
   public func Reset() {
     collapsed.Clear()
     analyses.Clear()
+    rendered.Clear()
   }
 
   public func Count() int32 -> engine.Cells.Count
@@ -161,22 +183,20 @@ public class TranscriptSource : VirtualListSource {
 
   public func IsSelectable(index int32) bool -> true
 
-  public func HeightAt(index int32, width int32) int32 {
-    if collapsed.Contains(engine.Cells[index].Index) { return 2 }
-    return Lines(engine.Cells[index]).Count + 1
-  }
+  public func HeightAt(index int32, width int32) int32 -> Lines(engine.Cells[index], width).Count + 1
 
   public func Toggle(index int32) {
     if index < 0 || index >= engine.Cells.Count { return }
     let id = engine.Cells[index].Index
     if collapsed.Contains(id) { collapsed.Remove(id) }
     else { collapsed.Add(id) }
+    rendered.Clear()
   }
 
   public func Render(index int32, screen Screen, bounds CellRect, clipBounds CellRect,
     style Style, state VirtualListItemState) {
       screen.Fill(clipBounds, style)
-      let lines = Lines(engine.Cells[index])
+      let lines = Lines(engine.Cells[index], bounds.WidthCells)
       var row = 0
       while row < lines.Count {
         let y = bounds.Row + row
@@ -187,7 +207,12 @@ public class TranscriptSource : VirtualListSource {
       }
     }
 
-  private func Lines(cell Cell) List[List[TextRun]] {
+  private func Lines(cell Cell, width int32) List[List[TextRun]] {
+    let available = Math.Max(1, width)
+    let options = showTree.ToString() + ":" + showIl.ToString() + ":" + ascii.ToString()
+    let key = cell.Index.ToString() + ":" + available.ToString() + ":" + options + ":" + palette.Name
+    var existing List[List[TextRun]]
+    if rendered.TryGetValue(key, out existing) { return existing }
     let result = List[List[TextRun]]()
     let isCollapsed = collapsed.Contains(cell.Index)
     let fold = isCollapsed
@@ -208,7 +233,11 @@ public class TranscriptSource : VirtualListSource {
         runs.Add(TextRun(run.Text, Style{ Foreground: run.Style.Foreground }))
       }
       result.Add(runs)
-      if isCollapsed { return result }
+      if isCollapsed {
+        let wrapped = Wrap(result, available)
+        rendered.Add(key, wrapped)
+        return wrapped
+      }
       inputIndex = inputIndex + 1
     }
 
@@ -230,7 +259,47 @@ public class TranscriptSource : VirtualListSource {
       AddLine(result, "     intermediate language", palette.Accent)
       AddOutput(result, cell.IntermediateLanguage != "" ? cell.IntermediateLanguage : "IL capture was not enabled for this cell.", palette.Faint)
     }
-    return result
+    let wrapped = Wrap(result, available)
+    rendered.Add(key, wrapped)
+    return wrapped
+  }
+
+  private func Wrap(lines List[List[TextRun]], width int32) List[List[TextRun]] {
+    let wrapped = List[List[TextRun]]()
+    let available = Math.Max(1, width)
+    for line in lines {
+      var row = List[TextRun]()
+      var used = 0
+      for run in line {
+        let piece = StringBuilder()
+        for grapheme in CellText.Graphemes(run.Text) {
+          let measured = Math.Max(1, CellText.MeasureWidth(grapheme))
+          if used > 0 && used + measured > available {
+            AddPiece(row, piece, run)
+            wrapped.Add(row)
+            row = List[TextRun]()
+            used = 0
+          }
+          piece.Append(grapheme)
+          used = used + measured
+          if used >= available {
+            AddPiece(row, piece, run)
+            wrapped.Add(row)
+            row = List[TextRun]()
+            used = 0
+          }
+        }
+        AddPiece(row, piece, run)
+      }
+      if row.Count > 0 || line.Count == 0 { wrapped.Add(row) }
+    }
+    return wrapped
+  }
+
+  private func AddPiece(row List[TextRun], piece StringBuilder, run TextRun) {
+    if piece.Length == 0 { return }
+    row.Add(TextRun(piece.ToString(), run.Style, run.Hyperlink))
+    piece.Clear()
   }
 
   private func AnalysisFor(cell Cell) EditorAnalysis {

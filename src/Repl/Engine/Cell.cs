@@ -22,8 +22,8 @@ public sealed record Cell(
     string SyntaxTree = "",
     string IntermediateLanguage = "");
 
-/// <summary>A single entry in the REPL state sidebar, rendered via the shared <c>SymbolDisplay</c> service.</summary>
-public sealed record ReplSymbol(string Display);
+/// <summary>A structured entry in the accumulated REPL session state.</summary>
+public sealed record ReplSymbol(string Kind, string Name, string Detail, string Value, string Display);
 
 /// <summary>Snapshot of the accumulated REPL session: imports, functions, variables, and user types.</summary>
 public sealed record ReplState(

@@ -44,6 +44,8 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
     private readonly IReadOnlyList<string> userReferences;
     private readonly InteractiveSessionHost host;
     private readonly string submissionsDirectory;
+    private ReferenceResolver? analysisResolver;
+    private int analysisSubmissionCount = -1;
     private int submissionCounter;
 
     /// <summary>
@@ -79,6 +81,38 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         => Task.Run(() => EvaluateCore(text, cancellationToken));
 
     /// <inheritdoc/>
+    public EditorAnalysis AnalyzeEditor(string text)
+    {
+        if (text.Length == 0)
+        {
+            return EditorAnalysis.Empty;
+        }
+
+        var baseline = AnalysisBridge.AnalyzeTokens(text);
+        try
+        {
+            var tree = SyntaxTree.Parse(SourceText.From(text, string.Empty));
+            var compilation = new Compilation(GetAnalysisResolver(), tree)
+            {
+                Submission = new SubmissionBindingOptions
+                {
+                    Imports = SubmissionImports.Create(
+                        submissions.Select(s => new SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)).ToImmutableArray()),
+                    DefaultPackageName = "gsi$analysis",
+                    ReplayImports = sessionImports.ToImmutableArray(),
+                    CaptureTrailingExpression = false,
+                },
+            };
+            var diagnostics = tree.Diagnostics.Concat(compilation.GlobalScope.Diagnostics).Concat(compilation.BoundProgram.Diagnostics);
+            return AnalysisBridge.WithDiagnostics(baseline, diagnostics, tree.Text);
+        }
+        catch
+        {
+            return baseline;
+        }
+    }
+
+    /// <inheritdoc/>
     public ReplState Snapshot()
     {
         if (submissions.Count == 0)
@@ -106,7 +140,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 {
                     if (seenImports.Add(import.Name))
                     {
-                        imports.Add(new ReplSymbol(Display(import, submission)));
+                        imports.Add(Describe("import", import, submission));
                     }
                 }
 
@@ -117,7 +151,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                         continue;
                     }
 
-                    functions.Add(new ReplSymbol(Display(fn, submission)));
+                    functions.Add(Describe("func", fn, submission));
                 }
 
                 foreach (var v in scope.Variables)
@@ -129,26 +163,18 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                         continue;
                     }
 
-                    var display = Display(v, submission);
                     var value = host.ReadStaticField(
                         submission.RuntimeAssembly,
                         submission.PackageName + "." + SubmissionImports.ProgramTypeName,
                         v.Name);
-                    if (value is not null)
-                    {
-                        // ADR-0157: display-side pretty rendering for the
-                        // sidebar values column, same contract as the echo.
-                        display += $" = {Truncate(ReplValueFormatter.Format(value), 20)}";
-                    }
-
-                    vars.Add(new ReplSymbol(display));
+                    vars.Add(Describe(v.IsReadOnly ? "let" : "var", v, submission, Truncate(ReplValueFormatter.Format(value), 20)));
                 }
 
                 foreach (var s in scope.Structs)
                 {
                     if (seenTypes.Add(s.Name))
                     {
-                        types.Add(new ReplSymbol(Display(s, submission)));
+                        types.Add(Describe("struct", s, submission));
                     }
                 }
 
@@ -156,7 +182,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 {
                     if (seenTypes.Add(i.Name))
                     {
-                        types.Add(new ReplSymbol(Display(i, submission)));
+                        types.Add(Describe("interface", i, submission));
                     }
                 }
 
@@ -164,7 +190,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 {
                     if (seenTypes.Add(e.Name))
                     {
-                        types.Add(new ReplSymbol(Display(e, submission)));
+                        types.Add(Describe("enum", e, submission));
                     }
                 }
 
@@ -172,7 +198,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 {
                     if (seenTypes.Add(d.Name))
                     {
-                        types.Add(new ReplSymbol(Display(d, submission)));
+                        types.Add(Describe("delegate", d, submission));
                     }
                 }
             }
@@ -238,6 +264,30 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
 
     private string Display(Symbol symbol, SubmissionState submission)
         => SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature, submission.Compilation);
+
+    private ReplSymbol Describe(string kind, Symbol symbol, SubmissionState submission, string value = "")
+    {
+        var display = Display(symbol, submission);
+        return new ReplSymbol(kind, symbol.Name, display, value, display + (value.Length == 0 ? string.Empty : " = " + value));
+    }
+
+    private ReferenceResolver GetAnalysisResolver()
+    {
+        if (analysisResolver is not null && analysisSubmissionCount == submissions.Count)
+        {
+            return analysisResolver;
+        }
+
+        if (analysisResolver is not null)
+        {
+            discardedResolvers.Add(analysisResolver);
+        }
+
+        var paths = submissions.Select(s => s.DllPath).Concat(userReferences).ToArray();
+        analysisResolver = paths.Length > 0 ? ReferenceResolver.WithReferences(paths) : ReferenceResolver.Default();
+        analysisSubmissionCount = submissions.Count;
+        return analysisResolver;
+    }
 
     private Cell EvaluateCore(string text, CancellationToken cancellationToken)
     {
@@ -407,6 +457,13 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
 
     private void ReleaseCompilations()
     {
+        if (analysisResolver is not null)
+        {
+            analysisResolver.Dispose();
+            analysisResolver = null;
+            analysisSubmissionCount = -1;
+        }
+
         foreach (var submission in submissions)
         {
             TryDeleteFile(submission.DllPath);

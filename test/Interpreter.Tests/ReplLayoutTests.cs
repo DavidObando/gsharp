@@ -95,6 +95,51 @@ public sealed class ReplLayoutTests
     }
 
     [Fact]
+    public void SessionSymbolsDriveCompletionHoverAndStructuredRows()
+    {
+        using var engine = new EmittedSessionEngine();
+        engine.Evaluate("import System.Text\nfunc Greet() string { return \"hi\" }\nlet answer = 123\nlet empty string? = nil\nstruct Thing {}");
+        var state = engine.Snapshot();
+
+        Assert.Contains(state.Imports, symbol => symbol.Name == "System.Text" && symbol.Kind == "import");
+        Assert.Contains(state.Functions, symbol => symbol.Name == "Greet" && symbol.Kind == "func");
+        Assert.Contains(state.Variables, symbol => symbol.Name == "answer" && symbol.Value == "123");
+        Assert.Contains(state.Variables, symbol => symbol.Name == "empty" && symbol.Value == "nil");
+        Assert.Contains(state.Types, symbol => symbol.Name == "Thing" && symbol.Kind == "struct");
+        Assert.Contains(AnalysisBridge.Completions("ans", 0, 3, state), item => item.Label == "answer");
+        Assert.Contains("answer", AnalysisBridge.Hover("answer", 0, 3, state), StringComparison.Ordinal);
+        Assert.Empty(engine.AnalyzeEditor("answer + 1").Diagnostics);
+        Assert.NotEmpty(engine.AnalyzeEditor("missingName + 1").Diagnostics);
+
+        var (root, driver) = Create(engine, 120, 32);
+        Control(driver, "3");
+        Assert.Equal(2, root.ActiveTab);
+        driver.Draw();
+        var frame = driver.FrameText();
+        Assert.Contains("session symbols", frame, StringComparison.Ordinal);
+        Assert.Contains("Greet", frame, StringComparison.Ordinal);
+        Assert.Contains("answer", frame, StringComparison.Ordinal);
+        Assert.Contains("Thing", frame, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EditorUsesAppClipboardAndTicksOnlyForActiveWork()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 26);
+
+        Assert.Same(driver.App.Clipboard, root.Editor.Clipboard);
+        Assert.Equal(TimeSpan.Zero, driver.App.TickInterval);
+
+        Type(driver, "let value = 1");
+        Assert.NotEqual(TimeSpan.Zero, driver.App.TickInterval);
+        Tick(driver);
+        Tick(driver);
+        Tick(driver);
+        Assert.Equal(TimeSpan.Zero, driver.App.TickInterval);
+    }
+
+    [Fact]
     public void TypeSubmitPumpRendersTranscriptCell()
     {
         using var engine = new EmittedSessionEngine();
@@ -261,16 +306,16 @@ public sealed class ReplLayoutTests
 
         driver.Draw();
         Assert.Contains("[3 Vars]", driver.FrameText(), StringComparison.Ordinal);
-        Assert.Contains("live variables", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("session symbols", driver.FrameText(), StringComparison.Ordinal);
         Assert.Contains("focus: tabs", driver.FrameText(), StringComparison.Ordinal);
-        Assert.DoesNotContain("live variables [focus]", driver.FrameText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("session symbols [focus]", driver.FrameText(), StringComparison.Ordinal);
 
         SendKey(driver, Key.Tab);
         Assert.IsType<TableView>(driver.FocusedElement);
 
         driver.Draw();
         Assert.DoesNotContain("[3 Vars]", driver.FrameText(), StringComparison.Ordinal);
-        Assert.Contains("live variables [focus]", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Contains("session symbols [focus]", driver.FrameText(), StringComparison.Ordinal);
         Assert.Contains("focus: variables", driver.FrameText(), StringComparison.Ordinal);
     }
 
@@ -322,6 +367,90 @@ public sealed class ReplLayoutTests
         SendKey(driver, Key.Enter);
         PumpUntilIdle(root, driver);
         Assert.Equal("hello", Assert.Single(engine.Cells).Value);
+    }
+
+    [Fact]
+    public void ControlCDismissesStandardInputAndCancelsThePendingCell()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 100, 30);
+
+        Type(driver, "Console.ReadLine()");
+        SendKey(driver, Key.Enter);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var frame = string.Empty;
+        while (!frame.Contains("standard input", StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(5);
+            driver.Pump();
+            driver.Draw();
+            frame = driver.FrameText();
+        }
+
+        Assert.Contains("standard input", frame, StringComparison.Ordinal);
+        Assert.Equal(EventResult.Handled, Control(driver, "c"));
+        PumpUntilIdle(root, driver);
+        driver.Draw();
+        Assert.DoesNotContain("standard input", driver.FrameText(), StringComparison.Ordinal);
+        Assert.Empty(engine.Cells);
+    }
+
+    [Fact]
+    public void TranscriptWrapsLongRowsAtTheViewportWidth()
+    {
+        using var engine = new EmittedSessionEngine();
+        engine.Evaluate("\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"");
+        var source = new TranscriptSource(engine, ReplTheme.Current);
+
+        Assert.True(source.HeightAt(0, 20) > source.HeightAt(0, 120));
+
+        var (_, driver) = Create(engine, 48, 18);
+        driver.Draw();
+        Assert.Contains("0123456789", driver.FrameText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoadFailureStaysInsideTheRepl()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        using var engine = new EmittedSessionEngine();
+        var (_, driver) = Create(engine, 120, 30);
+
+        Control(driver, "p");
+        Type(driver, "load /proc/self/mem");
+        driver.Draw();
+        SendKey(driver, Key.Enter);
+        driver.Draw();
+
+        Assert.Contains("command failed", driver.FrameText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ScreenReaderModeUsesAsciiTranscriptSymbols()
+    {
+        var previous = Environment.GetEnvironmentVariable("GSI_SCREEN_READER");
+        try
+        {
+            Environment.SetEnvironmentVariable("GSI_SCREEN_READER", "1");
+            ReplTheme.Reset();
+            using var engine = new EmittedSessionEngine();
+            engine.Evaluate("1+2");
+            var (_, driver) = Create(engine, 80, 24);
+            driver.Draw();
+
+            Assert.Contains("- [1] >", driver.FrameText(), StringComparison.Ordinal);
+            Assert.Equal(Color.TerminalDefault, ReplTheme.Current.Muted);
+            Assert.Equal(Color.TerminalDefault, ReplTheme.Current.Faint);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GSI_SCREEN_READER", previous);
+            ReplTheme.Reset();
+        }
     }
 
     [Fact]

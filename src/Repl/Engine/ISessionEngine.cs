@@ -53,6 +53,8 @@ public interface ISessionEngine
     /// <returns>The evaluated cell.</returns>
     Task<Cell> EvaluateAsync(string text, CancellationToken cancellationToken);
 
+    EditorAnalysis AnalyzeEditor(string text);
+
     /// <summary>Builds a snapshot of the accumulated session state for the REPL sidebar.</summary>
     /// <returns>The snapshot; <see cref="ReplState.Empty"/> when nothing has been evaluated.</returns>
     ReplState Snapshot();

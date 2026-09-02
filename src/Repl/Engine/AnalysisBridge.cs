@@ -6,20 +6,28 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer;
-using GSharp.LanguageServer.Protocol;
+using CoreDiagnostic = GSharp.Core.CodeAnalysis.Diagnostic;
+using CompletionItem = GSharp.LanguageServer.Protocol.CompletionItem;
+using CompletionItemKind = GSharp.LanguageServer.Protocol.CompletionItemKind;
+using InsertTextFormat = GSharp.LanguageServer.Protocol.InsertTextFormat;
+using Position = GSharp.LanguageServer.Protocol.Position;
+using SemanticTokensDocument = GSharp.LanguageServer.Protocol.SemanticTokensDocument;
 
 namespace GSharp.Repl.Engine;
 
 /// <summary>In-process bridge to the G# language server: completions and hover for editor text.</summary>
 public static class AnalysisBridge
 {
-    public static IReadOnlyList<CompletionItem> Completions(string text, int line, int col)
-        => Safe(() => CompletionComputer.ComputeCompletions(Build(text), new Position(line, col)), Array.Empty<CompletionItem>());
+    public static IReadOnlyList<CompletionItem> Completions(string text, int line, int col, ReplState? state = null)
+        => Safe(() => AddSessionCompletions(
+            CompletionComputer.ComputeCompletions(Build(text), new Position(line, col)), state), Array.Empty<CompletionItem>());
 
-    public static string? Hover(string text, int line, int col)
-        => Safe(() => HoverComputer.ComputeHover(Build(text), new Position(line, col))?.Contents?.MarkupContent?.Value, null);
+    public static string? Hover(string text, int line, int col, ReplState? state = null)
+        => Safe(() => HoverComputer.ComputeHover(Build(text), new Position(line, col))?.Contents?.MarkupContent?.Value
+            ?? SessionHover(text, line, col, state), null);
 
     public static EditorAnalysis Analyze(string text)
         => Safe(() => AnalyzeCore(text), EditorAnalysis.Empty);
@@ -56,12 +64,53 @@ public static class AnalysisBridge
         return new EditorCompletionEdit(startLine, startCharacter, endLine, endCharacter, text);
     }
 
+    internal static EditorAnalysis WithDiagnostics(EditorAnalysis baseline, IEnumerable<CoreDiagnostic> diagnostics, SourceText source)
+    {
+        var mapped = new List<EditorDiagnostic>();
+        foreach (var diagnostic in diagnostics)
+        {
+            if (!ReferenceEquals(diagnostic.Location.Text, source))
+            {
+                continue;
+            }
+
+            mapped.Add(new EditorDiagnostic(
+                diagnostic.Location.StartLine,
+                diagnostic.Location.StartCharacter,
+                diagnostic.Location.EndLine,
+                diagnostic.Location.EndCharacter,
+                diagnostic.Id,
+                diagnostic.Message,
+                diagnostic.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error ? 1
+                    : diagnostic.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning ? 2 : 3));
+        }
+
+        return new EditorAnalysis(baseline.Tokens, mapped);
+    }
+
+    internal static EditorAnalysis AnalyzeTokens(string text)
+        => Safe(() => new EditorAnalysis(Tokenize(Build(text)), Array.Empty<EditorDiagnostic>()), EditorAnalysis.Empty);
+
     private static EditorAnalysis AnalyzeCore(string text)
     {
         var result = DocumentSyncHandler.ComputeDiagnostics(text, skipBinding: false);
+        var tokens = Tokenize(result.Content);
+        var diagnostics = result.Diagnostics.Select(d => new EditorDiagnostic(
+            d.Range.Start.Line,
+            d.Range.Start.Character,
+            d.Range.End.Line,
+            d.Range.End.Character,
+            d.Code?.Value ?? string.Empty,
+            d.Message,
+            (int)d.Severity)).ToArray();
+        return new EditorAnalysis(tokens, diagnostics);
+    }
+
+    private static IReadOnlyList<EditorToken> Tokenize(DocumentContent content)
+    {
         var document = new SemanticTokensDocument(SemanticTokensHandler.Legend);
         var builder = document.Create();
-        SemanticTokensComputer.Tokenize(builder, result.Content);
+        SemanticTokensComputer.Tokenize(builder, content);
         builder.Commit();
 
         var data = document.GetSemanticTokens().Data;
@@ -75,15 +124,7 @@ public static class AnalysisBridge
             tokens.Add(new EditorToken(line, character, data[i + 2], data[i + 3]));
         }
 
-        var diagnostics = result.Diagnostics.Select(d => new EditorDiagnostic(
-            d.Range.Start.Line,
-            d.Range.Start.Character,
-            d.Range.End.Line,
-            d.Range.End.Character,
-            d.Code?.Value ?? string.Empty,
-            d.Message,
-            (int)d.Severity)).ToArray();
-        return new EditorAnalysis(tokens, diagnostics);
+        return tokens;
     }
 
     private static DocumentContent Build(string text)
@@ -98,6 +139,80 @@ public static class AnalysisBridge
 
         return new DocumentContent(SyntaxTree.Parse(text), lines);
     }
+
+    private static IReadOnlyList<CompletionItem> AddSessionCompletions(IReadOnlyList<CompletionItem> baseline, ReplState? state)
+    {
+        if (state is null || state.IsEmpty)
+        {
+            return baseline;
+        }
+
+        var items = baseline.ToList();
+        var seen = new HashSet<string>(items.Select(item => item.Label ?? string.Empty), StringComparer.Ordinal);
+        Add(items, seen, state.Imports, CompletionItemKind.Module);
+        Add(items, seen, state.Functions, CompletionItemKind.Function);
+        Add(items, seen, state.Variables, CompletionItemKind.Variable);
+        Add(items, seen, state.Types, CompletionItemKind.Class);
+        return items;
+    }
+
+    private static void Add(List<CompletionItem> items, HashSet<string> seen, IReadOnlyList<ReplSymbol> symbols, CompletionItemKind kind)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (!seen.Add(symbol.Name))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = symbol.Name,
+                Detail = symbol.Display,
+                Kind = kind,
+            });
+        }
+    }
+
+    private static string? SessionHover(string text, int line, int col, ReplState? state)
+    {
+        if (state is null || state.IsEmpty)
+        {
+            return null;
+        }
+
+        var sourceLines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        if (line < 0 || line >= sourceLines.Length || col < 0 || col > sourceLines[line].Length)
+        {
+            return null;
+        }
+
+        var sourceLine = sourceLines[line];
+        var start = col;
+        while (start > 0 && IsIdentifierCharacter(sourceLine[start - 1]))
+        {
+            start--;
+        }
+
+        var end = col;
+        while (end < sourceLine.Length && IsIdentifierCharacter(sourceLine[end]))
+        {
+            end++;
+        }
+
+        if (start == end)
+        {
+            return null;
+        }
+
+        var name = sourceLine.Substring(start, end - start);
+        return AllSymbols(state).FirstOrDefault(symbol => string.Equals(symbol.Name, name, StringComparison.Ordinal))?.Display;
+    }
+
+    private static IEnumerable<ReplSymbol> AllSymbols(ReplState state)
+        => state.Imports.Concat(state.Functions).Concat(state.Variables).Concat(state.Types);
+
+    private static bool IsIdentifierCharacter(char value) => char.IsLetterOrDigit(value) || value == '_';
 
     private static T Safe<T>(Func<T> f, T fallback)
     {

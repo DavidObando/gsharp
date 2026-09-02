@@ -55,6 +55,7 @@ public open class ReplApp : Column {
   private var message string
   private var lastInterrupt int64
   private var inputRequest InputRequest?
+  private var inputInterrupt Bind?
 
   public init(engine ISessionEngine) {
     this.engine = engine
@@ -70,6 +71,7 @@ public open class ReplApp : Column {
     lastInterrupt = -1
     worker = nil
     inputRequest = nil
+    inputInterrupt = nil
     completionItems = List[CompletionItem]()
     completionPane = nil
     palettePane = nil
@@ -81,6 +83,7 @@ public open class ReplApp : Column {
     footer = StatusBar{ Height: CellLength.Cells(1) }
 
     transcriptSource = TranscriptSource(engine, palette)
+    transcriptSource.Ascii = Environment.GetEnvironmentVariable("GSI_SCREEN_READER") == "1"
     transcript = VirtualListView{ Source: transcriptSource, GrowWeight: 1, FollowTail: true,
       SelectedStyle: palette.Selection }
     transcriptBox = Box{ GrowWeight: 1, ShowBorder: true, ShowScrollbar: true,
@@ -98,13 +101,15 @@ public open class ReplApp : Column {
     historyScreen = Box{ GrowWeight: 1, ShowBorder: true, ShowScrollbar: true, Title: "history", Children: { history } }
 
     variables = TableView{ GrowWeight: 1, SelectedRowStyle: palette.Selection }
-    variables.Columns.Add(TableColumn{ Header: "name", ColumnWidth: ColumnWidth.Cells(24) })
-    variables.Columns.Add(TableColumn{ Header: "type", ColumnWidth: ColumnWidth.Cells(28) })
-    variables.Columns.Add(TableColumn{ Header: "value", ColumnWidth: ColumnWidth.Share(1) })
-    variablesScreen = Box{ GrowWeight: 1, ShowBorder: true, ShowScrollbar: true, Title: "live variables", Children: { variables } }
+    variables.Columns.Add(TableColumn{ Header: "kind", ColumnWidth: ColumnWidth.Cells(10) })
+    variables.Columns.Add(TableColumn{ Header: "name", ColumnWidth: ColumnWidth.Cells(20) })
+    variables.Columns.Add(TableColumn{ Header: "detail", ColumnWidth: ColumnWidth.Share(1) })
+    variables.Columns.Add(TableColumn{ Header: "value", ColumnWidth: ColumnWidth.Cells(20) })
+    variablesScreen = Box{ GrowWeight: 1, ShowBorder: true, ShowScrollbar: true, Title: "session symbols", Children: { variables } }
 
     diagnostics = TableView{ GrowWeight: 1, SelectedRowStyle: palette.Selection }
     diagnostics.Columns.Add(TableColumn{ Header: "cell", ColumnWidth: ColumnWidth.Cells(6) })
+    diagnostics.Columns.Add(TableColumn{ Header: "severity", ColumnWidth: ColumnWidth.Cells(9) })
     diagnostics.Columns.Add(TableColumn{ Header: "code", ColumnWidth: ColumnWidth.Cells(10) })
     diagnostics.Columns.Add(TableColumn{ Header: "message", ColumnWidth: ColumnWidth.Share(1) })
     diagnosticsScreen = Box{ GrowWeight: 1, ShowBorder: true, ShowScrollbar: true, Title: "diagnostics", Children: { diagnostics } }
@@ -161,8 +166,9 @@ public open class ReplApp : Column {
   public func Configure(app App) {
     application = app
     app.QuitGestures.Clear()
-    app.TickInterval = TimeSpan.FromMilliseconds(80.0)
+    app.TickInterval = TimeSpan.Zero
     app.DefaultStyle = Style{ Foreground: ReplTheme.Current.Text, Background: ReplTheme.Current.Canvas }
+    editor.Clipboard = app.Clipboard
     app.Keys.Add(KeyGesture.Character(":"), BindingPhase.BeforeWidgets, () -> SpecialCharacter(":", () -> OpenPalette()))
     app.Keys.Add(KeyGesture.Character("/"), BindingPhase.BeforeWidgets, () -> SpecialCharacter("/", () -> OpenSearch()))
     app.Keys.Add(KeyGesture.Character("?"), BindingPhase.BeforeWidgets, () -> SpecialCharacter("?", () -> Activate(4)))
@@ -173,6 +179,7 @@ public open class ReplApp : Column {
     while i < 6 {
       let tab = i
       let key = (i + 1).ToString()
+      app.Keys.Add(KeyGesture.Ctrl(key), BindingPhase.BeforeWidgets, () -> Activate(tab))
       app.Keys.Add(KeyGesture.Character(key), BindingPhase.BeforeWidgets, () -> TabCharacter(key, tab))
       i = i + 1
     }
@@ -182,6 +189,7 @@ public open class ReplApp : Column {
   public func CancelPendingInput() {
     if let pending = inputRequest { pending.Complete(nil) }
     inputRequest = nil
+    RemoveInputInterrupt()
   }
 
   protected override func Render(screen Screen, bounds CellRect, style Style) {
@@ -376,6 +384,7 @@ public open class ReplApp : Column {
       (cell Cell) -> EvaluationCompleted(cell),
       (error Exception) -> EvaluationFailed(error),
       () -> EvaluationCancelled())
+    UpdateTicking()
   }
 
   private func EvaluationCompleted(cell Cell) {
@@ -386,6 +395,7 @@ public open class ReplApp : Column {
     transcript.FollowTail = true
     transcript.Refresh()
     Focus(editor)
+    UpdateTicking()
   }
 
   private func EvaluationFailed(error Exception) {
@@ -394,6 +404,7 @@ public open class ReplApp : Column {
     message = "evaluation failed: " + error.Message
     RebuildSessionViews()
     Focus(editor)
+    UpdateTicking()
   }
 
   private func EvaluationCancelled() {
@@ -402,13 +413,14 @@ public open class ReplApp : Column {
     message = "evaluation cancelled"
     RebuildSessionViews()
     Focus(editor)
+    UpdateTicking()
   }
 
   private func Interrupt() EventResult {
     if let request = inputRequest {
+      if let running = worker { running.Cancel() }
       request.Complete(nil)
       CloseInput()
-      if let running = worker { running.Cancel() }
       message = "cancelling input and evaluation"
       lastInterrupt = -1
       return EventResult.Handled
@@ -440,6 +452,7 @@ public open class ReplApp : Column {
     }
     pendingAnalysis = text
     analysisTicks = 3
+    UpdateTicking()
   }
 
   private func PumpAnalysis() bool {
@@ -454,8 +467,9 @@ public open class ReplApp : Column {
   private func AnalyzeNow(text string) {
     pendingAnalysis = nil
     analysisTicks = 0
-    analysis = AnalysisBridge.Analyze(text)
+    analysis = engine.AnalyzeEditor(text)
     editor.StyleSource = EditorLineSource(text, analysis, ReplTheme.Current)
+    UpdateTicking()
   }
 
   private func FormatEditor() {
@@ -473,7 +487,7 @@ public open class ReplApp : Column {
     if !editor.IsFocused || editor.Text == "" { return }
     let at = CaretCharacter()
     completionItems = MatchingCompletions(
-      AnalysisBridge.Completions(editor.Text, editor.Caret.LineIndex, at), CurrentPrefix())
+      AnalysisBridge.Completions(editor.Text, editor.Caret.LineIndex, at, engine.Snapshot()), CurrentPrefix())
     if completionItems.Count == 0 {
       message = "no completions"
       return
@@ -505,7 +519,7 @@ public open class ReplApp : Column {
     if editor.Text == "" { return }
     let at = CaretCharacter()
     let items = MatchingCompletions(
-      AnalysisBridge.Completions(editor.Text, editor.Caret.LineIndex, at), CurrentPrefix())
+      AnalysisBridge.Completions(editor.Text, editor.Caret.LineIndex, at, engine.Snapshot()), CurrentPrefix())
     if items.Count == 0 {
       message = "no completions"
       return
@@ -666,7 +680,7 @@ public open class ReplApp : Column {
         "Type code, place the caret on a symbol, then press Ctrl+K or F1 to show its type and symbol information.")
       return
     }
-    let text = AnalysisBridge.Hover(editor.Text, editor.Caret.LineIndex, CaretCharacter())
+    let text = AnalysisBridge.Hover(editor.Text, editor.Caret.LineIndex, CaretCharacter(), engine.Snapshot())
     OpenTextOverlay(hoverOverlay, "hover at editor caret", text ?? "No symbol information at the editor caret.")
   }
 
@@ -708,6 +722,14 @@ public open class ReplApp : Column {
   }
 
   private func RunCommand(command string) bool {
+    try { return RunCommandCore(command) }
+    catch (error Exception) {
+      message = "command failed: " + error.Message
+      return false
+    }
+  }
+
+  private func RunCommandCore(command string) bool {
     let normalized = command.Trim()
     if normalized == "reset" {
       if let running = worker { running.Cancel() }
@@ -774,6 +796,9 @@ public open class ReplApp : Column {
   private func OpenInput(request InputRequest) {
     inputRequest = request
     CloseAllOverlays()
+    if let app = application {
+      inputInterrupt = app.Keys.Add(KeyGesture.Ctrl("c"), BindingPhase.BeforeWidgets, () -> { Interrupt() })
+    }
     let pane = InputPane(request, () -> CloseInput(), ReplTheme.Current)
     inputOverlay.Content = Box{ GrowWeight: 1, ShowBorder: true, Title: "standard input", Children: { pane } }
     inputOverlay.IsVisible = true
@@ -791,7 +816,13 @@ public open class ReplApp : Column {
   private func CloseInput() {
     inputOverlay.IsVisible = false
     inputRequest = nil
+    RemoveInputInterrupt()
     Focus(editor)
+  }
+
+  private func RemoveInputInterrupt() {
+    if let binding = inputInterrupt, let app = application { app.Keys.Bindings.Remove(binding) }
+    inputInterrupt = nil
   }
 
   private func CloseOverlay(overlay Overlay) {
@@ -840,29 +871,23 @@ public open class ReplApp : Column {
 
   private func RebuildVariables() {
     let rows = List[TableRow]()
-    for symbol in engine.Snapshot().Variables {
-      let display = symbol.Display
-      var before = display
-      var value = ""
-      let equals = display.IndexOf(" = ", StringComparison.Ordinal)
-      if equals >= 0 {
-        before = display.Substring(0, equals)
-        value = display.Substring(equals + 3)
-      }
-      var name = before
-      var typeText = ""
-      let space = before.IndexOf(char(32))
-      if space > 0 {
-        name = before.Substring(0, space)
-        typeText = before.Substring(space + 1)
-      }
-      let row = TableRow{ Id: name }
-      row.Cells.Add(TableCell(name))
-      row.Cells.Add(TableCell(typeText))
-      row.Cells.Add(TableCell(value))
+    let state = engine.Snapshot()
+    AddSymbols(rows, state.Imports)
+    AddSymbols(rows, state.Functions)
+    AddSymbols(rows, state.Variables)
+    AddSymbols(rows, state.Types)
+    variables.Rows = rows
+  }
+
+  private func AddSymbols(rows List[TableRow], symbols IReadOnlyList[ReplSymbol]) {
+    for symbol in symbols {
+      let row = TableRow{ Id: symbol.Kind + ":" + symbol.Name }
+      row.Cells.Add(TableCell(symbol.Kind))
+      row.Cells.Add(TableCell(symbol.Name))
+      row.Cells.Add(TableCell(symbol.Detail))
+      row.Cells.Add(TableCell(symbol.Value))
       rows.Add(row)
     }
-    variables.Rows = rows
   }
 
   private func RebuildDiagnostics() {
@@ -874,6 +899,7 @@ public open class ReplApp : Column {
       for diagnostic in cell.Diagnostics {
         let row = TableRow{ Id: cell.Index.ToString() + ":" + rows.Count.ToString() }
         row.Cells.Add(TableCell(cell.Index.ToString()))
+        row.Cells.Add(TableCell(diagnostic.Severity.ToString().ToLowerInvariant()))
         row.Cells.Add(TableCell(diagnostic.Id))
         row.Cells.Add(TableCell(diagnostic.Message))
         rows.Add(row)
@@ -1030,6 +1056,13 @@ public open class ReplApp : Column {
     return count
   }
 
+  private func UpdateTicking() {
+    if let app = application {
+      app.TickInterval = worker != nil || pendingAnalysis != nil
+      ? TimeSpan.FromMilliseconds(80.0) : TimeSpan.Zero
+    }
+  }
+
   private func TranscriptPage() int32 -> Math.Max(1, transcript.ContentBounds.HeightRows - 1)
 
   private func ScrollTranscript(delta int32) EventResult {
@@ -1126,7 +1159,7 @@ public open class ReplApp : Column {
     transcriptBox.Title = FocusTitle("session transcript", transcript.IsFocused)
     editorBox.Title = FocusTitle("editor", editor.IsFocused)
     historyScreen.Title = FocusTitle("history", history.IsFocused)
-    variablesScreen.Title = FocusTitle("live variables", variables.IsFocused)
+    variablesScreen.Title = FocusTitle("session symbols", variables.IsFocused)
     diagnosticsScreen.Title = FocusTitle("diagnostics", diagnostics.IsFocused)
     helpScreen.Title = FocusTitle("help", help.IsFocused)
     settingsScreen.Title = FocusTitle("settings", settings.IsFocused)

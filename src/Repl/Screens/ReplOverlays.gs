@@ -50,7 +50,7 @@ public open class PalettePane : Column {
     input.MoveCaretToEnd()
   }
 
-  protected override func Render(screen Screen, bounds CellRect, style Style) {
+  protected override func PrepareLayout() {
     if input.Text != observed {
       observed = input.Text
       Rebuild()
@@ -124,7 +124,7 @@ public open class SearchPane : Column {
 
   public prop Input TextInput -> input
 
-  protected override func Render(screen Screen, bounds CellRect, style Style) {
+  protected override func PrepareLayout() {
     if input.Text != observed {
       observed = input.Text
       Rebuild()

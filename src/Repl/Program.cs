@@ -145,7 +145,7 @@ public static class Program
     /// </summary>
     private static int RunInteractive(List<string> references)
     {
-        if (Console.IsInputRedirected)
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
         {
             Console.Error.WriteLine("gsi requires an interactive terminal");
             return 1;

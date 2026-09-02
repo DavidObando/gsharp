@@ -102,11 +102,11 @@ public class ReplTheme {
         Color.Rgb("89DDFF"), Color.Rgb("C3E88D")))
       list.Add(ReplPalette(
         "mono",
-        Color.TerminalDefault, Color.Ansi(AnsiColor.BrightBlack), Color.Ansi(AnsiColor.BrightBlack),
+        Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault,
         Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault,
-        Color.Ansi(AnsiColor.BrightBlack), Color.TerminalDefault, Color.TerminalDefault,
+        Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault,
         Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault,
-        Color.Ansi(AnsiColor.BrightBlack), Color.TerminalDefault, Color.TerminalDefault,
+        Color.TerminalDefault, Color.TerminalDefault, Color.TerminalDefault,
         Color.TerminalDefault))
       list.Add(ReplPalette(
         "high-contrast",
