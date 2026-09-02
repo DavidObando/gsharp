@@ -1218,19 +1218,26 @@ public sealed partial class CSharpToGSharpTranslator
             // member on a BASE interface (e.g. `void IBar.M(){}` where
             // `interface IBar : IFoo` and IFoo already declares `M`). The
             // clause-based scheme below wires exactly ONE interface slot per
-            // method, so it only applies when there is a SINGLE entry. Imported
-            // generic interfaces also fall back because gsc currently erases
-            // their clause arguments while resolving the CLR slot (GS0494).
+            // method, so it only applies when there is a SINGLE entry.
             // Fallback keeps the pre-#2010 (#1911) named/forced-public path:
             // the method keeps its plain name with no clause, and
             // gsc's ordinary implicit name+signature interface-dispatch matching
             // then satisfies every entry uniformly (no explicit MethodImpl row
             // needed).
+            //
+            // Issue #3814: an IMPORTED GENERIC interface used to fall back here
+            // too, because gsc dropped every explicit implementation after the
+            // first same-signature one from the type's overload set — so a class
+            // explicitly implementing one member on TWO instantiations
+            // (`IAsyncEnumerable<int>` and `IAsyncEnumerable<string>`) reported
+            // the second interface unimplemented (GS0187). The fallback made that
+            // strictly worse: with no clause the two methods differ only in
+            // return type and collide as a duplicate overload (GS0264). gsc now
+            // keeps both slots, so the clause is emitted for imported generic
+            // interfaces as well.
             bool hasSingleExplicitInterfaceImpl = isExplicitInterfaceImpl &&
                 symbol.ExplicitInterfaceImplementations.Length == 1;
-            bool hasClauseCompatibleExplicitInterfaceImpl = hasSingleExplicitInterfaceImpl &&
-                (symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource) ||
-                 !symbol.ExplicitInterfaceImplementations[0].ContainingType.IsGenericType);
+            bool hasClauseCompatibleExplicitInterfaceImpl = hasSingleExplicitInterfaceImpl;
 
             if (isExplicitInterfaceImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
                 symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
