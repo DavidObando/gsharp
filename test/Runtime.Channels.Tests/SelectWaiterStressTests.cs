@@ -22,10 +22,13 @@ namespace GSharp.Runtime.Channels.Tests;
 /// <c>src/Sdk/Gsharp.Runtime.Channels/</c>): splitting claim-and-transfer in
 /// <c>SelectNode{T}.TryCommitReceive</c> into a claim followed by a re-probe
 /// breaks <see cref="Select_UnderCompetingConsumers_NeverLosesOrDuplicates"/>
-/// (a lost or duplicated id within 200 000); removing the generation check
-/// from <c>SelectWaiter.TryClaim</c> breaks
-/// <see cref="Select_TimerLoser_InFlightCallback_CannotClaimReusedWaiter"/>;
-/// skipping <c>Deregister</c> in <c>Return</c> breaks
+/// (a lost or duplicated id within 200 000); removing the generation bump
+/// from <c>SelectWaiter.Begin</c> is killed deterministically by
+/// <c>SelectWaiterTests.TryClaim_StaleGeneration_IsRejected</c> — the stress
+/// form here, <see cref="Select_TimerLoser_InFlightCallback_CannotClaimReusedWaiter"/>,
+/// is the integration exercise and is <em>not</em> claimed as a reliable
+/// killer (the 1 ms timer callback rarely lands in the window); skipping
+/// <c>Deregister</c> in <c>Return</c> breaks
 /// <see cref="Select_Losers_LeaveNoRegistrations"/>; acquiring gates in arm
 /// order instead of <c>Chan.Id</c> order breaks
 /// <see cref="Select_OppositeArmOrder_DoesNotDeadlock"/>; completing the
