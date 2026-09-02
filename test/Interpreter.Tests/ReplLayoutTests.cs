@@ -197,6 +197,30 @@ public sealed class ReplLayoutTests
     }
 
     [Fact]
+    public void BusyEvaluationRendersAnimatedScannerAndInterruptHint()
+    {
+        using var engine = new EmittedSessionEngine();
+        var (root, driver) = Create(engine, 80, 24);
+        root.Editor.Text = "import System.Threading\nThread.Sleep(750)\n1";
+
+        SendKey(driver, Key.Enter);
+        Assert.True(root.IsBusy);
+        driver.Draw();
+        var first = driver.FrameText();
+
+        Assert.Contains("■", first, StringComparison.Ordinal);
+        Assert.Contains("⬝", first, StringComparison.Ordinal);
+        Assert.Contains("Esc interrupt", first, StringComparison.Ordinal);
+
+        Tick(driver);
+        driver.Draw();
+        var second = driver.FrameText();
+
+        Assert.NotEqual(first, second);
+        PumpUntilIdle(root, driver);
+    }
+
+    [Fact]
     public void EmptyEditorTabPreservesKeyboardFocusTraversal()
     {
         using var engine = new EmittedSessionEngine();

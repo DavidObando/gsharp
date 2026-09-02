@@ -195,7 +195,8 @@ public open class ReplApp : Column {
     header.LeftText = " gsharp"
     header.CenterText = ""
     header.RightText = "v" + ReplHost.GetVersion() + " "
-    footer.LeftText = " focus: " + FocusName() + " · " + StatusText(errors) + " · " + message
+    footer.LeftText = ""
+    footer.LeftRuns = FooterLeftRuns(errors)
     footer.CenterText = ""
     footer.RightText = FooterHints() + " "
     FitOverlays(bounds)
@@ -1047,21 +1048,71 @@ public open class ReplApp : Column {
   }
 
   private func StatusText(errors int32) string {
-    if worker != nil {
-      let phase = busyFrame % 4
-      if phase == 1 { return "running." }
-      if phase == 2 { return "running.." }
-      if phase == 3 { return "running..." }
-      return "running"
-    }
     if errors > 0 { return errors.ToString() + " errors" }
     return "ready"
+  }
+
+  private func FooterLeftRuns(errors int32) List[TextRun] {
+    let palette = ReplTheme.Current
+    let runs = List[TextRun]()
+    if worker == nil {
+      runs.Add(TextRun(" focus: " + FocusName() + " · " + StatusText(errors) + " · " + message,
+        Style{ Foreground: palette.Text }))
+      return runs
+    }
+    runs.Add(TextRun(" ", Style{ Foreground: palette.Text }))
+    AddBusyScanner(runs)
+    if message.StartsWith("cancelling", StringComparison.Ordinal) {
+      runs.Add(TextRun("  cancelling...", Style{ Foreground: palette.Faint }))
+    } else {
+      runs.Add(TextRun("  Esc", Style{ Foreground: palette.Accent, Attributes: TextAttributes.Bold }))
+      runs.Add(TextRun(" interrupt", Style{ Foreground: palette.Faint }))
+    }
+    return runs
+  }
+
+  private func AddBusyScanner(runs List[TextRun]) {
+    let width = 6
+    let holdEnd = 3
+    let holdStart = 6
+    let backward = width - 1
+    let frame = busyFrame % (width + holdEnd + backward + holdStart)
+    var position = 0
+    var forward = true
+    var holdProgress = 0
+    if frame < width {
+      position = frame
+    } else if frame < width + holdEnd {
+      position = width - 1
+      holdProgress = frame - width
+    } else if frame < width + holdEnd + backward {
+      forward = false
+      position = width - 2 - (frame - width - holdEnd)
+    } else {
+      forward = false
+      holdProgress = frame - width - holdEnd - backward
+    }
+    let palette = ReplTheme.Current
+    var i = 0
+    while i < width {
+      let distance = forward ? position - i : i - position
+      let colorIndex = distance + holdProgress
+      let active = distance >= 0 && colorIndex >= 0 && colorIndex < width
+      let glyph = transcriptSource.Ascii ? (active ? "#" : ".") : (active ? "■" : "⬝")
+      var color = palette.Border
+      if colorIndex == 0 { color = palette.Accent }
+      else if active && colorIndex <= 2 { color = palette.Muted }
+      else if active { color = palette.Faint }
+      let attributes = colorIndex == 0 ? TextAttributes.Bold : TextAttributes.None
+      runs.Add(TextRun(glyph, Style{ Foreground: color, Attributes: attributes }))
+      i = i + 1
+    }
   }
 
   private func FooterHints() string {
     if tabs.IsFocused { return "Left/Right select · Tab enter" }
     if activeTab == 0 {
-      if worker != nil { return "Esc interrupt · Ctrl+C cancel" }
+      if worker != nil { return "Ctrl+C cancel" }
       return "Ctrl+K hover at caret · Ctrl+P palette · : when empty"
     }
     if activeTab == 1 { return "Enter load · / search · Ctrl+1 REPL" }
