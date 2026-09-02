@@ -801,6 +801,24 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #3802: a `[return: NotNullIfNotNull(nameof(p))]` return is
+            // declared `T?` but is exactly as nullable as its named argument,
+            // so answer for the ARGUMENT rather than reading the declared `T?`
+            // below. The argument's own EMITTED type is what gsc will see, so
+            // the taint fixpoint's promotion decision counts here as much as
+            // the syntactic one — reading only the latter is what left
+            // `Path.GetFileNameWithoutExtension(downloadFileName)` unpromoted
+            // in Oahu while `downloadFileName` itself was promoted to `string?`.
+            if (ConditionalNotNullPostcondition.TryGetForwardedArgument(
+                expression,
+                node => this.context.GetSymbolInfo(node).Symbol,
+                out ExpressionSyntax conditionalSource))
+            {
+                return this.IsNullableInitializer(conditionalSource)
+                    || this.ShouldPromoteToNullableReference(
+                        this.context.GetSymbolInfo(conditionalSource).Symbol);
+            }
+
             // Otherwise consult the bound symbol's declared annotation.
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
             ITypeSymbol symbolType = symbol switch

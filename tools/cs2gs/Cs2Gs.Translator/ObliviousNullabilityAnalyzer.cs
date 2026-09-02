@@ -3825,6 +3825,23 @@ internal static class ObliviousNullabilityAnalyzer
                 return;
         }
 
+        // Issue #3802: a `[return: NotNullIfNotNull(nameof(p))]` call FORWARDS
+        // its named argument's nullability — it is exactly as nullable as `p`
+        // is. Recording that as an EDGE rather than a verdict is what keeps
+        // cs2gs and gsc agreeing: if the fixpoint later promotes the argument's
+        // own declaration to `T?` (which is invisible to the syntactic
+        // judgement in `IsDirectlyNullable`, since oblivious C# annotates
+        // nothing), the target is promoted with it, exactly as gsc will refuse
+        // to narrow a call whose argument it sees as `T?`.
+        if (ConditionalNotNullPostcondition.TryGetForwardedArgument(
+            value,
+            node => model.GetSymbolInfo(node).Symbol,
+            out ExpressionSyntax forwarded))
+        {
+            CollectScalarValueFlow(target, forwarded, model, tainted, edges, scalarTupleEdges, scope);
+            return;
+        }
+
         if (scope != SourceScope.CallsOnly
             && TryResolveTupleElementSource(value, model, out TupleElementKey tupleSource))
         {
@@ -4234,6 +4251,23 @@ internal static class ObliviousNullabilityAnalyzer
         if (info.Nullability.Annotation == NullableAnnotation.Annotated)
         {
             return true;
+        }
+
+        // Issue #3802: `[return: NotNullIfNotNull(nameof(p))]` makes that
+        // declared `string?` CONDITIONAL — `Path.GetExtension(source)` is
+        // exactly as nullable as `source` is, so answer for the ARGUMENT
+        // instead of reading the declared `string?` below. Promoting it
+        // unconditionally is what widened RepositoryMirror's iterator to
+        // `sequence[string?]` and left a `string?` dictionary key gsc rightly
+        // rejected. When the argument is not DIRECTLY nullable the answer here
+        // is "no", and `CollectScalarValueFlow` records a forwarding edge so
+        // the fixpoint can still promote both together.
+        if (ConditionalNotNullPostcondition.TryGetForwardedArgument(
+            expression,
+            node => model.GetSymbolInfo(node).Symbol,
+            out ExpressionSyntax conditionalSource))
+        {
+            return IsDirectlyNullable(conditionalSource, model);
         }
 
         // Otherwise consult the bound symbol's DECLARED annotation, which
