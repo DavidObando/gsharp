@@ -40,7 +40,7 @@ public class SyncMapImportEmittedOracleTests
 
                 total = total + m.Load("a") + m.Load("b")   // 40 + 2
                 total = total + m.Load("missing")           // + zero value
-                total = total + m.Len()                     // + 2
+                total = total + m.Length()                     // + 2
                 if m.Contains("a") {
                     total = total + 100
                 }

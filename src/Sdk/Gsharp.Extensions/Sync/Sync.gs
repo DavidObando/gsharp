@@ -13,7 +13,7 @@
 //   * Backed by a private `ConcurrentDictionary[K, V]` — not a locked
 //     plain `map[K, V]` (a generic map field is blocked by #3303, and the
 //     concurrent backing is better on merits: lock-free reads and
-//     mutation-safe enumeration). Reads (`Load`, `Len`, `Contains`) and
+//     mutation-safe enumeration). Reads (`Load`, `Length`, `Contains`) and
 //     enumeration (`Keys`, `Range`) never take the monitor.
 //
 //   * Writes (`Store`, `Delete`, `Update`) serialize on a hidden monitor —
@@ -153,7 +153,7 @@ class SyncMap[K, V any] {
     ///
     /// @returns the entry count.
     @MethodImpl(MethodImplOptions.AggressiveInlining)
-    func Len() int32 {
+    func Length() int32 {
         return items.Count
     }
 

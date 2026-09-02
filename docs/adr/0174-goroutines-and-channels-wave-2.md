@@ -3,13 +3,21 @@
 - **Status**: Proposed
 - **Date**: 2026-09-01
 - **Phase**: Concurrency wave 2 (language surface + runtime + performance program)
+- **Supersedes on acceptance**: ADR-0082 (`import`-gated Go subspace). D13
+  retires the per-file opt-in and with it GS0316/GS0317; ADR-0082's packaging
+  and namespace decisions survive and are restated where they still apply.
+  ADR-0082 stays **Accepted** and in force until this ADR is accepted.
+- **Amends**: ADR-0158 — D16 renames `SyncMap.Len()` to `SyncMap.Length()` so
+  the concurrency story carries one name for one concept. Nothing else in
+  ADR-0158 changes. **D16 has landed** ahead of the rest of this ADR; see the
+  decision for why it was not held back.
 - **Related**: ADR-0002 (concurrency model: Go surface, .NET runtime, Kotlin
   scopes), ADR-0022 (`go`/`chan`/`select` lowering — this ADR completes and
   partly supersedes it), ADR-0023 (async state machines), ADR-0034 (imported
-  CLR interop), ADR-0039 (byref and CLR interop), ADR-0082 (`import`-gated
-  Go subspace, GS0316/GS0317), ADR-0084 (G#-authored `Gsharp.Extensions`
-  packages), ADR-0154 (test-oracle strength / mutant witnesses), ADR-0156
-  (emitted-only engine), ADR-0158 (synchronization story; the
+  CLR interop), ADR-0039 (byref and CLR interop), ADR-0084 (G#-authored `Gsharp.Extensions`
+  packages), ADR-0104 (`map[K, V]` type-clause spelling — the precedent D2
+  follows for `chan[T]`), ADR-0154 (test-oracle strength / mutant witnesses),
+  ADR-0156 (emitted-only engine), ADR-0158 (synchronization story; the
   representation-and-magic rule), ADR-0163 (`while let` loop-condition
   bindings), ADR-0168 (mixed deconstruction), ADR-0172 (named tuple
   elements); issue [#3304](https://github.com/DavidObando/gsharp/issues/3304)
@@ -121,10 +129,15 @@ among ready arms.
   lowering blocks. There is no cheap fix; the fix is to stop blocking.
 - **ADR-0158's representation rule.** Syntax-bearing types are
   compiler-known and identity-transparent to their BCL backing
-  (`map` ≡ `Dictionary`). Whatever `chan T` becomes must not throw away
-  `System.Threading.Channels` interop.
-- **ADR-0082's gate.** The Go surface is opt-in per file. Anything this ADR
-  adds inherits that gate and costs nothing to programs that do not import it.
+  (`map` ≡ `Dictionary`). Whatever the channel type becomes — under either
+  spelling — must not throw away `System.Threading.Channels` interop.
+- **ADR-0082's gate is retired by this ADR.** Wave 1 made the Go surface
+  opt-in per file. D12 removes the free-function built-ins that were the bulk
+  of what the gate protected, leaving only genuine syntax; D13 then drops the
+  opt-in entirely and makes that syntax part of the language. The channel
+  runtime is referenced by the SDK but only loaded by programs that construct
+  a channel, so the zero-cost property the gate was protecting is preserved by
+  linking rather than by binding.
 
 ### Measured baseline
 
@@ -193,10 +206,19 @@ semantics-equivalent implementations, then ratcheted in CI (D11).
 
 ## Decision
 
-Eleven decisions. D4 is the load-bearing one; the rest are either
-prerequisites for it or the expressability work it unblocks.
+Sixteen decisions. D4 is the load-bearing one; D1–D11 are either
+prerequisites for it or the expressability work it unblocks. D12–D16 are the
+surface-vocabulary decisions: they replace Go's free-function built-ins with
+ordinary members, retire the import gate, complete the spawn set, and settle
+one naming inconsistency this ADR's own vocabulary rule exposes in
+already-shipped code.
 
-### D1 — `chan T` stays `Channel<T>`; `make` constructs a G#-owned `Chan<T>` derived from it
+D2 belongs to that second group by subject even though it sits in the first
+by number: it respells the channel type clause `chan T` → `chan[T]`, which is
+what gives D12 its constructor spelling. It is numbered where it is because
+D3 onwards depend on the directional types it also defines.
+
+### D1 — `chan[T]` stays `Channel<T>`; construction yields a G#-owned `Chan<T>` derived from it
 
 A new C#-authored assembly, **`Gsharp.Runtime.Channels`**, packaged and
 referenced by the SDK exactly as `Gsharp.HotReload.Runtime` already is
@@ -211,34 +233,41 @@ The split that matters:
 
 | | CLR type |
 | --- | --- |
-| **The type `chan T` binds to** | `System.Threading.Channels.Channel[T]` — unchanged from wave 1 |
-| **The type `make(chan T, …)` constructs** | `Gsharp.Runtime.Channels.Chan[T]` |
+| **The type `chan[T]` binds to** | `System.Threading.Channels.Channel[T]` — unchanged from wave 1 |
+| **The expression `chan[T](…)` constructs** | `Gsharp.Runtime.Channels.Chan[T]` |
 
 This is deliberate, and it is a correction to an earlier draft of this ADR
-that bound `chan T` to the concrete `Chan[T]`. Binding the *type* to the
+that bound `chan[T]` to the concrete `Chan[T]`. Binding the *type* to the
 subclass buys nothing and costs inbound interop: a foreign `Channel[T]` from
-C# or NuGet would no longer be assignable to `chan T`. Binding the type to
+C# or NuGet would no longer be assignable to `chan[T]`. Binding the type to
 `Channel[T]` and the *constructor* to `Chan[T]` keeps ADR-0158's identity
-rule literally intact — `chan T` **is** `Channel<T>`, the way `map` **is**
+rule literally intact — `chan[T]` **is** `Channel<T>`, the way `map` **is**
 `Dictionary` — while still letting every channel G# creates carry the extra
 machinery.
+
+D12 keeps that split *invisible where it should be*: the author writes
+`chan[T](…)` where wave 1 wrote `make(chan T)`, and outside the one named
+factory below never has to spell `Chan` at all — much as a `map[K,V]` literal
+never spells `Dictionary`. The subclass is an implementation detail of the
+construction, not a second type in the user's everyday vocabulary.
 
 Operations dispatch accordingly: the emitter emits a type test, takes the
 fast path through `ISelectable[T]` when the instance is a `Chan[T]`, and
 falls back to the documented public `ChannelReader`/`ChannelWriter` protocol
 otherwise (matrix in D2). The fast path is the overwhelmingly common one,
-because it covers every channel created by `make`.
+because it covers every channel G# constructs.
 
 Semantics of a `Chan[T]` become Go-exact:
 
 | Form | Semantics |
 | --- | --- |
-| `make(chan T)` | **capacity 0 — a rendezvous channel.** A send completes only when a receiver takes the value. |
-| `make(chan T, n)` | ring buffer of capacity `n`, FIFO |
-| `close(ch)` | subsequent sends throw `ChannelClosedError`; receives drain, then yield `(zero, false)` forever |
-| `close` of a closed or `nil` channel | throws (Go panics) |
+| `chan[T]()` | **capacity 0 — a rendezvous channel.** A send completes only when a receiver takes the value. |
+| `chan[T](n)` | ring buffer of capacity `n`, FIFO |
+| `Chan.Unbounded[T]()` | unbounded buffer; the wave-1 behavior, now named |
+| `ch.Close()` | subsequent sends throw `ChannelClosedError`; receives drain, then yield `(zero, false)` forever |
+| `Close` of a closed or `nil` channel | throws (Go panics) |
 | send/receive on a `nil` channel | blocks forever (Go parity — this is what makes disabled `select` arms work) |
-| `len(ch)` / `cap(ch)` | buffered count / capacity — only defined on `Chan[T]` |
+| `ch.Length()` / `ch.Capacity` | buffered count / capacity — only defined on `Chan[T]` |
 
 **Memory model.** "Go-exact" is a claim about visibility, not just about
 queue behavior, so it is stated normatively:
@@ -251,11 +280,12 @@ queue behavior, so it is stated normatively:
   happens-before the *send completes*. `Chan[T]` matches this; a capacity-1
   bounded channel does not, which is why D1 cannot be built on
   `Channel.CreateBounded(1)`.
-- `close(ch)` happens-before a receive that observes closed-and-drained.
-- `len(ch)` and `cap(ch)` are **snapshots**. `len` carries no synchronization
-  guarantee and is racy by construction; it is diagnostic, not a control-flow
-  primitive. This matches Go and is documented as such rather than left to be
-  discovered.
+- `ch.Close()` happens-before a receive that observes closed-and-drained.
+- `ch.Length()` is a **snapshot**. It carries no synchronization guarantee and is
+  racy by construction; it is diagnostic, not a control-flow primitive. This
+  matches Go and is documented as such rather than left to be discovered.
+  `ch.Capacity` is *not* a snapshot — it is fixed for the life of the channel
+  and carries no race. D12 spells the two differently for exactly this reason.
 
 **Why C#-authored rather than G#-authored.** Unlike `SyncMap` (ADR-0158,
 zero compiler changes, ordinary G# surface), this assembly is *emitted into*
@@ -265,19 +295,51 @@ and lives on the hot path: it needs `IValueTaskSource`,
 infrastructure, not a user-facing library, and it must not participate in the
 `Gsharp.Extensions` bootstrap cycle.
 
-### D2 — `in chan T` / `out chan T` map onto `ChannelReader<T>` / `ChannelWriter<T>`
+### D2 — The type clause is `chan[T]`, and `in chan[T]` / `out chan[T]` map onto `ChannelReader<T>` / `ChannelWriter<T>`
 
 ```gsharp
-func produce(ch out chan int32) { … }       // send-only
-func consume(ch in chan int32) { … }        // receive-only
-func both(ch chan int32) { … }              // bidirectional
+func produce(ch out chan[int32]) { … }      // send-only
+func consume(ch in chan[int32]) { … }       // receive-only
+func both(ch chan[int32]) { … }             // bidirectional
 ```
 
 | G# type | CLR type |
 | --- | --- |
-| `chan T` | `System.Threading.Channels.Channel[T]` |
-| `out chan T` | `System.Threading.Channels.ChannelWriter[T]` |
-| `in chan T` | `System.Threading.Channels.ChannelReader[T]` |
+| `chan[T]` | `System.Threading.Channels.Channel[T]` |
+| `out chan[T]` | `System.Threading.Channels.ChannelWriter[T]` |
+| `in chan[T]` | `System.Threading.Channels.ChannelReader[T]` |
+
+**The element type moves inside brackets.** Wave 1 spelled the type clause
+`chan T`, juxtaposing the element type rather than bracketing it. That made
+`chan` the last keyword type clause in the language not to bracket its type
+arguments: `sequence[T]`, `asyncSequence[T]`, and — since ADR-0104 —
+`map[K, V]` all do. ADR-0104 retired `map[K]V` for exactly this reason and
+its Context section even lists `chan T` among the *converged* spellings,
+which was generous: a single juxtaposed argument is no more bracketed than a
+split one, it was simply less obviously wrong.
+
+The consistency argument is the same one ADR-0104 made and does not need
+restating. The argument ADR-0104 could not make, and that settles this, is
+that juxtaposition is **actively ambiguous** for channels in a way it never
+was for maps:
+
+- `chan int32?` parses as `chan (int32?)`, a channel of nullable, because the
+  element-type parser is greedy and consumes the `?`. A *nullable channel*
+  therefore has to be parenthesized, `(chan int32)?` — a carve-out the
+  grammar comments in `Parser.TypeClauses.cs:531-546` and the EBNF in
+  `spec.md:1827` both have to call out. With brackets, `chan[int32]?` and
+  `chan[int32?]` say the two things directly and the carve-out disappears.
+- The channel-level `?` slot is consequently almost unreachable today —
+  the parser comment concedes it is "only reachable for the rare element
+  shapes that do not themselves consume a trailing `?`". A grammar slot
+  that exists but is nearly unreachable is a latent bug.
+- Nesting reads better: `[]chan[T]` versus `[]chan T`, and
+  `map[string, chan[Job]]` versus `map[string, chan Job]`, where the reader
+  currently has to know that `chan` binds tighter than the enclosing comma.
+
+This also gives construction its spelling for free: `chan[T]()` and
+`chan[T](n)` are the type clause applied to arguments (D12), just as
+`map[K,V]{…}` is the map type clause applied to a literal body.
 
 Go's arrow spellings (`<-chan T` / `chan<- T`) are deliberately **not** kept.
 They are the shape a Go reader recognizes instantly, but they read as line
@@ -294,42 +356,49 @@ re-learn a spelling rather than recognize one:
 
 | Go | G# |
 | --- | --- |
-| `<-chan T` | `in chan T` |
-| `chan<- T` | `out chan T` |
-| `chan T` | `chan T` |
+| `<-chan T` | `in chan[T]` |
+| `chan<- T` | `out chan[T]` |
+| `chan T` | `chan[T]` |
 
 **Grammar note.** `in` and `out` are already keywords: ADR-0021 uses them for
 declaration-site variance *inside type-parameter brackets* (`interface
 Func[in TArg, out TResult]`), and `in` heads the `for … in …` loop. Neither
 collides — a channel direction appears only in **type position**, where
 neither of the others can. Phase 2 must nonetheless cover the one genuinely
-confusable line, `for v in ch`, against a parameter declared `ch in chan T`,
+confusable line, `for v in ch`, against a parameter declared `ch in chan[T]`,
 in the parser tests.
 
-Implicit conversions `chan T` → `out chan T` and `chan T` → `in chan T`
+Implicit conversions `chan[T]` → `out chan[T]` and `chan[T]` → `in chan[T]`
 exist; the reverse does not. This is what makes pattern 9 (channel ownership
-and routing) expressible: a producer returns `in chan T` and no caller can
+and routing) expressible: a producer returns `in chan[T]` and no caller can
 close it.
 
 It also preserves *inbound* interop: any BCL `ChannelReader<T>` — from
 `Channel.CreateUnbounded`, from a NuGet library, from C# — **is** a G#
-`in chan T` with no adapter, and any `Channel<T>` **is** a `chan T`.
+`in chan[T]` with no adapter, and any `Channel<T>` **is** a `chan[T]`.
 
 **Operation matrix.** Not every operation survives every representation, and
 pretending otherwise is how silent misbehavior gets shipped. This table is
 normative:
 
-| Operation | `Chan[T]` (from `make`) | Foreign `Channel[T]` | Foreign `ChannelReader[T]` | Foreign `ChannelWriter[T]` |
+| Operation | `Chan[T]` (constructed) | Foreign `Channel[T]` | Foreign `ChannelReader[T]` | Foreign `ChannelWriter[T]` |
 | --- | --- | --- | --- | --- |
 | send `ch <- v` | fast path | `WriteAsync` | — | `WriteAsync` |
 | receive `<-ch` | fast path | fallback loop | fallback loop | — |
 | two-value `v, ok = <-ch` | fast path | fallback loop | fallback loop | — |
 | `for v in ch` | fast path | `ReadAllAsync` | `ReadAllAsync` | — |
-| `close(ch)` | Go semantics (double-close throws) | `TryComplete()`; **double-close does not throw** | — | `TryComplete()` |
-| `len(ch)` / `cap(ch)` | supported | **GS0559** | **GS0559** | **GS0559** |
+| `ch.Close()` | Go semantics (double-close throws) | `TryComplete()`; **double-close does not throw** | **no member** | `TryComplete()` |
+| `ch.Length()` / `ch.Capacity` | supported | **no member** | **no member** | **no member** |
 | batch (D10) | fast path | element-wise fallback | element-wise fallback | element-wise fallback |
 | `select` arm | registered waiter | `WaitToRead/WriteAsync` + re-probe | same | same |
 | rendezvous guarantee | yes | **no** | **no** | **no** |
+
+Three of these rows say **no member** where an earlier draft said GS0551 or
+GS0559. That is D12 paying for itself: because `Close`, `Length`, and `Capacity`
+are members rather than free functions, "you cannot close a receive-only
+channel" and "`len` needs a channel we constructed" stop being bespoke
+channel diagnostics and become ordinary member-not-found errors that the
+existing binder already reports well.
 
 The **fallback loop** is `WaitToReadAsync()` → `TryRead(out v)`, *repeated*.
 The repetition is required, not incidental: `WaitToReadAsync` completing does
@@ -394,14 +463,14 @@ while let job = <-jobs {
 ADR-0163 requires a `while let` initializer to have nullable type `T?`
 (GS0296). A channel receive is a deliberate, narrow carve-out: it is
 *completion-bearing*, so the loop is governed by `ok`, not by nullability.
-`while let v = <-ch` therefore works for `chan int32` — no `chan int32?`, no
+`while let v = <-ch` therefore works for `chan[int32]` — no `chan[int32]?`, no
 reserved sentinel. This is the single change that retires the `nil`-sentinel
 protocol from the corpus.
 
 Three consequences of the carve-out are normative, because getting them wrong
 would silently corrupt data:
 
-- **No nullable stripping.** For `chan T?`, the bound variable is `T?`, not
+- **No nullable stripping.** For `chan[T]?`, the bound variable is `T?`, not
   `T`. Receiving a legitimate `nil` is a *successful* receive and **must**
   execute the loop body. This is the exact inverse of ADR-0163's normal rule,
   and it is the reason the carve-out has to be explicit rather than emergent:
@@ -435,7 +504,8 @@ The binder extends the existing for-in element protocol
 `IEnumerable[T]`, `IAsyncEnumerable[T]`, …) with a channel case. Iteration
 ends when the channel is closed and drained.
 
-**(d) `len(ch)` and `cap(ch)`**, gated with the other Go builtins.
+**(d) `ch.Length()` and `ch.Capacity`** — members on the constructed channel,
+not built-in functions. D12 gives the rationale and the naming split.
 
 The single-value form `<-ch` keeps Go's semantics — the element's zero value
 on a closed channel — but delivers it **without an exception**, which is the
@@ -446,30 +516,29 @@ The worker pool (pattern 1) becomes, in full:
 ```gsharp
 package Example.WorkerPool
 
-import Gsharp.Extensions.Go
-
-func worker(jobs in chan Job, results out chan Result) {
+func worker(jobs in chan[Job], results out chan[Result]) {
     for job in jobs {
         results <- process(job)
     }
 }
 
-func run(jobs in chan Job, workers int32) in chan Result {
-    let results = make(chan Result)
-    go func() {
+func run(jobs in chan[Job], workers int32) in chan[Result] {
+    let results = chan[Result]()
+    go {
         scope {
             for i in 0 ... workers {
                 go worker(jobs, results)
             }
         }
-        close(results)
-    }()
+        results.Close()
+    }
     return results
 }
 ```
 
-That is the Go program, with `scope` standing in for `sync.WaitGroup` and
-directional types making the ownership rule checkable.
+That is the Go program, with `scope` standing in for `sync.WaitGroup`,
+directional types making the ownership rule checkable, and no import
+required (D13).
 
 ### D4 — Suspension, not blocking: goroutine-reachable functions are compiled as state machines, and the coloring is *inferred*
 
@@ -882,16 +951,37 @@ default {
 - `case let v = await task` — a `Task`/`Task[T]` arm, so `select` can race
   channel work against ordinary BCL asynchrony without a bridging goroutine.
 
-### D9 — A small Go-shaped library, and an explicit list of what is *not* added
+### D9 — A small concurrency library, and an explicit list of what is *not* added
 
-Added to `Gsharp.Extensions.Go` (G#-authored where it can be, per ADR-0084):
+The helpers live in **`Gsharp.Concurrency`**, alongside the `Chan[T]` runtime
+class itself, and
+that namespace is on the **implicit import list** (suppressible with
+`/noimplicitimports`, like the other implicit imports). D13 removes the
+*gate*; it does not make every helper a global built-in. The distinction is
+deliberate:
+
+- `go`, `chan[T]`, `<-`, `select`, `go { … }`, and `async let` are **syntax** —
+  always available, no import, nothing to opt into;
+- `Chan.Unbounded`, `after`, `tick`, `merge`, and `Context` are **library** — ordinary
+  names in an ordinary namespace, reachable because that namespace is
+  implicitly imported, and hideable by a program that does not want them.
+
+G#-authored where it can be, per ADR-0084; the hot-path core is C#-authored
+per D1.
 
 | Addition | Purpose |
 | --- | --- |
+| `Chan.Unbounded[T]()` | the one construction form without a `chan[T]` spelling (D12) |
 | `after(d TimeSpan)` | `time.After` — selectable timer; `d` is the CLR `TimeSpan`, not a Go `Duration` |
 | `tick(d TimeSpan)` | `time.Tick` — selectable repeating timer; disposable, see leak note |
 | `Context` | `context.Context` bridge: wraps a `CancellationToken`, exposes `Token` for BCL interop, `WithTimeout`, `WithCancel`; the type of `scope`'s implicit `ctx` |
-| `merge(inputs …in chan T) in chan T` | fan-in (pattern 4), correct once D3 lands |
+| `merge(inputs …in chan[T]) in chan[T]` | fan-in (pattern 4), correct once D3 lands |
+
+This supersedes ADR-0082's `Gsharp.Extensions.Go` namespace for the
+concurrency surface. ADR-0082's *packaging* decision — a runtime assembly
+bundled by the SDK and referenced implicitly, with no `<PackageReference>`
+required of the user — is retained unchanged and is what makes an implicit
+namespace viable.
 
 Deliberately **not** added, each because the language already answers it
 better — the same posture ADR-0158 took:
@@ -915,12 +1005,12 @@ kind of buffer it can accept:
 
 ```gsharp
 // non-suspending: Span is legal, never crosses a suspension point
-func (ch in chan T) TryReceiveBatch(buffer Span[T]) int32
-func (ch out chan T) TrySendBatch(items ReadOnlySpan[T]) int32
+func (ch in chan[T]) TryReceiveBatch(buffer Span[T]) int32
+func (ch out chan[T]) TrySendBatch(items ReadOnlySpan[T]) int32
 
 // suspending: Memory only
-suspend func (ch in chan T) ReceiveBatch(buffer Memory[T], atLeast int32) int32
-suspend func (ch out chan T) SendBatch(items ReadOnlyMemory[T]) int32
+suspend func (ch in chan[T]) ReceiveBatch(buffer Memory[T], atLeast int32) int32
+suspend func (ch out chan[T]) SendBatch(items ReadOnlyMemory[T]) int32
 ```
 
 An earlier draft used `Span[T]` for the suspending forms. That is not
@@ -943,7 +1033,7 @@ survives only on the paths that provably cannot.
 to fill. `atLeast = buffer.Length` is a full-fill barrier. The parameter
 exists because both are legitimate and the default is genuinely ambiguous.
 
-**Rendezvous channels do not batch.** `cap(ch) == 0` means one value in
+**Rendezvous channels do not batch.** `ch.Capacity == 0` means one value in
 flight by definition, so `ReceiveBatch` on a rendezvous channel degenerates to
 `atLeast` sequential rendezvous transfers. That is correct but pointless;
 GS0562 warns.
@@ -1016,20 +1106,341 @@ The spike's hand-written `hchan` measured *worse* than the BCL channel
 park/unpark and scheduler hand-off are — but it was a *buffered* benchmark
 and therefore does not settle the rendezvous question either.
 
+### D12 — The channel built-ins become ordinary members
+
+`make`, `close`, `len`, and `cap` are retired from the channel surface and
+replaced by construction and members:
+
+| Wave 1 | This ADR | Kind |
+| --- | --- | --- |
+| `make(chan T)` | `chan[T]()` — **and the semantics change**, see D1 | constructor |
+| `make(chan T, n)` | `chan[T](n)` | constructor |
+| `make(chan T)` *(to preserve wave-1 buffering)* | `Chan.Unbounded[T]()` | static factory |
+| `close(ch)` | `ch.Close()` | instance method |
+| `len(ch)` | `ch.Length()` | instance **method** |
+| `cap(ch)` | `ch.Capacity` | instance **property** |
+
+**The constructor is spelled with the type clause, `chan[T]`.** D2 respells
+the channel type clause from `chan T` to `chan[T]`, and construction is then
+just that type clause applied to arguments — the same shape as `List[int32]()`
+and the exact parallel of `map[K,V]{…}` constructing a `Dictionary`. `chan[T]()`
+is a rendezvous channel, `chan[T](n)` is buffered with capacity `n`.
+
+This is why the capitalized `Chan` all but disappears from the surface. An
+earlier draft of this decision made `Chan[T]` the user-facing constructor and
+justified it by the BCL's non-generic-`Channel`-beside-`Channel<T>` pairing.
+That was the right shape for a library type and the wrong one here: `Chan<T>`
+is the *runtime* class D1 introduces, and users no more need to name it than
+they need to name `Dictionary` to write a `map` literal. One spelling,
+`chan[T]`, now covers the type and its construction.
+
+`Chan.Unbounded[T]()` survives as the single exception, reached through the
+runtime class name the way any static behind a magic collection type is
+reached. It is deliberately the wordiest of the three: an unbounded channel is
+a memory-leak risk that Go does not even offer, wave 1 produced one by
+*accident* from `make(chan T)`, and code that genuinely wants it should have
+to say so. `Chan.Rendezvous[T]()` and `Chan.Buffered[T](n)` from an earlier
+draft are dropped as redundant with `chan[T]()` and `chan[T](n)`.
+
+**Why this is not merely a re-spelling.** The `<-` operator and `select`
+statement carry syntax the compiler must bind, so they earn their magic under
+ADR-0158's rule. `make`, `close`, `len`, and `cap` carry none: they are free
+functions that exist only because Go spells them as builtins, and each one
+costs a diagnostic to police an operand a member would simply not offer.
+
+| Diagnostic an earlier draft needed | Why a member removes it |
+| --- | --- |
+| GS0551 — cannot `close` a receive-only channel | `in chan[T]` **is** `ChannelReader[T]` (D2), which has no `Close`. Ordinary member-not-found. |
+| GS0559 — `len`/`cap` need a channel we constructed | a foreign `Channel[T]` has no `Length`/`Capacity`. Ordinary member-not-found. |
+
+GS0548 is a third case and a different one. It was drafted to police
+`make(chan T)`'s silently-unbounded buffer, and *that* trap does die with the
+spelling — `chan[T]()` cannot be mistaken for a buffered channel and
+`Chan.Unbounded[T]()` has to be asked for by name. The identifier is kept, and
+downgraded to an advisory on newly-written `chan[T]()`, for the different
+reader who wanted a buffer and did not supply one. It is the one diagnostic
+here that survives D12 rather than being deleted by it.
+
+**Why `Length()` is a method and `Capacity` is a property.** They have opposite
+race properties and giving them the same shape would say they are the same
+kind of thing. `Capacity` is fixed for the life of the channel and carries no
+synchronization hazard, so it is a property, and `ch.Capacity == 0` is the
+documented rendezvous test. `Length()` is a racy snapshot — D1 states it is
+diagnostic, not a control-flow primitive — and the parentheses signal
+"computed, and stale the moment you have it". It avoids the failure ADR-0158
+names directly: a property on a concurrent object *looks* stable and invites
+`if ch.Count > 0 { <-ch }`, which races.
+
+`Length`, not `Len`. `Len` is a Go spelling, and D13's whole argument is that
+Go spellings give way where G# and the CLR already have one — `Array.Length`
+and `String.Length` are the incumbents. ADR-0158 shipped `SyncMap.Len()` under
+the older convention; D16 renames it rather than leaving the concurrency story
+with two names for one concept.
+
+**`chan[T]` implements `IDisposable`.** `Dispose()` closes the channel if it
+is not already closed, and is idempotent — which is why it cannot be spelled
+`Close()`: D1 requires double-`Close` to throw, and `Dispose` must not. This
+makes `using let` the lexical form for the create-and-drive-in-one-scope case
+and gives the ADR's "a goroutine parked forever on a channel nobody closes is
+unreclaimable" cost a real mitigation rather than a debug counter:
+
+```gsharp
+using let jobs = chan[Job](64)
+scope {
+    for i in 0 ... workers {
+        go worker(jobs)
+    }
+}
+// jobs is closed on scope exit even if the body threw
+```
+
+This is a complement, not a replacement. In patterns 1, 3, 4, and 9 the
+creator returns immediately and a spawned goroutine does the closing, so
+`using` would fire far too early; those keep `defer ch.Close()`.
+`Dispose` performs no suspending work, so GS0561 is not engaged.
+
+### D13 — The Go surface is no longer gated, and the collection built-ins are retired
+
+**The gate goes.** `go`, `chan[T]`, `<-`, `select`, `go { … }`, and `async let`
+are language syntax, available in every G# file with no import. GS0316 and
+GS0317 are retired and no longer reported. This supersedes ADR-0082's central
+decision.
+
+The gate is retired rather than relaxed because D4 changes what this surface
+*is*. ADR-0082 gated a *flavor* — an alternative spelling for programs whose
+shape suited it, with `scope` + `async`/`await` as the production surface.
+After D4, channel operations are the language's suspension points and `scope`
+is defined in terms of them. A language does not put its scheduler behind a
+per-file opt-in. ADR-0082's premise was correct for what wave 1 shipped and is
+no longer correct for what this ADR ships.
+
+**The collection built-ins go too.** `len`, `cap`, `append`, and `delete` on
+arrays, slices, maps, and strings — GS0317's actual subject — are removed
+rather than ungated. Leaving them would put four names in every G# program's
+global scope at the same moment D12 removes four from the channel surface,
+which is not a defensible pair of decisions.
+
+The replacements need no new API, because G#'s syntax-bearing types already
+*are* their BCL backing (ADR-0158):
+
+| Retired | Replacement | Already exists because |
+| --- | --- | --- |
+| `len(arr)`, `len(slice)`, `len(str)` | `.Length` | `[]T` **is** `T[]` (`SliceTypeSymbol.cs:31`); arrays and strings are CLR types |
+| `len(map)` | `.Count` | `map[K,V]` **is** `Dictionary[K,V]` |
+| `len(rect)` | `.Length`, `.GetLength(d)` | CLR rectangular array |
+| `delete(map, k)` | `.Remove(k)` | `Dictionary[K,V].Remove` |
+| `append(slice, v)` | `List[T]` + `.Add` | already the documented recommendation (`go-builtins.md`) |
+| `cap(slice)` | **nothing — removed outright** | see below |
+
+`cap` is deleted rather than replaced. A G# slice `[]T` **is** a CLR `T[]`,
+which has no capacity distinct from its length, so `cap` and `len` return the
+same number — the current documentation demonstrates it (`cap(nums)` is `3`
+for a 3-element slice) and the emitter for `BoundCapExpression` was never
+finished, which is the strongest available evidence that nobody needed it.
+Shipping a second spelling of `.Length` under a name that promises Go's
+amortized-growth semantics would be actively misleading, since G# slices have
+no such growth. `Chan[T].Capacity` is unaffected: a channel *does* have a
+capacity distinct from its count.
+
+`append` is deleted rather than given a member spelling. `[]T` is a fixed CLR
+array, so the current lowering allocates a new array and copies on every call
+(`MethodBodyEmitter.Expressions.cs:1101-1153`) — O(n) per element, with none
+of the amortization a Go programmer will assume from the name. A `.Append(v)`
+member would additionally collide with `System.Linq.Enumerable.Append`, which
+returns `IEnumerable[T]`. `List[T]` + `.Add` is the correct answer and the
+documentation already says so.
+
+**One migration diagnostic covers all of it.** GS0566 is reported at each
+retired built-in and its message names the replacement, in the same shape
+GS0317's message already uses.
+
+### D14 — `go { … }` block form
+
+`go` accepts a block as well as a call:
+
+```gsharp
+go { … }              // block form
+go f(x)               // call form, unchanged
+```
+
+The immediately-invoked goroutine literal `go func() { … }()` appears
+**fifteen times** in this document, and exists only because the binder
+requires a call operand (`StatementBinder.Blocks.cs:737-768`). It is the
+noisiest shape in the surface, and it is pure ceremony:
+
+```gsharp
+// before
+go func() {
+    defer out.Close()
+    for v in input { out <- f(v) }
+}()
+
+// after
+go {
+    defer out.Close()
+    for v in input { out <- f(v) }
+}
+```
+
+**The two forms differ in one normative way, and it must not be blurred.**
+D5's evaluation rule — callee and arguments evaluated on the spawning
+goroutine *before* the work item is queued — applies to `go f(x)`. A block has
+no arguments to evaluate; it **captures**. The usual objection follows: a
+captured loop variable is the classic Go bug, and is why Go's eager-argument
+rule exists at all.
+
+That objection does not apply to G#. `for … in` binds its element **per
+iteration** (as `foreach` does on the CLR, and as Go itself adopted in 1.22),
+so `go { use(v) }` inside a loop captures that iteration's `v`. The hazard
+Go's rule was defending against is already absent, which is why the block form
+is safe here and was not in pre-1.22 Go.
+
+Emission is strictly cheaper than the form it replaces: the block becomes the
+synthesized `IThreadPoolWorkItem` body directly (D5), with no lambda type, no
+delegate, and no invocation — where `go func(){…}()` synthesizes a closure and
+calls it.
+
+`go { … }` is a statement and produces no value, exactly as `go f(x)` does.
+Spawning something whose result you intend to read is D15.
+
+### D15 — `async let`: the structured, handle-free spawn
+
+```gsharp
+scope {
+    async let user   = fetchUser(id)
+    async let orders = fetchOrders(id)
+    return render(await user, await orders)
+}
+```
+
+`async let name = expr` starts `expr` as a **child of the enclosing `scope`**,
+dispatched through D5's work item so it genuinely runs concurrently, and binds
+`name` to its eventual result of type `R`.
+
+**Why this is needed at all.** `go` + `scope` + `async func` covers
+fire-and-forget, cancel-all, collect-a-stream, race, and timeout. It does not
+cover *spawn now, use the value later*, and the three things that look like
+they cover it do not:
+
+- **`async func` is not a spawn.** Its body runs synchronously on the caller
+  until the first suspension (ADR-0023); `go` dispatches to the pool.
+- **`async func` must be declared on the callee.** Under D4 the function whose
+  result you want is an ordinary `func`.
+- **`Task` is unstructured.** A `Task` created inside a `scope` is not
+  registered with it, not cancelled by it, and its failure is not collected
+  into `ScopeException` (D6).
+
+**Semantics**, stated normatively:
+
+| Question | Answer |
+| --- | --- |
+| Ownership | a child of the nearest enclosing `scope`; participates in D6's pending counter, cancellation, and failure aggregation exactly as a `go` child does |
+| Type of the binding | `R`, the logical result type — not a task |
+| Reading it | **`await name` is required at each use.** The use site is a suspension point, and D4's whole boundary discipline is that suspension is visible. This is Swift's rule for `async let`, for the same reason. |
+| Read twice | legal; the second `await` returns the completed value without suspending |
+| Never read | the child is cancelled at scope exit and awaited; if it failed, the failure propagates through the scope like any other child (D6) — it is **not** silently dropped. GS0559 warns. |
+| Failure | surfaces at `await`, or through the scope if never awaited |
+| Outside a `scope` | GS0551 — there is no owner, and an unowned `async let` is the unstructured `Task` this decision exists to avoid |
+| Escaping | impossible by construction: the binding is not a value, so it cannot be stored, returned, or collected |
+
+**Why a binding and not a handle.** A handle would be a value that outlives
+the scope that owns it, which is the property structured concurrency exists to
+remove. It would also forfeit D5's pooled builder: D5 requires a pooled
+`ValueTask` be **consumed exactly once**, and a user-visible handle can be
+dropped or awaited twice. Because `async let` keeps the completion object
+compiler-owned, exactly-once consumption is guaranteed and the pooled builder
+still applies — `async let` costs what `go` costs. Every value-handle design
+gives that up.
+
+The grammar slot is free and the family is established: G# already has
+`if let`, `while let`, `guard let`, `using let`, and `await using let`
+(`spec.md:1109, 1256-1279`), and `async` is already a keyword. `async let` is
+the one obvious empty seat.
+
+**What is deliberately *not* added.** A first-class spawn handle —
+`let h = go f(x)`, `spawn`, or a `Deferred[R]`. Two reasons, recorded so the
+idea is not re-proposed on intuition: "cancel or join one specific child" is
+already answered by nesting a `scope`, so a handle would be a second mechanism
+for something structured concurrency already does; and "hold a spawn as a
+value" is precisely the escape hatch that breaks the scope discipline D6 and
+D7 depend on. If a future ADR wants it, the option that fits this surface best
+is not a new handle type but a one-shot channel — Go's own answer — which
+composes with `select` with no new arm kind and inherits D1's memory model and
+D7's cancellation for free.
+
+### D16 — `SyncMap.Len()` becomes `SyncMap.Length()`
+
+ADR-0158 shipped `SyncMap` with `Len() int32`
+(`src/Sdk/Gsharp.Extensions/Sync/Sync.gs:156`). This ADR renames it to
+`Length()`. The signature, the semantics, and the racy-snapshot contract in its
+doc comment are unchanged; only the name moves.
+
+This is not a channel decision, and it is here because this ADR is what makes
+it necessary. D12 and D13 adopt a vocabulary rule — where G# and the CLR
+already have a spelling, Go's gives way — and then apply it hard enough to
+delete four global built-ins. `Len` is a Go spelling with a CLR incumbent
+(`Array.Length`, `String.Length`). Having spent the migration budget to remove
+`len(xs)` from the language, shipping `ch.Length()` next to `m.Len()` in the
+*same concurrency story*, for the identical concept with identical semantics,
+would be the exact inconsistency D13's "keep both spellings" alternative was
+rejected for.
+
+The rename keeps the **method** shape, which was never the Go-ism. ADR-0158
+chose a method over a property deliberately: the count is a snapshot that may
+be stale before it is observed, and parentheses say "computed" where a property
+says "stable". That reasoning is reproduced verbatim in D12 for `ch.Length()`,
+and after this rename the two members agree in name as well as in shape — which
+is the point, since a reader who learns the convention on one should not be
+surprised by the other.
+
+`Length` rather than `Count`, despite `Count` being the more common CLR
+spelling for a collection size, because `Count` is what `ICollection` and LINQ
+put on *stable* collections, and D12 records the specific failure mode this
+avoids: a `Count`-shaped member on a concurrent object invites
+`if m.Count > 0 { … }`, which races. `Length()` is deliberately not the
+spelling any BCL collection interface uses, so it does not read as a promise
+those interfaces make.
+
+Scope: `SyncMap.Len()` is the only `Len` in the shipped standard library, so
+this is a one-member rename with a mechanical call-site update, carried by
+GS0568.
+
+**This decision has already landed**, unlike D1–D15. That is deliberate and
+worth stating rather than leaving as an inconsistency for a reader to find.
+D16 touches nothing the rest of this ADR proposes: no channel, no goroutine,
+no diagnostic that does not already exist, and no design that Phase 1 could
+invalidate. Its entire cost is one method and its call sites, and every day it
+waits is a day more code is written against `Len()` that a later migration has
+to rewrite. Holding a one-member rename hostage to a fifteen-decision
+concurrency program would be paying interest for nothing. The rest of this ADR
+remains `Proposed`, and GS0568 is specified here for out-of-repo code rather
+than implemented.
+
 ## Consequences
 
 ### Breaking changes
 
 | # | Change | Migration |
 | --- | --- | --- |
-| 1 | `make(chan T)` becomes a rendezvous channel; it was unbounded | GS0548 (warning, one release; then behavior change): "`make(chan T)` is unbuffered — specify a capacity or accept rendezvous semantics." Mechanical fix: `make(chan T, n)`. |
+| 1 | **`make(chan T[, n])` is retired** in favour of `chan[T]([n])` / `Chan.Unbounded[T]()` (D12), and the no-capacity form is now a rendezvous channel rather than an unbounded one | GS0566 (error) at each `make`, naming the replacement. Because the spelling changes, the old silent-semantics trap is unreachable: `chan[T]()` is rendezvous by construction and `Chan.Unbounded[T]()` names the wave-1 behavior for code that wanted it. This merges what earlier drafts split across two rows, because it is one edit at one site. |
 | 2 | Receiving from a closed channel no longer raises and swallows `ChannelClosedException` | Observable only as a large speed-up, and through profilers/first-chance-exception handlers. |
-| 3 | `make(chan T, …)` constructs `Chan[T]`, not `Channel.CreateUnbounded`'s channel | **No source break.** `chan T` still *is* `Channel[T]`, so inbound and outbound interop are both unchanged. Observable only if code depended on the concrete runtime type. |
+| 3 | **`close(ch)`, `len(ch)`, `cap(ch)` are retired** in favour of `ch.Close()`, `ch.Length()`, `ch.Capacity` (D12) | GS0566 (error), message names the member. Mechanical. `chan[T]` still *is* `Channel[T]`, so inbound and outbound interop are unchanged; only what G# constructs is new. |
 | 4 | A function performing a channel operation becomes suspending, and its emitted CLR signature changes to return `ValueTask[R]` | Within an assembly, invisible. Across an assembly boundary it is binary-breaking — the same class of change as altering a return type. GS0560 warns where it happens; the strict-API opt-in escalates it to an error for libraries with a published surface. |
 | 5 | A suspending function may no longer convert to a non-suspending delegate type | GS0553 with the fix in the message. Affects code passing channel-touching lambdas to sync BCL callbacks (`Comparison[T]`, `Action`). |
 | 6 | `select` chooses uniformly at random among ready arms | Programs depending on today's receive-biased source order break. That dependency was never specified, and `samples/PortScan.gs:57` documents relying on it — the sample must be rewritten as part of this work. |
 | 7 | Channel operations are cancellation points | A blocked operation in a cancelled scope now throws instead of hanging. This is the intended behavior of ADR-0022 §scope. D7's linearization rule bounds it: a committed transfer still succeeds. |
 | 8 | `ExecutionContext` no longer flows into a goroutine (D5) | `AsyncLocal[T]`, `Activity`/distributed tracing, `CultureInfo`, and `ClaimsPrincipal` stop propagating across `go`. Hosts that need continuity must capture explicitly. Phase 3 measures the cost of restoring a minimal capture before this is locked in. |
+| 9 | **`len`, `cap`, `append`, `delete` are retired for arrays, slices, maps, and strings** (D13) | GS0566 (error) naming the replacement: `.Length`, `.Count`, `.Remove(k)`, `List[T]` + `.Add`. `cap` has no replacement and is deleted — for `[]T` ≡ `T[]` it returned `.Length`. Every replacement already exists via ADR-0158 type identity, so no new API ships with this row. |
+| 10 | **`import Gsharp.Extensions.Go` is no longer required, and no longer meaningful** for the concurrency surface (D13) | Non-breaking for *behavior* — code that has the import keeps compiling. The import becomes a no-op for these forms and the concurrency library moves to the implicitly-imported `Gsharp.Concurrency`. GS0316 and GS0317 are retired and never reported again. Supersedes ADR-0082. |
+| 11 | **The channel type clause is respelled `chan[T]`** (D2); `chan T` is rejected | GS0567 (error) with a span-accurate "did you mean `chan[T]`?", following ADR-0104's GS0366 precedent for `map[K]V` exactly: the legacy shape is still *recognized* by the parser for one release so the diagnostic can be precise, then bound as if the new spelling had been written. Purely mechanical, and IDE-fixable. The parenthesized nullable-channel workaround `(chan T)?` becomes `chan[T]?` and the parenthesized form stays legal as ordinary grouping. |
+| 12 | **`SyncMap.Len()` is renamed `SyncMap.Length()`** (D16) | GS0568 (error) naming the replacement. One member, mechanical. Semantics, signature, and the stale-snapshot contract are unchanged. |
+
+**Rows 1, 3, and 9 land in one migration window.** They are all "a retired
+built-in, with its replacement named in the diagnostic", they all fire GS0566,
+and a single mechanical pass fixes them. Doing them together is what makes the
+cost defensible: row 1's semantics were changing regardless, so the sites had
+to be visited anyway. In-repo scope is 7 `.gs` files and roughly 185 sites
+across 41 C# test files.
 
 ### What this unlocks
 
@@ -1043,6 +1454,24 @@ and therefore does not settle the rendezvous question either.
   claim in the surface.
 - G# can hold more shallow-parked operations per byte than Go. The advantage
   is depth-dependent (D4) and is measured per depth, not assumed.
+- **Concurrency stops being an opt-in dialect** (D13). Channels, `go`,
+  `select`, and `async let` are the language, not a flavor, and a learner
+  reaching for them does not first have to discover an import.
+- **Six compiler intrinsics leave the compiler** (D12, D13): `make`, `close`,
+  `len`, `cap`, `append`, and `delete` all stop having bespoke binder, emitter,
+  and bound-node-printer paths. Two *shipped* diagnostics, GS0316 and GS0317,
+  are retired with them; GS0551 and GS0559 were allocated by drafts of this ADR
+  and are now never implemented at all, which is cheaper still. The channel
+  surface's remaining magic — `chan[T]`, `<-`, `select`, `go`, `async let` — is
+  exactly the part that carries syntax, which is the line ADR-0158 drew.
+- **The IDE story improves without IDE work**: construction, closing, length,
+  and capacity become completable members on a type instead of magic names a
+  user has to already know.
+- **A grammar carve-out is deleted** (D2). `chan[T]?` and `chan[T?]` are now
+  distinguishable without parentheses, so the `(chan T)?` rule disappears from
+  the parser, from the EBNF in `spec.md`, and from the explanation anyone
+  writing a nullable channel currently has to read. The type grammar is left
+  with no keyword type clause that juxtaposes its type arguments.
 
 ### Operational and tooling consequences
 
@@ -1053,10 +1482,10 @@ than a discovery in the field.
 | --- | --- | --- |
 | **Debugging and stack traces** | D4 turns ordinary-looking functions into state machines. Call stacks become `MoveNext` frames; exception traces lose the logical G# frame. ADR-0023 notes await sequence-point markers are still emitted as `nop`s pending PDB support, so this lands on an already-weak foundation. | Phase 3 gate: source-level stack traces through inferred state machines, and a debugger step-over that does not descend into `MoveNext`. This is a **blocking** gate — inferred coloring that makes debugging worse is a bad trade regardless of throughput. |
 | **Hot reload** | Adding or removing a channel operation changes a method's signature *and* its state-machine shape. Both are rude edits. | `Gsharp.HotReload.Runtime` reports a clear restart-required diagnostic naming suspension change as the cause, rather than failing opaquely. |
-| **`gsi` / emitted-only engine (ADR-0156)** | `gsi` executes emitted IL in an in-memory load context and must resolve `Gsharp.Runtime.Channels` there. | Phase 1 gate: a `gsi` smoke test exercising `make`/send/receive/`select`. |
+| **`gsi` / emitted-only engine (ADR-0156)** | `gsi` executes emitted IL in an in-memory load context and must resolve `Gsharp.Runtime.Channels` there. | Phase 1 gate: a `gsi` smoke test exercising `Chan[T]` construction, send/receive, and `select`. |
 | **`cs2gs`** | C# translated to G# can contain synchronous callbacks that become invalid once inferred suspension propagates into them. | Phase 3: migration corpus test; `cs2gs` emits `suspend func`/`async func` explicitly rather than relying on inference. |
 | **Process exit** | Thread-pool threads are background threads. A free goroutine still running when the entry point returns is abandoned mid-flight — wave 1 has the same property via `Task.Run`, but D5 makes goroutines cheap enough that programs will have many more of them. | Documented explicitly; GS0563 warns on unscoped `go`. `scope` is the answer, and the guide leads with it. |
-| **Leaks** | An abandoned `tick` timer keeps firing; a goroutine parked forever on a channel nobody closes is unreclaimable. | `tick` returns a disposable; `using let` is the idiomatic form. A debug-mode runtime counter of live goroutines and registered waiters, surfaced by the runtime hook. |
+| **Leaks** | An abandoned `tick` timer keeps firing; a goroutine parked forever on a channel nobody closes is unreclaimable. | `tick` returns a disposable and `Chan[T]` is `IDisposable` (D12); `using let` is the idiomatic form for both. A debug-mode runtime counter of live goroutines and registered waiters, surfaced by the runtime hook. |
 | **Deadlock detection** | Go detects total deadlock ("all goroutines are asleep") because its scheduler owns every runnable entity. G# goroutines share the CLR thread pool with the rest of the process, so the equivalent global check is not available. | **Explicitly out of scope**, stated rather than omitted. Partial mitigation: `scope` can report the count and source locations of children still parked at a configurable timeout, which catches the common case without claiming Go's guarantee. |
 
 ### What this costs
@@ -1075,8 +1504,20 @@ than a discovery in the field.
 - Debugging and hot reload both get worse before tooling catches up; the
   Phase-3 gates exist because "faster but undebuggable" is not a trade this
   project should make silently.
-- Programs importing `Gsharp.Extensions.Go` gain a runtime dependency they
-  did not have. Programs that do not import it are unaffected (ADR-0082).
+- **Every program now carries the concurrency namespace in scope** (D13).
+  That is the point, but it is not free: `Chan`, `after`, `tick`, and `merge`
+  become names a program can collide with. They are implicitly *imported*, not
+  built in, so an ordinary explicit import or an alias resolves a collision —
+  but the collision is newly possible where the gate previously made it
+  impossible. `/noimplicitimports` remains the escape hatch.
+- **Retiring `len`/`cap`/`append`/`delete` is a real ergonomic loss for
+  Go-shaped code** (D13), and it is the decision in this ADR least forced by
+  necessity. It is taken because keeping four global built-ins while removing
+  four channel built-ins for the same stated reason would be incoherent — but
+  a Go programmer will type `len(xs)` and be corrected, and GS0566 needs to be
+  a genuinely good message for that to be acceptable.
+- Three source-breaking rows (1, 3, 9) land at once: 7 `.gs` files and roughly
+  185 sites across 41 C# test files in-repo, plus every downstream program.
 
 ### What this forecloses
 
@@ -1087,17 +1528,17 @@ infrastructure an actor implementation would need.
 
 ## Diagnostics
 
-This ADR allocates **GS0548–GS0565**. The highest identifier currently
-allocated in the repository's `GS05xx` band is GS0547, verified against
-`DiagnosticDescriptors`; conventions are documented at
-`docs/diagnostics.md:24-32, 46-83`.
+This ADR allocates **GS0548–GS0568** and **retires GS0316 and GS0317**. The
+highest identifier currently allocated in the repository's `GS05xx` band is
+GS0547, verified against `DiagnosticDescriptors`; conventions are documented
+at `docs/diagnostics.md:24-32, 46-83`.
 
 | ID | Severity | Meaning |
 | --- | --- | --- |
-| GS0548 | Warning → Error | `make(chan T)` is unbuffered; supply a capacity or accept rendezvous semantics |
-| GS0549 | Error | Cannot send on a receive-only channel (`in chan T`) |
-| GS0550 | Error | Cannot receive from a send-only channel (`out chan T`) |
-| GS0551 | Error | Cannot `close` a receive-only channel |
+| GS0548 | Warning | `chan[T]()` constructs a rendezvous channel; supply a capacity or use `Chan.Unbounded[T]()` if a buffer was intended. Advisory, and reachable only from newly-written code — migrated `make(chan T)` sites are rewritten by GS0566, not warned about here. |
+| GS0549 | Error | Cannot send on a receive-only channel (`in chan[T]`) |
+| GS0550 | Error | Cannot receive from a send-only channel (`out chan[T]`) |
+| GS0551 | Error | `async let` requires an enclosing `scope` *(reallocated — see note)* |
 | GS0552 | Error | A suspending override cannot implement a non-suspending declaration |
 | GS0553 | Error | A suspending function cannot convert to a non-suspending function type |
 | GS0554 | Error | Two-value receive requires exactly two targets |
@@ -1105,23 +1546,38 @@ allocated in the repository's `GS05xx` band is GS0547, verified against
 | GS0556 | Error | `select` arm guard must be a boolean expression |
 | GS0557 | Error | `case cancelled` is only valid inside a `scope` |
 | GS0558 | Warning | Suspending call in a non-suspending root context will block a thread |
-| GS0559 | Error | `len`/`cap` require a channel created by `make`; not available on a foreign `Channel[T]`, reader, or writer |
+| GS0559 | Warning | `async let` binding is never awaited; the child is started, then cancelled at scope exit *(reallocated — see note)* |
 | GS0560 | Warning (Error under strict API) | Public function became suspending by inference; declare `suspend func` to pin the signature contract |
 | GS0561 | Error | This member cannot suspend (constructor, accessor, static initializer, operator, finalizer, `Dispose`, or synchronous iterator) |
 | GS0562 | Warning | Batch operation on a rendezvous channel degenerates to sequential transfers |
 | GS0563 | Warning | Goroutine spawned outside a `scope`; its failure is fail-fast and it is not awaited |
 | GS0564 | Error | A `select` arm's channel operand appears in another arm with an incompatible direction |
 | GS0565 | Warning | `defer` body performs a channel operation; it will run under a shielded context with a bounded grace budget |
+| GS0566 | Error | Retired built-in; the message names the replacement (`make` → `chan[T](…)`, `close` → `.Close()`, `len` → `.Length` / `.Count` / `.Length()`, `cap` → removed or `.Capacity`, `append` → `List[T].Add`, `delete` → `.Remove(k)`) |
+| GS0567 | Error | Legacy channel type clause `chan T`; use `chan[T]` (D2) |
+| GS0568 | Error | `SyncMap.Len()` is renamed `SyncMap.Length()` (D16) |
+
+**Retired.** GS0316 and GS0317 gated the Go syntax and the Go built-ins
+respectively (ADR-0082). D13 removes the gate and D12/D13 remove the
+built-ins, so neither can be reported. Their identifiers are **not reused** —
+they shipped, and a retired shipped identifier stays retired.
+
+**Reallocated.** GS0551 and GS0559 were allocated by earlier drafts of *this*
+ADR for "cannot `close` a receive-only channel" and "`len`/`cap` require a
+channel created by `make`". D12 makes both conditions ordinary
+member-not-found errors, so neither diagnostic is needed. Because they were
+never implemented or shipped, the identifiers are reallocated within this
+ADR's own band rather than left as holes.
 
 ## Execution plan
 
 | Phase | Contents | Gate |
 | --- | --- | --- |
-| **1 — Runtime** | `Gsharp.Runtime.Channels`, `Chan[T]`, rendezvous, FIFO waiters, two-value receive, `Memory[T]` batch transfer, transactional `SelectWaiter` with generation counters and lock ordering; SDK packaging | C# unit tests + ADR-0154 mutant witnesses; **stress tests for the select protocol** (concurrent claim, ABA on pooled waiters, loser deregistration, close/cancel races); **memory-model tests** for the happens-before claims; `gsi` in-memory load-context smoke test; **true rendezvous baseline measured** and the D11 row filled in |
-| **2 — Observable completion** | D1 rebinding, D2 directional types and the foreign-channel matrix, D3's four surfaces, `len`/`cap`, GS0548–GS0551, GS0554–GS0555, GS0559 | Patterns 1, 4, 9 rewritten as samples with `.golden` output; `chan T?` sentinel deleted from docs; foreign-channel matrix covered row by row, including the `WaitToReadAsync` + `TryRead` **loop** under a competing consumer |
-| **3 — Suspension** | D4 inference and ABI, `suspend func`, `[Suspending]` metadata, builder selection, D5 `go` lowering and completion sink, #3304, GS0552/GS0553/GS0558/GS0560/GS0561/GS0563 | Starvation spike inverts: 400 parked + 1 spawned schedules immediately; **source-level stack traces and debugger step-over through inferred state machines** (blocking); hot-reload restart diagnostic; `cs2gs` migration corpus; `ExecutionContext` cost measured before isolation is locked in; spawn budget re-derived end-to-end |
-| **4 — Structure and selection** | D6 `scope` and its precedence table, D7 cancellation with the linearization rule and `defer` shielding, D8 `select`, D9 library, GS0556/GS0557/GS0564/GS0565 | Patterns 3, 7, 8 rewritten as samples; `PortScan.gs:57` rewritten off source-order dependence; **cancel-vs-commit race tests** proving no value is lost or duplicated; `defer`-under-cancellation tests including a `defer` that itself uses a channel |
-| **5 — Performance** | D10 batch surface, D11 harness, budget ratchet in CI | Budgets **set** from semantics-equivalent measurements, then ratcheted; within-runtime regression gate in the PR gate, Go ratio informational only |
+| **1 — Runtime** | `Gsharp.Runtime.Channels`, `chan[T]` (including its constructors, `Close`/`Length`/`Capacity`, and `IDisposable`), rendezvous, FIFO waiters, two-value receive, `Memory[T]` batch transfer, transactional `SelectWaiter` with generation counters and lock ordering; SDK packaging | C# unit tests + ADR-0154 mutant witnesses; **stress tests for the select protocol** (concurrent claim, ABA on pooled waiters, loser deregistration, close/cancel races); **memory-model tests** for the happens-before claims; `gsi` in-memory load-context smoke test; **true rendezvous baseline measured** and the D11 row filled in |
+| **2 — Observable completion and vocabulary** | D1 rebinding, D2 `chan[T]` respelling plus directional types and the foreign-channel matrix, D3's four surfaces, D12 members, D13 gate removal and built-in retirement, D16 `SyncMap.Length`, GS0548–GS0550, GS0554–GS0555, GS0566–GS0568; retire GS0316/GS0317 | Patterns 1, 4, 9 rewritten as samples with `.golden` output; `chan T?` sentinel deleted from docs; foreign-channel matrix covered row by row, including the `WaitToReadAsync` + `TryRead` **loop** under a competing consumer; **corpus migrated** (7 `.gs` files, ~185 test sites) and every GS0566 message asserted to name a working replacement; a channel program compiles with **no import**; **`chan[T]?` and `chan[T?]` bind to the two distinct types** and the `(chan T)?` carve-out is deleted from the grammar and `spec.md`; `SyncMap.Length()` renamed with call sites updated |
+| **3 — Suspension** | D4 inference and ABI, `suspend func`, `[Suspending]` metadata, builder selection, D5 `go` lowering and completion sink, D14 `go { … }` block form, #3304, GS0552/GS0553/GS0558/GS0560/GS0561/GS0563 | Starvation spike inverts: 400 parked + 1 spawned schedules immediately; **source-level stack traces and debugger step-over through inferred state machines** (blocking); hot-reload restart diagnostic; `cs2gs` migration corpus; `ExecutionContext` cost measured before isolation is locked in; spawn budget re-derived end-to-end; **`go { … }` emits no delegate** — asserted in allocation counts against the `go func(){…}()` form it replaces, and a per-iteration capture test |
+| **4 — Structure and selection** | D6 `scope` and its precedence table, D7 cancellation with the linearization rule and `defer` shielding, D8 `select`, D9 library, D15 `async let`, GS0551/GS0556/GS0557/GS0559/GS0564/GS0565 | Patterns 3, 7, 8 rewritten as samples; `PortScan.gs:57` rewritten off source-order dependence; **cancel-vs-commit race tests** proving no value is lost or duplicated; `defer`-under-cancellation tests including a `defer` that itself uses a channel; **`async let` tests**: two children run concurrently, an unawaited child is cancelled at scope exit, a failing unawaited child still reaches `ScopeException`, and the pooled builder is retained (allocation count) |
+| **5 — Performance** | D10 batch surface, D11 harness, GS0562, budget ratchet in CI | Budgets **set** from semantics-equivalent measurements, then ratcheted; within-runtime regression gate in the PR gate, Go ratio informational only |
 
 Phases 1–2 are independently shippable and already retire the four
 "awkward workaround" ratings. Phase 3 is the risk concentration, on two
@@ -1146,7 +1602,7 @@ rows.
    added `TryReceive(out value, out ok)` returns `ok=false` on a closed
    channel **with no exception**. D1 and D3 are mechanically sound. Note the
    limit of what this proves: it establishes *assignability* of `Chan[T]` to
-   `Channel[T]`, which is why D1 binds the **type** `chan T` to `Channel[T]`
+   `Channel[T]`, which is why D1 binds the **type** `chan[T]` to `Channel[T]`
    and only the **constructor** to `Chan[T]`.
 2. **An incomplete `IValueTaskSource`-backed `ValueTask` cannot be
    synchronously consumed.** Removing `.AsTask()` from the current lowering
@@ -1208,7 +1664,7 @@ performance budgets:
 The correctness guarantees, which matter more and are easier to leave
 untested:
 
-- **rendezvous** — a mutant that lets `make(chan T)` buffer one element must
+- **rendezvous** — a mutant that lets `chan[T]()` buffer one element must
   fail a test asserting the sender does not proceed until a receiver arrives;
 - **select atomicity** — a mutant that splits claim-and-transfer into
   "claim, then re-probe" must fail a stress test under a competing consumer
@@ -1226,10 +1682,32 @@ untested:
 - **`defer` shielding** — a mutant that runs `defer` under the cancelled
   context must fail a test whose cleanup performs a channel operation;
 - **`while let` nullable elements** — a mutant applying ADR-0163's nullable
-  stripping must fail a test that sends a legitimate `nil` on a `chan T?` and
+  stripping must fail a test that sends a legitimate `nil` on a `chan[T]?` and
   asserts the body ran;
 - **happens-before** — a mutant that publishes the payload after the transfer
-  commits must fail a test reading a field written before the send.
+  commits must fail a test reading a field written before the send;
+- **`chan[T].Dispose` idempotence** — a mutant that routes `Dispose` to
+  `Close` must fail a test that disposes an already-closed channel, since
+  `Close` throws on double-close and `Dispose` must not (D12);
+- **`Length` vs `Capacity`** — a mutant that returns the buffered count from
+  `Capacity`, or the capacity from `Length()`, must fail a test that fills a
+  channel partway and asserts the two differ;
+- **`go { … }` per-iteration capture** — a mutant that hoists the loop binding
+  out of the iteration must fail a test spawning `go { record(v) }` across a
+  loop and asserting every distinct `v` was recorded (D14);
+- **`async let` ownership** — a mutant that starts the child without
+  registering it with the enclosing scope must fail a test in which the scope
+  exits while the child is still running; a mutant that drops an unawaited
+  child's failure must fail a test asserting that failure reaches
+  `ScopeException` (D15);
+- **`async let` concurrency** — a mutant that evaluates the initializer
+  eagerly on the spawning goroutine (making `async let` an ordinary `let`)
+  must fail a test whose two children each block until the other has started;
+- **`chan[T]` nullability binding** — a mutant that binds `chan[int32]?` to a
+  channel-of-nullable, or `chan[int32?]` to a nullable-channel, must fail a
+  test that assigns `nil` to one and a `nil` element to the other (D2). This
+  is the witness that the respelling actually removed the ambiguity rather
+  than relocating it.
 
 ## Alternatives considered
 
@@ -1247,7 +1725,7 @@ while leaving the runtime broken produces confident, wrong programs.
 Mechanically the simplest route to D4's benefits — the async state-machine
 emitter already exists (ADR-0023). Rejected as the *primary* design because
 it breaks the promise this whole surface exists to keep: a Go programmer's
-`func worker(jobs in chan Job)` would have to be spelled `suspend func`, and
+`func worker(jobs in chan[Job])` would have to be spelled `suspend func`, and
 every caller up the chain with it. That is C#'s ergonomics wearing Go's
 syntax.
 
@@ -1274,12 +1752,12 @@ Rejected by measurement: 400 blocked receivers already produced 375 OS
 threads and a scheduling failure. This does not scale to Go's goroutine
 counts by two orders of magnitude.
 
-### Bind `chan T` to the concrete `Chan[T]`
+### Bind `chan[T]` to the concrete `Chan[T]`
 
-This ADR's own earlier draft. It reads well — "`chan T` **is** a G# channel" —
+This ADR's own earlier draft. It reads well — "`chan[T]` **is** a G# channel" —
 and it makes every operation a direct call with no type test. Rejected on
 review: binding the type to the subclass means a foreign `Channel[T]` from C#
-or NuGet is no longer assignable to `chan T`, which narrows inbound interop
+or NuGet is no longer assignable to `chan[T]`, which narrows inbound interop
 for no benefit that the constructor-only binding does not already provide.
 Subtype assignability is not the same property as ADR-0158's identity
 transparency, and claiming it was would have been the ADR asserting
@@ -1302,6 +1780,111 @@ Rejected by the spike's own result: the hand-written `hchan` was slower than
 the BCL's. Recorded here specifically so the idea is not re-proposed on
 intuition.
 
+### Keep the Go built-ins and the `import` gate
+
+The status quo, and the cheapest option: `make`, `close`, `len`, and `cap`
+stay free functions, `import Gsharp.Extensions.Go` stays the opt-in, and this
+ADR adds `len(ch)`/`cap(ch)` to the existing set. It has a real argument
+behind it — ADR-0082 created the Go subspace so Go-shaped code could be
+written *as Go*, and every replacement in D12/D13 makes it less so. A Go
+programmer arriving at `chan[Result](64)` must re-learn a spelling.
+
+Rejected because the ADR had already made the opposite choice once and could
+not justify making it inconsistently. D2 dropped Go's `<-chan T`/`chan<- T`
+on the grounds that **G# already had `in`/`out`**. That same test applied to
+the built-ins gives the same answer: G# already has constructors, members,
+`.Length`, `.Count`, `defer`, and `using let`. Keeping `make`/`close`/`len`/
+`cap` would mean the surface breaks Go's spelling where G# has an incumbent
+*except* where the incumbent happens to be a member rather than a keyword,
+which is not a principle anyone could apply to the next decision.
+
+The gate was rejected on a separate ground: D4 makes channel operations the
+language's suspension points, so this stops being a flavor and becomes
+infrastructure. ADR-0082's premise was right for what wave 1 shipped and
+wrong for what this ADR ships.
+
+### Retire the channel built-ins but keep `len`/`cap`/`append`/`delete`
+
+The narrower version of D13: fix the channel surface, leave the collection
+built-ins alone. Tempting because it halves the migration.
+
+Rejected as incoherent. The whole argument for `ch.Close()`/`ch.Length()` is
+that a free function carrying no syntax should be a member. `len(xs)` carries
+no syntax either. Removing four global built-ins from the channel surface for
+that reason while ungating four more into every program's global scope in the
+same ADR is two decisions that contradict each other. The evidence also ran
+the other way once examined: `cap` is degenerate on `[]T` ≡ `T[]` and its
+emitter was never finished, and `append`'s O(n)-per-element copy is a
+performance trap under a name that promises Go's amortized growth.
+
+### Keep both spellings — Go built-ins as aliases for the members
+
+The obvious compromise: `close(ch)` and `ch.Close()` both work, gated form
+documented for Go programmers.
+
+Rejected using this ADR's own words. D9 declines `sync.Once` and `atomic.*`
+wrappers because "adding Go-named wrappers would buy familiarity and cost a
+second way to do it". That reasoning does not become invalid one section
+later. The Go-to-G# bridge documentation carries a translation table instead,
+exactly as D2 already does for the arrow spellings.
+
+### A first-class spawn handle instead of `async let`
+
+`let h = go f(x)`, a `spawn` keyword, or a `Deferred[R]` — Kotlin's
+`async`/`Deferred` shape. Considered and rejected in D15; recorded here
+because it is the option most likely to be re-proposed.
+
+Three findings decided it. "Cancel one specific child" is already answered by
+nesting a `scope`, so a handle duplicates a mechanism. "Hold a spawn as a
+value" is exactly the escape from scope ownership that D6 and D7 depend on
+*not* being possible. And a user-visible handle forfeits D5's pooled builder,
+because a pooled `ValueTask` must be consumed exactly once while a handle can
+be dropped or awaited twice — so the handle form is a strictly more expensive
+lowering than `async let`, not a more flexible one at equal cost.
+
+The overloaded variant — `go f(x)` as a statement, `let h = go f(x)` as an
+expression — was rejected on a sharper ground: D5 makes an unobserved
+goroutine **fail-fast**, while a dropped `Task` is fail-silent. The same
+keyword would have opposite failure semantics depending on whether the caller
+used the result.
+
+### Keep the `chan T` type-clause spelling
+
+The cheapest option, and not obviously wrong: `chan T` is what wave 1 shipped,
+it is what Go writes, and respelling it churns every channel declaration in
+the corpus for no behavior change. ADR-0104 even listed `chan T` among the
+type clauses that had *already* converged.
+
+Rejected for one reason that consistency alone would not have carried: the
+juxtaposed form is ambiguous where the bracketed form is not. `chan int32?`
+means a channel of nullable, and a nullable channel has to be written
+`(chan int32)?` — a carve-out that exists in the parser
+(`Parser.TypeClauses.cs:531-546`), in the EBNF (`spec.md:1827`), and in the
+head of anyone writing the type. The channel-level `?` slot is correspondingly
+almost unreachable, which the parser's own comment concedes. A grammar with a
+nearly-unreachable production and a documented parenthesization workaround is
+carrying a latent bug, and `chan[T]` removes both. The consistency argument
+with `sequence[T]` and `map[K, V]`, and the fact that construction then needs
+no separate spelling, are real but secondary.
+
+The migration is the same shape ADR-0104 already executed for `map[K]V`,
+including recognizing the legacy form for one release to make GS0567
+span-accurate.
+
+### Give `SyncMap.Len()` a pass because it already shipped
+
+Renaming a shipped member is a real cost, and D16's subject is not even a
+channel. Leaving it alone was the default.
+
+Rejected because the cost of the inconsistency is paid forever by readers
+while the cost of the rename is paid once by a mechanical pass over one
+member. This ADR deletes `len` as a global built-in and adds `ch.Length()`; a
+`SyncMap.Len()` surviving in the same namespace would be the strongest
+available evidence that the vocabulary rule is applied by mood rather than by
+rule — and D13 explicitly rejected "keep both spellings" for that reason. The
+one-member scope is what makes this affordable; a wider `Len` surface would
+have deserved a separate ADR.
+
 ### Actors instead (#2485)
 
 Still the right long-term direction for *owned mutable state*, still not the
@@ -1312,8 +1895,8 @@ so this work moves that horizon closer rather than further.
 
 ## Open questions
 
-1. ~~**Spelling of directional types.**~~ **Resolved**: `in chan T` /
-   `out chan T`, not Go's `<-chan T` / `chan<- T`. Rationale and the Go
+1. ~~**Spelling of directional types.**~~ **Resolved**: `in chan[T]` /
+   `out chan[T]`, not Go's `<-chan T` / `chan<- T`. Rationale and the Go
    translation table are in D2.
 2. ~~**Is `suspend func` the right boundary spelling?**~~ **Resolved**: yes, a
    distinct keyword. `async func`'s task is *observable* and `suspend func`'s
@@ -1346,6 +1929,41 @@ so this work moves that horizon closer rather than further.
    unrecovered panic. An alternative is to log and continue, which is friendlier
    to server hosts but hides bugs. The runtime hook makes either possible; the
    default is the question.
+9. ~~**Does the gate cover syntax or vocabulary?**~~ **Resolved**: neither —
+   the gate is retired (D13). Syntax is always available; the library lives in
+   the implicitly-imported `Gsharp.Concurrency`.
+10. ~~**Should `len` and `cap` be spelled the same way?**~~ **Resolved**: no.
+    `ch.Length()` is a racy snapshot and is a method; `ch.Capacity` is immutable
+    and is a property (D12).
+11. ~~**Should `chan[T]` be `IDisposable`?**~~ **Resolved**: yes, as a
+    close-if-open safety net distinct from `Close()` (D12).
+12. ~~**Should `go` gain a block form?**~~ **Resolved**: yes (D14).
+13. ~~**Is a handle-returning spawn missing?**~~ **Resolved**: the gap was
+    real but narrower than "a handle" — it was *spawn now, use the value
+    later*. `async let` (D15) closes it without introducing a handle value.
+14. **Is `Gsharp.Concurrency` the right namespace name, and is implicit import
+    the right default?** D9 chooses both. The implicit import is what makes
+    D13's "built-in, not opt-in" real, but it also newly allows collisions on
+    `Chan`, `after`, `tick`, and `merge`. If collisions prove common in
+    practice, the fallback is an explicit import, which costs the seamlessness
+    but nothing else.
+15. **Should `await` be required at an `async let` use site?** D15 requires it,
+    on the grounds that the use site is a suspension point and D4's discipline
+    is that suspension is visible. The alternative — implicit, following D4's
+    implicit awaiting of inferred-suspending calls — is more concise and is
+    what Kotlin's `Deferred` avoids by being explicit. Worth revisiting once
+    Phase 4 has real code written against it.
+16. ~~**Should the channel type clause be respelled?**~~ **Resolved**: yes,
+    `chan[T]` (D2), which also gives `chan[T](…)` construction its spelling
+    and deletes the `(chan T)?` carve-out.
+17. **Should `Chan.Unbounded[T]()` exist at all?** D12 keeps it as the one
+    named factory, reached through the runtime class name. The alternative is
+    to drop unbounded channels from the G# surface entirely — Go has no such
+    thing, wave 1 only produced them by accident, and every use is a latent
+    unbounded queue. The reason not to is migration: wave 1 code that
+    knowingly relied on unbounded buffering needs a target for GS0566 to name.
+    Reconsider in Phase 5 once the corpus migration shows how many sites
+    actually chose it.
 
 ## Addendum A — The ten patterns, three ways
 
@@ -1362,6 +1980,8 @@ Two conventions used throughout:
   default (ADR-0006), so D4's GS0560 would suggest pinning these with
   `suspend func`. Application code can ignore that; a published library
   should not, and pattern 9 shows the declared form for contrast.
+- **vNext examples carry no `import Gsharp.Extensions.Go`.** D13 retires the
+  gate, and the 0.4 examples keep the import precisely to show what goes away.
 
 Seven of the ten patterns change. **Three do not** — 5, 6, and 10 are lock and
 atomic patterns that ADR-0158 and CLR interop already answer well, and this
@@ -1430,24 +2050,22 @@ go func() {
 **G# vNext**
 
 ```gsharp
-import Gsharp.Extensions.Go
-
-func worker(jobs in chan Job, results out chan Result) {
+func worker(jobs in chan[Job], results out chan[Result]) {
     for job in jobs {
         results <- process(job)
     }
 }
 
-func run(jobs in chan Job, workers int32) in chan Result {
-    let results = make(chan Result)
-    go func() {
+func run(jobs in chan[Job], workers int32) in chan[Result] {
+    let results = chan[Result]()
+    go {
         scope {
             for i in 0 ... workers {
                 go worker(jobs, results)
             }
         }
-        close(results)
-    }()
+        results.Close()
+    }
     return results
 }
 ```
@@ -1455,8 +2073,11 @@ func run(jobs in chan Job, workers int32) in chan Result {
 > **Delta.** `for job in jobs` (D3c) removes the sentinel protocol and the
 > `!!` unwraps; `Job` no longer has to be nullable. Directional types (D2)
 > make "workers may not close `results`" a compile error rather than a
-> comment. `scope` (D6) still replaces the `WaitGroup` — that part was
-> already better than Go.
+> comment — and with `Close` a member (D12), it is not even a channel-specific
+> diagnostic: `in chan[Result]` is `ChannelReader[Result]`, which has no
+> `Close`. `scope` (D6) still replaces the `WaitGroup` — that part was
+> already better than Go. The `go { … }` block (D14) and the absent import
+> (D13) are the remaining noise removed.
 
 ---
 
@@ -1512,14 +2133,12 @@ scope {
 already the surface's best fit.
 
 ```gsharp
-import Gsharp.Extensions.Go
-
-func runOne(item Item, sem chan bool) {
+func runOne(item Item, sem chan[bool]) {
     defer release(sem)
     process(item)
 }
 
-let sem = make(chan bool, limit)
+let sem = chan[bool](limit)
 
 scope {
     for item in items {
@@ -1529,11 +2148,13 @@ scope {
 }
 ```
 
-> **Delta.** Two behavioral fixes, no syntax change. The blocking `sem <- true`
-> no longer pins an OS thread (D4), so the spawner cannot starve the pool it
-> is feeding; and it now unwinds on scope cancellation instead of hanging
-> (D7). `make(chan bool, limit)` was already correct — `limit` is positive, so
-> defect 3 never bit here.
+> **Delta.** Two behavioral fixes and one spelling change. The blocking
+> `sem <- true` no longer pins an OS thread (D4), so the spawner cannot starve
+> the pool it is feeding; and it now unwinds on scope cancellation instead of
+> hanging (D7). The construction was already correct — `limit` is positive, so
+> defect 3 never bit here — but `chan[bool](limit)` now says
+> *buffered* rather than relying on the reader to know that a second argument
+> means capacity (D12).
 
 ---
 
@@ -1600,14 +2221,14 @@ func transform(input chan Item?, output chan Item?, done chan bool) {
 **G# vNext**
 
 ```gsharp
-func stage[T, R any](input in chan T, f (T) -> R) in chan R {
-    let out = make(chan R)
-    go func() {
-        defer close(out)
+func stage[T, R any](input in chan[T], f (T) -> R) in chan[R] {
+    let out = chan[R]()
+    go {
+        defer out.Close()
         for v in input {
             out <- f(v)
         }
-    }()
+    }
     return out
 }
 ```
@@ -1615,10 +2236,12 @@ func stage[T, R any](input in chan T, f (T) -> R) in chan R {
 > **Delta.** The single largest reduction in the study. Both `select`s vanish:
 > D7 makes every channel operation a cancellation point, so cancellation
 > unwinds through `for..in` and the send without being written down, and
-> `defer close(out)` still runs. The `done` channel, the sentinel, the nesting,
-> and the explicit `ctx` plumbing all disappear — and unlike Go, forgetting a
-> cancellation check is no longer possible, because there is nothing to
-> forget.
+> `defer out.Close()` still runs. The `done` channel, the sentinel, the
+> nesting, and the explicit `ctx` plumbing all disappear — and unlike Go,
+> forgetting a cancellation check is no longer possible, because there is
+> nothing to forget. The producer body is now a `go { … }` block (D14) rather
+> than an immediately-invoked closure, which is both shorter and one
+> allocation cheaper.
 
 ---
 
@@ -1684,20 +2307,20 @@ func merge(inputs []chan Item?) chan Item? {
 `merge` so nobody writes it again.
 
 ```gsharp
-func merge[T any](inputs ...in chan T) in chan T {
-    let out = make(chan T)
-    go func() {
+func merge[T any](inputs ...in chan[T]) in chan[T] {
+    let out = chan[T]()
+    go {
         scope {
             for input in inputs {
-                go func() {
+                go {
                     for v in input {
                         out <- v
                     }
-                }()
+                }
             }
         }
-        close(out)
-    }()
+        out.Close()
+    }
     return out
 }
 
@@ -1707,8 +2330,10 @@ let combined = merge(a, b, c)
 
 > **Delta.** `for v in input` (D3c) supplies the termination the workaround
 > could not express at any element type. The forwarder no longer needs to be
-> a named function, because the goroutine literal can capture `input`
-> per-iteration.
+> a named function, because the `go { … }` block (D14) captures `input`
+> per-iteration — the same binding rule `for..in` already has, which is why
+> the classic Go loop-variable bug this pattern guards against in the `go`
+> block does not arise here.
 
 ---
 
@@ -1907,6 +2532,27 @@ scope {
 > a block. It is also the pattern where G# 0.4's gap between accepted design
 > (ADR-0022) and shipped lowering is widest.
 
+The homogeneous case above is what `scope` alone handles. The *heterogeneous*
+case — a fixed set of differently-typed children whose results are all needed
+— is what `async let` (D15) adds:
+
+```gsharp
+scope {
+    async let user = fetchUser(id)
+    async let prefs = fetchPreferences(id)
+    async let feed = fetchFeed(id)
+
+    return Page(await user, await prefs, await feed)
+}
+```
+
+> All three requests are in flight at the first `async let`. Without D15 this
+> has no good spelling: `go` discards results, and a channel per child is
+> three constructions and three receives to express "run these three and use
+> the answers". The same failure and cancellation rules apply as to any other
+> child of the scope — a failure in `fetchPrefs` cancels its siblings and
+> surfaces at the scope boundary, whether or not `await prefs` was reached.
+
 ---
 
 ### Pattern 8 — Timeout wrapper
@@ -1956,8 +2602,8 @@ case <-timeout {
 
 ```gsharp
 func doWithTimeout[T any](timeout TimeSpan, f () -> T) T {
-    let ch = make(chan T, 1)
-    go func() { ch <- f() }()
+    let ch = chan[T](1)
+    go { ch <- f() }
 
     select {
     case let v = <-ch {
@@ -1973,8 +2619,9 @@ func doWithTimeout[T any](timeout TimeSpan, f () -> T) T {
 > **Delta.** `after(d)` (D9) is a selectable timer, not a channel fed by a
 > sleeping goroutine — so the losing timer costs nothing and nothing leaks.
 > The one-slot buffer is kept deliberately: it is what lets a late operation
-> send and exit instead of blocking forever, and that property survives
-> unchanged. `case let v = await task` (D8) covers the same shape when the
+> send and exit instead of blocking forever, and `chan[T](1)` (D12)
+> now says so at the construction site instead of leaving `, 1` to be
+> interpreted. `case let v = await task` (D8) covers the same shape when the
 > operation is already a `Task`.
 
 ---
@@ -2051,28 +2698,28 @@ func route(input chan int32?, evens chan int32?, odds chan int32?) {
 to pin its ABI (D4, GS0560). Application code may write plain `func`.
 
 ```gsharp
-suspend func produce(values []int32) in chan int32 {
-    let out = make(chan int32)
-    go func() {
-        defer close(out)
+suspend func produce(values []int32) in chan[int32] {
+    let out = chan[int32]()
+    go {
+        defer out.Close()
         for v in values {
             out <- v
         }
-    }()
-    return out
-}
-
-suspend func collect(input in chan int32) []int32 {
-    var out = []int32{}
-    for v in input {
-        out = append(out, v)
     }
     return out
 }
 
-suspend func route(input in chan int32, evens out chan int32, odds out chan int32) {
-    defer close(evens)
-    defer close(odds)
+suspend func collect(input in chan[int32]) []int32 {
+    var out = List[int32]()
+    for v in input {
+        out.Add(v)
+    }
+    return out.ToArray()
+}
+
+suspend func route(input in chan[int32], evens out chan[int32], odds out chan[int32]) {
+    defer evens.Close()
+    defer odds.Close()
 
     for v in input {
         if v % 2 == 0 {
@@ -2084,12 +2731,18 @@ suspend func route(input in chan int32, evens out chan int32, odds out chan int3
 }
 ```
 
-> **Delta.** Ownership becomes checkable: `produce` returns `in chan int32`,
-> so no caller can close it (GS0551); `route` takes `out chan int32`, so it
-> cannot accidentally *read* the channels it is filling (GS0550). `collect`
-> works at `int32` rather than `int32?` because `for v in input` terminates on
-> closure, not on a reserved value. This is the pattern that most needed the
-> type system, and the one the arrow-free `in`/`out` spelling reads best on.
+> **Delta.** Ownership becomes checkable, and after D12 it becomes checkable
+> *without a channel-specific rule*: `produce` returns `in chan[int32]`, which
+> is `ChannelReader[int32]`, which has no `Close` — so a caller trying to close
+> it gets an ordinary member-not-found error rather than a bespoke diagnostic.
+> `route` takes `out chan[int32]`, so it cannot accidentally *read* the channels
+> it is filling (GS0550). `collect` works at `int32` rather than `int32?`
+> because `for v in input` terminates on closure, not on a reserved value —
+> and it accumulates into a `List[int32]` rather than calling `append` per
+> element, which D13 retires precisely because it hid an O(n) copy behind a
+> name that promised amortized growth. This is the pattern that most needed
+> the type system, and the one the arrow-free `in`/`out` spelling reads best
+> on.
 
 ---
 

@@ -87,7 +87,7 @@ Design contract (details in the type's doc comments and
 - **Method-based, no index syntax** — `m[k] = m[k] + 1` on a shared map
   looks atomic and races; compound read-modify-write is spelled `Update`
   and is atomic against every other write.
-- **Reads and enumeration are lock-free** (`Load`, `Len`, `Contains`,
+- **Reads and enumeration are lock-free** (`Load`, `Length`, `Contains`,
   `Keys`, `Range`) on the private `ConcurrentDictionary` backing; writes
   (`Store`, `Delete`, `Update`) serialize on a hidden monitor that never
   leaks.

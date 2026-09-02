@@ -118,7 +118,10 @@ language surface:**
    (zero value when absent, mirroring G# map reads — which lower to
    `TryGetValue`, not `get_Item`), `Update(key, f) V` (atomic
    read-modify-write, returns the stored result), `Delete(key) bool`,
-   `Len() int32`, `Contains(key) bool`, `Keys() []K` (snapshot),
+   `Length() int32` (**renamed from `Len()` by ADR-0174 D16, landed** — `Len` was a
+   Go spelling with a CLR incumbent, and ADR-0174 retires that whole family;
+   the method shape and the stale-snapshot contract argued for below are
+   unchanged), `Contains(key) bool`, `Keys() []K` (snapshot),
    `Range(action)`. Reads and enumeration are lock-free on the concurrent
    backing; the three writes serialize on the private backing instance as
    hidden monitor — that is what makes `Update` atomic against *all*

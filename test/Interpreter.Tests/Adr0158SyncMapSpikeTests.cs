@@ -76,7 +76,7 @@ public class Adr0158SyncMapSpikeTests
                 }
             }
 
-            func Len() int32 {
+            func Length() int32 {
                 lock items {
                     return len(items)
                 }
@@ -299,7 +299,7 @@ public class Adr0158SyncMapSpikeTests
             func reader(m SyncMap) int32 {
                 var total = 0
                 for var i = 0; i < 20; i++ {
-                    total = total + m.Len()
+                    total = total + m.Length()
                     if m.Contains("k0") {
                         total = total + 1
                     }
@@ -406,7 +406,7 @@ public class Adr0158SyncMapSpikeTests
                     return v
                 }
 
-                func Len() int32 {
+                func Length() int32 {
                     return items.Count
                 }
             }
@@ -420,7 +420,7 @@ public class Adr0158SyncMapSpikeTests
                 var names = GenericSyncMap[int32, string]()
                 names.Store(1, "one")
 
-                var total = m.Load("a") + m.Load("b") + m.Load("c") + m.Len()
+                var total = m.Load("a") + m.Load("b") + m.Load("c") + m.Length()
                 if names.Load(1) == "one" {
                     total = total + 100
                 }

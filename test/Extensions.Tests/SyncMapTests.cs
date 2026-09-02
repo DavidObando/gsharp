@@ -94,12 +94,12 @@ public class SyncMapTests
     public void LenAndContains_TrackEntries()
     {
         var m = new SyncMap<string, int>();
-        Assert.Equal(0, m.Len());
+        Assert.Equal(0, m.Length());
         Assert.False(m.Contains("a"));
 
         m.Store("a", 1);
         m.Store("b", 2);
-        Assert.Equal(2, m.Len());
+        Assert.Equal(2, m.Length());
         Assert.True(m.Contains("a"));
         Assert.True(m.Contains("b"));
     }
@@ -167,7 +167,7 @@ public class SyncMapTests
                 new ParallelOptions { MaxDegreeOfParallelism = 16 },
                 i => m.Store("k" + i, i + 1));
 
-            Assert.Equal(keys, m.Len());
+            Assert.Equal(keys, m.Length());
             for (var i = 0; i < keys; i++)
             {
                 Assert.Equal(i + 1, m.Load("k" + i));
@@ -281,7 +281,7 @@ public class SyncMapTests
 
         for (var pass = 0; pass < 400; pass++)
         {
-            var len = m.Len();
+            var len = m.Length();
             Assert.InRange(len, 0, 32);
             _ = m.Contains("k0");
             var keys = m.Keys();

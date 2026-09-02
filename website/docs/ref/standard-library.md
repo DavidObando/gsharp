@@ -195,12 +195,12 @@ Console.WriteLine(m.Load("hits"))
 | `Load` | `func Load(key K) V` | Read `key`; returns `V`'s zero value when absent (map-read parity). Lock-free. |
 | `Update` | `func Update(key K, f (V) -> V) V` | Atomically replace the value with `f(current)` (`current` is the zero value when absent); returns the stored result. Atomic against all other writes. |
 | `Delete` | `func Delete(key K) bool` | Remove the entry; reports whether one was present. |
-| `Len` | `func Len() int32` | Entry count. Lock-free snapshot. |
+| `Length` | `func Length() int32` | Entry count. Lock-free snapshot. |
 | `Contains` | `func Contains(key K) bool` | Membership test. Lock-free. |
 | `Keys` | `func Keys() []K` | Snapshot slice of the keys. Safe under concurrent writes. |
 | `Range` | `func Range(action (K, V) -> void)` | Invoke `action` per entry; safe under concurrent writes, and `action` may itself write to the map (the monitor is not held). |
 
-`Load`, `Len`, and `Contains` carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]`. `Update` runs `f` while the internal write monitor is held — keep it small and non-blocking. Plain `map[K,V]` deliberately carries none of these guarantees; see [Maps](#maps).
+`Load`, `Length`, and `Contains` carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]`. `Update` runs `f` while the internal write monitor is held — keep it small and non-blocking. Plain `map[K,V]` deliberately carries none of these guarantees; see [Maps](#maps).
 
 ## Functions, delegates, and closures
 
