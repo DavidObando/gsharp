@@ -573,7 +573,11 @@ internal sealed partial class ExpressionBinder
                 inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, propertyName);
                 if (inhMember != null)
                 {
-                    if (!TryGetWritableClrMember(inhMember, out _, out var inhTargetSymbol, out _, fromDerivedType: true))
+                    // Issue #3815: project the inherited member through the
+                    // derived receiver so an imported GENERIC base's member keeps
+                    // the derived type's own type arguments (ChannelReader[T], not
+                    // the erased ChannelReader[object]).
+                    if (!TryGetWritableClrMember(inhMember, structSymbol, out _, out var inhTargetSymbol, out _, fromDerivedType: true))
                     {
                         Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
                         _ = BindExpression(initSyntax.Value);
@@ -1079,7 +1083,11 @@ internal sealed partial class ExpressionBinder
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                 if (clrMember != null)
                 {
-                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable, fromDerivedType: true))
+                    // Issue #3815: project the inherited member through the
+                    // derived receiver so an imported GENERIC base's member keeps
+                    // the derived type's own type arguments (ChannelReader[T], not
+                    // the erased ChannelReader[object]).
+                    if (!TryGetWritableClrMember(clrMember, structSymbol, out var inhTargetType, out var inhTargetSymbol, out var inhWritable, fromDerivedType: true))
                     {
                         Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, memberName);
                         return new BoundErrorExpression(null);
@@ -2706,7 +2714,11 @@ internal sealed partial class ExpressionBinder
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, fieldName);
                 if (clrMember != null)
                 {
-                    if (!TryGetWritableClrMember(clrMember, out var inhTargetType, out var inhTargetSymbol, out var inhWritable, fromDerivedType: true))
+                    // Issue #3815: project the inherited member through the
+                    // derived receiver so an imported GENERIC base's member keeps
+                    // the derived type's own type arguments (ChannelReader[T], not
+                    // the erased ChannelReader[object]).
+                    if (!TryGetWritableClrMember(clrMember, structSym, out var inhTargetType, out var inhTargetSymbol, out var inhWritable, fromDerivedType: true))
                     {
                         Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                         return new BoundErrorExpression(null);

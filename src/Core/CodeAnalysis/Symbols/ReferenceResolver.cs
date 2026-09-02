@@ -209,9 +209,15 @@ public sealed class ReferenceResolver : IDisposable
 
         public Assembly LoadReference(string path)
         {
-            directories.Add(Path.GetDirectoryName(path) ?? string.Empty);
+            AddProbeDirectory(path);
             return LoadFromAssemblyPath(path);
         }
+
+        // Issue #3818: a reference reused from the host context (rather than
+        // loaded here) still contributes its directory, so a private
+        // dependency sitting beside it stays resolvable from this context.
+        public void AddProbeDirectory(string path)
+            => directories.Add(Path.GetDirectoryName(path) ?? string.Empty);
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
@@ -509,7 +515,27 @@ public sealed class ReferenceResolver : IDisposable
                 }
 
                 var fullPath = Path.GetFullPath(path);
-                var assembly = runtimeContext.LoadReference(fullPath);
+
+                // Issue #3818: a reference the host has ALREADY loaded from
+                // this exact path must resolve to the host's instance, not to
+                // a second private copy. Loading it again into the driver
+                // context mints a rival identity for every type in it, and any
+                // Type that leaks between two compilations in one process
+                // (through the binder's process-wide symbol/member caches) then
+                // becomes a cross-context type: `MakeGenericMethod` rejects it,
+                // the only candidate is dropped, and the call reports the
+                // opaque "Cannot find function <name>" — order-dependently,
+                // because it needs an earlier compilation to have created the
+                // rival copy. Same file plus same identity means reuse is
+                // always safe; a genuinely different assembly does not match by
+                // path and is still loaded privately.
+                Assembly? reused = TryReuseHostLoadedAssembly(fullPath);
+                if (reused is not null)
+                {
+                    runtimeContext.AddProbeDirectory(fullPath);
+                }
+
+                var assembly = reused ?? runtimeContext.LoadReference(fullPath);
                 RegisterAssemblyOriginalPath(assembly, fullPath);
                 runtimeAssemblies.Add(assembly);
             }
@@ -1578,6 +1604,38 @@ public sealed class ReferenceResolver : IDisposable
         }
 
         AssemblyOriginalPaths.AddOrUpdate(assembly, path);
+    }
+
+    /// <summary>
+    /// Issue #3818: finds an assembly the default load context already holds
+    /// for <paramref name="fullPath"/>, so a runtime reference to it reuses the
+    /// host's identity instead of minting a second copy.
+    /// </summary>
+    /// <param name="fullPath">The absolute reference path.</param>
+    /// <returns>The already-loaded assembly, or <see langword="null"/>.</returns>
+    private static Assembly? TryReuseHostLoadedAssembly(string fullPath)
+    {
+        foreach (var loaded in AssemblyLoadContext.Default.Assemblies)
+        {
+            string location;
+            try
+            {
+                location = loaded.Location;
+            }
+            catch (NotSupportedException)
+            {
+                // Dynamic / in-memory assemblies have no location to match.
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(location)
+                && string.Equals(location, fullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return loaded;
+            }
+        }
+
+        return null;
     }
 
     private static ImmutableArray<Assembly> BuildHostAssemblies()
