@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -358,28 +359,15 @@ public class Issue2280AwaitForPatternAsyncEnumerableEmitTests
 
         IlVerifier.Verify(outPath, extraReferences);
 
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
-
-        if (extraReferences != null)
-        {
-            // The helper assembly isn't on the default load path, so resolve
-            // it explicitly when the runtime probes for it while invoking
-            // <Main>$.
-            AppDomain.CurrentDomain.AssemblyResolve += (_, resolveArgs) =>
-            {
-                var name = new AssemblyName(resolveArgs.Name).Name;
-                foreach (var reference in extraReferences)
-                {
-                    if (string.Equals(Path.GetFileNameWithoutExtension(reference), name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return Assembly.LoadFrom(reference);
-                    }
-                }
-
-                return null;
-            };
-        }
+        // The helper assemblies aren't on the default load path, so load them
+        // into the same context as the program that references them — the
+        // runtime probes for them while invoking <Main>$. (An
+        // AppDomain.AssemblyResolve hook cannot serve this: it only answers
+        // for the default context, and handing it an assembly from another
+        // context fails with "operation is not supported".)
+        var assembly = extraReferences == null || extraReferences.Length == 0
+            ? EmittedFixture.Load(outPath)
+            : EmittedFixture.LoadTogether(extraReferences.Append(outPath).ToArray())[^1];
 
         // Run the entry point and capture stdout
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");

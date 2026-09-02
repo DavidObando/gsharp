@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -202,7 +203,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
             Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
 
-        var assembly = Assembly.LoadFrom(result.OutputPath);
+        var assembly = EmittedFixture.Load(result.OutputPath);
         var api = assembly.GetType("Issue2514.Api")!;
         var readNameParameter = api.GetMethod("ReadName")!.GetGenericArguments().Single();
         Assert.Contains(

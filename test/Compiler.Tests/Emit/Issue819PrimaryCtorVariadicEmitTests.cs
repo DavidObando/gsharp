@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -165,7 +166,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             CompileLibrary(gsSrc, gsDll);
             IlVerifier.Verify(gsDll);
 
-            var asm = System.Reflection.Assembly.LoadFrom(gsDll);
+            var asm = EmittedFixture.Load(gsDll);
             var flags = System.Reflection.BindingFlags.Public
                 | System.Reflection.BindingFlags.NonPublic
                 | System.Reflection.BindingFlags.Instance;

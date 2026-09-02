@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Gsgen.Cli;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -129,7 +130,7 @@ public class Issue2215AnalyzerFlagTests
         Assert.True(exit == 0, $"gsc failed:\nstdout:\n{outWriter}\nstderr:\n{errWriter}");
         Assert.True(File.Exists(outPath));
 
-        var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+        var assembly = EmittedFixture.Load(outPath);
         var foo = assembly.GetTypes().Single(t => t.Name == "Foo");
 
         // "Greeting" only exists on Foo if gsc actually ran the generator (via
@@ -190,7 +191,7 @@ public class Issue2215AnalyzerFlagTests
         Assert.True(exit == 0, $"gsc failed:\nstdout:\n{outWriter}\nstderr:\n{errWriter}");
         Assert.True(File.Exists(outPath));
 
-        var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+        var assembly = EmittedFixture.Load(outPath);
         var foo = assembly.GetTypes().Single(t => t.Name == "Foo");
 
         // Only present if gsgen actually ran (paths tokenized correctly) and

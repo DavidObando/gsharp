@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -574,7 +575,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
                 csharpSource: null);
             Assert.True(exitCode == 0, diagnostics);
             IlVerifier.Verify(outPath, additionalReferences: references);
-            return Assembly.Load(File.ReadAllBytes(outPath));
+            return EmittedFixture.Load(outPath);
         }
         finally
         {

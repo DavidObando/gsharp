@@ -248,6 +248,6 @@ sealed interface IData {
             result.Success,
             "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
 
-        _ = System.Reflection.Assembly.Load(peStream.ToArray()).GetTypes();
+        _ = EmittedFixture.Load(peStream.ToArray()).GetTypes();
     }
 }

@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -478,7 +479,7 @@ public class Issue2933AsyncSelectArmBindingTests
         }
 
         Assert.True(exitCode == 0, $"{name}: gsc failed:\n{stdout}\n{stderr}");
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         return RunBounded(assemblyPath, name);
     }

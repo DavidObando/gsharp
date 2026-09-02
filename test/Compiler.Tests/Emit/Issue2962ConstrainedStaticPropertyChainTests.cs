@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 using Xunit.Sdk;
 
@@ -115,7 +116,7 @@ public class Issue2962ConstrainedStaticPropertyChainTests
         try
         {
             var assemblyPath = CompileSource(Source, directory, "Issue2962Chains.dll", target: "exe");
-            _ = Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes();
+            _ = EmittedFixture.Load(assemblyPath).GetTypes();
             Assert.Equal(Expected, RunChild(assemblyPath, directory));
         }
         finally

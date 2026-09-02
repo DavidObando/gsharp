@@ -15,6 +15,7 @@ using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -351,7 +352,7 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
                   """);
 
             IlVerifier.Verify(assemblyPath);
-            Assert.NotEmpty(Assembly.Load(bytes).GetTypes());
+            Assert.NotEmpty(EmittedFixture.Load(bytes).GetTypes());
 
             var start = new ProcessStartInfo("dotnet")
             {

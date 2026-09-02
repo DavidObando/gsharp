@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -249,8 +250,7 @@ public class Issue944IndexerDeclarationEmitTests
     {
         var (exitCode, output, outPath) = CompileToFile(source);
         Assert.True(exitCode == 0, $"gsc failed:\n{output}");
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 
     private static (int ExitCode, string Output) TryCompile(string source)

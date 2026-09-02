@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -206,7 +207,7 @@ public class Issue2342PackageScopedFunctionAndAliasEmitTests
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
         IlVerifier.Verify(outPath);
-        return Assembly.Load(File.ReadAllBytes(outPath));
+        return EmittedFixture.Load(outPath);
     }
 
     private static System.Collections.Generic.List<string> CompileExpectingErrors(params string[] sources)

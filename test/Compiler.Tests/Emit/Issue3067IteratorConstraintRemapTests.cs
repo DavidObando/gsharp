@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -209,7 +210,7 @@ public class Issue3067IteratorConstraintRemapTests
         try
         {
             var assemblyPath = Compile(source, directory);
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             var types = assembly.GetTypes();
             var stateMachine = Assert.Single(
                 types,

@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Threading.Tasks;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -447,7 +448,7 @@ public class Issue2922FixedSwitchIlTests
 
         public string AssemblyPath { get; }
 
-        public Assembly Load() => Assembly.Load(File.ReadAllBytes(AssemblyPath));
+        public Assembly Load() => EmittedFixture.Load(AssemblyPath);
 
         public void AssertLoadable() => Assert.NotEmpty(Load().GetTypes());
 

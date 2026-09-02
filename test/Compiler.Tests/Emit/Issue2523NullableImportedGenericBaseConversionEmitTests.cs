@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -77,8 +78,12 @@ public sealed class Issue2523NullableImportedGenericBaseConversionEmitTests
             IlVerifier.Verify(outputPath, additionalReferences: references);
             Assert.Equal($"3{Environment.NewLine}2{Environment.NewLine}", Run(outputPath));
 
-            var fixture = Assembly.LoadFrom(fixturePath);
-            var emitted = Assembly.LoadFrom(outputPath);
+            // One context for the reference fixture and the emitted
+            // assembly that imports it, so the nullability assertions
+            // below see one identity for the fixture's types.
+            var loaded2523 = EmittedFixture.LoadTogether(fixturePath, outputPath);
+            var fixture = loaded2523[0];
+            var emitted = loaded2523[1];
             var api = emitted.GetType("Issue2523.Emit.Api2523", throwOnError: true)!;
             var buildChain = api.GetMethod(
                 "BuildChain",

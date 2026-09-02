@@ -12,6 +12,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -323,7 +324,7 @@ public class Issue2953FixedReturnFallthroughGuardTests
             string.Join(Environment.NewLine, emit.Diagnostics.Select(diagnostic => diagnostic.ToString())));
 
         var bytes = peStream.ToArray();
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(bytes);
         Assert.NotEmpty(assembly.GetTypes());
 
         var stem = $"Issue2953_{name}_{Guid.NewGuid():N}";

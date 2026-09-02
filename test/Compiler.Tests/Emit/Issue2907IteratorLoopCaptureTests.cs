@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -528,7 +529,7 @@ public class Issue2907IteratorLoopCaptureTests
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
 
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
 
         var output = RunBounded(assemblyPath, name);
@@ -595,7 +596,7 @@ public class Issue2907IteratorLoopCaptureTests
 
         var assemblyPath = Compile(Source, nameof(LibraryIteratorLoopCaptureLoadsAndInvokes), target: "library");
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var method = program.GetMethod("values", BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(method);
@@ -630,7 +631,7 @@ public class Issue2907IteratorLoopCaptureTests
 
         var assemblyPath = Compile(Source, nameof(NonIteratorLoopCaptureGuard));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"0,1,{Environment.NewLine}", RunBounded(assemblyPath, nameof(NonIteratorLoopCaptureGuard)));
     }
@@ -666,7 +667,7 @@ public class Issue2907IteratorLoopCaptureTests
     {
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"{expected}{Environment.NewLine}{expected}{Environment.NewLine}", RunBounded(assemblyPath, name));
     }

@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -122,7 +123,7 @@ public class Issue3627VariadicCarrierEmitTests
         File.WriteAllText(srcPath, source);
         RunGsc(new[] { "/out:" + outPath, "/target:library", "/targetframework:net10.0", srcPath });
         IlVerifier.Verify(outPath);
-        return Assembly.Load(File.ReadAllBytes(outPath));
+        return EmittedFixture.Load(outPath);
     }
 
     private static string CompileAndRun(string source)

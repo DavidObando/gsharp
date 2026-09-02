@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -201,7 +202,7 @@ public class Issue2945StaticVirtualNullableErasureTests
         try
         {
             var libraryPath = CompileGSharp(source, directory, "Issue2945Matrix.dll", target: "library");
-            _ = Assembly.Load(File.ReadAllBytes(libraryPath)).GetTypes();
+            _ = EmittedFixture.Load(libraryPath).GetTypes();
             var consumerPath = CompileCSharpConsumer(consumer, libraryPath, directory);
             Assert.Equal(expected + Environment.NewLine, RunChild(consumerPath, directory));
             IlVerifier.Verify(libraryPath);
@@ -241,7 +242,7 @@ public class Issue2945StaticVirtualNullableErasureTests
         try
         {
             var outputPath = CompileGSharp(source, directory, "Issue2945GSharp.dll", target: "exe");
-            _ = Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
+            _ = EmittedFixture.Load(outputPath).GetTypes();
             Assert.Equal($"ok{Environment.NewLine}", RunChild(outputPath, directory));
             IlVerifier.Verify(
                 outputPath,

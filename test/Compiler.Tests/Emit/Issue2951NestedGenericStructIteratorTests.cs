@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -508,7 +509,7 @@ public class Issue2951NestedGenericStructIteratorTests
     private static void AssertLoadsAndRuns(string source, string name, string expected)
     {
         var assemblyPath = Compile(source, name);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal(expected, RunBounded(assemblyPath, name));
     }

@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -65,7 +66,7 @@ public sealed class Issue2502InheritedStaticMembersEmitTests
             var library = CompileGSharp(directory, "Issue2502Source", Source, "library");
             IlVerifier.Verify(library);
 
-            var assembly = Assembly.LoadFrom(library);
+            var assembly = EmittedFixture.Load(library);
             var derived = assembly.GetType("Issue2502Source.Derived2502")!;
             var closedBase = assembly.GetType("Issue2502Source.Base2502`1")!.MakeGenericType(typeof(string));
             Assert.Equal(closedBase, derived.BaseType!.BaseType);

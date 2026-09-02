@@ -12,6 +12,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -356,7 +357,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             File.Delete(assemblyPath);
         }
 
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(bytes);
         var types = assembly.GetTypes();
         Assert.NotEmpty(types);
         var program = types.Single(type => type.Name == "<Program>");

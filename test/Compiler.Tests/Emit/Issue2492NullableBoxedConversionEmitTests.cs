@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -206,7 +207,7 @@ public sealed class Issue2492NullableBoxedConversionEmitTests
             var (exitCode, stdout, stderr) = Compile(sourcePath, outputPath, "library");
             Assert.True(exitCode == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
             IlVerifier.Verify(outputPath);
-            return Assembly.Load(File.ReadAllBytes(outputPath));
+            return EmittedFixture.Load(outputPath);
         }
         finally
         {

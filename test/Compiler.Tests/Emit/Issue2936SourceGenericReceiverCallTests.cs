@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -41,7 +42,7 @@ public class Issue2936SourceGenericReceiverCallTests
         {
             var assemblyPath = Compile(Source, directory);
             IlVerifier.Verify(assemblyPath);
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             Assert.NotEmpty(assembly.GetTypes());
             Assert.Equal($"5{Environment.NewLine}", RunBounded(assemblyPath));
         }

@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -187,10 +188,19 @@ public class Issue2891TryRegionFlowEmitTests
             }
             public var result = F(false) + F(true)
             """);
+        // `Origin` carries a loop purely so the JIT will not inline it:
+        // the assertion below reads its frame out of the rethrown stack
+        // trace, and an inlined frame simply is not there. Code loaded into
+        // a collectible context is jitted with full optimizations from the
+        // start, so a one-line thrower would vanish (issue #3828).
         yield return Case("RethrowPreservesOriginStack", 7, """
             import System
             func Origin() {
-                throw Exception("origin")
+                var pad = 0
+                for var i = 0; i < 3; i++ {
+                    pad += i
+                }
+                throw Exception("origin" + pad.ToString())
             }
             func F(replace bool) int32 {
                 try {
@@ -628,7 +638,7 @@ public class Issue2891TryRegionFlowEmitTests
             File.Delete(assemblyPath);
         }
 
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(bytes);
         var types = assembly.GetTypes();
         Assert.NotEmpty(types);
         var program = types.Single(type => type.Name == "<Program>");
@@ -660,7 +670,7 @@ public class Issue2891TryRegionFlowEmitTests
             });
             Assert.Equal(0, exitCode);
             IlVerifier.Verify(assemblyPath);
-            Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+            Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes());
 
             var start = new ProcessStartInfo("dotnet")
             {

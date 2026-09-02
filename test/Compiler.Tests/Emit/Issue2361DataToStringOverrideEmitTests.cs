@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -508,7 +509,6 @@ public class Issue2361DataToStringOverrideEmitTests
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
         IlVerifier.Verify(outPath);
 
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 }

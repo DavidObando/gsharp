@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -102,7 +103,7 @@ public class Issue3566SequenceToNonGenericEnumerableTests
                 exitCode == 0,
                 $"gsc failed:\nstdout:\n{standardOut}\nstderr:\n{standardError}");
             IlVerifier.Verify(outputPath);
-            var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
+            var assembly = EmittedFixture.Load(outputPath);
             _ = assembly.GetTypes();
             var entryPoint = assembly.EntryPoint
                 ?? throw new InvalidOperationException("Emitted assembly has no entry point.");

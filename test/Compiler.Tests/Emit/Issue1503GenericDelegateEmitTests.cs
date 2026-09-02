@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -346,7 +347,7 @@ public class Issue1503GenericDelegateEmitTests
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
             IlVerifier.Verify(outPath);
 
-            return Assembly.Load(File.ReadAllBytes(outPath));
+            return EmittedFixture.Load(outPath);
         }
         finally
         {

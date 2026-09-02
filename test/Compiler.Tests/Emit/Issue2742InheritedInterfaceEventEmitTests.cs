@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -43,7 +44,7 @@ public sealed class Issue2742InheritedInterfaceEventEmitTests
         using var artifacts = Compile(source);
         IlVerifier.Verify(artifacts.OutputPath);
 
-        var assembly = Assembly.Load(File.ReadAllBytes(artifacts.OutputPath));
+        var assembly = EmittedFixture.Load(artifacts.OutputPath);
         var type = assembly.GetType("Oahu.Core.DownloadSettings", throwOnError: true)!;
         var instance = Activator.CreateInstance(type)!;
         var contract = assembly.GetType("Oahu.Core.IDownloadSettings", throwOnError: true)!;
@@ -103,7 +104,7 @@ public sealed class Issue2742InheritedInterfaceEventEmitTests
         using var artifacts = Compile(source);
         IlVerifier.Verify(artifacts.OutputPath);
 
-        var assembly = Assembly.Load(File.ReadAllBytes(artifacts.OutputPath));
+        var assembly = EmittedFixture.Load(artifacts.OutputPath);
         var type = assembly.GetType("Issue2742.Custom.Derived", throwOnError: true)!;
         var contract = assembly.GetType("Issue2742.Custom.IChanges", throwOnError: true)!;
         var instance = Activator.CreateInstance(type)!;
@@ -137,7 +138,7 @@ public sealed class Issue2742InheritedInterfaceEventEmitTests
         using var artifacts = Compile(source);
         IlVerifier.Verify(artifacts.OutputPath);
 
-        var assembly = Assembly.Load(File.ReadAllBytes(artifacts.OutputPath));
+        var assembly = EmittedFixture.Load(artifacts.OutputPath);
         var type = assembly.GetType("Issue2742.Imported.Derived", throwOnError: true)!;
         var instance = Activator.CreateInstance(type)!;
         var map = type.GetInterfaceMap(typeof(INotifyPropertyChanged));

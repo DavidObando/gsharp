@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -55,7 +56,7 @@ public class Issue2928TupleFunctionEmitTests
             result.Success,
             string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.ToString())));
 
-        var assembly = Assembly.Load(peStream.ToArray());
+        var assembly = EmittedFixture.Load(peStream.ToArray());
         var program = assembly.GetTypes().Single(type => type.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
 
