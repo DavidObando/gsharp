@@ -8,13 +8,12 @@
 package GSharp.Samples.Channels
 
 import System
-import Gsharp.Extensions.Go
 
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 ch <- 1
 ch <- 2
 ch <- 3
-close(ch)
+ch.Close()
 
 let a = <-ch
 let b = <-ch

@@ -6,25 +6,41 @@ draft: false
 
 # Go-flavored concurrency
 
-`Gsharp.Extensions.Go` is an opt-in extension namespace that surfaces
-the Go-shaped concurrency primitives — `go`, `chan T`, send and receive
-arrows, `select`, `close`, and `make(chan T, ...)` — on top of the
-runtime types that ship with .NET (`Task`, `System.Threading.Channels`).
+G#'s Go-shaped concurrency primitives — `go`, `chan[T]`, the send and
+receive arrows, and `select` — are part of the language (ADR-0174): no
+import, no opt-in. They sit on top of the runtime types that ship with .NET
+(`Task`, `System.Threading.Channels`) plus a small G#-owned channel runtime,
+`Gsharp.Runtime.Channels`, that the SDK references for you.
 
-The always-available concurrency surface (`scope`, `async`/`await`,
+The structured concurrency surface (`scope`, `async`/`await`,
 `async sequence[T]`) is documented in
 [Concurrency and async](../guide/concurrency). Use this page when you
 want goroutine- and channel-shaped code in a G# project.
 
-:::note Requires `import Gsharp.Extensions.Go`
-The Go-flavored forms are gated behind a per-file
-`import Gsharp.Extensions.Go`. Without the import, the binder emits
-[`GS0316`](../ref/diagnostics#go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316)
-for each gated form. The gate is always opt-in: `/noimplicitimports`
-does not interact with it. `scope` itself is not gated and works on
-the unannotated language; only the Go-flavored shapes need the
-import.
+:::note Coming from wave 1?
+ADR-0174 is a clean-cut break. `chan T` is now `chan[T]` (`GS0567`),
+`make(chan T[, n])` is `chan[T]()` / `chan[T](n)` / `Chan.Unbounded[T]()`
+and `close(ch)` is `ch.Close()` (`GS0566`), the `len`/`cap`/`append`/`delete`
+built-ins are retired for their members (`GS0566`), and
+`import Gsharp.Extensions.Go` is gone (`GS0316`/`GS0317` are retired).
+Every diagnostic names the replacement for the exact site it fires on.
 :::
+
+## Go to G# at a glance
+
+| Go | G# |
+| --- | --- |
+| `chan T` | `chan[T]` |
+| `<-chan T` (receive-only) | `in chan[T]` |
+| `chan<- T` (send-only) | `out chan[T]` |
+| `make(chan T)` (unbuffered) | `chan[T]()` (rendezvous) |
+| `make(chan T, n)` | `chan[T](n)` |
+| — (Go has no unbounded channel) | `Chan.Unbounded[T]()` |
+| `close(ch)` | `ch.Close()` |
+| `len(ch)` / `cap(ch)` | `ch.Length()` / `ch.Capacity` (on a channel you constructed) |
+| `v, ok := <-ch` | `let (v, ok) = <-ch` (or `v, ok = <-ch` into existing variables) |
+| `for v := range ch` | `for v in ch` |
+| `for { v, ok := <-ch; if !ok { break } … }` | `while let v = <-ch { … }` |
 
 ## Goroutines with `go`
 
@@ -38,14 +54,13 @@ at scope exit and failures propagate.
 package GSharp.Samples.GoScope
 
 import System
-import Gsharp.Extensions.Go
 
-func send(value int32, ch chan int32) int32 {
+func send(value int32, ch chan[int32]) int32 {
     ch <- value
     return 0
 }
 
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 scope {
     go send(1, ch)
     go send(2, ch)
@@ -68,23 +83,34 @@ failures.
 
 ## Channels
 
-Channels are typed `chan T` and created with `make(chan T)` (unbuffered)
-or `make(chan T, capacity)` (buffered). Send is a statement
-(`ch <- value`); receive is a prefix expression (`<-ch`). Closing a
-channel is supported via `close(ch)`. After a channel is closed and
-drained, receiving yields the element type's default value.
+Channels are typed `chan[T]` and constructed by applying the type clause to
+arguments: `chan[T]()` is a **rendezvous** channel — capacity 0, a send
+completes only when a receiver takes the value, exactly Go's unbuffered
+channel — and `chan[T](capacity)` is buffered. `Chan.Unbounded[T]()` is the
+one unbounded form; it is deliberately the wordiest, because an unbounded
+buffer is a memory-leak risk Go does not even offer. Send is a statement
+(`ch <- value`); receive is a prefix expression (`<-ch`). `ch.Close()`
+closes (closing twice throws, like Go's panic; `Dispose()` is the idempotent
+close, so `using let ch = chan[T](n)` works). After a channel is closed and
+drained, receiving yields the element type's zero value — with no
+exception on the way.
+
+A `chan[T]` converts implicitly to a receive-only `in chan[T]` or a
+send-only `out chan[T]`, never the reverse. That is what makes channel
+ownership checkable: a producer that returns `in chan[T]` hands out a
+handle nobody can close or send on (sending on an `in chan[T]` is
+`GS0549`; receiving from an `out chan[T]` is `GS0550`).
 
 ```gsharp title="Channels.gs"
 package GSharp.Samples.Channels
 
 import System
-import Gsharp.Extensions.Go
 
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 ch <- 1
 ch <- 2
 ch <- 3
-close(ch)
+ch.Close()
 
 let a = <-ch
 let b = <-ch
@@ -104,8 +130,72 @@ Console.WriteLine(d)
 0
 ```
 
-Internally, channels lower to `System.Threading.Channels` — the same
-types you would reach for from C#.
+`chan[T]` **is** `System.Threading.Channels.Channel<T>` (`in chan[T]` is
+`ChannelReader<T>`, `out chan[T]` is `ChannelWriter<T>`), so any channel
+coming from C# or a NuGet package flows into a `chan[T]` parameter with no
+adapter — and a `chan[T]` can be handed to any C# API that wants a
+`Channel<T>`. What `chan[T](…)` constructs is the runtime's
+`Gsharp.Concurrency.Chan<T>` subclass, which is where `Length()` (a racy
+snapshot, hence a method) and `Capacity` (fixed for the channel's life,
+hence a property) live. Foreign channels are supported through the public
+reader/writer protocol; only a G#-constructed channel has the rendezvous
+guarantee.
+
+## Observable completion: `ok`, `while let`, `for … in`
+
+A single-value receive cannot tell a closed channel from a delivered zero.
+The two-value receive can: `let (v, ok) = <-ch` binds the element and
+whether the channel delivered it (`ok` is `false` once the channel is
+closed and drained). `v, ok = <-ch` assigns two existing variables. Two
+loops drain a channel until it is closed — `for v in ch { … }` and
+`while let v = <-ch { … }` — and both deliver a `nil` element of a
+`chan[T?]` to the body rather than mistaking it for the end (the
+`while let` channel clause is keyed on `ok`, not on `nil`, so it does not
+strip the element's nullability). In a `while let` with several clauses
+the channel clauses gate in source order: a closed channel in the first
+clause never receives from the second.
+
+```gsharp title="ChannelOwnership.gs"
+package GSharp.Samples.ChannelOwnership
+
+import System
+
+func fill(ch out chan[int32], count int32) {
+    for i in 1 ... count + 1 {
+        ch <- i * i
+    }
+    ch.Close()
+}
+
+func squares(count int32) in chan[int32] {
+    let ch = chan[int32](2)
+    go fill(ch, count)
+    return ch
+}
+
+let source = squares(5)
+while let v = <-source {
+    Console.WriteLine(v)
+}
+
+let (afterClose, ok) = <-source
+Console.WriteLine("closed: {0} {1}", afterClose, ok)
+```
+
+```text
+1
+4
+9
+16
+25
+closed: 0 False
+```
+
+The producer owns the channel — it is the only party that sends and
+closes — and hands out an `in chan[int32]` nobody else can close. The
+worker-pool (`WorkerPool.gs`) and fan-in (`FanInMerge.gs`) samples build
+on the same three pieces: directional parameters, `for job in jobs`, and a
+`scope` that joins the workers before the results channel is closed.
 
 ## `select` over channel operations
 
@@ -117,9 +207,8 @@ send, and a `default` arm that runs when nothing is ready.
 package GSharp.Samples.Select
 
 import System
-import Gsharp.Extensions.Go
 
-let ready = make(chan int32, 1)
+let ready = chan[int32](1)
 ready <- 7
 select {
 case let v = <-ready {
@@ -127,7 +216,7 @@ case let v = <-ready {
 }
 }
 
-let empty = make(chan int32, 1)
+let empty = chan[int32](1)
 select {
 case let v = <-empty {
     Console.WriteLine("unexpected: $v")
@@ -157,7 +246,6 @@ package GSharp.Samples.AsyncGoScopeJoin
 
 import System
 import System.Threading.Tasks
-import Gsharp.Extensions.Go
 
 async func work() {
     await Task.Delay(1)
@@ -193,5 +281,5 @@ interop are one import away.
 
 - [Concurrency and async](../guide/concurrency) — the always-available
   `scope` + `async`/`await` surface.
-- [Go-style built-ins](go-builtins) — `len`, `cap`, `append`, `delete`
-  ship in the same `Gsharp.Extensions.Go` namespace.
+- [Go-style built-ins (retired)](go-builtins) — the replacement table for
+  `len`, `cap`, `append`, `delete`, `make`, and `close`.

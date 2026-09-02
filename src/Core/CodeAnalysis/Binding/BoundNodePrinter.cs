@@ -90,9 +90,6 @@ public static class BoundNodePrinter
             case BoundNodeKind.GoStatement:
                 WriteGoStatement((BoundGoStatement)node, writer);
                 break;
-            case BoundNodeKind.ChannelSendStatement:
-                WriteChannelSendStatement((BoundChannelSendStatement)node, writer);
-                break;
             case BoundNodeKind.SelectStatement:
                 WriteSelectStatement((BoundSelectStatement)node, writer);
                 break;
@@ -154,9 +151,6 @@ public static class BoundNodePrinter
             case BoundNodeKind.MapLiteralExpression:
                 WriteMapLiteralExpression((BoundMapLiteralExpression)node, writer);
                 break;
-            case BoundNodeKind.MapDeleteExpression:
-                WriteMapDeleteExpression((BoundMapDeleteExpression)node, writer);
-                break;
             case BoundNodeKind.IndexExpression:
                 WriteIndexExpression((BoundIndexExpression)node, writer);
                 break;
@@ -177,12 +171,6 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.FunctionPointerInvocationExpression:
                 WriteFunctionPointerInvocationExpression((BoundFunctionPointerInvocationExpression)node, writer);
-                break;
-            case BoundNodeKind.CapExpression:
-                WriteIntrinsicCall("cap", ((BoundCapExpression)node).Operand, writer);
-                break;
-            case BoundNodeKind.AppendExpression:
-                WriteAppendExpression((BoundAppendExpression)node, writer);
                 break;
             case BoundNodeKind.StructLiteralExpression:
                 WriteStructLiteralExpression((BoundStructLiteralExpression)node, writer);
@@ -282,15 +270,6 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.SwitchExpressionArm:
                 WriteSwitchExpressionArm((BoundSwitchExpressionArm)node, writer);
-                break;
-            case BoundNodeKind.MakeChannelExpression:
-                WriteMakeChannelExpression((BoundMakeChannelExpression)node, writer);
-                break;
-            case BoundNodeKind.ChannelReceiveExpression:
-                WriteChannelReceiveExpression((BoundChannelReceiveExpression)node, writer);
-                break;
-            case BoundNodeKind.ChannelCloseExpression:
-                WriteIntrinsicCall("close", ((BoundChannelCloseExpression)node).Channel, writer);
                 break;
             case BoundNodeKind.AddressOfExpression:
                 WriteAddressOfExpression((BoundAddressOfExpression)node, writer);
@@ -933,16 +912,6 @@ public static class BoundNodePrinter
         arm.Result.WriteTo(writer);
     }
 
-    private static void WriteChannelSendStatement(BoundChannelSendStatement node, IndentedTextWriter writer)
-    {
-        node.Channel.WriteTo(writer);
-        writer.WriteSpace();
-        writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-        writer.WriteSpace();
-        node.Value.WriteTo(writer);
-        writer.WriteLine();
-    }
-
     private static void WriteSelectStatement(BoundSelectStatement node, IndentedTextWriter writer)
     {
         writer.WriteKeyword(SyntaxKind.SelectKeyword);
@@ -1037,29 +1006,6 @@ public static class BoundNodePrinter
         writer.WriteIdentifier("yield");
         writer.WriteSpace();
         node.Expression.WriteTo(writer);
-    }
-
-    private static void WriteMakeChannelExpression(BoundMakeChannelExpression node, IndentedTextWriter writer)
-    {
-        writer.WriteIdentifier("make");
-        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
-        writer.WriteKeyword(SyntaxKind.ChanKeyword);
-        writer.WriteSpace();
-        writer.WriteIdentifier(node.ChannelType.ElementType.Name);
-        if (node.Capacity != null)
-        {
-            writer.WritePunctuation(SyntaxKind.CommaToken);
-            writer.WriteSpace();
-            node.Capacity.WriteTo(writer);
-        }
-
-        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
-    }
-
-    private static void WriteChannelReceiveExpression(BoundChannelReceiveExpression node, IndentedTextWriter writer)
-    {
-        writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-        node.Channel.WriteTo(writer);
     }
 
     private static void WriteImportedCallExpression(BoundImportedCallExpression node, IndentedTextWriter writer)
@@ -1334,17 +1280,6 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 
-    private static void WriteAppendExpression(BoundAppendExpression node, IndentedTextWriter writer)
-    {
-        writer.WriteIdentifier("append");
-        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
-        node.Slice.WriteTo(writer);
-        writer.WritePunctuation(SyntaxKind.CommaToken);
-        writer.WriteSpace();
-        node.Element.WriteTo(writer);
-        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
-    }
-
     private static void WriteMapLiteralExpression(BoundMapLiteralExpression node, IndentedTextWriter writer)
     {
         writer.WriteIdentifier(node.MapType.Name);
@@ -1364,17 +1299,6 @@ public static class BoundNodePrinter
         }
 
         writer.WritePunctuation(SyntaxKind.CloseBraceToken);
-    }
-
-    private static void WriteMapDeleteExpression(BoundMapDeleteExpression node, IndentedTextWriter writer)
-    {
-        writer.WriteIdentifier("delete");
-        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
-        node.Map.WriteTo(writer);
-        writer.WritePunctuation(SyntaxKind.CommaToken);
-        writer.WriteSpace();
-        node.Key.WriteTo(writer);
-        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 
     private static void WriteBlockExpression(BoundBlockExpression node, IndentedTextWriter writer)

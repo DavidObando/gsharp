@@ -42,7 +42,6 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SelectBreak
-            import Gsharp.Extensions.Go
 
             func F() int32 {
                 for {
@@ -61,10 +60,9 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SelectRealBreak
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 for {
                     select {
                         case ch <- 1 { break }
@@ -146,7 +144,6 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SelectGoto
-            import Gsharp.Extensions.Go
 
             func F() int32 {
                 select {
@@ -188,7 +185,6 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SwitchScopeBreak
-            import Gsharp.Extensions.Go
 
             func F(x int32) int32 {
                 for {
@@ -280,10 +276,9 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SelectArmCompletion
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 select {
                     case ch <- 1 { }
                     default { return 1 }
@@ -299,10 +294,9 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SelectReturns
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 select {
                     case ch <- 1 { return 1 }
                     case <-ch { return 2 }
@@ -319,10 +313,9 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SelectNoDefaultReturns
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 select {
                     case ch <- 1 { return 1 }
                     case <-ch { return 2 }
@@ -339,10 +332,9 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
         const string Source = """
             package Issue2890.SelectThrows
             import System
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 select {
                     case ch <- 1 { throw Exception() }
                     case <-ch { throw Exception() }
@@ -375,10 +367,9 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     {
         const string Source = """
             package Issue2890.SwitchSelectReturns
-            import Gsharp.Extensions.Go
 
             func F(x int32) int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 switch x {
                     case 1 {
                         select {

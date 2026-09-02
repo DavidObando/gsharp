@@ -229,12 +229,30 @@ public partial class Parser
         }
     }
 
+    private ExpressionSyntax ParseChannelCreationExpression()
+    {
+        // ADR-0174 D12: `chan[T]()` (rendezvous) / `chan[T](n)` (buffered).
+        // The type clause is parsed canonically — a legacy `chan T(…)` shape
+        // reports GS0567 from inside ParseChanTypeClause — and the argument
+        // list follows exactly as for `List[int32](…)`.
+        var typeClause = ParseChanTypeClause(directionToken: null, legacyMakeOperand: false);
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var arguments = ParseArguments();
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new ChannelCreationExpressionSyntax(syntaxTree, typeClause, openParen, arguments, closeParen);
+    }
+
     private ExpressionSyntax ParseMakeChannelExpression()
     {
-        // Phase 5.4 / ADR-0022: `make(chan T)` / `make(chan T, capacity)`.
+        // ADR-0174 D12 / GS0566: `make(chan T[, capacity])` is retired in
+        // favour of `chan[T](…)`. The shape is still recognized so the
+        // diagnostic can name the exact replacement for THIS site and the
+        // expression still binds (as a construction) — no cascade. The inner
+        // clause is parsed as a legacy-make operand so it does not also
+        // report GS0567: one diagnostic per retired site.
         var makeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-        var channelType = ParseChanTypeClause();
+        var channelType = ParseChanTypeClause(directionToken: null, legacyMakeOperand: true);
         SyntaxToken? comma = null;
         ExpressionSyntax? capacity = null;
         if (Current.Kind == SyntaxKind.CommaToken)
@@ -244,6 +262,14 @@ public partial class Parser
         }
 
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        var elementText = channelType.ChanElementType is { } element ? syntaxTree.Text.ToString(element.Span) : "T";
+        var retiredSpan = TextSpan.FromBounds(makeIdentifier.Span.Start, closeParen.Span.End);
+        var retiredText = syntaxTree.Text.ToString(retiredSpan);
+        var guidance = capacity is null
+            ? $"use 'chan[{elementText}]()' for a rendezvous channel (a send completes only when a receiver takes the value), or 'Chan.Unbounded[{elementText}]()' to keep the unbounded buffer wave 1 gave 'make(chan T)'."
+            : $"use 'chan[{elementText}]({syntaxTree.Text.ToString(capacity.Span)})' instead.";
+        Diagnostics.ReportRetiredBuiltin(new TextLocation(syntaxTree.Text, retiredSpan), retiredText, guidance);
         return new MakeChannelExpressionSyntax(syntaxTree, makeIdentifier, openParen, channelType, comma, capacity, closeParen);
     }
 

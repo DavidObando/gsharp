@@ -63,7 +63,7 @@ go x
         // Go-extensions import so existing `go` tests continue to exercise
         // bind/lower/emit rather than the gate. Issue722-specific gate
         // behaviour is covered by Issue722GoExtensionsImportGateTests.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var fullSource = source;
         return EmittedOracle.Evaluate(fullSource);
     }
 }

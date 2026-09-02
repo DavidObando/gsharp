@@ -27,7 +27,7 @@ public class VariadicTests
         var result = Evaluate(@"
 import System
 
-func CountTypes(types ...Type) int32 -> len(types)
+func CountTypes(types ...Type) int32 -> types.Length
 
 CountTypes(Type.EmptyTypes)
 ");
@@ -42,7 +42,7 @@ CountTypes(Type.EmptyTypes)
         var result = Evaluate(@"
 func sum(nums ...int32) int32 {
     var total = 0
-    for var i = 0; i < len(nums); i++ {
+    for var i = 0; i < nums.Length; i++ {
         total = total + nums[i]
     }
     return total
@@ -57,7 +57,7 @@ sum(1, 2, 3, 4)
     public void Variadic_AcceptsZeroTrailingArgs_EmptySlice()
     {
         var result = Evaluate(@"
-func count(xs ...int32) int32 { return len(xs) }
+func count(xs ...int32) int32 { return xs.Length }
 count()
 ");
         Assert.Empty(result.Diagnostics);
@@ -70,7 +70,7 @@ count()
         var result = Evaluate(@"
 func joinWith(sep string, parts ...string) string {
     var s = """"
-    for var i = 0; i < len(parts); i++ {
+    for var i = 0; i < parts.Length; i++ {
         if i > 0 { s = s + sep }
         s = s + parts[i]
     }
@@ -124,7 +124,7 @@ bad(1, 2)
         // ADR-0102 §5 — so packing semantics are exercised in the emit
         // tests, not here.)
         var result = Evaluate(@"
-let f = func(xs ...int32) int32 { return len(xs) }
+let f = func(xs ...int32) int32 { return xs.Length }
 ");
         Assert.Empty(result.Diagnostics);
     }
@@ -134,7 +134,7 @@ let f = func(xs ...int32) int32 { return len(xs) }
     {
         // ADR-0102 §3 — arrow-lambda variant.
         var result = Evaluate(@"
-let count = (xs ...int32) -> len(xs)
+let count = (xs ...int32) -> xs.Length
 count([]int32{10, 20, 30})
 ");
         Assert.Empty(result.Diagnostics);
@@ -150,7 +150,7 @@ count([]int32{10, 20, 30})
 class Joiner {
     func Sum(nums ...int32) int32 {
         var total = 0
-        for var i = 0; i < len(nums); i++ { total = total + nums[i] }
+        for var i = 0; i < nums.Length; i++ { total = total + nums[i] }
         return total
     }
 }
@@ -166,7 +166,7 @@ j.Sum(1, 2, 3, 4)
     {
         var result = Evaluate(@"
 class Joiner {
-    func Count(nums ...int32) int32 { return len(nums) }
+    func Count(nums ...int32) int32 { return nums.Length }
 }
 var j = Joiner()
 j.Count([]int32{1, 2, 3})
@@ -180,7 +180,7 @@ j.Count([]int32{1, 2, 3})
     {
         var result = Evaluate(@"
 class Joiner {
-    func Count(nums ...int32) int32 { return len(nums) }
+    func Count(nums ...int32) int32 { return nums.Length }
 }
 var j = Joiner()
 j.Count()
@@ -201,7 +201,7 @@ class Sequences {
     }
 }
 let xs = Sequences.Of(1, 2, 3)
-len(xs)
+xs.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
@@ -234,7 +234,7 @@ class Sequences {
     }
 }
 let xs = Sequences.Of[int32]()
-len(xs)
+xs.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(0, result.Value);
@@ -250,7 +250,7 @@ len(xs)
 interface IAdder {
     func Add(nums ...int32) int32 {
         var total = 0
-        for var i = 0; i < len(nums); i++ { total = total + nums[i] }
+        for var i = 0; i < nums.Length; i++ { total = total + nums[i] }
         return total
     }
 }
@@ -267,7 +267,7 @@ a.Add(1, 2, 3, 4)
     {
         var result = Evaluate(@"
 interface IAdder {
-    func Add(nums ...int32) int32 { return len(nums) }
+    func Add(nums ...int32) int32 { return nums.Length }
 }
 class Adder : IAdder {}
 var a = Adder()
@@ -290,7 +290,7 @@ class Tags {
     }
 }
 var t = Tags(""a"", ""b"", ""c"")
-len(t.Values)
+t.Values.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
@@ -307,7 +307,7 @@ class Tags {
     }
 }
 var t = Tags([]string{""x"", ""y""})
-len(t.Values)
+t.Values.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Value);
@@ -379,7 +379,7 @@ let r = d()
         var result = Evaluate(@"
 func Of[T](values ...T) []T { return values }
 let xs = Of(1, 2, 3)
-len(xs)
+xs.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
@@ -395,7 +395,7 @@ len(xs)
 func Of[T](values ...T) []T { return values }
 let arr = []int32{10, 20, 30}
 let xs = Of(arr)
-len(xs)
+xs.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
@@ -407,7 +407,7 @@ len(xs)
         var result = Evaluate(@"
 func Of[T](values ...T) []T { return values }
 let xs = Of[int32]()
-len(xs)
+xs.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(0, result.Value);
@@ -457,11 +457,7 @@ bad()
 
     private static EmittedOracleResult Evaluate(string source)
     {
-        // ADR-0083 / issue #723: prepend the Go extensions import so the
-        // `len(...)` calls inside variadic-helper test sources keep
-        // binding rather than tripping the GS0317 gate. The unused import
-        // is silent when a test happens not to call any gated built-in.
-        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
+        return EmittedOracle.Evaluate(source);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)

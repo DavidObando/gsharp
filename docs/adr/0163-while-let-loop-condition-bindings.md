@@ -1,6 +1,6 @@
 # ADR-0163: `while let` loop-condition bindings
 
-- **Status**: Accepted
+- **Status**: Accepted — follow-up in ADR-0174 D3: a `while let v = <-ch` clause is recognized syntactically and gates on the receive's `ok` flag instead of the nil check, so a `T?` element is delivered rather than ending the loop
 - **Date**: 2026-08-11
 - **Phase**: Language control flow / migration fidelity
 - **Related**: ADR-0069 (smart-cast narrowing), ADR-0070 (`while` and loop labels), ADR-0071 (`if let` / `guard let`), ADR-0160 (`as` yields nullable), [#3352](https://github.com/DavidObando/gsharp/issues/3352), parent [#3347](https://github.com/DavidObando/gsharp/issues/3347)

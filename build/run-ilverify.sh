@@ -91,6 +91,9 @@ for dll in "$RUNTIME_DIR"/System.*.dll \
            "$RUNTIME_DIR"/Microsoft.Win32.Registry.dll; do
     [[ -f "$dll" ]] && REF_ARGS+=(-r "$dll")
 done
+# ADR-0174 D1: emitted programs reference the channel runtime whenever they
+# construct or operate on a channel; it is not a BCL assembly, so add it.
+REF_ARGS+=(-r "$CHANNELS_DLL")
 
 # Baseline: map assembly base name -> comma-separated ignored error codes.
 baseline_codes() {

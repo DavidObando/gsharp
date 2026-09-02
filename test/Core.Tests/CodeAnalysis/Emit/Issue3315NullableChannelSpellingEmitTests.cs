@@ -8,29 +8,25 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
-/// Issue #3315 / ADR-0159 addendum: the nullable-channel spelling. A
-/// parenthesized single type clause <c>(T)</c> is grouping, and its trailing
-/// <c>?</c> marks the WHOLE inner type nullable — <c>(chan int32)?</c> is a
-/// nullable channel of <c>int32</c>, the GS0520 escape hatch for genuinely
-/// optional channel slots. The unparenthesized trailing <c>?</c> KEEPS its
-/// element binding (<c>chan int32?</c> is <c>chan (int32?)</c>), consistent
-/// with the suffix family (<c>[]T?</c> element-nullable per #1212,
-/// <c>(T) -&gt; R?</c> return-nullable per ADR-0075/ADR-0137). Both readings
-/// are pinned here — the chosen one positively, the other spelled explicitly.
+/// Issue #3315, restated under ADR-0174 D2: the nullable-channel spelling.
+/// With the element type inside brackets the two readings need no carve-out
+/// — <c>chan[int32]?</c> is a nullable channel of <c>int32</c> (the GS0520
+/// escape hatch for genuinely optional channel slots) and <c>chan[int32?]</c>
+/// is a channel of nullable elements. Both are pinned here, alongside the
+/// grouping forms <c>(T)?</c> that remain legal for every other composite.
 /// </summary>
 public class Issue3315NullableChannelSpellingEmitTests
 {
     [Fact]
     public void ParenthesizedNullableChannel_Local_DefaultsToNil_NoGS0520()
     {
-        // The optional-channel escape hatch: a `(chan T)?` slot is exempt
+        // The optional-channel escape hatch: a `chan[T]?` slot is exempt
         // from GS0520 and zero-values to nil.
         var result = EmittedOracle.Evaluate("""
             package P3315NullChanZero
 
-            import Gsharp.Extensions.Go
 
-            var c (chan int32)?
+            var c chan[int32]?
             c == nil
             """);
 
@@ -42,14 +38,13 @@ public class Issue3315NullableChannelSpellingEmitTests
     [Fact]
     public void ParenthesizedNullableChannel_NilInitializer_Binds()
     {
-        // Red→green witness: before #3315 `(chan int32)?` was a 1-tuple
+        // Red→green witness: before #3315 `chan[int32]?` was a 1-tuple
         // parse and reported "unexpected token" in the binder.
         var result = EmittedOracle.Evaluate("""
             package P3315NullChanNilInit
 
-            import Gsharp.Extensions.Go
 
-            var c (chan int32)? = nil
+            var c chan[int32]? = nil
             c == nil
             """);
 
@@ -65,9 +60,8 @@ public class Issue3315NullableChannelSpellingEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3315NullChanMake
 
-            import Gsharp.Extensions.Go
 
-            var c (chan int32)? = make(chan int32, 1)
+            var c chan[int32]? = chan[int32](1)
             var wasReady = c != nil
             c = nil
             wasReady && c == nil
@@ -84,10 +78,9 @@ public class Issue3315NullableChannelSpellingEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3315NullChanField
 
-            import Gsharp.Extensions.Go
 
             class Worker {
-                var inbox (chan int32)?
+                var inbox chan[int32]?
                 func HasInbox() bool { return inbox != nil }
             }
 
@@ -103,14 +96,13 @@ public class Issue3315NullableChannelSpellingEmitTests
     [Fact]
     public void UnparenthesizedQuestion_BindsToElement_NotChannel()
     {
-        // The OTHER reading, spelled explicitly: `chan int32?` stays a
+        // The OTHER reading, spelled explicitly: `chan[int32?]` stays a
         // channel of nullable elements, so it is NOT nil-assignable.
         var result = EmittedOracle.Evaluate("""
             package P3315ElemBinding
 
-            import Gsharp.Extensions.Go
 
-            var c chan int32? = nil
+            var c chan[int32?] = nil
             """);
 
         Assert.Contains(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
@@ -119,16 +111,15 @@ public class Issue3315NullableChannelSpellingEmitTests
     [Fact]
     public void ParenthesizedElement_SameTypeAsUnparenthesized()
     {
-        // `chan (int32?)` and `chan int32?` denote the same type: a channel
+        // `chan (int32?)` and `chan[int32?]` denote the same type: a channel
         // of nullable int32 is accepted where the other spelling is declared.
         var result = EmittedOracle.Evaluate("""
             package P3315ElemEquiv
 
-            import Gsharp.Extensions.Go
 
-            func take(c chan int32?) int32 { return 7 }
+            func take(c chan[int32?]) int32 { return 7 }
 
-            take(make(chan (int32?), 1))
+            take(chan[int32?](1))
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
@@ -186,14 +177,13 @@ public class Issue3315NullableChannelSpellingEmitTests
     [Fact]
     public void BareChannel_StillReportsGS0520()
     {
-        // The carve-out itself is unchanged: a bare `chan T` slot without an
+        // The carve-out itself is unchanged: a bare `chan[T]` slot without an
         // initializer stays an error.
         var result = EmittedOracle.Evaluate("""
             package P3315BareChanStillGS0520
 
-            import Gsharp.Extensions.Go
 
-            var c chan int32
+            var c chan[int32]
             """);
 
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0520");

@@ -1802,7 +1802,32 @@ internal sealed partial class StatementBinder
         // `var (a, b, ...) = expr` counterpart. Phase 7.3 extends the RHS from
         // tuple-only to data structs, preserving single-eval via a synthetic local.
         var isReadOnly = syntax.Keyword.Kind == SyntaxKind.LetKeyword;
-        var initializer = bindExpression(syntax.Initializer);
+        BoundExpression initializer;
+        if (IsChannelReceiveSyntax(syntax.Initializer, out var receive))
+        {
+            // ADR-0174 D3: `let (v, ok) = <-ch` is the two-value receive — the
+            // element (its zero value once closed) and whether the channel
+            // delivered it — bound as a `(T, bool)` tuple so the ordinary
+            // deconstruction below does the rest.
+            if (syntax.Identifiers.Count != 2)
+            {
+                Diagnostics.ReportChannelBindingTargetCount(syntax.CloseParenToken.Location, "let (value, ok) = <-ch", "two names", syntax.Identifiers.Count);
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            var received = BindTwoValueReceive(receive, out _);
+            if (received == null)
+            {
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            initializer = received;
+        }
+        else
+        {
+            initializer = bindExpression(syntax.Initializer);
+        }
+
         if (initializer.Type == TypeSymbol.Error)
         {
             return new BoundExpressionStatement(syntax, initializer);

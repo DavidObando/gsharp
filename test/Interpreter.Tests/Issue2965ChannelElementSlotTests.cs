@@ -18,15 +18,14 @@ public class Issue2965ChannelElementSlotTests
     {
         const string Source = """
             import System
-            import Gsharp.Extensions.Go
 
             data struct Pair(Value int32)
 
-            let plain = make(chan Pair, 1)
+            let plain = chan[Pair](1)
             plain <- Pair(41)
             Console.WriteLine((<-plain).Value)
 
-            let selected = make(chan Pair, 1)
+            let selected = chan[Pair](1)
             select {
                 case selected <- Pair(42) {
                     Console.Write("")

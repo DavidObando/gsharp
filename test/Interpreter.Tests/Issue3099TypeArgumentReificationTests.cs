@@ -31,7 +31,6 @@ public class Issue3099TypeArgumentReificationTests
         const string Source = """
             package Issue3255
             import System
-            import Gsharp.Extensions.Go
 
             class Box[T] {
             }
@@ -42,7 +41,7 @@ public class Issue3099TypeArgumentReificationTests
             }
 
             func Reify[T]() {
-                let channelValue = Box[Owner[chan T].Payload[string]]()
+                let channelValue = Box[Owner[chan[T]].Payload[string]]()
                 let channelType = channelValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
                 Console.WriteLine("chan:" + channelType.GetGenericTypeDefinition().FullName)
                 Console.WriteLine("chan-arg:" + channelType.GenericTypeArguments[0].FullName)
@@ -63,7 +62,7 @@ public class Issue3099TypeArgumentReificationTests
                 Console.WriteLine("async-sequence:" + asyncSequenceType.GetGenericTypeDefinition().FullName)
                 Console.WriteLine("async-sequence-arg:" + asyncSequenceType.GenericTypeArguments[0].FullName)
 
-                let deepValue = Box[Owner[map[string,sequence[chan T]]].Payload[string]]()
+                let deepValue = Box[Owner[map[string,sequence[chan[T]]]].Payload[string]]()
                 let deepMap = deepValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
                 let deepSequence = deepMap.GenericTypeArguments[1]
                 let deepChannel = deepSequence.GenericTypeArguments[0]
@@ -210,7 +209,6 @@ public class Issue3099TypeArgumentReificationTests
         const string Source = """
             package Issue3255ManagedFunctionPointer
             import System
-            import Gsharp.Extensions.Go
             class Box[T] {}
             class Owner[T] { class Payload[U] {} }
             unsafe func Reify[T]() {
@@ -235,7 +233,7 @@ public class Issue3099TypeArgumentReificationTests
 
             Assert.Equal(1, result.ExitCode);
             Assert.Contains(
-                "(7,27,7,45): error GS0521: Pointer and function-pointer types cannot be used as generic type arguments.",
+                "(6,27,6,45): error GS0521: Pointer and function-pointer types cannot be used as generic type arguments.",
                 result.Stdout,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", result.Stdout, StringComparison.Ordinal);

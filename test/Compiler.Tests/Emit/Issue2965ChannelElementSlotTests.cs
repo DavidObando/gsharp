@@ -25,11 +25,10 @@ public class Issue2965ChannelElementSlotTests
         const string Source = """
             package Issue2965SendOnly
             import System
-            import Gsharp.Extensions.Go
 
             data struct Pair(Value int32)
 
-            let ch = make(chan Pair, 1)
+            let ch = chan[Pair](1)
             ch <- Pair(41)
             Console.WriteLine(1)
             """;
@@ -45,7 +44,6 @@ public class Issue2965ChannelElementSlotTests
             import System
             import System.Threading
             import System.Threading.Tasks
-            import Gsharp.Extensions.Go
 
             data struct Pair(Value int32)
 
@@ -67,32 +65,32 @@ public class Issue2965ChannelElementSlotTests
 
             class RefBox(Value int32) {}
 
-            func delayedSend(ch chan Pair) int32 {
+            func delayedSend(ch chan[Pair]) int32 {
                 Thread.Sleep(10)
                 ch <- Pair(51)
                 return 0
             }
 
-            func delayedReceive(ch chan Pair) int32 {
+            func delayedReceive(ch chan[Pair]) int32 {
                 Thread.Sleep(10)
                 return (<-ch).Value
             }
 
             func echo[T](value T) T {
-                let ch = make(chan T, 1)
+                let ch = chan[T](1)
                 ch <- value
                 return <-ch
             }
 
             async func asyncPair() int32 {
-                let ch = make(chan Pair, 1)
+                let ch = chan[Pair](1)
                 ch <- Pair(50)
                 await Task.Delay(1)
                 return (<-ch).Value
             }
 
             async func asyncSelectPair() int32 {
-                let ch = make(chan Pair, 1)
+                let ch = chan[Pair](1)
                 ch <- Pair(56)
                 var result = 0
                 select {
@@ -104,24 +102,24 @@ public class Issue2965ChannelElementSlotTests
                 return result
             }
 
-            let plainReceive = make(chan Pair, 1)
+            let plainReceive = chan[Pair](1)
             plainReceive <- Pair(41)
             Console.WriteLine((<-plainReceive).Value)
-            close(plainReceive)
+            plainReceive.Close()
 
-            let selectReceive = make(chan Pair, 1)
+            let selectReceive = chan[Pair](1)
             selectReceive <- Pair(42)
             select {
                 case let value = <-selectReceive { Console.WriteLine(value.Value) }
             }
 
-            let discardReceive = make(chan Pair, 1)
+            let discardReceive = chan[Pair](1)
             discardReceive <- Pair(55)
             select {
                 case <-discardReceive { Console.WriteLine(55) }
             }
 
-            let selectSend = make(chan Pair, 1)
+            let selectSend = chan[Pair](1)
             select {
                 case selectSend <- Pair(43) {
                     Console.Write("")
@@ -129,49 +127,49 @@ public class Issue2965ChannelElementSlotTests
             }
             Console.WriteLine((<-selectSend).Value)
 
-            let plainStruct = make(chan Plain, 1)
+            let plainStruct = chan[Plain](1)
             plainStruct <- Plain{Value: 44}
             Console.WriteLine((<-plainStruct).Value)
 
-            let genericStruct = make(chan Box[int32], 1)
+            let genericStruct = chan[Box[int32]](1)
             genericStruct <- Box[int32]{Value: 45}
             Console.WriteLine((<-genericStruct).Value)
 
-            let nestedStruct = make(chan Outer, 1)
+            let nestedStruct = chan[Outer](1)
             nestedStruct <- Outer{Item: Inner{Value: 46}}
             Console.WriteLine((<-nestedStruct).Item.Value)
 
-            let nullableValue = make(chan int32?, 1)
+            let nullableValue = chan[int32?](1)
             nullableValue <- 47
             Console.WriteLine((<-nullableValue) ?? -1)
 
-            let nullablePair = make(chan Pair?, 1)
+            let nullablePair = chan[Pair?](1)
             nullablePair <- Pair(54)
             Console.WriteLine(((<-nullablePair) ?? Pair(-1)).Value)
 
-            let reference = make(chan RefBox, 1)
+            let reference = chan[RefBox](1)
             reference <- RefBox(48)
             Console.WriteLine((<-reference).Value)
 
-            let primitive = make(chan int32, 1)
+            let primitive = chan[int32](1)
             primitive <- 49
             Console.WriteLine(<-primitive)
 
-            let imported = make(chan DateTime, 1)
+            let imported = chan[DateTime](1)
             imported <- DateTime(2020, 1, 1)
             Console.WriteLine((<-imported).Year)
 
-            let closed = make(chan Pair, 1)
-            close(closed)
+            let closed = chan[Pair](1)
+            closed.Close()
             Console.WriteLine((<-closed).Value)
 
-            let closedSelect = make(chan Pair, 1)
-            close(closedSelect)
+            let closedSelect = chan[Pair](1)
+            closedSelect.Close()
             select {
                 case let value = <-closedSelect { Console.WriteLine(value.Value) }
             }
 
-            let blockingReceive = make(chan Pair)
+            let blockingReceive = Chan.Unbounded[Pair]()
             scope {
                 go delayedSend(blockingReceive)
                 select {
@@ -179,7 +177,7 @@ public class Issue2965ChannelElementSlotTests
                 }
             }
 
-            let blockingSend = make(chan Pair)
+            let blockingSend = Chan.Unbounded[Pair]()
             scope {
                 go delayedReceive(blockingSend)
                 select {

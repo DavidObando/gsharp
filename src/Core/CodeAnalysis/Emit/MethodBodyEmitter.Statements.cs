@@ -702,8 +702,7 @@ internal sealed partial class MethodBodyEmitter
         var isCompleted = BclMember.Getter(typeof(System.Threading.Tasks.Task), "IsCompleted");
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
+        this.EmitChannelReaderView(chType, getReader);
         this.il.LoadLocalAddress(slots.OutSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.GetChannelMethodEntityHandle(tryRead, chType.ElementType));
@@ -713,8 +712,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.MarkLabel(closedLabel);
         this.il.LoadLocal(slots.ChannelSlots[index]);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
+        this.EmitChannelReaderView(chType, getReader);
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.GetChannelMethodEntityHandle(completion, chType.ElementType));
         this.il.OpCode(ILOpCode.Callvirt);
@@ -759,8 +757,7 @@ internal sealed partial class MethodBodyEmitter
         var tryWrite = BclMember.Method(writerClr, "TryWrite", elementClr);
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
+        this.EmitChannelWriterView(chType, getWriter);
         this.il.LoadLocal(slots.ValueSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.GetChannelMethodEntityHandle(tryWrite, chType.ElementType));
@@ -839,8 +836,7 @@ internal sealed partial class MethodBodyEmitter
             var getWriter = BclMember.Getter(channelClr, "Writer");
             var waitToWrite = BclMember.Method(writerClr, "WaitToWriteAsync", typeof(System.Threading.CancellationToken));
             this.il.LoadLocal(slots.ChannelSlots[index]);
-            this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
+            this.EmitChannelWriterView(chType, getWriter);
             this.EmitCancellationTokenNone();
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.GetChannelMethodEntityHandle(waitToWrite, chType.ElementType));
@@ -851,8 +847,7 @@ internal sealed partial class MethodBodyEmitter
             var getReader = BclMember.Getter(channelClr, "Reader");
             var waitToRead = BclMember.Method(readerClr, "WaitToReadAsync", typeof(System.Threading.CancellationToken));
             this.il.LoadLocal(slots.ChannelSlots[index]);
-            this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
+            this.EmitChannelReaderView(chType, getReader);
             this.EmitCancellationTokenNone();
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.GetChannelMethodEntityHandle(waitToRead, chType.ElementType));
@@ -864,40 +859,24 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetMethodReference(asTask));
     }
 
-    private void EmitChannelSendStatement(BoundChannelSendStatement node)
+    // ADR-0174 D2: a select arm's operand is viewed through its channel
+    // symbol. A bidirectional `chan[T]` is a Channel<T> whose reader/writer
+    // must be fetched; an `in chan[T]` / `out chan[T]` IS the reader/writer.
+    private void EmitChannelReaderView(ChannelTypeSymbol chType, MethodInfo getReader)
     {
-        var chType = (ChannelTypeSymbol)node.Channel.Type;
-        var elementClr = ResolveChannelElementClrType(chType.ElementType);
-        var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
-        var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = BclMember.Getter(channelClr, "Writer");
-        var writeAsync = BclMember.Method(writerClr, "WriteAsync", elementClr, typeof(System.Threading.CancellationToken));
-        var asTaskNonGeneric = BclMember.Method(typeof(System.Threading.Tasks.ValueTask), "AsTask", Type.EmptyTypes);
-        var getAwaiter = BclMember.Method(typeof(System.Threading.Tasks.Task), "GetAwaiter", Type.EmptyTypes);
-        var getResult = BclMember.Method(typeof(System.Runtime.CompilerServices.TaskAwaiter), "GetResult", Type.EmptyTypes);
+        if (chType.Direction == ChannelDirection.Both)
+        {
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
+        }
+    }
 
-        var (vtSlot, taSlot, _, _) = this.channelOpSlots[node];
-
-        this.EmitExpression(node.Channel);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
-
-        this.EmitExpression(node.Value);
-        this.EmitCancellationTokenNone();
-
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.GetChannelMethodEntityHandle(writeAsync, chType.ElementType));
-
-        this.il.StoreLocal(vtSlot);
-        this.il.LoadLocalAddress(vtSlot);
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(asTaskNonGeneric));
-
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getAwaiter));
-        this.il.StoreLocal(taSlot);
-        this.il.LoadLocalAddress(taSlot);
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getResult));
+    private void EmitChannelWriterView(ChannelTypeSymbol chType, MethodInfo getWriter)
+    {
+        if (chType.Direction == ChannelDirection.Both)
+        {
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
+        }
     }
 }

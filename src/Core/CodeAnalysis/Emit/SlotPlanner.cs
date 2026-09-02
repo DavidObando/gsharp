@@ -79,9 +79,6 @@ internal sealed class SlotPlanner
     public void CollectStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
         => new StructLiteralCollector(sink).Visit(node);
 
-    public void CollectAppends(BoundNode node, List<BoundAppendExpression> sink)
-        => new AppendCollector(sink).Visit(node);
-
     public void CollectNullConditional(BoundNode node, List<BoundNullConditionalAccessExpression> sink)
         => new NullConditionalCollector(sink).Visit(node);
 
@@ -482,18 +479,6 @@ internal sealed class SlotPlanner
             base.VisitSelectStatement(node);
         }
 
-        protected override void VisitChannelSendStatement(BoundChannelSendStatement node)
-        {
-            AllocateChannelSendSlots(node, this.localTypes, this.channelOpSlots);
-            base.VisitChannelSendStatement(node);
-        }
-
-        protected override void VisitChannelReceiveExpression(BoundChannelReceiveExpression node)
-        {
-            AllocateChannelReceiveSlots(node, this.localTypes, this.channelOpSlots);
-            base.VisitChannelReceiveExpression(node);
-        }
-
         protected override void VisitSwitchExpression(BoundSwitchExpression node)
         {
             if (!this.switchExpressionSlots.ContainsKey(node))
@@ -540,48 +525,6 @@ internal sealed class SlotPlanner
             var awaiter = localTypes.Count;
             localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
             scopeFrameSlots[node] = (tasks, cts, awaiter);
-        }
-
-        private static void AllocateChannelSendSlots(
-            BoundChannelSendStatement node,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
-        {
-            if (channelOpSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var vt = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
-            var ta = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
-            channelOpSlots[node] = (vt, ta, -1, -1);
-        }
-
-        private static void AllocateChannelReceiveSlots(
-            BoundChannelReceiveExpression node,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
-        {
-            if (channelOpSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var chType = (ChannelTypeSymbol)node.Channel.Type;
-
-            var vt = localTypes.Count;
-            localTypes.Add(ConstructChannelOperationType(
-                typeof(System.Threading.Tasks.ValueTask<>),
-                chType.ElementType));
-            var ta = localTypes.Count;
-            localTypes.Add(ConstructChannelOperationType(
-                typeof(System.Runtime.CompilerServices.TaskAwaiter<>),
-                chType.ElementType));
-            var result = localTypes.Count;
-            localTypes.Add(chType.ElementType);
-            channelOpSlots[node] = (vt, ta, result, -1);
         }
 
         private static TypeSymbol ConstructChannelOperationType(Type openDefinition, TypeSymbol elementType)
@@ -802,22 +745,6 @@ internal sealed class SlotPlanner
         {
             this.sink.Add(node);
             base.VisitStructLiteralExpression(node);
-        }
-    }
-
-    private sealed class AppendCollector : BoundTreeWalker
-    {
-        private readonly List<BoundAppendExpression> sink;
-
-        public AppendCollector(List<BoundAppendExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitAppendExpression(BoundAppendExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitAppendExpression(node);
         }
     }
 

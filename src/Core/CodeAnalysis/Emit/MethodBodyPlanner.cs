@@ -334,7 +334,6 @@ internal sealed class MethodBodyPlanner
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
         Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
@@ -352,9 +351,9 @@ internal sealed class MethodBodyPlanner
         InstructionEncoder il,
         Dictionary<BoundStackAllocExpression, int>? stackAllocResultSlots = null)
     {
-        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
+        this.CollectStatements(body.Statements, function, locals, localTypes, labels, il, pass: 1);
         this.CollectBlockExpressionLocals(body, locals, localTypes);
-        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
+        this.CollectStatements(body.Statements, function, locals, localTypes, labels, il, pass: 2);
 
         // Phase B: pattern switch statements bring three classes of locals
         // into the host method:
@@ -418,15 +417,6 @@ internal sealed class MethodBodyPlanner
                 localTypes.Add(nc.Receiver.Type);
                 receiverSpillSlots[nc.Receiver] = wrapperSlot;
             }
-        }
-
-        foreach (var append in this.CollectAppends(body))
-        {
-            var srcSlot = localTypes.Count;
-            localTypes.Add(append.SliceType);
-            var dstSlot = localTypes.Count;
-            localTypes.Add(append.SliceType);
-            appendSlots[append] = (srcSlot, dstSlot);
         }
 
         foreach (var literal in this.CollectStructLiterals(body))
@@ -1036,7 +1026,6 @@ internal sealed class MethodBodyPlanner
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         InstructionEncoder il,
         int pass)
     {
@@ -1091,14 +1080,14 @@ internal sealed class MethodBodyPlanner
                     case BoundScopeStatement sc:
                         if (sc.Body is BoundBlockStatement scBlock)
                         {
-                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundFixedStatement fx:
                         if (fx.Body is BoundBlockStatement fxBlock)
                         {
-                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
@@ -1113,7 +1102,7 @@ internal sealed class MethodBodyPlanner
 
                             if (arm.Body is BoundBlockStatement armBlock)
                             {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, il, pass);
                             }
                         }
 
@@ -1133,12 +1122,12 @@ internal sealed class MethodBodyPlanner
                         // pattern scratch slots and pattern-binding locals).
                         foreach (var arm in ps.Arms)
                         {
-                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundTryStatement t:
-                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
                             // Issue #420 (P3-6): tolerate an elided catch variable
@@ -1151,17 +1140,17 @@ internal sealed class MethodBodyPlanner
                                 localTypes.Add(clause.Variable.Type);
                             }
 
-                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         if (t.FinallyBlock != null)
                         {
-                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundBlockStatement nestedBlock:
-                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, il, pass);
                         break;
                 }
             }
@@ -1186,14 +1175,14 @@ internal sealed class MethodBodyPlanner
                     case BoundScopeStatement sc:
                         if (sc.Body is BoundBlockStatement scBlock)
                         {
-                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundFixedStatement fx:
                         if (fx.Body is BoundBlockStatement fxBlock)
                         {
-                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
@@ -1202,7 +1191,7 @@ internal sealed class MethodBodyPlanner
                         {
                             if (arm.Body is BoundBlockStatement armBlock)
                             {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, il, pass);
                             }
                         }
 
@@ -1213,25 +1202,25 @@ internal sealed class MethodBodyPlanner
                         // the pass==1 branch above for the full rationale).
                         foreach (var arm in ps.Arms)
                         {
-                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundTryStatement t:
-                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
-                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         if (t.FinallyBlock != null)
                         {
-                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundBlockStatement nestedBlock:
-                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, il, pass);
                         break;
                 }
             }
@@ -1251,7 +1240,6 @@ internal sealed class MethodBodyPlanner
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         InstructionEncoder il,
         int pass)
     {
@@ -1262,19 +1250,12 @@ internal sealed class MethodBodyPlanner
 
         if (armBody is BoundBlockStatement armBlock)
         {
-            this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+            this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, il, pass);
         }
         else
         {
-            this.CollectStatements(ImmutableArray.Create(armBody), function, locals, localTypes, labels, appendSlots, il, pass);
+            this.CollectStatements(ImmutableArray.Create(armBody), function, locals, localTypes, labels, il, pass);
         }
-    }
-
-    private IEnumerable<BoundAppendExpression> CollectAppends(BoundNode node)
-    {
-        var list = new List<BoundAppendExpression>();
-        this.slotPlanner.CollectAppends(node, list);
-        return list;
     }
 
     private IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)

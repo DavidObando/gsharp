@@ -147,7 +147,7 @@ Provide a `snippets/gsharp.json` file with common patterns:
 | `go` | Spawn a concurrent call |
 | `scope` | Structured-concurrency scope |
 | `select` | Channel `select` statement |
-| `chan` | `make(chan T)` channel creation |
+| `chan` | `chan[T](n)` channel creation |
 | `using` | Scoped resource (Dispose at exit) |
 | `refparam` | Function with a `ref` parameter (ADR-0060) |
 | `outparam` | Function with an `out` parameter (ADR-0060) |

@@ -81,10 +81,10 @@ func Main() {
     {
         var source = @"
 import System
-func len(s Span[int32]) int32 { return s.Length }
+func s Span[int32].Length int32 { return s.Length }
 func Main() {
     var nums []int32 = []int32{1, 2, 3, 4}
-    Console.WriteLine(len(nums))
+    Console.WriteLine(nums.Length)
 }
 ";
         var result = Evaluate(source);

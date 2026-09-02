@@ -15,9 +15,9 @@ G#'s production concurrency surface is built on three pieces:
 - **`sequence[T]` + `async sequence[T]`** — synchronous and asynchronous
   iterators built on `yield` and consumed with `for` / `await for`.
 
-This guide focuses on the always-available surface. The optional
-Go-flavored layer (`go`, `chan T`, `select`, `close`, `make(chan ...)`)
-lives in [Extensions: Go-flavored concurrency](../extensions/go-concurrency).
+This guide focuses on the structured surface. The Go-flavored layer
+(`go`, `chan[T]`, `select`, `for v in ch`) is part of the language too and
+is documented in [Go-flavored concurrency](../extensions/go-concurrency).
 
 ## `scope` — structured concurrency
 
@@ -27,8 +27,8 @@ the enclosing scope are:
 
 1. `await expr` inside the scope — the awaited task becomes part of the
    scope's join set.
-2. `go call(...)` inside the scope when `import Gsharp.Extensions.Go` is
-   present — the goroutine task is registered and joined.
+2. `go call(...)` inside the scope — the goroutine is registered and
+   joined.
 
 Either way, exceptions from registered work surface as the scope
 unwinds, instead of being silently dropped.
@@ -203,7 +203,6 @@ When sharing is unavoidable, the toolbox is, in order:
    read-modify-write is spelled `Update` and is atomic:
 
    ```gsharp
-   import Gsharp.Extensions.Go
    import Gsharp.Extensions.Sync
 
    func bump(m SyncMap[string, int32]) int32 {
@@ -232,8 +231,7 @@ for the full `SyncMap` API.
 ## See also
 
 - [Tutorial: Async and sequences](../tutorials/async-and-sequences)
-- [Extensions: Go-flavored concurrency](../extensions/go-concurrency)
-  — channels, `go`, `select`, and `close` for projects that import
-  `Gsharp.Extensions.Go`.
+- [Go-flavored concurrency](../extensions/go-concurrency)
+  — channels, `go`, `select`, and `ch.Close()`; no import required.
 - [Standard library: Gsharp.Extensions.Sync](../ref/standard-library#gsharpextensionssync)
   — the `SyncMap[K, V]` API reference.

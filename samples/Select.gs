@@ -7,14 +7,13 @@ package GSharp.Samples.Select
 
 import System
 import System.Threading
-import Gsharp.Extensions.Go
 
-func delayedSend(ch chan int32) {
+func delayedSend(ch chan[int32]) {
     Thread.Sleep(10)
     ch <- 40
 }
 
-let ready = make(chan int32, 1)
+let ready = chan[int32](1)
 ready <- 7
 select {
 case let v = <-ready {
@@ -22,7 +21,7 @@ case let v = <-ready {
 }
 }
 
-let sendCh = make(chan int32, 1)
+let sendCh = chan[int32](1)
 select {
 case sendCh <- 11 {
     Console.WriteLine("sent")
@@ -31,7 +30,7 @@ case sendCh <- 11 {
 let sentValue = <-sendCh
 Console.WriteLine(sentValue)
 
-let empty = make(chan int32, 1)
+let empty = chan[int32](1)
 select {
 case let v = <-empty {
     Console.WriteLine("unexpected: $v")
@@ -41,7 +40,7 @@ default {
 }
 }
 
-let blocking = make(chan int32)
+let blocking = Chan.Unbounded[int32]()
 scope {
     go delayedSend(blocking)
     select {

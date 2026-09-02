@@ -363,7 +363,6 @@ public class Issue2900FixedPinReleaseEmitTests
         const string Source = """
             package Issue2900.Shapes
             import System
-            import Gsharp.Extensions.Go
 
             public var trace = ""
 
@@ -481,7 +480,7 @@ public class Issue2900FixedPinReleaseEmitTests
                         }
                     }
                 }
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 1
                 select {
                     case let value = <-ch {
@@ -508,7 +507,7 @@ public class Issue2900FixedPinReleaseEmitTests
                         }
                     }
                 }
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 1
                 selectLoop: for {
                     select {
@@ -617,10 +616,9 @@ public class Issue2900FixedPinReleaseEmitTests
         const string Source = """
             package Issue2900.SelectReturn
             import System
-            import Gsharp.Extensions.Go
 
             func FromSelect(xs []int32) int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 2
                 unsafe {
                     fixed p *int32 = xs {

@@ -88,10 +88,9 @@ public class Issue611SliceArrayParityTests
         var gsource = """
             package Probe.Tests
             import System
-            import Gsharp.Extensions.Go
 
             func Size[T any](items []T) int32 {
-                return len(items)
+                return items.Length
             }
 
             var s = []string{"a", "b", "c"}
@@ -192,14 +191,13 @@ public class Issue611SliceArrayParityTests
     [Fact]
     public void Intrinsic_Len_WorksOnSlice()
     {
-        // len() on a slice — already correct, pinned here.
+        // .Length on a slice — already correct, pinned here.
         var gsource = """
             package Probe.Tests
             import System
-            import Gsharp.Extensions.Go
 
             var s = []int32{10, 20, 30, 40}
-            Console.WriteLine(len(s))
+            Console.WriteLine(s.Length)
             """;
 
         var output = CompileAndRun(gsource);
@@ -209,14 +207,13 @@ public class Issue611SliceArrayParityTests
     [Fact]
     public void Intrinsic_Len_WorksOnFixedArray()
     {
-        // len() on a fixed-array — already correct, pinned here.
+        // .Length on a fixed-array — already correct, pinned here.
         var gsource = """
             package Probe.Tests
             import System
-            import Gsharp.Extensions.Go
 
             var a = [2]int32{5, 6}
-            Console.WriteLine(len(a))
+            Console.WriteLine(a.Length)
             """;
 
         var output = CompileAndRun(gsource);

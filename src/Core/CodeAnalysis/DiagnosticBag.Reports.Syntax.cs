@@ -499,45 +499,6 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.AssignmentArgumentWasNamedArgumentSpelling, targetName);
 
     /// <summary>
-    /// ADR-0082 / issue #722: GS0316 — a Go-flavored concurrency syntactic
-    /// form (<c>go</c>, <c>chan T</c>, <c>&lt;-ch</c>, <c>ch &lt;- v</c>,
-    /// <c>select</c>, <c>close(ch)</c>, <c>make(chan T)</c>) was used in a
-    /// compilation unit that does not <c>import Gsharp.Extensions.Go</c>.
-    /// The Go-flavored surface is opt-in; the production concurrency surface
-    /// is <c>scope</c> + <c>async</c> / <c>await</c>. The diagnostic names
-    /// the triggering form so users see exactly what to fix.
-    /// </summary>
-    /// <param name="location">The source location of the offending keyword or operator.</param>
-    /// <param name="form">The triggering syntactic form (e.g. <c>go</c>, <c>chan</c>, <c>&lt;-</c>, <c>select</c>, <c>close</c>, <c>make(chan)</c>).</param>
-    public void ReportGoExtensionsImportRequired(TextLocation location, string form)
-    => Report(location, DiagnosticDescriptors.GoExtensionsImportRequired, form);
-
-    /// <summary>
-    /// ADR-0083 / issue #723: GS0317 — a Go-style built-in function
-    /// (<c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>) was called in
-    /// a compilation unit that does not <c>import Gsharp.Extensions.Go</c>.
-    /// The message names the built-in and, when there is a clean
-    /// .NET-idiomatic replacement (<c>.Length</c>, <c>.Count</c>,
-    /// <c>.Remove(k)</c>, <c>List[T].Add</c>), points the user at it as an
-    /// alternative to the import. The <c>close(ch)</c> built-in keeps using
-    /// <see cref="ReportGoExtensionsImportRequired"/> (GS0316) because it
-    /// shares the channel surface with <c>chan</c> / <c>&lt;-</c> /
-    /// <c>select</c>; the <c>make(chan T)</c> shape is gated through the
-    /// inner <c>chan</c> type-clause check (also GS0316), so this
-    /// diagnostic only fires for the strict built-in identifiers above.
-    /// </summary>
-    /// <param name="location">The source location of the offending built-in identifier.</param>
-    /// <param name="builtin">The triggering built-in name (e.g. <c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>).</param>
-    /// <param name="suggestion">A short alternative form to recommend (e.g. <c>.Length</c>, <c>.Count</c>, <c>.Remove(k)</c>), or <c>null</c> when there is no clean .NET-idiomatic replacement.</param>
-    public void ReportGoBuiltinRequiresImport(TextLocation location, string builtin, string? suggestion)
-    {
-        var suggestionText = suggestion is null
-            ? string.Empty
-            : string.Format(DiagnosticDescriptors.GoBuiltinSuggestionMessageFormat, suggestion);
-        Report(location, DiagnosticDescriptors.GoBuiltinRequiresImport, builtin, suggestionText);
-    }
-
-    /// <summary>
     /// Reports GS0363 — ADR-0101 / issue #799: the C# <c>params</c> keyword is
     /// not part of the G# parameter grammar. The canonical G# spelling for a
     /// variadic parameter is <c>name ...T</c> (where <c>T</c> is the element
@@ -559,6 +520,42 @@ public sealed partial class DiagnosticBag
     /// <param name="valueTypeText">The source text of the value type clause.</param>
     public void ReportLegacyMapTypeClauseSyntax(TextLocation location, string keyTypeText, string valueTypeText)
     => Report(location, DiagnosticDescriptors.LegacyMapTypeClauseSyntax, keyTypeText, valueTypeText);
+
+    /// <summary>
+    /// Reports GS0567 — ADR-0174 D2: the retired juxtaposed channel type-clause
+    /// spelling <c>chan T</c> was used. The location spans the whole shape
+    /// (from the direction token or <c>chan</c> through the element type) so an
+    /// IDE quick-fix can replace it with <c>chan[T]</c> in one edit; the parser
+    /// recovers by binding the canonical form, so the file does not cascade.
+    /// </summary>
+    /// <param name="location">The span of the legacy shape.</param>
+    /// <param name="elementTypeText">The element type's source text, used to spell the replacement.</param>
+    public void ReportLegacyChanTypeClauseSyntax(TextLocation location, string elementTypeText)
+    => Report(location, DiagnosticDescriptors.LegacyChanTypeClauseSyntax, elementTypeText);
+
+    /// <summary>
+    /// Reports GS0566 — ADR-0174 D12/D13: a retired Go built-in was used
+    /// (<c>make(chan …)</c>, <c>close</c>, <c>len</c>, <c>cap</c>,
+    /// <c>append</c>, <c>delete</c>). The message names the exact working
+    /// replacement for this site, in the shape ADR-0154 demands of a
+    /// diagnostic that recommends an action.
+    /// </summary>
+    /// <param name="location">The span of the retired form.</param>
+    /// <param name="retiredForm">The retired source text (e.g. <c>make(chan int32, 3)</c>).</param>
+    /// <param name="guidance">A full clause naming the replacement (e.g. <c>use 'chan[int32](3)' instead.</c>).</param>
+    public void ReportRetiredBuiltin(TextLocation location, string retiredForm, string guidance)
+    => Report(location, DiagnosticDescriptors.RetiredBuiltin, retiredForm, guidance);
+
+    /// <summary>
+    /// Reports GS0546 at bind time — ADR-0174 D1: a channel operation lowers
+    /// onto <c>Gsharp.Runtime.Channels</c>, which is not in the reference set.
+    /// The emitter raises the same descriptor for BCL members a target
+    /// framework lacks; here the missing member is the runtime's channel class.
+    /// </summary>
+    /// <param name="location">The location of the channel construct.</param>
+    /// <param name="missingMember">The full name of the type the construct lowers onto.</param>
+    public void ReportTargetFrameworkMemberUnavailable(TextLocation location, string missingMember)
+    => Report(location, DiagnosticDescriptors.TargetFrameworkMemberUnavailable, missingMember);
 
     /// <summary>
     /// Issue #1602: GS0417 — the source nests expressions, types, statements,

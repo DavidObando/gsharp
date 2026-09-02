@@ -117,9 +117,7 @@ public class Issue805MapTypeClauseSpellingBinderTests
     // state; nothing needs to run.
     private static (System.Collections.Immutable.ImmutableArray<Diagnostic> Diagnostics, Compilation Compilation) Compile(string source)
     {
-        // Prepend the Go-extensions import so map ops bind without
-        // tripping ADR-0083's GS0317 import gate.
-        var syntaxTree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
+        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(syntaxTree);
         var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
         return (diagnostics, compilation);

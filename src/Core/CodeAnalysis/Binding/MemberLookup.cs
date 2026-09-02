@@ -2045,6 +2045,17 @@ internal sealed class MemberLookup
                 }
 
                 return false;
+            case ChannelTypeSymbol channel:
+                // ADR-0174 D2: chan[T] / in chan[T] / out chan[T] over a symbolic
+                // element erases to Channel<erased T> / ChannelReader<…> / ChannelWriter<…>.
+                if (TryProjectErasedClrType(channel.ElementType, out var channelElement)
+                    && channelElement != null)
+                {
+                    erased = ChannelTypeSymbol.OpenClrDefinition(channel.Direction).MakeGenericType(channelElement);
+                    return true;
+                }
+
+                return false;
             case ArrayTypeSymbol array:
                 if (TryProjectErasedClrType(array.ElementType, out var arrayElement)
                     && arrayElement != null)
@@ -2298,6 +2309,50 @@ internal sealed class MemberLookup
             ImmutableArray.Create(map.KeyType, map.ValueType));
         return true;
     }
+
+    /// <summary>
+    /// ADR-0174 D12: the channel twin of <see cref="TryGetSymbolicOpenMapReceiverView"/>.
+    /// A <c>chan[T]</c> / <c>in chan[T]</c> / <c>out chan[T]</c> over a
+    /// same-compilation or type-parameter element has no loadable CLR type;
+    /// surface the symbolic constructed <c>Channel[T]</c> /
+    /// <c>ChannelReader[T]</c> / <c>ChannelWriter[T]</c> view so the BCL member
+    /// surface and the <c>Close()</c> extension bind exactly as on a CLR-backed
+    /// element. Concrete channels stay on the reflection fast path.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="view">The symbolic channel view, on success.</param>
+    /// <returns><see langword="true"/> when a symbolic view was produced.</returns>
+    public static bool TryGetSymbolicOpenChannelReceiverView(
+        TypeSymbol? receiverType,
+        [NotNullWhen(true)] out ImportedTypeSymbol? view)
+    {
+        view = null;
+        if (receiverType is not ChannelTypeSymbol { ClrType: null } channel)
+        {
+            return false;
+        }
+
+        var open = ChannelTypeSymbol.OpenClrDefinition(channel.Direction);
+        view = ImportedTypeSymbol.GetConstructed(
+            open.MakeGenericType(typeof(object)),
+            open,
+            ImmutableArray.Create(channel.ElementType));
+        return true;
+    }
+
+    /// <summary>
+    /// Normalizes any magic-collection receiver without a loadable CLR type to
+    /// its symbolic constructed BCL view (open maps, issue #3311; channels,
+    /// ADR-0174 D12).
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="view">The symbolic view, on success.</param>
+    /// <returns><see langword="true"/> when a symbolic view was produced.</returns>
+    public static bool TryGetSymbolicOpenReceiverView(
+        TypeSymbol? receiverType,
+        [NotNullWhen(true)] out ImportedTypeSymbol? view)
+        => TryGetSymbolicOpenMapReceiverView(receiverType, out view)
+            || TryGetSymbolicOpenChannelReceiverView(receiverType, out view);
 
     /// <summary>
     /// Probes a user-defined <see cref="StructSymbol"/> for the
@@ -5776,6 +5831,20 @@ internal sealed class MemberLookup
             // and a following ThenInclude must still recover TEntity=Book from
             // that receiver before a nullable selector result forces the next
             // return back into symbolic form.
+            // ADR-0174 D2: a `chan[T]` / `in chan[T]` / `out chan[T]` actual
+            // unifies against an open `Channel<T>` / `ChannelReader<T>` /
+            // `ChannelWriter<T>` formal on its element — this is what lets
+            // `ch.Close()` on a `chan[Pair]` (same-compilation element, no CLR
+            // type) recover T=Pair for the `ChannelExtensions.Close<T>` MethodSpec
+            // instead of erasing it to object.
+            if (actual is ChannelTypeSymbol channelActual
+                && openArgs.Length == 1
+                && ClrTypeUtilities.AreSame(ChannelTypeSymbol.OpenClrDefinition(channelActual.Direction), openDef))
+            {
+                UnifyForMethodTypeArgs(openArgs[0], channelActual.ElementType, openMethod, result);
+                return;
+            }
+
             if (actual is ImportedTypeSymbol imp
                 && TryGetConstructedImportedProjection(imp, out var projectedImp)
                 && projectedImp != null

@@ -897,6 +897,13 @@ public partial class Parser
             return false;
         }
 
+        // ADR-0174 D2: a directional channel head, not an element name.
+        if ((Peek(pos).Text == "in" || Peek(pos).Text == "out")
+            && Peek(pos + 1).Kind == SyntaxKind.ChanKeyword)
+        {
+            return false;
+        }
+
         switch (Peek(pos + 1).Kind)
         {
             case SyntaxKind.IdentifierToken:
@@ -1056,11 +1063,30 @@ public partial class Parser
             return TryScanMapTypeClause(ref pos);
         }
 
+        // ADR-0174 D2: `[in|out] chan[T]?`, plus the retired `chan T` shape so
+        // ParseTypeClause can report its span-accurate GS0567.
+        if (Peek(pos).Kind == SyntaxKind.IdentifierToken
+            && (Peek(pos).Text == "in" || Peek(pos).Text == "out")
+            && Peek(pos + 1).Kind == SyntaxKind.ChanKeyword)
+        {
+            pos++;
+        }
+
         if (Peek(pos).Kind == SyntaxKind.ChanKeyword)
         {
             isComplex = true;
             pos++;
-            if (!TryScanTypeClause(ref pos))
+            if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                pos++;
+                if (!TryScanTypeClause(ref pos) || Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken)
+                {
+                    return false;
+                }
+
+                pos++;
+            }
+            else if (!TryScanTypeClause(ref pos))
             {
                 return false;
             }

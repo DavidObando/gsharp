@@ -24,8 +24,13 @@ G# brings Go-style ergonomics — packages, `func`, `defer`, `for`, slices — t
 | `struct` | `struct`, `data struct`, `data class`, or `class` | G# also has CLR classes and structural data aggregates. |
 | exported by `Name` | `public Name` | Visibility is explicit: `public`, `private`, or `internal`. |
 | goroutine `go f()` | `go f()` | Scoped `go` joins through `scope`. |
-| channel `chan T` | `chan T` | Lowered to `System.Threading.Channels`. |
+| channel `chan T` | `chan[T]` | A `chan[T]` **is** `System.Threading.Channels.Channel<T>`; `<-chan T` / `chan<- T` are `in chan[T]` / `out chan[T]`. |
+| `make(chan T)` / `make(chan T, n)` | `chan[T]()` / `chan[T](n)` | `chan[T]()` is a rendezvous channel, exactly Go's unbuffered channel. |
+| `close(ch)`, `len(ch)`, `cap(ch)` | `ch.Close()`, `ch.Length()`, `ch.Capacity` | Members, not built-ins; closing twice throws like Go's panic. |
+| `v, ok := <-ch` | `let (v, ok) = <-ch` | `ok` is `false` once the channel is closed and drained. |
+| `for v := range ch` | `for v in ch` (or `while let v = <-ch`) | Both loop until the channel is closed; a `nil` element of a `chan[T?]` is delivered, not mistaken for close. |
 | `select` | `select` | Cases cover sends, receives, and `default`. |
+| `len(xs)`, `append(xs, v)`, `delete(m, k)` | `xs.Length`, `List[T]` + `.Add(v)`, `m.Remove(k)` | The Go-style built-ins are retired (GS0566 names the member). |
 | `defer cleanup()` | `defer cleanup()` | Defers run at block exit. |
 | `interface{}` | `object` or an interface type | CLR object identity and interfaces apply. |
 | `error` returns | exceptions or result values | G# interoperates with .NET exceptions. |

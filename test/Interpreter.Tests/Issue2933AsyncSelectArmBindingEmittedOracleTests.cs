@@ -20,10 +20,9 @@ public class Issue2933AsyncSelectArmBindingEmittedOracleTests
     public void EmittedOraclePreservesAsyncSelectReceiveBinding()
     {
         const string Source = """
-            import Gsharp.Extensions.Go
 
             async func Run() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var result = 0
                 select {

@@ -16,8 +16,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Phase 3.A.2 — variable-length slice types <c>[]T</c>, composite
-/// literals, indexing, and the <c>len</c> / <c>cap</c> / <c>append</c>
-/// intrinsics.
+/// literals, and indexing. ADR-0174 D13 retired the <c>len</c> /
+/// <c>cap</c> / <c>append</c> built-ins: a slice's length is <c>.Length</c>,
+/// the growable shape is <c>List[T]</c> + <c>Add</c>, and the retired
+/// spellings report GS0566 naming that replacement.
 /// </summary>
 public class SliceTests
 {
@@ -40,7 +42,7 @@ public class SliceTests
     [Fact]
     public void Len_OnSlice_ReturnsCount()
     {
-        var result = Evaluate("var xs = []int32{1, 2, 3, 4}\nlen(xs)");
+        var result = Evaluate("var xs = []int32{1, 2, 3, 4}\nxs.Length");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(4, result.Value);
     }
@@ -48,7 +50,7 @@ public class SliceTests
     [Fact]
     public void Len_OnArray_ReturnsLength()
     {
-        var result = Evaluate("var xs = [3]int32{1, 2, 3}\nlen(xs)");
+        var result = Evaluate("var xs = [3]int32{1, 2, 3}\nxs.Length");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
     }
@@ -56,73 +58,51 @@ public class SliceTests
     [Fact]
     public void Len_OnString_ReturnsLength()
     {
-        var result = Evaluate("len(\"hello\")");
+        var result = Evaluate("\"hello\".Length");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(5, result.Value);
     }
 
     [Fact]
-    public void Cap_OnSlice_AliasesLen()
+    public void Cap_IsRetired_ReportsGS0566()
     {
-        var result = Evaluate("var xs = []int32{1, 2, 3}\ncap(xs)");
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(3, result.Value);
+        // ADR-0174 D13: `cap` has no replacement — a slice is a fixed CLR
+        // array whose capacity is its length.
+        var diagnostics = Bind("var xs = []int32{1, 2, 3}\ncap(xs)\n");
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS0566", diagnostic.Id);
+        Assert.Contains("xs.Length", diagnostic.Message);
     }
 
     [Fact]
-    public void Cap_OnString_Diagnosed()
+    public void Append_IsRetired_ReportsGS0566_NamingListAdd()
     {
-        var diagnostics = Bind("cap(\"x\")\n");
-        Assert.Contains(diagnostics, d => d.Message.Contains("'cap' cannot"));
+        var diagnostics = Bind("var xs = []int32{1, 2}\nxs = append(xs, 3)\n");
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS0566", diagnostic.Id);
+        Assert.Contains("List[T]", diagnostic.Message);
+        Assert.Contains("xs.Add(3)", diagnostic.Message);
     }
 
     [Fact]
-    public void Append_GrowsSliceByOne()
+    public void GrowableShape_IsListAdd()
     {
-        var result = Evaluate("var xs = []int32{1, 2}\nxs = append(xs, 3)\nlen(xs)");
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(3, result.Value);
-    }
-
-    [Fact]
-    public void Append_PreservesExistingElements()
-    {
-        var result = Evaluate("var xs = []int32{10, 20}\nxs = append(xs, 30)\nxs[0] + xs[1] + xs[2]");
+        var result = Evaluate("import System.Collections.Generic\nvar xs = List[int32]()\nxs.Add(10)\nxs.Add(20)\nxs.Add(30)\nxs[0] + xs[1] + xs[2]");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(60, result.Value);
     }
 
     [Fact]
-    public void Append_OnArray_Diagnosed()
+    public void StringSlice_LiteralIndexes()
     {
-        var diagnostics = Bind("var xs = [2]int32{1, 2}\nappend(xs, 3)\n");
-        Assert.Contains(diagnostics, d => d.Message.Contains("'append' cannot"));
-    }
-
-    [Fact]
-    public void EmptySliceLiteral_AppendWorks()
-    {
-        var result = Evaluate("var xs = []int32{}\nxs = append(xs, 7)\nxs[0]");
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(7, result.Value);
-    }
-
-    [Fact]
-    public void StringSlice_AppendWorks()
-    {
-        var result = Evaluate("var ns = []string{\"a\"}\nns = append(ns, \"b\")\nns[1]");
+        var result = Evaluate("var ns = []string{\"a\", \"b\"}\nns[1]");
         Assert.Empty(result.Diagnostics);
         Assert.Equal("b", result.Value);
     }
 
     private static EmittedOracleResult Evaluate(string source)
     {
-        // ADR-0083 / issue #723: every gated built-in (len / cap / append /
-        // delete) used in the test sources is intentional, so prepend the
-        // gate import here rather than duplicating it across every literal
-        // string. This mirrors the helper-level mitigation #722 applied for
-        // the channel-cluster tests.
-        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
+        return EmittedOracle.Evaluate(source);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)

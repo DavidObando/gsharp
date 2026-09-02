@@ -507,6 +507,8 @@ internal sealed partial class ExpressionBinder
                 return BindSwitchExpression((SwitchExpressionSyntax)syntax);
             case SyntaxKind.MakeChannelExpression:
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
+            case SyntaxKind.ChannelCreationExpression:
+                return BindChannelCreationExpression((ChannelCreationExpressionSyntax)syntax);
             case SyntaxKind.TypeOfExpression:
                 return BindTypeOfExpression((TypeOfExpressionSyntax)syntax);
             case SyntaxKind.SizeOfExpression:

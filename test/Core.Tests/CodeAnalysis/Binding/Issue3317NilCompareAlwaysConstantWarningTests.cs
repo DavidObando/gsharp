@@ -11,7 +11,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #3317 / ADR-0159: GS0523, the statically-constant nil-comparison
 /// warning. With sound empty-instance zero values a bare (non-<c>?</c>)
-/// <c>map[K, V]</c> / <c>[]T</c> / <c>[N]T</c> / <c>chan T</c> value can
+/// <c>map[K, V]</c> / <c>[]T</c> / <c>[N]T</c> / <c>chan[T]</c> value can
 /// never be nil, so <c>== nil</c> is always false and <c>!= nil</c> always
 /// true — typically dead code ported verbatim from Go. The warning is
 /// static-type based (v1): it fires for both operand orders, and does NOT
@@ -64,13 +64,13 @@ public class Issue3317NilCompareAlwaysConstantWarningTests
     public void BareChannel_NilComparison_Warns()
     {
         // GS0520 forces bare channel slots to be explicitly initialized, so
-        // a bare `chan T` operand is likewise never nil.
+        // a bare `chan[T]` operand is likewise never nil. (ADR-0174: the slot
+        // is declared with the type clause — an inferred `let c = chan[int32](1)`
+        // has the runtime's `Chan[int32]` class type, an ordinary reference.)
         var result = EmittedOracle.Evaluate("""
             package P3317ChanWarn
 
-            import Gsharp.Extensions.Go
-
-            var c = make(chan int32, 1)
+            var c chan[int32] = chan[int32](1)
             c == nil
             """);
 
@@ -110,14 +110,13 @@ public class Issue3317NilCompareAlwaysConstantWarningTests
     [Fact]
     public void NullableChannelSlot_DoesNotWarn()
     {
-        // The #3315 spelling: `(chan T)?` is the genuinely-optional channel;
+        // The #3315 spelling: `chan[T]?` is the genuinely-optional channel;
         // its nil check is exactly what the comparison exists for.
         var result = EmittedOracle.Evaluate("""
             package P3317ChanOptOk
 
-            import Gsharp.Extensions.Go
 
-            var c (chan int32)?
+            var c chan[int32]?
             c == nil
             """);
 

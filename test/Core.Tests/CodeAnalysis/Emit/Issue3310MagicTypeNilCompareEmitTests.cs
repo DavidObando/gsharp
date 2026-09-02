@@ -11,7 +11,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// Issue #3310 / ADR-0159, nil-comparison half: <c>x == nil</c> /
 /// <c>x != nil</c> binds for EVERY reference-backed magic type. #3309 added
 /// maps; this adds slices (<c>[]T</c>), fixed arrays (<c>[N]T</c>), and
-/// channels (<c>chan T</c>), flipping #3309's deliberate-rejection pins.
+/// channels (<c>chan[T]</c>), flipping #3309's deliberate-rejection pins.
 /// Matrix per kind: both operators, both operand orders (#3217 nil-on-left
 /// canonicalization), plus the open-generic (null-ClrType) field shape.
 /// Comparison-only semantics are pinned: bare-slot nil ASSIGNMENT still
@@ -48,9 +48,8 @@ public class Issue3310MagicTypeNilCompareEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3310ChanNil
 
-            import Gsharp.Extensions.Go
 
-            var c = make(chan int32, 1)
+            var c = chan[int32](1)
             {{probe}}
             """);
 
@@ -122,9 +121,8 @@ public class Issue3310MagicTypeNilCompareEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310NoChanNilAssign
 
-            import Gsharp.Extensions.Go
 
-            var c = make(chan int32, 1)
+            var c = chan[int32](1)
             c = nil
             c == nil
             """);

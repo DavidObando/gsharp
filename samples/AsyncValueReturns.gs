@@ -11,7 +11,6 @@ package GSharp.Samples.AsyncValueReturns
 
 import System
 import System.Threading.Tasks
-import Gsharp.Extensions.Go
 
 async func asyncInt() int32 {
     await Task.Delay(1)

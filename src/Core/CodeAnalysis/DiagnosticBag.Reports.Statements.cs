@@ -243,6 +243,39 @@ public sealed partial class DiagnosticBag
     public void ReportSendTargetIsNotChannel(TextLocation location, TypeSymbol actualType)
     => Report(location, DiagnosticDescriptors.SendTargetIsNotChannel, actualType);
 
+    /// <summary>ADR-0174 D2: GS0549 — a send through an <c>in chan[T]</c> (receive-only) handle.</summary>
+    /// <param name="location">The location of the send operator.</param>
+    /// <param name="channelType">The receive-only channel type.</param>
+    public void ReportSendOnReceiveOnlyChannel(TextLocation location, TypeSymbol channelType)
+    => Report(location, DiagnosticDescriptors.SendOnReceiveOnlyChannel, channelType);
+
+    /// <summary>ADR-0174 D2: GS0550 — a receive through an <c>out chan[T]</c> (send-only) handle.</summary>
+    /// <param name="location">The location of the receive operator.</param>
+    /// <param name="channelType">The send-only channel type.</param>
+    public void ReportReceiveFromSendOnlyChannel(TextLocation location, TypeSymbol channelType)
+    => Report(location, DiagnosticDescriptors.ReceiveFromSendOnlyChannel, channelType);
+
+    /// <summary>ADR-0174 D3: GS0554 — a channel-receive binding form was given the wrong number of targets.</summary>
+    /// <param name="location">The location of the offending target list.</param>
+    /// <param name="form">The canonical spelling of the form, for example <c>let value, ok = &lt;-ch</c>.</param>
+    /// <param name="expected">The expected target count in words, for example <c>two targets</c>.</param>
+    /// <param name="actual">The number of targets the author wrote.</param>
+    public void ReportChannelBindingTargetCount(TextLocation location, string form, string expected, int actual)
+    => Report(location, DiagnosticDescriptors.ChannelBindingTargetCount, form, expected, actual);
+
+    /// <summary>ADR-0174 D3: GS0555 — a <c>while let</c> initializer is a channel handle rather than a receive from one.</summary>
+    /// <param name="location">The location of the initializer.</param>
+    /// <param name="bindingName">The binding's identifier.</param>
+    /// <param name="initializerText">The initializer's source text.</param>
+    public void ReportWhileLetOverChannelNeedsReceive(TextLocation location, string bindingName, string initializerText)
+    => Report(location, DiagnosticDescriptors.WhileLetOverChannelNeedsReceive, bindingName, initializerText);
+
+    /// <summary>ADR-0174 D12: GS0548 — <c>chan[T]()</c> constructs a rendezvous channel; advisory for the reader who wanted a buffer.</summary>
+    /// <param name="location">The location of the construction.</param>
+    /// <param name="elementTypeText">The element type's display text.</param>
+    public void ReportRendezvousChannelConstructed(TextLocation location, string elementTypeText)
+    => Report(location, DiagnosticDescriptors.RendezvousChannelConstructed, elementTypeText);
+
     /// <summary>
     /// Reports that the operand of <c>close(ch)</c> is not a channel (Phase 5.4 / ADR-0022).
     /// </summary>

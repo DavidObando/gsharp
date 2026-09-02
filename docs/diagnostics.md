@@ -867,6 +867,13 @@ is not a spelling gsc accepts today (GS0157).
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
+| GS0548 | Warning | `'chan[<T>]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[<T>]()' if an unbounded buffer was intended (ADR-0174 D12).` | `let ch = chan[int32]()` |
+| GS0549 | Error | `Cannot send on the receive-only channel type '<type>'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2).` | `func f(ch in chan[int32]) { ch <- 1 }` |
+| GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).` | `func f(ch out chan[int32]) { let v = <-ch }` |
+| GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
+| GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed (ADR-0174 D3).` | `while let v = ch { }` where `ch` is a `chan[int32]` |
+| GS0566 | Error | `'<retired form>' has been retired (ADR-0174); <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
+| GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead (ADR-0174 D2).` | `var ch chan int32` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
@@ -1218,8 +1225,8 @@ nesting depth.
 | GS0311 | Error | `data` and `inline` are combined on the same declaration. |
 | GS0312 | Error | `open` and `sealed` are combined on the same declaration. |
 | GS0313 | Warning | Non-exhaustive `switch` over a sealed-hierarchy base or discriminated-union enum. |
-| GS0316 | Error | `'<form>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead.` |
-| GS0317 | Error | `'<name>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '<suggestion>' directly.` |
+| GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
+| GS0317 | Retired | Retired by ADR-0174 (D13): `len`, `cap`, `append`, and `delete` are no longer built-ins, so there is no import gate to miss; a call to one reports GS0566 naming the member replacement. |
 | GS0330 | Error | An event is declared inside an interface `shared` block; interface static events are not supported. |
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body.` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block.` |

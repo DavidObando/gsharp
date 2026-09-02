@@ -186,6 +186,12 @@ public class DiagnosticIdUniquenessTests
             // is the platform-default unmanaged calling convention.
             ["GS0356"] = "Retired",
 
+            // Retired by ADR-0174 D13: channel syntax is the language, not a
+            // flavor gated behind `import Gsharp.Extensions.Go`, and the
+            // `len`/`cap`/`append`/`delete` built-ins are gone (GS0566).
+            ["GS0316"] = "Retired",
+            ["GS0317"] = "Retired",
+
             // Reserved after auto-properties became valid in data aggregates.
             ["GS0419"] = "Reserved",
 

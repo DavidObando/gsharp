@@ -215,6 +215,15 @@ internal sealed partial class StatementBinder
     {
         var collection = bindExpression(syntax.Collection);
 
+        // ADR-0174 D3: `for v in ch` drains a channel until it is closed. Decided
+        // before the enumerator probe: a channel handle has no GetEnumerator,
+        // and a foreign `Channel<T>` must take the same receive path as `chan[T]`.
+        if (collection.Type != TypeSymbol.Error
+            && ChannelTypeSymbol.TryGetChannelShape(collection.Type, out _, out _, out _))
+        {
+            return BindForInChannelStatement(syntax, collection, labelName, originatingSyntax, bindLoopPrelude);
+        }
+
         if (collection.Type?.ClrType is { } collectionClrType)
         {
             MemberLookup.ResolveGetEnumerator(collectionClrType, out var ambiguousGetEnumerator);
@@ -803,14 +812,31 @@ internal sealed partial class StatementBinder
         scope = new BoundScope(enclosingScope);
         var loopScope = scope;
 
+        // ADR-0174 D3: a `let v = <-ch` clause is a channel clause. Its
+        // declarations run at the check label like any other clause, but its
+        // gate (`ok`) is tested right after them — `if !ok goto break` — so the
+        // clauses short-circuit in source order, and it never joins the
+        // nil-check chain (the element keeps its own nullability).
         var localsForFrame = new List<(VariableSymbol Variable, TypeSymbol Underlying)>();
+        var clauses = new List<WhileLetChannelClause>();
         var declarations = ImmutableArray.CreateBuilder<BoundStatement>();
+        var hasChannelGate = false;
         foreach (var binding in bindingSyntaxes)
         {
+            if (IsChannelReceiveSyntax(binding.Initializer, out var receive))
+            {
+                var channelClause = BindWhileLetChannelClause(binding, receive, enclosingScope, loopScope);
+                clauses.Add(channelClause);
+                declarations.AddRange(channelClause.Declarations);
+                hasChannelGate |= channelClause.Gate != null;
+                continue;
+            }
+
             var (variable, underlying, declaration) = BindWhileLetBindingClause(
                 binding,
                 enclosingScope,
                 loopScope);
+            clauses.Add(new WhileLetChannelClause(ImmutableArray.Create(declaration), Gate: null));
             declarations.Add(declaration);
             if (variable != null && underlying != null)
             {
@@ -819,7 +845,7 @@ internal sealed partial class StatementBinder
         }
 
         var condition = BuildNilCheckChain(originatingSyntax, localsForFrame)
-            ?? new BoundLiteralExpression(originatingSyntax, false, TypeSymbol.Bool);
+            ?? new BoundLiteralExpression(originatingSyntax, hasChannelGate, TypeSymbol.Bool);
         var declarationBlock = new BoundBlockStatement(originatingSyntax, declarations.ToImmutable());
         var body = BindConditionedLoopBody(
             condition,
@@ -840,7 +866,15 @@ internal sealed partial class StatementBinder
         statements.Add(body);
         statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
         statements.Add(new BoundLabelStatement(originatingSyntax, checkLabel));
-        statements.AddRange(declarationBlock.Statements);
+        foreach (var clause in clauses)
+        {
+            statements.AddRange(clause.Declarations);
+            if (clause.Gate != null)
+            {
+                statements.Add(new BoundConditionalGotoStatement(originatingSyntax, breakLabel, clause.Gate, jumpIfTrue: false));
+            }
+        }
+
         statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
         statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
         return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
@@ -876,6 +910,27 @@ internal sealed partial class StatementBinder
                     {
                         scope = initializerScope;
                     }
+                },
+                reportNonNullableInitializer: (clause, initializer) =>
+                {
+                    // ADR-0174 D3: `while let v = ch` names the channel itself;
+                    // the author almost certainly meant `<-ch`. Say so (GS0555)
+                    // instead of the generic must-be-nullable GS0296.
+                    if (ChannelTypeSymbol.TryGetChannelShape(initializer.Type, out _, out var direction, out _)
+                        && direction != ChannelDirection.Out)
+                    {
+                        var location = clause.Initializer.Location;
+                        Diagnostics.ReportWhileLetOverChannelNeedsReceive(
+                            location,
+                            clause.Identifier.ValueText,
+                            location.Text?.ToString(location.Span) ?? "ch");
+                        return;
+                    }
+
+                    Diagnostics.ReportIfLetInitializerMustBeNullable(
+                        clause.Initializer.Location,
+                        clause.Identifier.ValueText,
+                        Invariant.Required(initializer.Type, "a bound initializer has a type"));
                 });
 
             var declaration = new BoundVariableDeclaration(binding, bound.Variable, bound.Initializer);

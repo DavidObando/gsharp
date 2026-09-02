@@ -54,8 +54,6 @@ public abstract class BoundTreeRewriter
                 return RewritePatternSwitchStatement((BoundPatternSwitchStatement)node);
             case BoundNodeKind.GoStatement:
                 return RewriteGoStatement((BoundGoStatement)node);
-            case BoundNodeKind.ChannelSendStatement:
-                return RewriteChannelSendStatement((BoundChannelSendStatement)node);
             case BoundNodeKind.SelectStatement:
                 return RewriteSelectStatement((BoundSelectStatement)node);
             case BoundNodeKind.ScopeStatement:
@@ -363,18 +361,12 @@ public abstract class BoundTreeRewriter
                 return RewriteStackAllocExpression((BoundStackAllocExpression)node);
             case BoundNodeKind.MapLiteralExpression:
                 return RewriteMapLiteralExpression((BoundMapLiteralExpression)node);
-            case BoundNodeKind.MapDeleteExpression:
-                return RewriteMapDeleteExpression((BoundMapDeleteExpression)node);
             case BoundNodeKind.IndexExpression:
                 return RewriteIndexExpression((BoundIndexExpression)node);
             case BoundNodeKind.IndexAssignmentExpression:
                 return RewriteIndexAssignmentExpression((BoundIndexAssignmentExpression)node);
             case BoundNodeKind.LenExpression:
                 return RewriteLenExpression((BoundLenExpression)node);
-            case BoundNodeKind.CapExpression:
-                return RewriteCapExpression((BoundCapExpression)node);
-            case BoundNodeKind.AppendExpression:
-                return RewriteAppendExpression((BoundAppendExpression)node);
             case BoundNodeKind.StructLiteralExpression:
                 return RewriteStructLiteralExpression((BoundStructLiteralExpression)node);
             case BoundNodeKind.BlockExpression:
@@ -437,12 +429,6 @@ public abstract class BoundTreeRewriter
                 return RewriteAwaitExpression((BoundAwaitExpression)node);
             case BoundNodeKind.SwitchExpression:
                 return RewriteSwitchExpression((BoundSwitchExpression)node);
-            case BoundNodeKind.MakeChannelExpression:
-                return RewriteMakeChannelExpression((BoundMakeChannelExpression)node);
-            case BoundNodeKind.ChannelReceiveExpression:
-                return RewriteChannelReceiveExpression((BoundChannelReceiveExpression)node);
-            case BoundNodeKind.ChannelCloseExpression:
-                return RewriteChannelCloseExpression((BoundChannelCloseExpression)node);
             case BoundNodeKind.AddressOfExpression:
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
             case BoundNodeKind.ConditionalAddressExpression:
@@ -922,21 +908,6 @@ public abstract class BoundTreeRewriter
         return new BoundGoStatement(null, expression);
     }
 
-    /// <summary>Rewrites a bound channel-send statement (Phase 5.5).</summary>
-    /// <param name="node">The channel-send statement to rewrite.</param>
-    /// <returns>The rewritten channel-send statement.</returns>
-    protected virtual BoundStatement RewriteChannelSendStatement(BoundChannelSendStatement node)
-    {
-        var channel = RewriteExpression(node.Channel);
-        var value = RewriteExpression(node.Value);
-        if (channel == node.Channel && value == node.Value)
-        {
-            return node;
-        }
-
-        return new BoundChannelSendStatement(null, channel, value);
-    }
-
     /// <summary>Rewrites a bound select statement (Phase 5.6).</summary>
     /// <param name="node">The select statement to rewrite.</param>
     /// <returns>The rewritten select statement.</returns>
@@ -1036,53 +1007,6 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundYieldStatement(null, expression);
-    }
-
-    /// <summary>Rewrites a bound make-channel expression (Phase 5.4).</summary>
-    /// <param name="node">The make-channel expression to rewrite.</param>
-    /// <returns>The rewritten make-channel expression.</returns>
-    protected virtual BoundExpression RewriteMakeChannelExpression(BoundMakeChannelExpression node)
-    {
-        if (node.Capacity == null)
-        {
-            return node;
-        }
-
-        var capacity = RewriteExpression(node.Capacity);
-        if (capacity == node.Capacity)
-        {
-            return node;
-        }
-
-        return new BoundMakeChannelExpression(null, node.ChannelType, capacity);
-    }
-
-    /// <summary>Rewrites a bound channel-receive expression (Phase 5.5).</summary>
-    /// <param name="node">The channel-receive expression to rewrite.</param>
-    /// <returns>The rewritten channel-receive expression.</returns>
-    protected virtual BoundExpression RewriteChannelReceiveExpression(BoundChannelReceiveExpression node)
-    {
-        var channel = RewriteExpression(node.Channel);
-        if (channel == node.Channel)
-        {
-            return node;
-        }
-
-        return new BoundChannelReceiveExpression(null, channel, node.Type);
-    }
-
-    /// <summary>Rewrites a bound channel-close expression (Phase 5.4).</summary>
-    /// <param name="node">The channel-close expression to rewrite.</param>
-    /// <returns>The rewritten channel-close expression.</returns>
-    protected virtual BoundExpression RewriteChannelCloseExpression(BoundChannelCloseExpression node)
-    {
-        var channel = RewriteExpression(node.Channel);
-        if (channel == node.Channel)
-        {
-            return node;
-        }
-
-        return new BoundChannelCloseExpression(null, channel);
     }
 
     /// <summary>
@@ -1451,21 +1375,6 @@ public abstract class BoundTreeRewriter
         return builder == null ? node : new BoundMapLiteralExpression(null, node.MapType, builder.MoveToImmutable());
     }
 
-    /// <summary>Rewrites a <c>delete(m, k)</c> expression.</summary>
-    /// <param name="node">The node to rewrite.</param>
-    /// <returns>The rewritten node.</returns>
-    protected virtual BoundExpression RewriteMapDeleteExpression(BoundMapDeleteExpression node)
-    {
-        var map = RewriteExpression(node.Map);
-        var key = RewriteExpression(node.Key);
-        if (map == node.Map && key == node.Key)
-        {
-            return node;
-        }
-
-        return new BoundMapDeleteExpression(null, map, key);
-    }
-
     /// <summary>Rewrites an index expression.</summary>
     /// <param name="node">The node to rewrite.</param>
     /// <returns>The rewritten node.</returns>
@@ -1527,30 +1436,6 @@ public abstract class BoundTreeRewriter
     {
         var operand = RewriteExpression(node.Operand);
         return operand == node.Operand ? node : new BoundLenExpression(null, operand);
-    }
-
-    /// <summary>Rewrites a <c>cap(x)</c> expression.</summary>
-    /// <param name="node">The node to rewrite.</param>
-    /// <returns>The rewritten node.</returns>
-    protected virtual BoundExpression RewriteCapExpression(BoundCapExpression node)
-    {
-        var operand = RewriteExpression(node.Operand);
-        return operand == node.Operand ? node : new BoundCapExpression(null, operand);
-    }
-
-    /// <summary>Rewrites an <c>append(s, e)</c> expression.</summary>
-    /// <param name="node">The node to rewrite.</param>
-    /// <returns>The rewritten node.</returns>
-    protected virtual BoundExpression RewriteAppendExpression(BoundAppendExpression node)
-    {
-        var slice = RewriteExpression(node.Slice);
-        var element = RewriteExpression(node.Element);
-        if (slice == node.Slice && element == node.Element)
-        {
-            return node;
-        }
-
-        return new BoundAppendExpression(null, slice, element, node.SliceType);
     }
 
     /// <summary>Rewrites a struct composite literal.</summary>

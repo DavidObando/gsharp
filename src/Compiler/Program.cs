@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
 using System.Text;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -344,6 +345,61 @@ public class Program
         return Success;
     }
 
+    /// <summary>
+    /// ADR-0174 D1: an emitted program references <c>Gsharp.Runtime.Channels</c>
+    /// whenever it constructs or operates on a channel. Under the SDK, MSBuild's
+    /// copy-local puts that assembly beside the app; a direct <c>gsc /out:</c>
+    /// invocation has no such step, so gsc performs the one copy itself — only
+    /// when the emitted PE actually carries the AssemblyRef, so a program that
+    /// never touches a channel gets nothing extra. Never overwrites a file the
+    /// user already placed there.
+    /// </summary>
+    /// <param name="outputPath">The emitted assembly.</param>
+    private static void CopyBundledRuntimeBeside(string outputPath)
+    {
+        try
+        {
+            var bundled = ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory);
+            var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (bundled is null || string.IsNullOrEmpty(outputDir))
+            {
+                return;
+            }
+
+            var destination = Path.Combine(outputDir, Path.GetFileName(bundled));
+            if (File.Exists(destination) || string.Equals(Path.GetFullPath(bundled), destination, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            using var peStream = File.OpenRead(outputPath);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(peStream);
+            if (!pe.HasMetadata)
+            {
+                return;
+            }
+
+            var reader = pe.GetMetadataReader();
+            var runtimeName = Path.GetFileNameWithoutExtension(bundled);
+            foreach (var handle in reader.AssemblyReferences)
+            {
+                if (string.Equals(reader.GetString(reader.GetAssemblyReference(handle).Name), runtimeName, StringComparison.Ordinal))
+                {
+                    File.Copy(bundled, destination, overwrite: false);
+                    return;
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // Best effort: the program is still correct; only a direct-driver
+            // run from that folder would need the assembly placed manually.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private static int Emit(Compilation compilation, CommandLineArgs args, string outputPath)
     {
         var outputDir = Path.GetDirectoryName(outputPath);
@@ -463,6 +519,8 @@ public class Program
         {
             WriteRuntimeConfig(outputPath, args.TargetFramework);
         }
+
+        CopyBundledRuntimeBeside(outputPath);
 
         Console.WriteLine($"Wrote {outputPath}");
         if (!string.IsNullOrEmpty(refOutputPath))

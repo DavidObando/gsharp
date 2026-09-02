@@ -300,9 +300,14 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         var packageName = "gsi" + n;
 
         var tree = SyntaxTree.Parse(SourceText.From(text, string.Empty));
+        // ADR-0174 D1: a later cell's resolver is rebuilt from the prior
+        // submissions, so it must re-append the bundled driver references
+        // (Gsharp.Extensions, Gsharp.Runtime.Channels) the first cell got from
+        // ReferenceResolver.Default(); otherwise a channel constructed in cell
+        // one cannot be sent on in cell two ("Chan`1 ... not provided").
         var referencePaths = submissions.Select(s => s.DllPath).Concat(userReferences).ToArray();
         var resolver = referencePaths.Length > 0
-            ? ReferenceResolver.WithReferences(referencePaths)
+            ? ReferenceResolver.WithReferences(ReferenceResolver.ResolveDriverReferencePaths(referencePaths))
             : ReferenceResolver.Default();
 
         string? dllPath = null;

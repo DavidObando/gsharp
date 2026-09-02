@@ -36,16 +36,6 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal sealed class BinderContext
 {
     /// <summary>
-    /// ADR-0082 / issue #722. The fully-qualified namespace whose presence
-    /// in a compilation unit's import set unlocks the Go-flavored
-    /// concurrency surface (<c>go</c>, <c>chan T</c>, <c>&lt;-</c>,
-    /// <c>select</c>, <c>close(ch)</c>, <c>make(chan T)</c>) and, in
-    /// follow-up issues, Go-style built-ins (#723) and helper namespaces
-    /// (#724).
-    /// </summary>
-    public const string GoExtensionsImportTarget = "Gsharp.Extensions.Go";
-
-    /// <summary>
     /// Counter used to allocate unique <see cref="BoundLabel"/> identifiers.
     /// Mutated in place by callers (sometimes via
     /// <see cref="System.Threading.Interlocked.Increment(ref int)"/>), so it
@@ -129,6 +119,8 @@ internal sealed class BinderContext
     private int cachedStaticImportStructCount = -1;
     private SyntaxTree? cachedStaticImportSyntaxTree;
 
+    private ChannelRuntimeBinder? channelRuntime;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BinderContext"/> class.
     /// </summary>
@@ -144,6 +136,12 @@ internal sealed class BinderContext
     /// Gets the diagnostics bag for the binder this context backs.
     /// </summary>
     public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+
+    /// <summary>
+    /// Gets the lowering of channel operations onto the <c>Gsharp.Runtime.Channels</c>
+    /// runtime (ADR-0174 D1), resolved once per binder against the compilation's reference set.
+    /// </summary>
+    public ChannelRuntimeBinder ChannelRuntime => channelRuntime ??= new ChannelRuntimeBinder(References);
 
     /// <summary>
     /// Gets the binder's initial scope. Unlike <see cref="RootScope"/>, this
@@ -611,140 +609,6 @@ internal sealed class BinderContext
 
             // A bare `import TypeName` (no dotted prefix) names a default-package type.
             return target.IndexOf('.') < 0 && string.Equals(s.Name, target, StringComparison.Ordinal);
-        }
-    }
-
-    /// <summary>
-    /// ADR-0082 / issue #722. Returns whether <c>import Gsharp.Extensions.Go</c>
-    /// is declared in the compilation unit that contains the given syntax
-    /// node. The check is per <see cref="Syntax.SyntaxTree"/> — multi-file
-    /// packages (ADR-0028) do not collapse import sets across files.
-    /// Implicit / compiler-synthesized imports never match: the Go-flavored
-    /// surface is always opt-in regardless of <c>/noimplicitimports</c>.
-    /// </summary>
-    /// <param name="syntax">The syntax node whose owning compilation unit is checked.</param>
-    /// <returns><c>true</c> when the same compilation unit declares <c>import Gsharp.Extensions.Go</c>; <c>false</c> otherwise.</returns>
-    public bool IsGoExtensionsImported(Syntax.SyntaxNode syntax)
-    {
-        if (syntax == null)
-        {
-            return false;
-        }
-
-        var tree = syntax.SyntaxTree;
-        if (tree == null)
-        {
-            return false;
-        }
-
-        foreach (var imp in RootScope.GetDeclaredImports())
-        {
-            if (string.Equals(imp.Target, GoExtensionsImportTarget, StringComparison.Ordinal)
-                && imp.Declaration is { SyntaxTree: var declTree }
-                && declTree == tree)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// ADR-0082 / issue #722. Convenience wrapper that reports <c>GS0316</c>
-    /// at <paramref name="location"/> when the file containing
-    /// <paramref name="syntax"/> does not import <c>Gsharp.Extensions.Go</c>.
-    /// Returns <c>true</c> when the diagnostic fired so callers can
-    /// short-circuit cosmetic recovery, but every gated binder still
-    /// produces the same bound tree it would have produced with the import
-    /// present (per ADR-0082 "Recovery").
-    /// </summary>
-    /// <param name="syntax">The syntax node whose owning compilation unit is checked.</param>
-    /// <param name="location">The location to anchor the diagnostic at (typically the keyword or operator token).</param>
-    /// <param name="form">The triggering syntactic form (<c>go</c>, <c>chan</c>, <c>&lt;-</c>, <c>select</c>, <c>close</c>, <c>make(chan)</c>).</param>
-    /// <returns><c>true</c> when GS0316 was reported.</returns>
-    public bool ReportIfGoExtensionsImportMissing(Syntax.SyntaxNode syntax, Text.TextLocation location, string form)
-    {
-        if (IsGoExtensionsImported(syntax))
-        {
-            return false;
-        }
-
-        Diagnostics.ReportGoExtensionsImportRequired(location, form);
-        return true;
-    }
-
-    /// <summary>
-    /// ADR-0083 / issue #723. Convenience wrapper that reports <c>GS0317</c>
-    /// at <paramref name="location"/> when the file containing
-    /// <paramref name="syntax"/> does not import <c>Gsharp.Extensions.Go</c>.
-    /// Picks the .NET-idiomatic suggestion text (if any) from the
-    /// per-built-in / per-receiver-type table in ADR-0083 §"Suggestion
-    /// matrix" so the message points the user at <c>.Length</c>,
-    /// <c>.Count</c>, <c>.Remove(k)</c>, etc. when there is one. Returns
-    /// <c>true</c> when GS0317 fired so callers can preserve recovery
-    /// behaviour identical to the import-present path (per ADR-0083
-    /// "Recovery"): the gated built-in still binds to its placeholder
-    /// <c>BoundExpression</c> so subsequent type / shape diagnostics still
-    /// surface in the same pass.
-    /// </summary>
-    /// <param name="syntax">The syntax node whose owning compilation unit is checked.</param>
-    /// <param name="location">The location to anchor the diagnostic at (typically the built-in identifier token).</param>
-    /// <param name="builtin">The triggering built-in name (e.g. <c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>).</param>
-    /// <param name="receiverType">The bound type of the built-in's primary receiver argument, when known; <c>null</c> for the unresolved / error case.</param>
-    /// <returns><c>true</c> when GS0317 was reported.</returns>
-    public bool ReportIfGoBuiltinImportMissing(Syntax.SyntaxNode syntax, Text.TextLocation location, string builtin, TypeSymbol receiverType)
-    {
-        if (IsGoExtensionsImported(syntax))
-        {
-            return false;
-        }
-
-        Diagnostics.ReportGoBuiltinRequiresImport(location, builtin, GetGoBuiltinSuggestion(builtin, receiverType));
-        return true;
-    }
-
-    /// <summary>
-    /// ADR-0083 / issue #723. Returns the .NET-idiomatic alternative for a
-    /// gated Go-style built-in, based on the built-in's identifier and the
-    /// bound type of its primary receiver. Returns <c>null</c> when no
-    /// clean alternative exists (e.g. <c>cap</c>, or <c>append</c> on a
-    /// slice — the recommendation in that case is the import itself or a
-    /// mutable <c>List[T].Add</c>).
-    /// </summary>
-    /// <param name="builtin">The built-in name (e.g. <c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>).</param>
-    /// <param name="receiverType">The bound type of the receiver argument, when known.</param>
-    /// <returns>The suggestion snippet (e.g. <c>.Length</c>, <c>.Count</c>, <c>.Remove(k)</c>, <c>List[T].Add</c>), or <c>null</c> when no clean .NET-idiomatic alternative is documented.</returns>
-    public static string? GetGoBuiltinSuggestion(string builtin, TypeSymbol? receiverType)
-    {
-        switch (builtin)
-        {
-            case "len":
-                if (receiverType is MapTypeSymbol)
-                {
-                    return ".Count";
-                }
-
-                if (receiverType is ArrayTypeSymbol or SliceTypeSymbol or RectangularArrayTypeSymbol
-                    || receiverType == TypeSymbol.String)
-                {
-                    return ".Length";
-                }
-
-                // Unknown / error receiver: keep `.Length` as the most common
-                // hint without lying about maps; the per-type case above
-                // already steered maps to `.Count`.
-                return ".Length";
-
-            case "delete":
-                return ".Remove(k)";
-
-            case "append":
-                return "List[T].Add";
-
-            default:
-                // cap / make / close have no clean .NET-idiomatic alternative.
-                return null;
         }
     }
 

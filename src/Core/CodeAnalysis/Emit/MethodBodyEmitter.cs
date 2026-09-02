@@ -53,7 +53,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<VariableSymbol, int> locals;
     private readonly Dictionary<ParameterSymbol, int> parameters;
     private readonly Dictionary<BoundLabel, LabelHandle> labels;
-    private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
     private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots;
     private readonly Dictionary<BoundDefaultExpression, int> defaultExpressionSlots;
     private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots;
@@ -80,7 +79,6 @@ internal sealed partial class MethodBodyEmitter
     // InvalidProgramException at run time). Track which receive nodes have
     // already had their try/catch materialised so every occurrence — root or
     // not — runs exactly once, at the start of its containing statement.
-    private readonly HashSet<BoundChannelReceiveExpression> materializedChannelReceives = new HashSet<BoundChannelReceiveExpression>();
 
     // Issue #1688: tracks which planned receiverSpillSlots entries have
     // already been evaluated-and-cached during this method's emission. A
@@ -148,7 +146,6 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<VariableSymbol, int> locals,
         Dictionary<ParameterSymbol, int> parameters,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
         Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
@@ -178,7 +175,6 @@ internal sealed partial class MethodBodyEmitter
         this.locals = locals;
         this.parameters = parameters;
         this.labels = labels;
-        this.appendSlots = appendSlots;
         this.structLiteralSlots = structLiteralSlots;
         this.defaultExpressionSlots = defaultExpressionSlots;
         this.mapIndexSlots = mapIndexSlots;
@@ -341,7 +337,6 @@ internal sealed partial class MethodBodyEmitter
 
         this.RecordSequencePointFor(statement);
         this.MaterializeSpilledStackAllocs(statement);
-        this.MaterializeSpilledChannelReceives(statement);
         switch (statement)
         {
             case BoundBlockStatement block:
@@ -432,9 +427,6 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundFixedStatement fixedStmt:
                 this.EmitFixedStatement(fixedStmt);
-                break;
-            case BoundChannelSendStatement cs:
-                this.EmitChannelSendStatement(cs);
                 break;
             case BoundSelectStatement select:
                 this.EmitSelectStatement(select);
@@ -543,40 +535,6 @@ internal sealed partial class MethodBodyEmitter
 
             this.EmitStackAllocCore(sa);
             this.il.StoreLocal(this.stackAllocResultSlots[sa]);
-        }
-    }
-
-    // Issue #2283: before a statement's own IL is emitted (evaluation stack is
-    // empty here), materialise every `<-ch` channel-receive expression this
-    // statement contains, in source order, running each one's try/catch (see
-    // EmitChannelReceiveCore) at this empty-stack point and storing the
-    // result into its pre-allocated slot. The original operand position
-    // (EmitChannelReceiveExpression) then just loads that slot instead of
-    // re-emitting the try/catch — which would otherwise open a protected
-    // region while earlier operands of the same expression are still on the
-    // stack (ECMA-335 III.3.47 violation: ilverify TryNonEmptyStack /
-    // StackUnderflow, InvalidProgramException at run time). Nested statements
-    // are handled by their own EmitStatement pass, so this walker does not
-    // descend past the first statement boundary. This always runs — even for
-    // a receive that is already the whole statement — so there is exactly one
-    // code path, and it is unconditionally safe.
-    private void MaterializeSpilledChannelReceives(BoundStatement statement)
-    {
-        if (this.channelOpSlots.Count == 0)
-        {
-            return;
-        }
-
-        var receives = new List<BoundChannelReceiveExpression>();
-        new ChannelReceiveCollector(receives).Visit(statement);
-        foreach (var recv in receives)
-        {
-            if (!this.materializedChannelReceives.Add(recv))
-            {
-                continue;
-            }
-
-            this.EmitChannelReceiveCore(recv);
         }
     }
 
@@ -1449,53 +1407,6 @@ internal sealed partial class MethodBodyEmitter
             if (node is BoundStackAllocExpression sa && this.spilled.ContainsKey(sa))
             {
                 this.sink.Add(sa);
-            }
-        }
-    }
-
-    // Issue #2283: collects every BoundChannelReceiveExpression directly
-    // contained in a single statement (mirrors SpilledStackAllocCollector —
-    // does not descend past the first statement boundary; nested statements
-    // run their own MaterializeSpilledChannelReceives pass). Post-order, so a
-    // receive nested inside another receive's channel sub-expression (however
-    // unlikely) is materialised innermost-first.
-    private sealed class ChannelReceiveCollector : BoundTreeWalker
-    {
-        private readonly List<BoundChannelReceiveExpression> sink;
-        private bool entered;
-
-        public ChannelReceiveCollector(List<BoundChannelReceiveExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        public override void VisitStatement(BoundStatement? node)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            if (this.entered)
-            {
-                return;
-            }
-
-            this.entered = true;
-            base.VisitStatement(node);
-        }
-
-        public override void VisitExpression(BoundExpression? node)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            base.VisitExpression(node);
-            if (node is BoundChannelReceiveExpression recv)
-            {
-                this.sink.Add(recv);
             }
         }
     }

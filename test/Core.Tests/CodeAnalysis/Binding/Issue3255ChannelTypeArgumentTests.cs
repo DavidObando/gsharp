@@ -29,7 +29,6 @@ public class Issue3255ChannelTypeArgumentTests
         var result = EmittedOracle.Evaluate("""
             package Issue3255Enclosing
 
-            import Gsharp.Extensions.Go
 
             class Box[T] {}
             class Owner[T] {
@@ -37,7 +36,7 @@ public class Issue3255ChannelTypeArgumentTests
             }
 
             func Reify[T]() int32 {
-                let value = Box[Owner[chan T].Payload[string]]()
+                let value = Box[Owner[chan[T]].Payload[string]]()
                 let channelType = value.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
                 return channelType.GetGenericTypeDefinition().FullName == "System.Threading.Channels.Channel`1"
                     && channelType.GenericTypeArguments[0].FullName == "System.Int32" ? 42 : 0
@@ -56,7 +55,6 @@ public class Issue3255ChannelTypeArgumentTests
         var result = EmittedOracle.Evaluate("""
             package Issue3255NestedMember
 
-            import Gsharp.Extensions.Go
 
             class Owner[T] {
                 class Payload[U] {
@@ -64,10 +62,10 @@ public class Issue3255ChannelTypeArgumentTests
                 }
             }
 
-            func Make[T](value T) Owner[chan T].Payload[T] {
-                let ch = make(chan T, 1)
+            func Make[T](value T) Owner[chan[T]].Payload[T] {
+                let ch = chan[T](1)
                 ch <- value
-                return Owner[chan T].Payload[T]{Value: ch}
+                return Owner[chan[T]].Payload[T]{Value: ch}
             }
 
             let payload = Make[int32](42)
@@ -84,25 +82,24 @@ public class Issue3255ChannelTypeArgumentTests
         var result = EmittedOracle.Evaluate("""
             package Issue3255Substitution
 
-            import Gsharp.Extensions.Go
 
             interface Reader[T] {
-                func Read(ch chan T) T;
+                func Read(ch chan[T]) T;
             }
 
             class Box[T] : Reader[T] {
-                var Value chan T = make(chan T, 1)
-                func Read(ch chan T) T { return <-ch }
+                var Value chan[T] = chan[T](1)
+                func Read(ch chan[T]) T { return <-ch }
             }
 
-            func Relay[T](reader Reader[T], ch chan T) T {
+            func Relay[T](reader Reader[T], ch chan[T]) T {
                 return reader.Read(ch)
             }
 
             let box = Box[int32]()
             box.Value <- 20
             let first = <-box.Value
-            let ch = make(chan int32, 1)
+            let ch = chan[int32](1)
             ch <- 22
             first + Relay[int32](box, ch)
             """);
@@ -117,10 +114,9 @@ public class Issue3255ChannelTypeArgumentTests
         var result = EmittedOracle.Evaluate("""
             package Issue3255Iterator
 
-            import Gsharp.Extensions.Go
 
-            func Channels[T](value T) sequence[chan T] {
-                let ch = make(chan T, 1)
+            func Channels[T](value T) sequence[chan[T]] {
+                let ch = chan[T](1)
                 ch <- value
                 yield ch
             }
@@ -164,7 +160,7 @@ public class Issue3255ChannelTypeArgumentTests
             class Box[T] {}
             class Owner[T] { class Payload[U] {} }
             func Reify[T]() {
-                let value = Box[Owner[chan T].Payload[string]]()
+                let value = Box[Owner[chan[T]].Payload[string]]()
             }
             """;
         var tree = SyntaxTree.Parse(SourceText.From(Source, "issue3255.gs"));
@@ -184,7 +180,7 @@ public class Issue3255ChannelTypeArgumentTests
         Assert.Equal(4, diagnostic.Location.StartLine);
         Assert.Equal(26, diagnostic.Location.StartCharacter);
         Assert.Equal(4, diagnostic.Location.EndLine);
-        Assert.Equal(32, diagnostic.Location.EndCharacter);
+        Assert.Equal(33, diagnostic.Location.EndCharacter);
     }
 
     private static IEnumerable<SyntaxNode> Descendants(SyntaxNode node)

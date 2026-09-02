@@ -736,12 +736,6 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindGoStatement(GoStatementSyntax syntax)
     {
-        // ADR-0082 / issue #722: gate the `go expr` statement on
-        // `import Gsharp.Extensions.Go`. Report GS0316 if the import is
-        // missing, then continue binding so downstream diagnostics about
-        // the operand's call-shape still surface.
-        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.GoKeyword.Location, "go");
-
         // Issue #3304: the spawned call's result is discarded (ADR-0022), so
         // a void-returning operand is the natural goroutine shape — bind with
         // canBeVoid so GS0124 does not force `return 0` boilerplate onto
@@ -770,32 +764,43 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
     {
-        // Phase 5.5 / ADR-0022: `ch <- v` send statement.
-        // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
-        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.LeftArrowToken.Location, "<- (send)");
-
+        // ADR-0174 D1/D2: `ch <- v` lowers to ChannelOps.Send<T>(ch, v, default).
+        // Any channel-shaped handle may be sent on except a receive-only
+        // `in chan[T]` (GS0549) — this is what makes ownership checkable.
         var channel = bindExpression(syntax.Channel);
         if (channel is BoundErrorExpression)
         {
             return new BoundExpressionStatement(syntax, channel);
         }
 
-        if (channel.Type is not ChannelTypeSymbol chan)
+        if (!ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var elementType, out var direction, out _))
         {
             Diagnostics.ReportSendTargetIsNotChannel(syntax.Channel.Location, channel.Type);
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
-        var value = conversions.BindConversion(syntax.Value, chan.ElementType);
-        return new BoundChannelSendStatement(syntax, channel, value);
+        if (direction == ChannelDirection.In)
+        {
+            Diagnostics.ReportSendOnReceiveOnlyChannel(syntax.LeftArrowToken.Location, channel.Type);
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        var value = conversions.BindConversion(syntax.Value, elementType);
+        if (!binderCtx.ChannelRuntime.IsAvailable)
+        {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(syntax.LeftArrowToken.Location, ChannelRuntimeBinder.ChanTypeName);
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        return binderCtx.ChannelRuntime.BindSend(syntax, channel, value, elementType, direction);
     }
 
     private BoundStatement BindSelectStatement(SelectStatementSyntax syntax)
     {
         // Phase 5.6 / ADR-0022: select statement orchestrating channel ops.
-        // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
-        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.SelectKeyword.Location, "select");
-
+        // ADR-0174 D2: arms accept any channel-shaped handle; the operand is
+        // viewed through its `chan[T]` / `in chan[T]` / `out chan[T]` symbol so
+        // the (wave-1, pre-D8) select emitter sees one representation.
         if (syntax.Cases.Length == 0)
         {
             Diagnostics.ReportSelectWithNoCases(syntax.SelectKeyword.Location);
@@ -836,10 +841,32 @@ internal sealed partial class StatementBinder
             // All non-default arms reference a channel.
             var channelSyntax = Invariant.Required(caseSyntax.Channel, "a non-default select case has a channel");
             var channelExpr = bindExpression(channelSyntax);
-            var chan = channelExpr.Type as ChannelTypeSymbol;
+            ChannelTypeSymbol? chan = null;
+            if (channelExpr is not BoundErrorExpression
+                && ChannelTypeSymbol.TryGetChannelShape(channelExpr.Type, out var armElement, out var armDirection, out _))
+            {
+                if (caseSyntax.CaseKind == SelectCaseKind.Send && armDirection == ChannelDirection.In)
+                {
+                    Diagnostics.ReportSendOnReceiveOnlyChannel(channelSyntax.Location, channelExpr.Type);
+                }
+                else if (caseSyntax.CaseKind != SelectCaseKind.Send && armDirection == ChannelDirection.Out)
+                {
+                    Diagnostics.ReportReceiveFromSendOnlyChannel(channelSyntax.Location, channelExpr.Type);
+                }
+                else
+                {
+                    chan = ChannelTypeSymbol.Get(armElement, armDirection);
+                    if (channelExpr.Type != chan)
+                    {
+                        channelExpr = new BoundConversionExpression(null, chan, channelExpr);
+                    }
+                }
+            }
+
             if (channelExpr is BoundErrorExpression || chan == null)
             {
-                if (chan == null && channelExpr is not BoundErrorExpression)
+                if (chan == null && channelExpr is not BoundErrorExpression
+                    && !ChannelTypeSymbol.TryGetChannelShape(channelExpr.Type, out _, out _, out _))
                 {
                     if (caseSyntax.CaseKind == SelectCaseKind.Send)
                     {

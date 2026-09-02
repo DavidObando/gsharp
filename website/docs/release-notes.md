@@ -7,6 +7,24 @@ draft: false
 
 G# is pre-1.0. The repository's version base is currently `0.4`, and product versions are derived by Nerdbank.GitVersioning from that base and the Git commit. Until the project reaches a stable compatibility promise, release notes should be read as implementation status notes rather than a long-term compatibility contract.
 
+## Unreleased (0.5 line)
+
+### Breaking changes
+
+- **`chan T` is respelled `chan[T]`** (ADR-0174 D2). The element type moves inside brackets like `sequence[T]` and `map[K, V]`; `in chan[T]` / `out chan[T]` are the receive-only / send-only handles (`ChannelReader<T>` / `ChannelWriter<T>`), `chan[T]?` is a nullable channel and `chan[T?]` a channel of nullable — the `(chan T)?` grouping carve-out is gone. The legacy spelling is rejected with `GS0567`, which names the exact replacement.
+- **`make(chan T[, n])` is retired** in favour of `chan[T]()` (rendezvous — capacity 0, Go's unbuffered channel), `chan[T](n)`, and `Chan.Unbounded[T]()` (the wave-1 behavior of `make(chan T)`, now named). `GS0566` names the replacement per site; note the semantic change for the no-capacity form.
+- **`close(ch)` is retired** in favour of the member `ch.Close()` (`GS0566`). Closing twice throws (Go's panic); `Dispose()` is the idempotent close, so `using let` works. `len(ch)` / `cap(ch)` become `ch.Length()` / `ch.Capacity` on a channel you constructed.
+- **Receiving from a closed channel no longer raises and swallows `ChannelClosedException`** — the zero value is delivered directly (about 400× faster on that path).
+- **`import Gsharp.Extensions.Go` is gone** (ADR-0174 D13): the concurrency syntax is the language, the namespace and its marker type are deleted, and the gate diagnostics `GS0316` / `GS0317` are retired. The concurrency library lives in the implicitly imported `Gsharp.Concurrency` namespace (`/noimplicitimports` disables it).
+- **`len`, `cap`, `append`, and `delete` are retired** (ADR-0174 D13). A call reports `GS0566` naming the member replacement for that site: `xs.Length`, `m.Count`, `m.Remove(k)`, `ch.Length()` / `ch.Capacity`; `append` has no member spelling — a slice is a fixed CLR array, so keep a growable `List[T]` and `.Add`; `cap` on a slice is removed outright (its capacity was its length). A user-defined function of the same name is an ordinary call.
+
+### Added
+
+- `Gsharp.Runtime.Channels`: a C#-authored channel runtime bundled with the SDK (`tools/channels/`) and auto-referenced by every project. `Chan<T>` is a rendezvous-capable `Channel<T>` subclass with Go-exact close semantics, a two-value receive, batch transfer, and the transactional `select` waiter protocol; `gsc` copies it beside an emitted program that references it.
+- Directional channel types and the D2 operation matrix: foreign BCL channels, readers, and writers flow into `chan[T]` / `in chan[T]` / `out chan[T]` with no adapter.
+- `GS0548` (advisory: `chan[T]()` is a rendezvous channel), `GS0549`/`GS0550` (send/receive through the wrong directional handle), `GS0554` (a channel-receive binding form with the wrong number of targets), `GS0555` (`while let v = ch` where a receive was meant).
+- **Observable completion** (ADR-0174 D3): the two-value receive `let (v, ok) = <-ch` (or `v, ok = <-ch`) distinguishes a delivered zero value from a closed channel; `while let v = <-ch { … }` and `for v in ch { … }` loop until the channel is closed. A `chan[T?]` element that is `nil` is delivered, not mistaken for close.
+
 ## 0.4
 
 The fourth pre-1.0 line focuses on **sound defaults, expressive control flow, and faithful CLR interop**. Collection zero values are now usable without hidden nulls, pattern matching works directly in boolean and loop conditions, rectangular CLR arrays have native syntax, and explicit extension receivers preserve extension semantics for owned types and enums. Tooling adds synchronized-map support, clearer REPL display, and `dotnet watch` hot reload.

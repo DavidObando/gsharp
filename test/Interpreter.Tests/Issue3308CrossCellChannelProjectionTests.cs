@@ -13,15 +13,16 @@ namespace GSharp.Interpreter.Tests;
 /// submission-as-metadata seam bound a prior cell's global via its CLR
 /// projection, so operations that type-check against the magic symbol failed
 /// cross-cell: every channel operation (<c>&lt;-ch</c>, <c>ch &lt;- v</c>,
-/// <c>select</c> arms, <c>close</c>) on a <c>chan T</c> global (projected as
+/// <c>select</c> arms, <c>Close()</c>) on a <c>chan[T]</c> global (projected as
 /// imported <c>System.Threading.Channels.Channel[T]</c>), and
 /// <c>len</c>/<c>append</c> on slice and fixed-array globals (projected as
 /// imported <c>T[]</c>). The <c>Pin_*</c> tests pin the kinds that already
 /// round-trip correctly through the seam (maps via the erased dictionary
 /// member family, sequences via the duck-typed enumerable probes,
 /// function-typed globals via the delegate-shape call mapping) so the fix
-/// cannot regress them. Gated forms re-import <c>Gsharp.Extensions.Go</c>
-/// per cell, matching the ADR-0082/ADR-0083 per-file gate.
+/// cannot regress them. ADR-0174 removed the <c>Gsharp.Extensions.Go</c>
+/// import gate; a later cell's resolver must still carry the bundled channel
+/// runtime, which is the second thing these tests now police.
 /// </summary>
 public sealed class Issue3308CrossCellChannelProjectionTests
 {
@@ -32,15 +33,14 @@ public sealed class Issue3308CrossCellChannelProjectionTests
         // channel has a value before the cross-cell receive.
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var done = make(chan int32, 1)
+            var done = chan[int32](1)
             func poke() {
                 done <- 42
             }
             """);
         AssertOk(engine, "poke()");
 
-        var receive = engine.Evaluate("import Gsharp.Extensions.Go\n<-done");
+        var receive = engine.Evaluate("<-done");
         Assert.False(receive.HasError, string.Join("; ", receive.Diagnostics));
         Assert.Equal(42, receive.Value);
     }
@@ -50,12 +50,11 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var ch = make(chan int32, 1)
+            var ch = chan[int32](1)
             """);
-        AssertOk(engine, "import Gsharp.Extensions.Go\nch <- 7");
+        AssertOk(engine, "ch <- 7");
 
-        var receive = engine.Evaluate("import Gsharp.Extensions.Go\n<-ch");
+        var receive = engine.Evaluate("<-ch");
         Assert.False(receive.HasError, string.Join("; ", receive.Diagnostics));
         Assert.Equal(7, receive.Value);
     }
@@ -65,13 +64,11 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var ready = make(chan int32, 1)
+            var ready = chan[int32](1)
             ready <- 5
             """);
 
         var result = engine.Evaluate("""
-            import Gsharp.Extensions.Go
             var got = 0
             select {
             case let v = <-ready {
@@ -89,18 +86,16 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var sendCh = make(chan int32, 1)
+            var sendCh = chan[int32](1)
             """);
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
             select {
             case sendCh <- 11 {
             }
             }
             """);
 
-        var receive = engine.Evaluate("import Gsharp.Extensions.Go\n<-sendCh");
+        var receive = engine.Evaluate("<-sendCh");
         Assert.False(receive.HasError, string.Join("; ", receive.Diagnostics));
         Assert.Equal(11, receive.Value);
     }
@@ -110,12 +105,10 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var empty = make(chan int32, 1)
+            var empty = chan[int32](1)
             """);
 
         var result = engine.Evaluate("""
-            import Gsharp.Extensions.Go
             var picked = 0
             select {
             case let v = <-empty {
@@ -139,12 +132,10 @@ public sealed class Issue3308CrossCellChannelProjectionTests
         // channel captured from the prior cell — a real rendezvous.
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var u = make(chan int32)
+            var u = Chan.Unbounded[int32]()
             """);
 
         var result = engine.Evaluate("""
-            import Gsharp.Extensions.Go
             go func() {
                 u <- 9
             }()
@@ -159,12 +150,11 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var c = make(chan int32, 1)
+            var c = chan[int32](1)
             """);
-        AssertOk(engine, "import Gsharp.Extensions.Go\nclose(c)");
+        AssertOk(engine, "c.Close()");
 
-        var receive = engine.Evaluate("import Gsharp.Extensions.Go\n<-c");
+        var receive = engine.Evaluate("<-c");
         Assert.False(receive.HasError, string.Join("; ", receive.Diagnostics));
         Assert.Equal(0, receive.Value);
     }
@@ -174,12 +164,11 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var sc = make(chan string, 1)
+            var sc = chan[string](1)
             """);
-        AssertOk(engine, "import Gsharp.Extensions.Go\nsc <- \"hi\"");
+        AssertOk(engine, "sc <- \"hi\"");
 
-        var receive = engine.Evaluate("import Gsharp.Extensions.Go\n<-sc");
+        var receive = engine.Evaluate("<-sc");
         Assert.False(receive.HasError, string.Join("; ", receive.Diagnostics));
         Assert.Equal("hi", receive.Value);
     }
@@ -188,22 +177,20 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     public void UserStructElement_CrossCellSendReceive()
     {
         // A user-struct element type: the cross-cell reverse projection must
-        // rebuild `chan Point` over the current resolver's view of the prior
+        // rebuild `chan[Point]` over the current resolver's view of the prior
         // cell's emitted Point type so a later cell can send a composite
         // literal and read fields off the received value.
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
             struct Point {
                 var X int32
                 var Y int32
             }
-            var pc = make(chan Point, 1)
+            var pc = chan[Point](1)
             """);
-        AssertOk(engine, "import Gsharp.Extensions.Go\npc <- Point{X: 3, Y: 4}");
+        AssertOk(engine, "pc <- Point{X: 3, Y: 4}");
 
         var result = engine.Evaluate("""
-            import Gsharp.Extensions.Go
             var p = <-pc
             p.X + p.Y
             """);
@@ -216,13 +203,12 @@ public sealed class Issue3308CrossCellChannelProjectionTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
-            var rc = make(chan int32, 1)
+            var rc = chan[int32](1)
             """);
-        AssertOk(engine, "import Gsharp.Extensions.Go\nrc = make(chan int32, 2)");
-        AssertOk(engine, "import Gsharp.Extensions.Go\nrc <- 21");
+        AssertOk(engine, "rc = chan[int32](2)");
+        AssertOk(engine, "rc <- 21");
 
-        var receive = engine.Evaluate("import Gsharp.Extensions.Go\n<-rc");
+        var receive = engine.Evaluate("<-rc");
         Assert.False(receive.HasError, string.Join("; ", receive.Diagnostics));
         Assert.Equal(21, receive.Value);
     }
@@ -236,7 +222,7 @@ public sealed class Issue3308CrossCellChannelProjectionTests
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, "var xs = []int32{1, 2, 3}");
 
-        var lenProbe = engine.Evaluate("import Gsharp.Extensions.Go\nlen(xs)");
+        var lenProbe = engine.Evaluate("xs.Length");
         Assert.False(lenProbe.HasError, string.Join("; ", lenProbe.Diagnostics));
         Assert.Equal(3, lenProbe.Value);
 
@@ -244,8 +230,8 @@ public sealed class Issue3308CrossCellChannelProjectionTests
         Assert.False(indexProbe.HasError, string.Join("; ", indexProbe.Diagnostics));
         Assert.Equal(2, indexProbe.Value);
 
-        AssertOk(engine, "import Gsharp.Extensions.Go\nxs = append(xs, 4)");
-        var appended = engine.Evaluate("import Gsharp.Extensions.Go\nlen(xs)");
+        AssertOk(engine, "xs = []int32{xs[0], xs[1], xs[2], 4}");
+        var appended = engine.Evaluate("xs.Length");
         Assert.False(appended.HasError, string.Join("; ", appended.Diagnostics));
         Assert.Equal(4, appended.Value);
 
@@ -270,7 +256,7 @@ public sealed class Issue3308CrossCellChannelProjectionTests
         Assert.False(indexProbe.HasError, string.Join("; ", indexProbe.Diagnostics));
         Assert.Equal(3, indexProbe.Value);
 
-        var lenProbe = engine.Evaluate("import Gsharp.Extensions.Go\nlen(a)");
+        var lenProbe = engine.Evaluate("a.Length");
         Assert.False(lenProbe.HasError, string.Join("; ", lenProbe.Diagnostics));
         Assert.Equal(3, lenProbe.Value);
 

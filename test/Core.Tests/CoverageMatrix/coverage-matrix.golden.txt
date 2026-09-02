@@ -40,6 +40,7 @@ CaseKeyword
 CatchClause
 CatchKeyword
 ChanKeyword
+ChannelCreationExpression
 ChannelReceiveExpression
 ChannelSendStatement
 CharacterToken
@@ -280,7 +281,6 @@ YieldStatement
 
 [BoundNodeKind]
 AddressOfExpression
-AppendExpression
 ArrayCreationExpression
 AsExpression
 AssignmentExpression
@@ -296,10 +296,6 @@ BinaryPattern
 BlockExpression
 BlockStatement
 CallExpression
-CapExpression
-ChannelCloseExpression
-ChannelReceiveExpression
-ChannelSendStatement
 ClrBinaryOperatorExpression
 ClrConstructorCallExpression
 ClrConversionCallExpression
@@ -350,8 +346,6 @@ LenExpression
 ListPattern
 LiteralExpression
 LocalFunctionDeclaration
-MakeChannelExpression
-MapDeleteExpression
 MapLiteralExpression
 MethodGroupExpression
 NotPattern

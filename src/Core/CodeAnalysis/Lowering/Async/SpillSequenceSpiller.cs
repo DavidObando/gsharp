@@ -278,9 +278,6 @@ public static class SpillSequenceSpiller
                 case BoundYieldStatement yieldStatement:
                     return RewriteYieldStatement(yieldStatement, builder);
 
-                case BoundChannelSendStatement channelSend:
-                    return RewriteChannelSendStatement(channelSend, builder);
-
                 case BoundGoStatement goStatement:
                     return RewriteGoStatement(goStatement, builder);
 
@@ -586,45 +583,6 @@ public static class SpillSequenceSpiller
             var temp = MakeSpillTemp(expression.Type);
             builder.Add(new BoundVariableDeclaration(null, temp, expression));
             return new BoundVariableExpression(null, temp);
-        }
-
-        private bool RewriteChannelSendStatement(
-            BoundChannelSendStatement channelSend,
-            ImmutableArray<BoundStatement>.Builder builder)
-        {
-            var channelNeedsSpill = HasAwait(channelSend.Channel);
-            var valueNeedsSpill = HasAwait(channelSend.Value);
-            if (!channelNeedsSpill && !valueNeedsSpill)
-            {
-                builder.Add(channelSend);
-                return false;
-            }
-
-            var channel = channelSend.Channel;
-            if (channelNeedsSpill)
-            {
-                var spilledChannel = SpillExpression(channel);
-                FlushSideEffects(spilledChannel, builder);
-                channel = spilledChannel.Value;
-            }
-
-            if (valueNeedsSpill && !CanDeferAcrossLift(channel))
-            {
-                var channelTemp = MakeSpillTemp(channel.Type);
-                builder.Add(new BoundVariableDeclaration(null, channelTemp, channel));
-                channel = new BoundVariableExpression(null, channelTemp);
-            }
-
-            var value = channelSend.Value;
-            if (valueNeedsSpill)
-            {
-                var spilledValue = SpillExpression(value);
-                FlushSideEffects(spilledValue, builder);
-                value = spilledValue.Value;
-            }
-
-            builder.Add(new BoundChannelSendStatement(null, channel, value));
-            return true;
         }
 
         private bool RewriteGoStatement(
@@ -1088,48 +1046,10 @@ public static class SpillSequenceSpiller
                         len,
                         len.Operand,
                         operand => new BoundLenExpression(null, operand));
-                case BoundCapExpression cap:
-                    return SpillOneOperand(
-                        cap,
-                        cap.Operand,
-                        operand => new BoundCapExpression(null, operand));
-                case BoundAppendExpression append:
-                    return SpillTwoOperand(
-                        append,
-                        append.Slice,
-                        append.Element,
-                        (slice, element) =>
-                            new BoundAppendExpression(null, slice, element, append.SliceType));
                 case BoundStructLiteralExpression structLiteral:
                     return SpillStructLiteral(structLiteral);
-                case BoundMakeChannelExpression makeChannel:
-                    if (makeChannel.Capacity == null)
-                    {
-                        return Trivial(makeChannel);
-                    }
-
-                    return SpillOneOperand(
-                        makeChannel,
-                        makeChannel.Capacity,
-                        capacity => new BoundMakeChannelExpression(null, makeChannel.ChannelType, capacity));
-                case BoundChannelReceiveExpression channelReceive:
-                    return SpillOneOperand(
-                        channelReceive,
-                        channelReceive.Channel,
-                        channel => new BoundChannelReceiveExpression(null, channel, channelReceive.Type));
-                case BoundChannelCloseExpression channelClose:
-                    return SpillOneOperand(
-                        channelClose,
-                        channelClose.Channel,
-                        channel => new BoundChannelCloseExpression(null, channel));
                 case BoundMapLiteralExpression mapLiteral:
                     return SpillMapLiteral(mapLiteral);
-                case BoundMapDeleteExpression mapDelete:
-                    return SpillTwoOperand(
-                        mapDelete,
-                        mapDelete.Map,
-                        mapDelete.Key,
-                        (map, key) => new BoundMapDeleteExpression(null, map, key));
                 case BoundIsExpression isExpr:
                     return SpillOneOperand(
                         isExpr,

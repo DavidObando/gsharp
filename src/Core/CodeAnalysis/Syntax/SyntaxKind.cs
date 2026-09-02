@@ -264,6 +264,7 @@ public enum SyntaxKind
     AwaitExpression,
     GoStatement,
     MakeChannelExpression,
+    ChannelCreationExpression,
     ChannelReceiveExpression,
     ChannelSendStatement,
     SelectStatement,

@@ -41,7 +41,6 @@ public class Issue3354RectangularArrayEmitTests
             package P
             import System
             import System.Collections.Generic
-            import Gsharp.Extensions.Go
 
             struct Cell { var Value int32 }
             class RefCell { var Value int32 }
@@ -110,7 +109,7 @@ public class Issue3354RectangularArrayEmitTests
             Console.WriteLine(returned.GetLength(1))
             Console.WriteLine(returned.GetLowerBound(0))
             Console.WriteLine(returned.GetUpperBound(1))
-            Console.WriteLine(len(returned))
+            Console.WriteLine(returned.Length)
             let empty = EmptyHolder().Grid
             Console.WriteLine(empty.Rank)
             Console.WriteLine(empty.Length)

@@ -167,7 +167,7 @@ public static class TupleElementNamesReader
             case ChannelTypeSymbol channel:
             {
                 var applied = Apply(channel.ElementType, names, ref position);
-                return ReferenceEquals(applied, channel.ElementType) ? type : ChannelTypeSymbol.Get(applied);
+                return ReferenceEquals(applied, channel.ElementType) ? type : ChannelTypeSymbol.Get(applied, channel.Direction);
             }
 
             case ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported:

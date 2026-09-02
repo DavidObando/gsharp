@@ -53,7 +53,6 @@ import System.Runtime.CompilerServices
 /// shared map is a race no per-operation locking can fix.
 ///
 /// ```gs
-/// import Gsharp.Extensions.Go
 /// import Gsharp.Extensions.Sync
 ///
 /// var m = SyncMap[string, int32]()
@@ -175,9 +174,8 @@ class SyncMap[K, V any] {
     /// @returns a new slice holding the snapshot keys, in no particular
     ///          order.
     func Keys() []K {
-        // List + ToArray rather than the `append` builtin: append is gated
-        // behind `import Gsharp.Extensions.Go` (GS0317 / ADR-0083), which
-        // this assembly should not self-import just to build a snapshot.
+        // List + ToArray: a slice is a fixed CLR array, and the growable
+        // shape is `List[T]` + `Add` (ADR-0174 D13 retired `append`).
         var ks = List[K]()
         for k in items.Keys {
             ks.Add(k)

@@ -22,7 +22,7 @@ public class ChannelTests
     public void MakeChannel_AndSendRecv_Roundtrip()
     {
         var source = @"
-let ch = make(chan int32, 1)
+let ch = chan[int32](1)
 ch <- 7
 let v = <-ch
 ";
@@ -34,7 +34,7 @@ let v = <-ch
     public void MakeChannel_Unbounded_Binds()
     {
         var source = @"
-let ch = make(chan string)
+let ch = Chan.Unbounded[string]()
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -44,8 +44,8 @@ let ch = make(chan string)
     public void Close_OnChannel_Binds()
     {
         var source = @"
-let ch = make(chan int32, 1)
-close(ch)
+let ch = chan[int32](1)
+ch.Close()
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -55,8 +55,8 @@ close(ch)
     public void Receive_FromClosedChannel_ReturnsZero()
     {
         var source = @"
-let ch = make(chan int32, 1)
-close(ch)
+let ch = chan[int32](1)
+ch.Close()
 let v = <-ch
 ";
         var result = Evaluate(source);
@@ -86,24 +86,22 @@ let v = <-x
     }
 
     [Fact]
-    public void Close_OnNonChannel_Diagnoses()
+    public void Close_OnNonChannel_IsAnOrdinaryMemberNotFound()
     {
+        // ADR-0174 D12: `Close()` is a member, so closing a non-channel is the
+        // ordinary member-not-found error — no channel-specific diagnostic.
         var source = @"
 let x = 1
-close(x)
+x.Close()
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("channel"));
+        Assert.NotEmpty(result.Diagnostics);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id.StartsWith("GS05", System.StringComparison.Ordinal));
     }
 
     private static EmittedOracleResult Evaluate(string source)
     {
-        // ADR-0082 / issue #722: every Go-flavored concurrency form is
-        // gated behind `import Gsharp.Extensions.Go`. These tests focus on
-        // bind/recv/close behaviour rather than the gate, so prepend the
-        // import once for the whole class. The dedicated
-        // Issue722GoExtensionsImportGateTests cover the gate explicitly.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
-        return EmittedOracle.Evaluate(fullSource);
+        // ADR-0174 D13: the channel surface needs no import.
+        return EmittedOracle.Evaluate(source);
     }
 }

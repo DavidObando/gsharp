@@ -284,9 +284,21 @@ internal sealed partial class ExpressionBinder
                 // re-projection, and the emitter parents the MemberRefs at
                 // the `Dictionary<!K, !V>` TypeSpec
                 // (TryNormalizeToSymbolicContainer's map arm).
-                if (MemberLookup.TryGetSymbolicOpenMapReceiverView(receiverType, out var mapView))
+                if (MemberLookup.TryGetSymbolicOpenReceiverView(receiverType, out var mapView))
                 {
                     normalized = mapView;
+                    return true;
+                }
+
+                return false;
+            case ChannelTypeSymbol:
+                // ADR-0174 D12: a `chan[T]` over a same-compilation or
+                // type-parameter element (`ch.Close()` where `ch : chan[Pair]`)
+                // normalizes to the symbolic constructed Channel<T> /
+                // ChannelReader<T> / ChannelWriter<T> view for the same reason.
+                if (MemberLookup.TryGetSymbolicOpenChannelReceiverView(receiverType, out var channelView))
+                {
+                    normalized = channelView;
                     return true;
                 }
 
@@ -3787,7 +3799,7 @@ internal sealed partial class ExpressionBinder
                         // erased `object`, tripping the verifier against the
                         // symbolic `Dictionary<!K, !V>` MemberRef. Feed it the
                         // normalized Dictionary view instead.
-                        var instConversionReceiverType = MemberLookup.TryGetSymbolicOpenMapReceiverView(receiver?.Type, out _)
+                        var instConversionReceiverType = MemberLookup.TryGetSymbolicOpenReceiverView(receiver?.Type, out _)
                             ? effectiveReceiverType
                             : receiver?.Type;
                         var instConvertedArgs = BuildResolvedClrCallArguments(

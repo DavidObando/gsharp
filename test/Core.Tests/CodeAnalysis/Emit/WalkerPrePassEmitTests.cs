@@ -102,15 +102,20 @@ Console.WriteLine(pts[1].Y)
     [Fact]
     public void Append_Inside_TupleLiteral_Emits_Correctly()
     {
-        // append(...) results assigned to locals first, then captured in a
+        // List.Add(...) calls run first, then indexed reads are captured in a
         // tuple — exercises descent into BoundTupleLiteralExpression children.
+        // (ADR-0174 D13 retired the `append` built-in; `List[T].Add` is the
+        // growable shape.)
         const string Source = @"package P
 import System
-import Gsharp.Extensions.Go
-var xs = []int32{1, 2}
-var ys = []int32{10}
-xs = append(xs, 3)
-ys = append(ys, 20)
+import System.Collections.Generic
+var xs = List[int32]()
+xs.Add(1)
+xs.Add(2)
+var ys = List[int32]()
+ys.Add(10)
+xs.Add(3)
+ys.Add(20)
 var t = (xs[2], ys[1])
 Console.WriteLine(t.Item1)
 Console.WriteLine(t.Item2)
@@ -125,12 +130,14 @@ Console.WriteLine(t.Item2)
     {
         const string Source = @"package P
 import System
-import Gsharp.Extensions.Go
-var xs = []int32{1, 2}
-if len(xs) > 0 {
-    xs = append(xs, 99)
+import System.Collections.Generic
+var xs = List[int32]()
+xs.Add(1)
+xs.Add(2)
+if xs.Count > 0 {
+    xs.Add(99)
 }
-Console.WriteLine(len(xs))
+Console.WriteLine(xs.Count)
 Console.WriteLine(xs[2])
 ";
         var output = Run(Source, "Walker-AppendInIf");

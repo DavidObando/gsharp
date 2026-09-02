@@ -134,7 +134,6 @@ public class Issue2906ExhaustiveSwitchReturnFlowTests
             }
             """);
         yield return Case("SwitchInsideSelect", """
-            import Gsharp.Extensions.Go
             enum E { A, B }
             func F(x E) int32 {
                 select {

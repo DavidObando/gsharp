@@ -215,6 +215,20 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // ADR-0174 D1/D2: the channel lattice. `chan[T]` IS `Channel<T>` (and
+        // the runtime's constructed `Chan<T>` is one too), so a same-direction
+        // pair over an identical element is identity in either direction
+        // (inbound: a foreign `Channel<T>`/`ChannelReader<T>` flows into
+        // `chan[T]`/`in chan[T]` with no adapter; outbound: a `chan[T]` is
+        // passed to a C# `Channel<T>` parameter). Narrowing a bidirectional
+        // handle to `in`/`out` is implicit (emitted as `get_Reader`/`get_Writer`);
+        // the reverse, and `in` <-> `out`, do not exist — this is what makes
+        // channel ownership checkable (pattern 9).
+        if (TryClassifyChannelConversion(from, to, out var channelConversion))
+        {
+            return channelConversion;
+        }
+
         // Issue #2354 follow-up: a generic G# class's own `this` parameter is
         // bound with the OPEN generic definition as its type (`TypeArguments`
         // empty, `IsGenericDefinition == true` — see FunctionSymbol.ThisParameter
@@ -3081,7 +3095,8 @@ public sealed class Conversion
             case SequenceTypeSymbol fromSequence when to is SequenceTypeSymbol toSequence:
                 return IsCrossContextIdenticalElement(fromSequence.ElementType, toSequence.ElementType);
             case ChannelTypeSymbol fromChannel when to is ChannelTypeSymbol toChannel:
-                return IsCrossContextIdenticalElement(fromChannel.ElementType, toChannel.ElementType);
+                return fromChannel.Direction == toChannel.Direction
+                    && IsCrossContextIdenticalElement(fromChannel.ElementType, toChannel.ElementType);
             case AsyncSequenceTypeSymbol fromAsync when to is AsyncSequenceTypeSymbol toAsync:
                 return IsCrossContextIdenticalElement(fromAsync.ElementType, toAsync.ElementType);
             case ArrayTypeSymbol fromArray when to is ArrayTypeSymbol toArray:
@@ -3111,6 +3126,58 @@ public sealed class Conversion
             default:
                 return false;
         }
+    }
+
+    // ADR-0174 D2: classifies conversions where at least one side is a G#
+    // channel type clause and the other is channel-shaped (a magic symbol,
+    // the runtime's `Chan<T>`, or a foreign BCL channel/reader/writer).
+    private static bool TryClassifyChannelConversion(TypeSymbol? from, TypeSymbol? to, out Conversion conversion)
+    {
+        conversion = Conversion.None;
+        if (from is not ChannelTypeSymbol && to is not ChannelTypeSymbol)
+        {
+            return false;
+        }
+
+        if (!ChannelTypeSymbol.TryGetChannelShape(from, out var fromElement, out var fromDirection, out _)
+            || !ChannelTypeSymbol.TryGetChannelShape(to, out var toElement, out var toDirection, out var toIsConstructed))
+        {
+            return false;
+        }
+
+        // A nullable wrapper on either side is not a channel conversion; the
+        // lifted rules handle it over the underlying pair.
+        if (from is NullableTypeSymbol || to is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        if (!IsCrossContextIdenticalElement(fromElement, toElement))
+        {
+            return false;
+        }
+
+        // Nothing converts TO the runtime class except itself (it is a subtype).
+        if (toIsConstructed)
+        {
+            return false;
+        }
+
+        if (fromDirection == toDirection)
+        {
+            conversion = Conversion.Identity;
+            return true;
+        }
+
+        if (fromDirection == ChannelDirection.Both)
+        {
+            conversion = Conversion.Implicit;
+            return true;
+        }
+
+        // in -> out, out -> in, and directional -> bidirectional: no conversion.
+        conversion = Conversion.None;
+        return true;
     }
 
     // Issue #2299: element-level identity check used by

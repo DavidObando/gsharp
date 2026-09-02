@@ -91,7 +91,7 @@ class Tags(name string, tags ...string) { }
         var result = Evaluate(@"
 class Tags(name string, tags ...string) { }
 let t = Tags(""project"", ""a"", ""b"", ""c"")
-len(t.tags)
+t.tags.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);
@@ -103,7 +103,7 @@ len(t.tags)
         var result = Evaluate(@"
 class Tags(name string, tags ...string) { }
 let t = Tags(""project"")
-len(t.tags)
+t.tags.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(0, result.Value);
@@ -116,7 +116,7 @@ len(t.tags)
 class Tags(name string, tags ...string) { }
 let arr = []string{""x"", ""y""}
 let t = Tags(""pass"", arr)
-len(t.tags)
+t.tags.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Value);
@@ -144,7 +144,7 @@ t.tags[0]
         var result = Evaluate(@"
 class Words(values ...string) { }
 let w = Words(""a"", ""b"", ""c"", ""d"")
-len(w.values)
+w.values.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(4, result.Value);
@@ -156,7 +156,7 @@ len(w.values)
         var result = Evaluate(@"
 class Words(values ...string) { }
 let w = Words()
-len(w.values)
+w.values.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(0, result.Value);
@@ -168,7 +168,7 @@ len(w.values)
         var result = Evaluate(@"
 class Box[T](first T, rest ...T) { }
 let b = Box(10, 20, 30)
-len(b.rest)
+b.rest.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Value);
@@ -180,7 +180,7 @@ len(b.rest)
         var result = Evaluate(@"
 class Box[T](first T, rest ...T) { }
 let b = Box[int32](5)
-len(b.rest)
+b.rest.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(0, result.Value);
@@ -193,7 +193,7 @@ len(b.rest)
 class Box[T](first T, rest ...T) { }
 let arr = []int32{100, 200}
 let b = Box(7, arr)
-len(b.rest)
+b.rest.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Value);
@@ -227,7 +227,7 @@ let x = Nums(1, ""x"", 3)
         var result = Evaluate(@"
 data class Person(name string, hobbies ...string) { }
 let p = Person(""Alice"", ""reading"", ""hiking"")
-len(p.hobbies)
+p.hobbies.Length
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Value);
@@ -260,9 +260,7 @@ let t = Tags(name: ""a"", tags: ""b"")
 
     private static EmittedOracleResult Evaluate(string source)
     {
-        // Mirrors VariadicTests.Evaluate — `len(...)` lives behind the
-        // Gsharp.Extensions.Go gate.
-        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
+        return EmittedOracle.Evaluate(source);
     }
 
     private static System.Collections.Immutable.ImmutableArray<Diagnostic> Bind(string source)

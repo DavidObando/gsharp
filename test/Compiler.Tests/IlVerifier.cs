@@ -581,6 +581,17 @@ internal static class IlVerifier
             }
         }
 
+        // ADR-0174 D1: emitted programs reference Gsharp.Runtime.Channels
+        // whenever they construct or operate on a channel. It is not a BCL
+        // assembly; the test host carries it beside itself (Compiler.Tests →
+        // Compiler → runtime copy-local), exactly where `dotnet exec` of the
+        // emitted program will also find it.
+        var channelsRuntime = Path.Combine(AppContext.BaseDirectory, "Gsharp.Runtime.Channels.dll");
+        if (File.Exists(channelsRuntime))
+        {
+            refs.Add(channelsRuntime);
+        }
+
         return refs;
     }
 }

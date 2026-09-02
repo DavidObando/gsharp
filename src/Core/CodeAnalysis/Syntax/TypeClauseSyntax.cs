@@ -275,20 +275,29 @@ public sealed class TypeClauseSyntax : SyntaxNode
     {
     }
 
-    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a channel type <c>chan T?</c> (Phase 5.4 / ADR-0022).</summary>
+    /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a channel type <c>chan[T]?</c>, <c>in chan[T]?</c>, or <c>out chan[T]?</c> (ADR-0174 D2).</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="chanDirectionToken">The optional <c>in</c>/<c>out</c> direction token.</param>
     /// <param name="chanKeyword">The <c>chan</c> keyword.</param>
+    /// <param name="chanOpenBracketToken">The <c>[</c> opening the element type; <see langword="null"/> when the parser recovered from the legacy <c>chan T</c> shape (see GS0567).</param>
     /// <param name="chanElementType">The element type clause.</param>
-    /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
+    /// <param name="chanCloseBracketToken">The <c>]</c> closing the element type; <see langword="null"/> for the legacy shape.</param>
+    /// <param name="questionToken">The optional trailing <c>?</c> marking the whole channel nullable.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
+        SyntaxToken? chanDirectionToken,
         SyntaxToken chanKeyword,
+        SyntaxToken? chanOpenBracketToken,
         TypeClauseSyntax chanElementType,
+        SyntaxToken? chanCloseBracketToken,
         SyntaxToken? questionToken)
         : base(syntaxTree)
     {
+        ChanDirectionToken = chanDirectionToken;
         ChanKeyword = chanKeyword;
+        ChanOpenBracketToken = chanOpenBracketToken;
         ChanElementType = chanElementType;
+        ChanCloseBracketToken = chanCloseBracketToken;
         QuestionToken = questionToken;
     }
 
@@ -819,14 +828,26 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this clause denotes a map type <c>map[K,V]</c> (ADR-0104).</summary>
     public bool IsMap => MapKeyword != null;
 
+    /// <summary>Gets the <c>in</c>/<c>out</c> direction token of a directional channel type (ADR-0174 D2), or <c>null</c> for <c>chan[T]</c> and non-channel clauses.</summary>
+    public SyntaxToken? ChanDirectionToken { get; }
+
     /// <summary>Gets the <c>chan</c> keyword for channel types, or <c>null</c>.</summary>
     public SyntaxToken? ChanKeyword { get; }
+
+    /// <summary>Gets the <c>[</c> opening the channel element type (ADR-0174 D2), or <c>null</c> — including when the parser recovered from the legacy <c>chan T</c> shape under GS0567.</summary>
+    public SyntaxToken? ChanOpenBracketToken { get; }
 
     /// <summary>Gets the channel element type clause, or <c>null</c>.</summary>
     public TypeClauseSyntax? ChanElementType { get; }
 
-    /// <summary>Gets a value indicating whether this clause denotes a channel type <c>chan T</c> (Phase 5.4 / ADR-0022).</summary>
+    /// <summary>Gets the <c>]</c> closing the channel element type (ADR-0174 D2), or <c>null</c>.</summary>
+    public SyntaxToken? ChanCloseBracketToken { get; }
+
+    /// <summary>Gets a value indicating whether this clause denotes a channel type <c>chan[T]</c> / <c>in chan[T]</c> / <c>out chan[T]</c> (ADR-0174 D2).</summary>
     public bool IsChannel => ChanKeyword != null;
+
+    /// <summary>Gets a value indicating whether this channel clause was written in the retired juxtaposed spelling <c>chan T</c> (recovered under GS0567).</summary>
+    public bool IsLegacyChanSpelling => ChanKeyword != null && ChanOpenBracketToken == null;
 
     /// <summary>Gets the <c>*</c> token for pointer types, or <c>null</c> (ADR-0039).</summary>
     public SyntaxToken? PointerStarToken { get; }

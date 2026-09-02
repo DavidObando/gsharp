@@ -49,10 +49,9 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323Repro
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c = make(chan int32)
+                var c = Chan.Unbounded[int32]()
                 go func() { c <- 42 }()
                 return <-c
             }
@@ -72,12 +71,11 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323ReadOnly
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c = make(chan int32, 1)
+                var c = chan[int32](1)
                 c <- 99
-                var out = make(chan int32, 1)
+                var out = chan[int32](1)
                 go func() {
                     out <- <-c
                 }()
@@ -99,11 +97,10 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323ReadWrite
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c = make(chan int32, 1)
-                var out = make(chan int32, 1)
+                var c = chan[int32](1)
+                var out = chan[int32](1)
                 go func() {
                     c <- 5
                     out <- <-c + 1
@@ -121,19 +118,18 @@ public class Issue3323GoroutineChannelCaptureTests
     [Fact]
     public void Goroutine_InlineLiteral_CapturesChannel_Close()
     {
-        // `close(c)` on a captured channel — a third capture shape distinct
+        // `c.Close()` on a captured channel — a third capture shape distinct
         // from send/receive. Receiving from a closed channel yields the
         // element type's zero value.
         var result = Compile("""
             package P3323Close
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c = make(chan int32, 1)
-                var done = make(chan int32, 1)
+                var c = chan[int32](1)
+                var done = chan[int32](1)
                 go func() {
-                    close(c)
+                    c.Close()
                     done <- 1
                 }()
                 <-done
@@ -158,7 +154,6 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323MultiChannelMixedTypes
 
-            import Gsharp.Extensions.Go
 
             struct Point {
                 var X int32
@@ -166,15 +161,15 @@ public class Issue3323GoroutineChannelCaptureTests
             }
 
             func run() int32 {
-                var ch1 = make(chan int32, 1)
-                var ch2 = make(chan int32, 1)
+                var ch1 = chan[int32](1)
+                var ch2 = chan[int32](1)
                 var n = 3
                 var s = "hi"
                 var p = Point{X: 1, Y: 2}
-                var done = make(chan int32, 1)
+                var done = chan[int32](1)
                 go func() {
                     ch1 <- n + p.X
-                    ch2 <- int32(len(s)) + p.Y
+                    ch2 <- int32(s.Length) + p.Y
                     done <- 1
                 }()
                 <-done
@@ -197,11 +192,10 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323Reassigned
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c = make(chan int32, 1)
-                c = make(chan int32, 1)
+                var c = chan[int32](1)
+                c = chan[int32](1)
                 go func() { c <- 55 }()
                 return <-c
             }
@@ -224,11 +218,10 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323DeclareThenAssign
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
-                c = make(chan int32, 1)
+                var c chan[int32]
+                c = chan[int32](1)
                 go func() { c <- 66 }()
                 return <-c
             }
@@ -253,10 +246,9 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323NamedIndirectionGuard
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 let x = 10
                 let send = func() {
                     ch <- x
@@ -283,11 +275,10 @@ public class Issue3323GoroutineChannelCaptureTests
         var result = Compile("""
             package P3323IntCapture
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var n = 7
-                var out = make(chan int32, 1)
+                var out = chan[int32](1)
                 go func() {
                     out <- n * 2
                 }()

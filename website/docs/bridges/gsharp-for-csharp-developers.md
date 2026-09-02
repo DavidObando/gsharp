@@ -29,7 +29,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
-| `lock` and tasks | `go`, `chan T`, `select`, `scope` | G# adds structured concurrency over .NET tasks and channels. |
+| `lock` and tasks | `go`, `chan[T]`, `select`, `scope` | G# adds structured concurrency over .NET tasks and channels. |
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |
 | `void M(int x = 0)` | `func M(x int32 = 0)` | G# functions support optional parameters with constant defaults. |
 | `void M(int x, int y); void M(int x);` | overloads of `M(int32, int32)` / `M(int32)` | G# functions support overloading on parameter shape; duplicates report `GS0264`. |
@@ -118,10 +118,10 @@ let (px, py) = p
 
 ## Concurrency is structured and .NET-backed
 
-G# adds `go`, `chan T`, `select`, and `scope`. The lowering targets .NET tasks and channels, so code can coordinate with CLR async APIs while retaining concise channel syntax.
+G# adds `go`, `chan[T]`, `select`, and `scope`. The lowering targets .NET tasks and channels, so code can coordinate with CLR async APIs while retaining concise channel syntax.
 
 ```gsharp
-let ch = make(chan string, 1)
+let ch = chan[string](1)
 ch <- "ready"
 select {
 case let msg = <-ch {

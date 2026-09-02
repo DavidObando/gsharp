@@ -84,7 +84,7 @@ public class Issue2851GenericDiagnosticDisplayTests
             (SliceTypeSymbol.Get(box), "[]Box[int32]"),
             (SequenceTypeSymbol.Get(box), "sequence[Box[int32]]"),
             (MapTypeSymbol.Get(TypeSymbol.String, box), "map[string,Box[int32]]"),
-            (ChannelTypeSymbol.Get(box), "chan Box[int32]"),
+            (ChannelTypeSymbol.Get(box), "chan[Box[int32]]"),
             (TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(box, TypeSymbol.Int32)), "(Box[int32], int32)"),
             (FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(box), TypeSymbol.Void), "(Box[int32]) -> void"),
             (FunctionPointerTypeSymbol.GetManaged(ImmutableArray.Create<TypeSymbol>(box), box), "*func(Box[int32]) Box[int32]"),

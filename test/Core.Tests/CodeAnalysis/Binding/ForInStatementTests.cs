@@ -56,7 +56,6 @@ s
     {
         var source = @"
 import System.Collections.Generic
-import Gsharp.Extensions.Go
 
 var dict = Dictionary[string, int32]()
 dict[""a""] = 1
@@ -65,7 +64,7 @@ var total = 0
 var keyChars = 0
 for k, v in dict {
     total = total + v
-    keyChars = keyChars + len(k)
+    keyChars = keyChars + k.Length
 }
 (total * 10) + keyChars
 ";

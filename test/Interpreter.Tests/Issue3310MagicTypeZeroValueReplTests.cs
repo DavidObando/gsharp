@@ -62,9 +62,8 @@ public sealed class Issue3310MagicTypeZeroValueReplTests
     {
         using var engine = new EmittedSessionEngine();
         AssertOk(engine, """
-            import Gsharp.Extensions.Go
 
-            var c = make(chan int32, 1)
+            var c = chan[int32](1)
             """);
 
         var probe = engine.Evaluate("c != nil");

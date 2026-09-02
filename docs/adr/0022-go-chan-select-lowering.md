@@ -1,6 +1,6 @@
 # ADR-0022: `go` / `chan` / `select` → .NET lowering
 
-- **Status**: Accepted
+- **Status**: Accepted — amended by ADR-0174 (D2 `chan[T]` spelling and directions, D3 two-value receive and channel loops, D12 `Chan<T>` construction; channel operations now lower onto `Gsharp.Runtime.Channels.ChannelOps`)
 - **Date**: 2026-05-23
 - **Phase**: Phase 5 (lock before 5.3)
 - **Related**: ADR-0002 (concurrency model), ADR-0023 (async state-machine strategy); execution plan §§5.3 – 5.7

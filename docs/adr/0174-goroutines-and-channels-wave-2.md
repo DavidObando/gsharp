@@ -455,7 +455,7 @@ still open. Only the third state requires suspending.
 machinery (ADR-0015, ADR-0168):
 
 ```gsharp
-let value, ok = <-jobs
+let (value, ok) = <-jobs
 if !ok {
     return
 }
@@ -1974,6 +1974,78 @@ so this work moves that horizon closer rather than further.
     knowingly relied on unbounded buffering needs a target for GS0566 to name.
     Reconsider in Phase 5 once the corpus migration shows how many sites
     actually chose it.
+
+## Errata and implementation notes
+
+Recorded as the phases land, so a reader of the decision can see where the
+implementation had to refine it.
+
+1. **Clean-cut migration (author decision, 2026-09-02).** No staged
+   warning release. GS0566/GS0567 are errors from the PR that introduces
+   them; the in-repo corpus is migrated in the same PR. Breaking-change row
+   10 is amended: `import Gsharp.Extensions.Go` is *deleted* for the
+   concurrency surface, not kept as a no-op (the `len`/`cap`/`append`/`delete`
+   gate, GS0317, is retired together with those built-ins in Phase 2's
+   final PR).
+2. **Migration footprint.** The corpus census measured 54 C# test files /
+   322 retired-built-in sites and 64 files including the `chan T` respelling
+   — about 1.7× the estimate in "Breaking changes". Nine `.gs` samples, not
+   seven.
+3. **Type of a constructed channel.** `let ch = chan[T](n)` has the static
+   type of the runtime class, `Gsharp.Concurrency.Chan[T]`, not the type
+   clause `chan[T]`. This is what makes D12's "no member" rows literally
+   true: `Length()`/`Capacity`/`Close()` are ordinary imported members of the
+   constructed class, and a `chan[T]`-typed handle (which may be any foreign
+   `Channel<T>`) reports the ordinary member-not-found error. `Chan[T]`
+   converts to `chan[T]` by identity, so the class name surfaces only in
+   hovers over inferred locals.
+4. **Lowering shape.** Channel operations are bound as ordinary imported
+   calls on a static runtime facade, `Gsharp.Concurrency.ChannelOps`
+   (`Receive`/`Receive2`/`Send`/`Close`, with `…Async` twins for Phase 3),
+   and construction as an imported constructor call. The compiler emits no
+   channel-specific IL; the fast-path/fallback dispatch of D2's matrix lives
+   in tested C#. The compiler core takes **no** project reference on the
+   runtime — the type is resolved through the reference set, and the SDK,
+   the driver probe, and the test hosts guarantee its presence.
+5. **`gsc` copy-local.** An emitted program references
+   `Gsharp.Runtime.Channels` whenever it touches a channel. Under MSBuild the
+   SDK's copy-local puts it beside the app; a direct `gsc /out:` run has no
+   such step, so `gsc` copies the bundled runtime beside the output when
+   (and only when) the emitted PE carries the AssemblyRef. Without this every
+   out-of-process test harness and every direct-driver user would have to
+   copy it by hand.
+6. **Phase 1 measurements (Linux x64, 20 cores, same-machine Go 1.27).**
+   Rendezvous round trip 1.18–1.30 µs/op vs Go 617 ns/op (≈2×, single
+   launch); closed receive 0.7 ns/op vs Go 32.5 ns/op — the lock-free
+   closed-and-drained fast path in `Chan<T>.TryReceive` is sound because
+   `closed` is monotonic and the buffer can only drain after close. Go's own
+   numbers on this machine differ 2.8× from the Apple-silicon reference,
+   which is D11's point about ratios versus absolute figures.
+7. **Select lock order.** The runtime orders gates by a process-wide
+   monotonic per-channel id (deliberately not a per-`Chan<T>` static, which
+   would be one counter per element type), a total order with no tiebreak —
+   the same property D8 step 6 asks of `RuntimeHelpers.GetHashCode` plus
+   identity.
+8. **`SelectWaiter.Add*` needs a `Chan<T>` overload.** A `Chan<T>` is both
+   a `Channel<T>` and an `ISelectable<T>`, so the two D8 overloads are
+   ambiguous for a constructed channel; the most specific overload resolves
+   it, and the Phase 4 emitter must call it.
+9. **Two-value receive spelling.** D3's original example, `let value, ok =
+   <-jobs`, collides with ADR-0168's mixed-binding rule, under which a `let`
+   on the first target does not distribute — `ok` would have to be an
+   existing variable. The declaring spelling is therefore the tuple
+   deconstruction `let (value, ok) = <-ch` (or `var (value, ok)`); the
+   multi-target `value, ok = <-ch` assigns two existing variables, and
+   ADR-0168's `let value, let ok = <-ch` declares both. Every form recognizes
+   the prefix `<-` syntactically and binds it as the `(T, bool)` tuple of
+   `ChannelOps.Receive2<T>`; a wrong target count is GS0554. The same
+   syntactic recognition drives `while let v = <-ch` (which bypasses
+   ADR-0163's nullable stripping, so a `T?` element stays `T?`, and gates
+   each clause on its own `ok` before the next clause receives) and
+   `for v in ch` (the collection is evaluated once; the loop is the
+   `while let` shape, so there is no new iteration kind). GS0555 is narrowed
+   to the one case the guidance fits: a `while let` whose initializer *is* a
+   channel handle rather than a receive from one.
 
 ## Addendum A — The ten patterns, three ways
 

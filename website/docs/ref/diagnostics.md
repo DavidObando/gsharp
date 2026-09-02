@@ -1008,6 +1008,13 @@ is not a spelling gsc accepts today (GS0157).
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
+| GS0548 | Warning | `'chan[<T>]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[<T>]()' if an unbounded buffer was intended (ADR-0174 D12).` | `let ch = chan[int32]()` |
+| GS0549 | Error | `Cannot send on the receive-only channel type '<type>'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2).` | `func f(ch in chan[int32]) { ch <- 1 }` |
+| GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).` | `func f(ch out chan[int32]) { let v = <-ch }` |
+| GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
+| GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed (ADR-0174 D3).` | `while let v = ch { }` where `ch` is a `chan[int32]` |
+| GS0566 | Error | `'<retired form>' has been retired (ADR-0174); <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
+| GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead (ADR-0174 D2).` | `var ch chan int32` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
@@ -1051,91 +1058,35 @@ Cause/fix:
   normally with no diagnostic. See
   for the full rule, scope, and recovery rationale.
 
-## Go-flavored concurrency requires `import Gsharp.Extensions.Go` (GS0316)
+## Go-flavored concurrency gate (GS0316, retired)
 
-The per-file gate on the Go-flavored
-concurrency surface. The production concurrency surface is `scope` +
-`async`/`await`; the Go-flavored shapes (`go`, `chan T`, `<-` send,
-`<-` receive, `select`, `close(ch)`, `make(chan T[, cap])`) remain
-available but are opt-in. The binder checks for `import
-Gsharp.Extensions.Go` in the current compilation unit (not the
-project) before binding any of the gated forms and emits `GS0316`
-when the import is absent. The triggering form is named in the
-message so users see exactly what to add.
+ADR-0082 gated the Go-shaped concurrency surface (`go`, `chan`, `<-`, `select`,
+`close`, `make(chan …)`) behind `import Gsharp.Extensions.Go`. ADR-0174 (D13)
+retired the gate: the syntax is part of the language, `make`/`close` are
+replaced by `chan[T](…)` and `ch.Close()` (GS0566), and the concurrency library
+lives in the implicitly imported `Gsharp.Concurrency` namespace. GS0316 is never
+reported again and its identifier is not reused.
 
 | ID | Severity | Message |
-|----|----------|---------|
-| GS0316 | Error | `'<form>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead.` |
+|---|---|---|
+| GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
 
-Cause/fix:
+## Go-style built-ins gate (GS0317, retired)
 
-- **GS0316** — any use of `go`, `chan` (in a type clause or inside
-  `make`), `<-` (send or receive), `select`, or `close(ch)` in a
-  source file that does not contain `import Gsharp.Extensions.Go`.
-  Add the import at the top of the file (right after the `package`
-  declaration is canonical), or rewrite the code on the
-  `scope` + `async`/`await` surface. The diagnostic is anchored at
-  the offending keyword/operator (`go`, `chan`, `<-`, `select`,
-  `close`); each `make(chan T)` site is reported once at its inner
-  `chan` keyword. The gate is **always opt-in**: `/noimplicitimports`
-  does not interact with it, and the implicit `System` import
-  toggle has no effect on whether `Gsharp.Extensions.Go` is in scope.
- See for the full rule, recovery strategy, and packaging
-  rationale.
-
-## Go-style built-ins require `import Gsharp.Extensions.Go` (GS0317)
-
-The per-file gate from
-to the Go-style built-in functions `len`, `cap`, `append`, and
-`delete`. The binder checks for `import Gsharp.Extensions.Go`
-in the current compilation unit before resolving any of these
-identifiers as built-ins and emits `GS0317` when the import is
-absent. The message names the offending built-in and, when there
-is a clean .NET-idiomatic replacement, names the replacement
-too — so users can fix the call site either by adding the
-import or by switching to the BCL equivalent.
+ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
+`delete` behind a per-file `import Gsharp.Extensions.Go`, and GS0317 fired when
+the import was missing. ADR-0174 (D13) retired the built-ins themselves: every
+receiver already carries the member (`xs.Length`, `m.Count`, `m.Remove(k)`,
+`List[T].Add`, `ch.Length()`, `ch.Capacity`), so there is nothing left to gate.
+A call to a retired name reports [GS0566](#adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567)
+with a replacement computed for that site; a user-defined function of the same
+name is an ordinary call. The `Gsharp.Extensions.Go` namespace no longer exists,
+so the import itself is the ordinary unresolved-import error. GS0317 is never
+reported again and its identifier is not reused.
 
 | ID | Severity | Message |
-|----|----------|---------|
-| GS0317 | Error | `'<name>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '<suggestion>' directly.` |
-
-`<suggestion>` is selected from the following table based on the
-built-in identifier and the bound type of its primary receiver:
-
-| Built-in | Receiver | `<suggestion>` |
-|----|----|----|
-| `len` | array / slice / string | `.Length` |
-| `len` | map | `.Count` |
-| `delete` | map | `.Remove(k)` |
-| `append` | slice | `List[T].Add` |
-| `cap` | any | — (import-only variant: "Add 'import Gsharp.Extensions.Go'.") |
-
-The diagnostic is anchored at the built-in identifier token. The
-`close(ch)` and `make(chan T)` shapes are part of the channel
-Cluster and keep firing **GS0316** rather than
-GS0317 — the suggested fix is the same import, but the message
-frames the `scope` + `async`/`await` alternative for the
-channel surface. The two diagnostics share the same
-`BinderContext.IsGoExtensionsImported` predicate, so a single
-`import Gsharp.Extensions.Go` unlocks both clusters at once.
-
-Recovery is identical to GS0316: the binder reports GS0317 and
-continues binding the call as if the import were present, so
-subsequent shape diagnostics (e.g. `GS0117` for a wrong-typed
-argument) still surface in the same pass.
-
-Cause/fix:
-
-- **GS0317** — any call to `len`, `cap`, `append`, or `delete`
-  in a source file that does not contain
-  `import Gsharp.Extensions.Go`. Add the import at the top of
-  the file (right after the `package` declaration is canonical),
-  or switch to the .NET-idiomatic alternative named in the
-  message: `array.Length` / `slice.Length` / `string.Length`
-  for `len` on length-bearing values, `map.Count` for `len` on
-  maps, `map.Remove(k)` for `delete`, and `List[T].Add` for
- The mutable-list shape of `append`. See for the
-  full rule and the deconfliction note with GS0316.
+|---|---|---|
+| GS0317 | Retired | Retired by ADR-0174 (D13): `len`, `cap`, `append`, and `delete` are no longer built-ins, so there is no import gate to miss; a call to one reports GS0566 naming the member replacement. |
 
 
 

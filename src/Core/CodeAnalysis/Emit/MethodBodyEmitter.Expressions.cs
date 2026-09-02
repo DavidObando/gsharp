@@ -500,14 +500,6 @@ internal sealed partial class MethodBodyEmitter
             case BoundFunctionPointerInvocationExpression fnInvoke:
                 this.EmitFunctionPointerInvocation(fnInvoke);
                 break;
-            case BoundCapExpression cap:
-                this.EmitExpression(cap.Operand);
-                this.il.OpCode(ILOpCode.Ldlen);
-                this.il.OpCode(ILOpCode.Conv_i4);
-                break;
-            case BoundAppendExpression app:
-                this.EmitAppend(app);
-                break;
             case BoundStructLiteralExpression structLit:
                 this.EmitStructLiteral(structLit);
                 break;
@@ -516,15 +508,6 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundSwitchExpression switchExpr:
                 this.EmitSwitchExpression(switchExpr);
-                break;
-            case BoundMakeChannelExpression mkCh:
-                this.EmitMakeChannelExpression(mkCh);
-                break;
-            case BoundChannelReceiveExpression chRecv:
-                this.EmitChannelReceiveExpression(chRecv);
-                break;
-            case BoundChannelCloseExpression chClose:
-                this.EmitChannelCloseExpression(chClose);
                 break;
             case BoundConstructorCallExpression ctorCall:
                 this.EmitConstructorCall(ctorCall);
@@ -606,9 +589,6 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundMapLiteralExpression mapLit:
                 this.EmitMapLiteral(mapLit);
-                break;
-            case BoundMapDeleteExpression mapDel:
-                this.EmitMapDelete(mapDel);
                 break;
             case BoundDefaultExpression defaultExpr:
                 this.EmitDefault(defaultExpr);
@@ -1106,56 +1086,6 @@ internal sealed partial class MethodBodyEmitter
         this.il.CallIndirect(sig);
     }
 
-    private void EmitAppend(BoundAppendExpression app)
-    {
-        // Issue #418 (P1-3): name the bound-node context in the message
-        // when a slot is missing so a regression in a pre-pass walker
-        // surfaces an actionable error instead of a generic KeyNotFound.
-        if (!this.appendSlots.TryGetValue(app, out var slots))
-        {
-            throw new InvalidOperationException(
-                $"No slot populated for {app.Kind} on slice type '{app.SliceType?.Name}' — "
-                + "walker pre-pass missed this child? "
-                + "Check AppendCollector and its ancestor walker.");
-        }
-
-        var element = app.SliceType.ElementType;
-        var elementToken = this.outer.memberRefs.GetElementTypeToken(element);
-
-        // src = slice
-        this.EmitExpression(app.Slice);
-        this.il.StoreLocal(slots.Src);
-
-        // dst = new T[src.Length + 1]
-        this.il.LoadLocal(slots.Src);
-        this.il.OpCode(ILOpCode.Ldlen);
-        this.il.OpCode(ILOpCode.Conv_i4);
-        this.il.LoadConstantI4(1);
-        this.il.OpCode(ILOpCode.Add);
-        this.il.OpCode(ILOpCode.Newarr);
-        this.il.Token(elementToken);
-        this.il.StoreLocal(slots.Dst);
-
-        // Array.Copy(src, dst, src.Length)
-        this.il.LoadLocal(slots.Src);
-        this.il.LoadLocal(slots.Dst);
-        this.il.LoadLocal(slots.Src);
-        this.il.OpCode(ILOpCode.Ldlen);
-        this.il.OpCode(ILOpCode.Conv_i4);
-        this.il.Call(this.outer.wellKnown.GetArrayCopyReference());
-
-        // dst[src.Length] = element
-        this.il.LoadLocal(slots.Dst);
-        this.il.LoadLocal(slots.Src);
-        this.il.OpCode(ILOpCode.Ldlen);
-        this.il.OpCode(ILOpCode.Conv_i4);
-        this.EmitExpression(app.Element);
-        this.EmitStoreElement(element);
-
-        // Leave dst on stack
-        this.il.LoadLocal(slots.Dst);
-    }
-
     private void EmitMapLiteral(BoundMapLiteralExpression literal)
     {
         // ADR-0104 emit: `map[K,V]{k1: v1, ...}` lowers to
@@ -1217,32 +1147,6 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(setItemRef);
         }
-    }
-
-    private void EmitMapDelete(BoundMapDeleteExpression del)
-    {
-        // Phase 3.A.4 emit: `delete(m, k)` lowers to `callvirt Dictionary<K,V>::Remove(K)`
-        // and pops the returned bool — `delete` is typed as void.
-        var mapType = (MapTypeSymbol)del.Map.Type;
-        var dictType = mapType.ClrType;
-
-        // Issue #3301: same-compilation user-struct key/value — no erased
-        // CLR Dictionary<,> to reflect on; use the #1481-style symbolic
-        // TypeSpec-parented MemberRef instead.
-        var removeRef = dictType == null
-            ? this.outer.memberRefs.GetMapRemoveReference(mapType)
-            : this.outer.memberRefs.GetMethodReference(
-                dictType.GetMethod(
-                    "Remove",
-                    new[] { Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation") })
-                ?? throw new InvalidOperationException(
-                    $"Dictionary type '{dictType.FullName}' has no Remove(K) method."));
-
-        this.EmitExpression(del.Map);
-        this.EmitExpression(del.Key);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(removeRef);
-        this.il.OpCode(ILOpCode.Pop);
     }
 
     private void EmitStructLiteral(BoundStructLiteralExpression literal)

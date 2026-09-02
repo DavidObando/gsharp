@@ -256,9 +256,8 @@ public sealed class Issue3130DriverReferenceTests
                 """
                 package RuntimeEmitProbe
                 import System
-                import Gsharp.Extensions.Go
 
-                let values = make(chan DateTime, 1)
+                let values = chan[DateTime](1)
                 values <- DateTime(2020, 1, 1)
                 Console.WriteLine((<-values).Year)
                 """);

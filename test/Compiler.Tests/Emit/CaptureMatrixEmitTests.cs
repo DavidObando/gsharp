@@ -199,10 +199,9 @@ public class CaptureMatrixEmitTests
         yield return Row("SelectReceiveBinding_SyncLambda", """
             package CaptureMatrixSelectSync
             import System
-            import Gsharp.Extensions.Go
 
             func Main() {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 41
                 select {
                 case let v = <-ch {
@@ -217,12 +216,11 @@ public class CaptureMatrixEmitTests
             package CaptureMatrixSelectAsync
             import System
             import System.Threading.Tasks
-            import Gsharp.Extensions.Go
 
             func Echo(v int32) Task[int32] -> Task.FromResult(v)
 
             func Main() {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 41
                 select {
                 case let v = <-ch {

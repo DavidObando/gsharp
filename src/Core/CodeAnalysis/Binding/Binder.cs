@@ -876,6 +876,16 @@ public sealed class Binder
             // may still write `import System` redundantly; lookup short-circuits
             // on the first matching import so duplicates are harmless.
             binder.scope.TryImport(new ImportSymbol("System", "System", declaration: null));
+
+            // ADR-0174 D9/D13: the concurrency library namespace is implicitly
+            // imported whenever the runtime assembly is in the reference set,
+            // so `Chan.Unbounded[T]()`, `ch.Close()` (an extension on a
+            // `chan[T]`), and the D9 helpers resolve with no import — the
+            // syntax (`go`, `chan[T]`, `<-`, `select`) never needed one.
+            if (binder.scope.References.TryResolveType(ChannelRuntimeBinder.ChanTypeName, out _))
+            {
+                binder.scope.TryImport(new ImportSymbol("Gsharp.Concurrency", "Gsharp.Concurrency", declaration: null));
+            }
         }
 
         // Resolve each syntax tree's package declaration to a PackageSymbol.
@@ -3649,21 +3659,22 @@ public sealed class Binder
 
         if (syntax.IsChannel)
         {
-            // Phase 5.4 / ADR-0022: channel type clause `chan T`.
-            // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
-            // Reports GS0316 anchored at the `chan` keyword and recovers by
-            // binding the channel type as if the import were present.
-            // IsChannel implies the parser set ChanKeyword/ChanElementType.
-            var chanKeyword = Invariant.Required(syntax.ChanKeyword, "IsChannel implies the parser set ChanKeyword");
-            binderCtx.ReportIfGoExtensionsImportMissing(syntax, chanKeyword.Location, "chan");
-
+            // ADR-0174 D2: `chan[T]` / `in chan[T]` / `out chan[T]`. The
+            // parser recovers the retired `chan T` shape under GS0567 and it
+            // binds here as if the canonical spelling had been written.
             var elementType = BindTypeClause(Invariant.Required(syntax.ChanElementType, "IsChannel implies the parser set ChanElementType"));
             if (elementType == null)
             {
                 return null;
             }
 
-            return ChannelTypeSymbol.Get(elementType);
+            var direction = syntax.ChanDirectionToken?.Text switch
+            {
+                "in" => ChannelDirection.In,
+                "out" => ChannelDirection.Out,
+                _ => ChannelDirection.Both,
+            };
+            return ChannelTypeSymbol.Get(elementType, direction);
         }
 
         // Issue #1046: an array/slice whose element is itself a (non-identifier)

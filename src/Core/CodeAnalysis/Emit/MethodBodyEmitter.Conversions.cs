@@ -56,6 +56,27 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // ADR-0174 D2: the channel lattice. Same direction is identity at the
+        // IL level (`Chan<T>` IS a `Channel<T>`; a foreign `ChannelReader<T>`
+        // IS an `in chan[T]`). Narrowing a bidirectional handle to a
+        // directional one fetches the reader/writer view.
+        if (conv.Type is ChannelTypeSymbol targetChannel
+            && ChannelTypeSymbol.TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out _))
+        {
+            this.EmitExpression(conv.Expression);
+            if (sourceDirection == targetChannel.Direction)
+            {
+                return;
+            }
+
+            var elementClr = ResolveChannelElementClrType(targetChannel.ElementType);
+            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
+            var view = BclMember.Getter(channelClr, targetChannel.Direction == ChannelDirection.In ? "Reader" : "Writer");
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.GetChannelMethodEntityHandle(view, targetChannel.ElementType));
+            return;
+        }
+
         // Issue #2840 / #2841: a nullable wrapper over a REFERENCE type is a
         // binder-level annotation only — it erases to the underlying type's CLR
         // representation — so the delegate-materialisation arms below classify

@@ -4307,7 +4307,6 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<VariableSymbol, int> locals = new();
         private readonly Dictionary<BoundLabel, LabelHandle> labels = new();
         private readonly List<TypeSymbol> localTypes = new();
-        private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots = new();
         private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots = new();
         private readonly Dictionary<BoundDefaultExpression, int> defaultExpressionSlots = new();
         private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots = new();
@@ -4372,7 +4371,6 @@ internal sealed class ReflectionMetadataEmitter
                 this.locals,
                 this.localTypes,
                 this.labels,
-                this.appendSlots,
                 this.structLiteralSlots,
                 this.defaultExpressionSlots,
                 this.mapIndexSlots,
@@ -4479,7 +4477,6 @@ internal sealed class ReflectionMetadataEmitter
                 this.locals,
                 parameters,
                 this.labels,
-                this.appendSlots,
                 this.structLiteralSlots,
                 this.defaultExpressionSlots,
                 this.mapIndexSlots,

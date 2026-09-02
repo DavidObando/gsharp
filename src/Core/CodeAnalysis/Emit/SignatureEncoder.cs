@@ -530,11 +530,10 @@ internal sealed class SignatureEncoder
         }
         else if (type is ChannelTypeSymbol chType)
         {
-            // Phase E: chan T -> System.Threading.Channels.Channel<T>.
-            // Compiled metadata must retain symbolic element identity under
-            // generic invariance. The interpreter can independently keep its
-            // object fallback because channel values are boxed there.
-            var channelOpen = typeof(System.Threading.Channels.Channel<object>).GetGenericTypeDefinition();
+            // ADR-0174 D2: chan[T] -> Channel<T>, in chan[T] -> ChannelReader<T>,
+            // out chan[T] -> ChannelWriter<T>. Compiled metadata must retain
+            // symbolic element identity under generic invariance.
+            var channelOpen = ChannelTypeSymbol.OpenClrDefinition(chType.Direction);
             if (MethodBodyEmitter.ChannelElementNeedsSymbolicType(chType.ElementType))
             {
                 var genericInst = encoder.GenericInstantiation(

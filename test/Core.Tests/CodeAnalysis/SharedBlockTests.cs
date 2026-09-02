@@ -478,13 +478,12 @@ var result = Counter.increment()
     public void SharedBlock_ImplicitStaticFieldAccess_ChainedMemberAccess()
     {
         var source = @"
-import Gsharp.Extensions.Go
 
 class Holder {
     shared {
         var name string
         func getLen() int32 {
-            return len(name)
+            return name.Length
         }
     }
 }
@@ -1176,7 +1175,6 @@ r
         var source = @"package BareStaticInGo
 import System
 import System.Threading
-import Gsharp.Extensions.Go
 
 class Bus {
     shared { var count int32 }

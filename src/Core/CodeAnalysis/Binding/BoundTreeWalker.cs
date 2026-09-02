@@ -21,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// dropped many <see cref="BoundExpression"/> kinds (tuple literals, map
 /// literals, null-conditional access, CLR calls/indexers/properties, indirect
 /// calls, switch expressions, etc.). Any literal/append nested inside a
-/// dropped context reached <c>EmitStructLiteral</c>/<c>EmitAppendExpression</c>
+/// dropped context reached <c>EmitStructLiteral</c>
 /// without a pre-allocated slot and threw at emit time. Using this default-
 /// recurse walker eliminates the entire class of bug.
 /// </summary>
@@ -111,9 +111,6 @@ public abstract class BoundTreeWalker
                 break;
             case BoundNodeKind.GoStatement:
                 VisitGoStatement((BoundGoStatement)node);
-                break;
-            case BoundNodeKind.ChannelSendStatement:
-                VisitChannelSendStatement((BoundChannelSendStatement)node);
                 break;
             case BoundNodeKind.SelectStatement:
                 VisitSelectStatement((BoundSelectStatement)node);
@@ -205,9 +202,6 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.MapLiteralExpression:
                 VisitMapLiteralExpression((BoundMapLiteralExpression)node);
                 break;
-            case BoundNodeKind.MapDeleteExpression:
-                VisitMapDeleteExpression((BoundMapDeleteExpression)node);
-                break;
             case BoundNodeKind.IndexExpression:
                 VisitIndexExpression((BoundIndexExpression)node);
                 break;
@@ -216,12 +210,6 @@ public abstract class BoundTreeWalker
                 break;
             case BoundNodeKind.LenExpression:
                 VisitLenExpression((BoundLenExpression)node);
-                break;
-            case BoundNodeKind.CapExpression:
-                VisitCapExpression((BoundCapExpression)node);
-                break;
-            case BoundNodeKind.AppendExpression:
-                VisitAppendExpression((BoundAppendExpression)node);
                 break;
             case BoundNodeKind.StructLiteralExpression:
                 VisitStructLiteralExpression((BoundStructLiteralExpression)node);
@@ -309,15 +297,6 @@ public abstract class BoundTreeWalker
                 break;
             case BoundNodeKind.SwitchExpression:
                 VisitSwitchExpression((BoundSwitchExpression)node);
-                break;
-            case BoundNodeKind.MakeChannelExpression:
-                VisitMakeChannelExpression((BoundMakeChannelExpression)node);
-                break;
-            case BoundNodeKind.ChannelReceiveExpression:
-                VisitChannelReceiveExpression((BoundChannelReceiveExpression)node);
-                break;
-            case BoundNodeKind.ChannelCloseExpression:
-                VisitChannelCloseExpression((BoundChannelCloseExpression)node);
                 break;
             case BoundNodeKind.AddressOfExpression:
                 VisitAddressOfExpression((BoundAddressOfExpression)node);
@@ -512,12 +491,6 @@ public abstract class BoundTreeWalker
         VisitExpression(node.Expression);
     }
 
-    protected virtual void VisitChannelSendStatement(BoundChannelSendStatement node)
-    {
-        VisitExpression(node.Channel);
-        VisitExpression(node.Value);
-    }
-
     protected virtual void VisitSelectStatement(BoundSelectStatement node)
     {
         foreach (var arm in node.Cases)
@@ -644,12 +617,6 @@ public abstract class BoundTreeWalker
         }
     }
 
-    protected virtual void VisitMapDeleteExpression(BoundMapDeleteExpression node)
-    {
-        VisitExpression(node.Map);
-        VisitExpression(node.Key);
-    }
-
     protected virtual void VisitIndexExpression(BoundIndexExpression node)
     {
         VisitExpression(node.Target);
@@ -677,17 +644,6 @@ public abstract class BoundTreeWalker
     protected virtual void VisitLenExpression(BoundLenExpression node)
     {
         VisitExpression(node.Operand);
-    }
-
-    protected virtual void VisitCapExpression(BoundCapExpression node)
-    {
-        VisitExpression(node.Operand);
-    }
-
-    protected virtual void VisitAppendExpression(BoundAppendExpression node)
-    {
-        VisitExpression(node.Slice);
-        VisitExpression(node.Element);
     }
 
     protected virtual void VisitStructLiteralExpression(BoundStructLiteralExpression node)
@@ -940,24 +896,6 @@ public abstract class BoundTreeWalker
 
             VisitExpression(arm.Result);
         }
-    }
-
-    protected virtual void VisitMakeChannelExpression(BoundMakeChannelExpression node)
-    {
-        if (node.Capacity != null)
-        {
-            VisitExpression(node.Capacity);
-        }
-    }
-
-    protected virtual void VisitChannelReceiveExpression(BoundChannelReceiveExpression node)
-    {
-        VisitExpression(node.Channel);
-    }
-
-    protected virtual void VisitChannelCloseExpression(BoundChannelCloseExpression node)
-    {
-        VisitExpression(node.Channel);
     }
 
     protected virtual void VisitAddressOfExpression(BoundAddressOfExpression node)

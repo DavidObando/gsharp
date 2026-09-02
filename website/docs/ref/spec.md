@@ -140,7 +140,7 @@ VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
              | "let" "{" identifier "=" identifier { "," identifier "=" identifier } "}" "=" Expression .
 ```
 
-An initializer-less `var` binds the named type's **zero value**: `0`/`false`/`""` for the scalar types, the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan T` is carved out — an auto-created channel has no sensible default, so a channel declaration without an initializer is rejected (`GS0520`; initialize with `make(chan T)` or `make(chan T, capacity)`). Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
+An initializer-less `var` binds the named type's **zero value**: `0`/`false`/`""` for the scalar types, the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan[T]` is carved out — an auto-created channel has no sensible default, so a channel declaration without an initializer is rejected (`GS0520`; initialize with `chan[T]()`, `chan[T](capacity)`, or `Chan.Unbounded[T]()`). Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
 
 `let` communicates immutability of the binding. `var` introduces a mutable variable. `const` is for compile-time constants. Tuple deconstruction and named deconstruction use `let` forms. Multi-target assignment is statement syntax over existing writable storage and accepts either one RHS per target or one matching tuple-valued RHS. The legacy `identifier ":=" Expression` short variable-declaration form was removed; use `let name = expr` (immutable) or `var name = expr` (mutable) instead.
 
@@ -171,11 +171,11 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Object and nil
 
-`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, `[,]T` (and higher ranks), and `chan T` — with or without a `?` annotation; comparison is the interop-boundary observation tool. The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. Arrays and slices are **invariant** in their element type for *implicit* conversions: `[]Derived` does not implicitly convert to `[]Base` even though the CLR permits array reference covariance, because a covariant write through the widened reference fails at run time (`System.ArrayTypeMismatchException`). The widening is available *explicitly*, one dimension only, when the element conversion is itself an implicit reference conversion: `cast[[]Base](derived)` (equally `cast[[]Base]` over an imported `Derived[]`) is a representation-level no-op that yields the **same** array instance, and the bare form is rejected with `GS0156` pointing at that cast. Unrelated or narrowing element types remain unconvertible. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract. `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match. **Tuple equality** (ADR-0171): `==` and `!=` are defined whenever both operands are tuple types of the same arity (differing arity is error GS0539; a tuple against a non-tuple is GS0129). The comparison is element-wise: each operand is evaluated exactly once, then the element pairs are compared left-to-right through the ordinary equality rules (user-declared element operators, string equality, lifted nullable elements, nested tuples recursively), folded with short-circuiting `&&` (`!=` folds the element `!=` comparisons with `||`) — mirroring C# §12.12.10. An element pair with no defined equality reports GS0129 with the element types. The result is `bool`. **Named tuple elements** (ADR-0172): a tuple type may name elements name-first — `(line int32, column int32)` — and a tuple literal may label elements — `(line: 1, column: 2)` (partial naming allowed; a lone labeled or named single element is GS0543 because `(T)` is grouping). Names are metadata over the positional shape: a declared name resolves member access to its position (`pos.line` ≡ `pos.Item1`, and `ItemN`/`.N` stay valid), same-shape tuples differing only in names are identical types related by an identity conversion (an explicit literal label that the target renames warns GS0541; a named-value conversion to a differently-named target is silent), equality ignores names, and generic substitution preserves them. Duplicate names are GS0540; `ItemN` at the wrong position and `Rest` are reserved (GS0542).
+`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, `[,]T` (and higher ranks), and `chan[T]` / `in chan[T]` / `out chan[T]` — with or without a `?` annotation; comparison is the interop-boundary observation tool. The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. Arrays and slices are **invariant** in their element type for *implicit* conversions: `[]Derived` does not implicitly convert to `[]Base` even though the CLR permits array reference covariance, because a covariant write through the widened reference fails at run time (`System.ArrayTypeMismatchException`). The widening is available *explicitly*, one dimension only, when the element conversion is itself an implicit reference conversion: `cast[[]Base](derived)` (equally `cast[[]Base]` over an imported `Derived[]`) is a representation-level no-op that yields the **same** array instance, and the bare form is rejected with `GS0156` pointing at that cast. Unrelated or narrowing element types remain unconvertible. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract. `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match. **Tuple equality** (ADR-0171): `==` and `!=` are defined whenever both operands are tuple types of the same arity (differing arity is error GS0539; a tuple against a non-tuple is GS0129). The comparison is element-wise: each operand is evaluated exactly once, then the element pairs are compared left-to-right through the ordinary equality rules (user-declared element operators, string equality, lifted nullable elements, nested tuples recursively), folded with short-circuiting `&&` (`!=` folds the element `!=` comparisons with `||`) — mirroring C# §12.12.10. An element pair with no defined equality reports GS0129 with the element types. The result is `bool`. **Named tuple elements** (ADR-0172): a tuple type may name elements name-first — `(line int32, column int32)` — and a tuple literal may label elements — `(line: 1, column: 2)` (partial naming allowed; a lone labeled or named single element is GS0543 because `(T)` is grouping). Names are metadata over the positional shape: a declared name resolves member access to its position (`pos.line` ≡ `pos.Item1`, and `ItemN`/`.N` stay valid), same-shape tuples differing only in names are identical types related by an identity conversion (an explicit literal label that the target renames warns GS0541; a named-value conversion to a differently-named target is silent), equality ignores names, and generic substitution preserves them. Duplicate names are GS0540; `ItemN` at the wrong position and `Rest` are reserved (GS0542).
 
 ### Arrays and slices
 
-Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan T`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
+Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan[T]`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
 
 ```gsharp
 let xs = []int32{1, 2, 3}
@@ -211,13 +211,13 @@ let matrix = [2, 3]int32{1, 2, 3, 4, 5, 6}
 
 A non-empty rectangular initializer requires non-negative constant dimensions whose product equals the element count. Empty/no-initializer forms allow runtime dimensions. Reads, writes, compound assignments, increments/decrements, `??=`, address-taking, multi-target assignment, and async operands preserve receiver/dimension/index/value evaluation order.
 
-Rectangular arrays expose the ordinary `System.Array` surface: `.Length` is total element count, `.Rank` is dimension count, and `.GetLength(d)`, `.GetLowerBound(d)`, and `.GetUpperBound(d)` inspect a dimension. `for … in` enumerates elements in row-major order; a two-variable loop uses a flat zero-based enumeration index. `len(rectangular)` also returns total element count when the Go built-ins import is present. Rectangular arrays are not slices: `cap` and `append` do not apply.
+Rectangular arrays expose the ordinary `System.Array` surface: `.Length` is total element count, `.Rank` is dimension count, and `.GetLength(d)`, `.GetLowerBound(d)`, and `.GetUpperBound(d)` inspect a dimension. `for … in` enumerates elements in row-major order; a two-variable loop uses a flat zero-based enumeration index. Rectangular arrays are not slices; `.Length` is their element count.
 
 Source and imported CLR rectangular arrays retain rank in fields, properties, parameters, returns, generic substitutions, nullable metadata, and reflection. G# emits the CLR `T[,]`/`T[,,]` shape directly rather than flattening it.
 
 Like other bare magic collection types, an uninitialized non-null rectangular slot receives a sound empty instance: every dimension has length zero. A nullable rectangular slot (`[,]?T`) retains `nil` as its zero value.
 
-Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go`; see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
+Slices are backed by CLR arrays: `[]T` **is** `T[]`, so a slice's length is `.Length` and it has no separate capacity. The growable shape is `List[T]` + `Add`. The Go-style `len`, `cap`, `append`, `delete`, and `make` built-ins are retired (ADR-0174 D13, `GS0566`); see [Retired Go-style built-ins](#retired-go-style-built-ins) for the replacement table.
 
 #### Nullable arrays vs arrays of nullable elements
 
@@ -260,21 +260,20 @@ let counts = map[string,int32]{"g": 1, "sharp": 2}
 
 ### Channels
 
-Channels are written `chan T`. A channel value is created with `make(chan T)` or `make(chan T, capacity)`. Prefix receive is `<-ch`; send statements are `ch <- value`; `select` multiplexes receive and send cases. Channels are backed by `System.Threading.Channels`. A channel declaration **must** carry an initializer — an auto-created channel has no sensible default (buffer size, ownership), so `var ch chan T` without one is rejected with `GS0520`; this is the deliberate carve-out from the empty-instance zero values the other collection types get.
+Channels are written `chan[T]` (ADR-0174 D2) — the element type inside brackets, like `sequence[T]` and `map[K, V]`. `in chan[T]` is a receive-only handle and `out chan[T]` a send-only one; a `chan[T]` converts implicitly to either, never the reverse, which is what makes channel ownership checkable. A channel value is constructed by applying the type clause to arguments: `chan[T]()` is a **rendezvous** channel (capacity 0 — a send completes only when a receiver takes the value), `chan[T](capacity)` is buffered, and `Chan.Unbounded[T]()` is the one unbounded form, spelled through the runtime class deliberately. Prefix receive is `<-ch` (the element's zero value on a closed, drained channel — no exception); send statements are `ch <- value`; `ch.Close()` closes (closing twice throws; `Dispose()` is the idempotent close, so `using let` works); `select` multiplexes receive and send cases. `chan[T]` **is** `System.Threading.Channels.Channel<T>` (`in`/`out` are `ChannelReader<T>`/`ChannelWriter<T>`), so any BCL channel flows in with no adapter; what `chan[T](…)` constructs is the runtime's `Gsharp.Concurrency.Chan<T>` subclass, which also carries `Length()` (a racy snapshot, hence a method) and `Capacity` (fixed, hence a property). A channel declaration **must** carry an initializer — an auto-created channel has no sensible default, so `var ch chan[T]` without one is rejected with `GS0520`; this is the deliberate carve-out from the empty-instance zero values the other collection types get. A trailing `?` marks the whole channel nullable (`chan[int32]?`); a nullable element is `chan[int32?]`.
 
-The Go-flavored channel surface — `chan T`, `<-` (send and receive), `make(chan T)`, `select`, and `close(ch)` — is gated behind a per-file `import Gsharp.Extensions.Go`. Files that use any of these forms without the import get diagnostic `GS0316`.
+The retired spellings are rejected with a replacement named in the message: the juxtaposed type clause `chan T` (`GS0567` — use `chan[T]`), and the built-ins `make(chan T[, n])` and `close(ch)` (`GS0566` — use `chan[T](…)` / `Chan.Unbounded[T]()` and `ch.Close()`). The syntax needs no import (ADR-0174 D13 retired the `import Gsharp.Extensions.Go` gate, GS0316); the concurrency library lives in the implicitly imported `Gsharp.Concurrency` namespace.
 
 ```gsharp title="samples/Channels.gs"
 package GSharp.Samples.Channels
 
 import System
-import Gsharp.Extensions.Go
 
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 ch <- 1
 ch <- 2
 ch <- 3
-close(ch)
+ch.Close()
 
 let a = <-ch
 let b = <-ch
@@ -294,45 +293,36 @@ Console.WriteLine(d)
 0
 ```
 
-### Go-style built-ins (`import Gsharp.Extensions.Go`)
+### Retired Go-style built-ins
 
-G# inherits a small set of Go-style built-in functions —
-`len`, `cap`, `append`, `delete`, and the `make(chan T[, cap])`
-constructor — that operate on the Go-flavored collection /
-channel surface. Every built-in in
-this cluster is gated behind the same per-file
-`import Gsharp.Extensions.Go` as the channel surface. Files that call any of these without the import get
-diagnostic `GS0317` (or `GS0316` for `make(chan T)`, anchored
-at the inner `chan` clause, and for `close(ch)` — see
-"Deconfliction").
+G# 0.4 inherited a small set of Go-style built-in functions — `len`, `cap`,
+`append`, `delete`, and the channel forms `make(chan T[, cap])` and
+`close(ch)` — gated behind a per-file `import Gsharp.Extensions.Go`.
+ADR-0174 (D12, D13) retired all of them, and the namespace with them: every
+receiver already carries the member, so a free function that adds no syntax
+only competed with it. A call to a retired name reports `GS0566`, whose
+message names the replacement for that exact site; the names are free for
+user-defined functions, which bind as ordinary calls.
 
-| Built-in | Resolves to | .NET-idiomatic alternative |
-|---|---|---|
-| `len(arr)` / `len(slice)` / `len(string)` | array / slice / string length | `arr.Length` / `s.Length` |
-| `len(map)` | map entry count | `m.Count` |
-| `cap(slice)` | underlying-storage capacity | — (use the import) |
-| `append(slice, elem)` | grow-and-copy on a slice | `List[T].Add` for mutable lists |
-| `delete(map, key)` | erase a map entry | `m.Remove(k)` |
-| `make(chan T[, cap])` | channel constructor | — (use the import) |
-| `close(ch)` | channel-writer complete | — (use the import) |
-
-The GS0317 diagnostic message names the offending built-in and,
-where a .NET-idiomatic alternative exists, names it too — so a
-file that writes `len(arr)` without the import is told "call
-'.Length' directly" instead of being forced to add the import.
-The recovery strategy is identical to 's: the binder
-reports GS0317 once per offending site and continues binding
-the call as if the import were present, so subsequent type /
-shape diagnostics still surface in the same pass.
+| Retired | Write instead |
+|---|---|
+| `len(arr)` / `len(slice)` / `len(string)` / `len(rectangular)` | `arr.Length` / `s.Length` |
+| `len(map)` | `m.Count` |
+| `len(ch)` / `cap(ch)` | `ch.Length()` / `ch.Capacity` (on a channel you constructed) |
+| `cap(slice)` | removed — a slice is a fixed CLR array whose capacity is its length, `xs.Length` |
+| `append(slice, elem)` | keep a growable `List[T]` and call `.Add(elem)` |
+| `delete(map, key)` | `m.Remove(k)` |
+| `make(chan T[, cap])` | `chan[T]()` / `chan[T](cap)` / `Chan.Unbounded[T]()` |
+| `close(ch)` | `ch.Close()` |
 
 ```gsharp title="samples/Slices.gs (excerpt)"
-import Gsharp.Extensions.Go
+import System.Collections.Generic
 
 var nums = []int32{10, 20, 30}
-Console.WriteLine(len(nums))     // 3
-Console.WriteLine(cap(nums))     // 3
-nums = append(nums, 40)
-Console.WriteLine(len(nums))     // 4
+Console.WriteLine(nums.Length)   // 3
+var grown = List[int32]()
+grown.Add(40)
+Console.WriteLine(grown.Count)   // 1
 ```
 
 ### Function types
@@ -414,7 +404,8 @@ TypeClause = identifier TypeArgList? "?"?
            | "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "map" "[" TypeClause "]" TypeClause "?"?
-           | "chan" TypeClause "?"?
+           | ( "in" | "out" )? "chan" "[" TypeClause "]" "?"?
+           | "chan" TypeClause                                                    (* legacy; GS0567 *)
            | "sequence" "[" TypeClause "]" "?"?
            | "async" "sequence" "[" TypeClause "]" "?"?
            | "func" "(" TypeClauseList? ")" TypeClause? "?"?                  (* deprecated, GS0303 *)
@@ -796,7 +787,7 @@ Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional 
 
 ### Primary expressions and calls
 
-Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, `make(chan ...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, channel construction `chan[T](...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
 
 - **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The separator is `:`. In argument position, `=` is an ordinary assignment expression; a bare assignment whose target also names a parameter reports `GS0524` so the author can choose `Foo(timeout: 30)` or `Foo((timeout = 30))` explicitly. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names.
 - **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)`. The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).
@@ -1175,7 +1166,7 @@ PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" 
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
 (* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
-PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | BlockExpression | SwitchExpr | IfExpression | IfLetExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | BlockExpression | SwitchExpr | IfExpression | IfLetExpression | "(" Expression ")" | TupleLiteral | ChannelCreation | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`.. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
 InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .
@@ -1521,7 +1512,7 @@ DeferStmt = "defer" Expression .
 
 `go expr` starts a concurrent call; binding requires the operand to be a call (`GS0137` otherwise). The operand may return `void` — the natural goroutine shape, matching Go — and any result a value-returning operand produces is discarded. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
 
-The `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` forms are the **Go-flavored concurrency surface** and are gated behind a per-file `import Gsharp.Extensions.Go`. The binder reports `GS0316` at each offending keyword/operator (`go`, `chan`, `<-`, `select`, `close`) when the import is absent in the same compilation unit. `scope` itself is **not** gated. The gate is always opt-in and is independent of `/noimplicitimports`.
+The `go`, `chan[T]`, `<-` (send and receive), and `select` forms are part of the language and need no import (ADR-0174 D13 retired the ADR-0082 gate, GS0316). A send through an `in chan[T]` is `GS0549`; a receive through an `out chan[T]` is `GS0550`. Channel operations lower onto the `Gsharp.Runtime.Channels` runtime (`Gsharp.Concurrency.ChannelOps`), which the SDK references implicitly.
 
 ```ebnf
 GoStmt     = "go" Expression .
@@ -1587,7 +1578,7 @@ AwaitForRangeStmt = "await" "for" identifier "in" Expression Block .
 
 `go` launches concurrent function calls. Emitted code supports channels, `go`, `scope`, and `select` through lowering and CLR primitives. Outside `scope`, launched-task exceptions can be unobserved; inside `scope`, child tasks are registered and joined when the scope exits.
 
-Channels are typed, can be buffered, and support `close`, send, receive, and `select`. Receiving from a closed channel yields the element default value in the implemented channel path, as shown by the `Channels` sample. The production concurrency surface is `scope` + `async`/`await`. The Go-flavored shapes (`go`, `chan T`, `<-` send, `<-` receive, `select`, `close(ch)`, and `make(chan T)`) remain fully supported but are opt-in: each consuming file must contain `import Gsharp.Extensions.Go`. The binder emits `GS0316` for each gated form when the import is missing.
+Channels are typed (`chan[T]`, with `in`/`out` directional handles), are rendezvous by default or buffered by capacity, and support `Close()`, send, receive, and `select`. Receiving from a closed channel yields the element's zero value without an exception, as shown by the `Channels` sample. The Go-flavored shapes (`go`, `chan[T]`, `<-` send, `<-` receive, `select`) are part of the language and need no import (ADR-0174).
 
 ## Async and iterators
 
@@ -1815,7 +1806,7 @@ ArrayTypePrefix   ::= '[' Number? ']' | '[' ',' (',')* ']'
 TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
                     | ArrayTypePrefix '?'? identifier ('.' identifier)* '?'?
                     | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
-                                                                                             the WHOLE inner type nullable, e.g. '(chan int32)?',  *)
+                                                                                             the WHOLE inner type nullable, e.g. '([]int32)?',  *)
                     | '(' TupleTypeElement (',' TupleTypeElement)+ ')' '?'?                          (* tuple type; TupleTypeElement ::= identifier? TypeClause (ADR-0172) *)
                     | '(' FnTypeParamList? ')' '->' TypeClause                            (* arrow function type, ; `?` in TypeClause is return nullability *)
                     | '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?               (* parenthesized arrow function type,  *)
@@ -1823,8 +1814,9 @@ TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
                     | 'async' '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?       (* parenthesized async arrow function type,  *)
                     | 'map' '[' TypeClause ',' TypeClause ']' '?'?                        (* canonical,  *)
                     | 'map' '[' TypeClause ']' TypeClause '?'?                            (* legacy; GS0366 *)
-                    | 'chan' TypeClause                                                   (* a trailing '?' binds to the ELEMENT ('chan int32?' = 'chan (int32?)');
-                                                                                             a nullable CHANNEL is spelled '(chan T)?',  *)
+                    | ('in' | 'out')? 'chan' '[' TypeClause ']' '?'?                       (* ADR-0174 D2: 'chan[int32]?' is a nullable channel,
+                                                                                             'chan[int32?]' a channel of nullable; 'in' receive-only, 'out' send-only *)
+                    | 'chan' TypeClause                                                   (* legacy; GS0567 *)
                     | 'sequence' '[' TypeClause ']' '?'?
                     | 'async' 'sequence' '[' TypeClause ']' '?'?
                     | 'func' '(' FnTypeParamList? ')' TypeClause? '?'?                    (* deprecated; GS0303 *)
@@ -1966,7 +1958,7 @@ PrimaryExpression ::= Literal | identifier
                     | FunctionLiteral | LambdaExpression
                     | SwitchExpr | IfExpression | IfLetExpression
                     | '(' Expression ')' | TupleLiteral
-                    | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
+                    | ChannelCreation | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
                     | ThrowExpr                                          (* throw-expression,  *)
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
@@ -2000,7 +1992,7 @@ LambdaExpression  ::= 'async'? '(' LambdaParameters? ')' '->' ( Expression | Blo
 LambdaParameters  ::= LambdaParameter (',' LambdaParameter)*
 LambdaParameter   ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause? ('=' Expression)?
 TrailingLambda    ::= FunctionLiteral
-MakeChannel       ::= 'make' '(' 'chan' TypeClause (',' Expression)? ')'
+ChannelCreation   ::= 'chan' '[' TypeClause ']' '(' Expression? ')'                 (* ADR-0174 D12; 'make(chan T[, n])' is retired, GS0566 *)
 TypeOf            ::= 'typeof' '(' TypeClause ')'
 NameOf            ::= 'nameof' '(' Expression ')'
 DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (*  *)
