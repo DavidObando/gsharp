@@ -134,6 +134,99 @@ public class Sample
     }
 
     [Fact]
+    public void SeveralGsaIdentifiers_LandInOneAnnotation()
+    {
+        const string source = @"
+public class Sample
+{
+#pragma warning disable GSA0007, GSA0005
+    public int Both() => 1;
+#pragma warning restore GSA0007, GSA0005
+}
+";
+
+        string printed = Translate(source);
+
+        Assert.Contains("@SuppressDiagnostic(\"GSA0005\", \"GSA0007\")", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "@SuppressDiagnostic"));
+    }
+
+    /// <summary>
+    /// Issue #3831: the region opens INSIDE the method and closes after it, so
+    /// it covers no declaration whole. Widening it to the method would suppress
+    /// diagnostics on the statements before the <c>disable</c>, which the C#
+    /// source still reports.
+    /// </summary>
+    [Fact]
+    public void ARegionThatCutsAcrossADeclaration_IsNotWidenedToIt()
+    {
+        const string source = @"
+public class Sample
+{
+    public int Cut()
+    {
+        int a = 1;
+#pragma warning disable GSA0005
+        return a;
+    }
+#pragma warning restore GSA0005
+
+    public int After() => 2;
+}
+";
+
+        string printed = Translate(source);
+
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #3831: a numeric error code is a literal, not an identifier — the
+    /// other arm of the code-text switch. It names no <c>GSA</c> analyzer, so it
+    /// is dropped while the identifier beside it is carried.
+    /// </summary>
+    [Fact]
+    public void ANumericErrorCodeIsDropped_AndTheGsaIdentifierBesideItSurvives()
+    {
+        const string source = @"
+public class Sample
+{
+#pragma warning disable 1591, GSA0005
+    public int Mixed() => 1;
+#pragma warning restore 1591, GSA0005
+}
+";
+
+        string printed = Translate(source);
+
+        Assert.Contains("@SuppressDiagnostic(\"GSA0005\")", printed, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(printed, "@SuppressDiagnostic"));
+        Assert.DoesNotContain("1591", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #3831: a bare <c>#pragma warning disable</c> names no identifier at
+    /// all. It must translate to nothing — never to an annotation with an empty
+    /// or absent identifier.
+    /// </summary>
+    [Fact]
+    public void ABareDisableNamesNothing_AndProducesNoAnnotation()
+    {
+        const string source = @"
+public class Sample
+{
+#pragma warning disable
+    public int Everything() => 1;
+#pragma warning restore
+}
+";
+
+        string printed = Translate(source);
+
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TranslatedSuppression_BindsInTheMigratedTree()
     {
         const string source = @"

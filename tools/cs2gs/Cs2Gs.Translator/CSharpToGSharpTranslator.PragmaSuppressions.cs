@@ -50,7 +50,7 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
-            if (declared is not List<AttributeUse> attributes || source is null)
+            if (declared is not List<AttributeUse> attributes)
             {
                 return;
             }
@@ -89,11 +89,24 @@ public sealed partial class CSharpToGSharpTranslator
                 return result;
             }
 
-            List<PragmaWarningDirectiveTriviaSyntax> directives = root
-                .DescendantTrivia(descendIntoTrivia: true)
-                .Where(t => t.IsKind(SyntaxKind.PragmaWarningDirectiveTrivia))
-                .Select(t => (PragmaWarningDirectiveTriviaSyntax)t.GetStructure())
-                .Where(d => d is not null)
+            // Issue #3831: collected with a type PATTERN rather than
+            // `Select(cast).Where(d => d is not null)`. This file is itself in
+            // the self-migration corpus, and a sequence-level null filter does
+            // not narrow the ELEMENT type: the migrated G# kept
+            // `PragmaWarningDirectiveTriviaSyntax?` all the way down, so every
+            // member access on a directive below failed to resolve. The
+            // pattern narrows, and the loop is the same work.
+            var collected = new List<PragmaWarningDirectiveTriviaSyntax>();
+            foreach (SyntaxTrivia trivia in root.DescendantTrivia(descendIntoTrivia: true))
+            {
+                if (trivia.IsKind(SyntaxKind.PragmaWarningDirectiveTrivia)
+                    && trivia.GetStructure() is PragmaWarningDirectiveTriviaSyntax pragma)
+                {
+                    collected.Add(pragma);
+                }
+            }
+
+            List<PragmaWarningDirectiveTriviaSyntax> directives = collected
                 .OrderBy(d => d.SpanStart)
                 .ToList();
 
@@ -148,14 +161,19 @@ public sealed partial class CSharpToGSharpTranslator
         {
             foreach (ExpressionSyntax code in directive.ErrorCodes)
             {
+                // Issue #3831: the "names nothing" arm is the empty string, not
+                // `null`. A `null` arm makes the whole switch — and with it this
+                // iterator's element type — nullable in the migrated G#, where
+                // the `text != null` test does not narrow across the `yield`;
+                // no identifier starts with "GSA" for the empty string either.
                 string text = code switch
                 {
                     IdentifierNameSyntax name => name.Identifier.ValueText,
                     LiteralExpressionSyntax literal => literal.Token.ValueText,
-                    _ => null,
+                    _ => string.Empty,
                 };
 
-                if (text != null && text.StartsWith("GSA", StringComparison.Ordinal))
+                if (text.StartsWith("GSA", StringComparison.Ordinal))
                 {
                     yield return text;
                 }
