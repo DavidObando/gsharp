@@ -35,6 +35,7 @@ public sealed class GSharpAnalyzerDriver
     private readonly Dictionary<GSharpDiagnosticAnalyzer, Stopwatch> elapsed = new();
     private readonly Dictionary<GSharpDiagnosticAnalyzer, ImmutableHashSet<string>> supportedIds = new();
     private readonly HashSet<(GSharpDiagnosticAnalyzer Owner, string Id)> reportedUnsupported = new();
+    private DiagnosticSuppressionMap? suppressions;
 
     private GSharpAnalyzerDriver(Compilation.Compilation compilation, AnalyzerOptions options, CancellationToken cancellationToken)
     {
@@ -293,6 +294,16 @@ public sealed class GSharpAnalyzerDriver
             && fileName.EndsWith(".g.gs", StringComparison.OrdinalIgnoreCase)
             && (!registry.GeneratedCodeFlags.TryGetValue(owner, out var flags)
                 || (flags & GeneratedCodeAnalysisFlags.ReportDiagnostics) == 0))
+        {
+            return;
+        }
+
+        // ADR-0175 (#3820/#3824): a source `@SuppressDiagnostic("ID")` scope
+        // covering this diagnostic's primary location drops it. The check sits
+        // here, in the driver, so gsc, the language server, and
+        // GSharpAnalyzerVerifier all honour the same scoping rule.
+        suppressions ??= DiagnosticSuppressionMap.Build(compilation.SyntaxTrees);
+        if (suppressions.IsSuppressed(diagnostic))
         {
             return;
         }

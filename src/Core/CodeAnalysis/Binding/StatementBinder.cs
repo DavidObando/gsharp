@@ -275,6 +275,23 @@ internal sealed partial class StatementBinder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         scope = new BoundScope(scope);
 
+        // ADR-0175 (#3820/#3824): the only annotation a block statement accepts
+        // is the compiler-intrinsic `@SuppressDiagnostic`, whose scope is this
+        // block's `{`..`}`. It is consumed straight from the syntax tree by the
+        // analyzer driver and never bound; anything else in annotation position
+        // before a block is the ADR-0047 §2 "not allowed on statement" error.
+        foreach (var annotation in syntax.Annotations)
+        {
+            if (Analyzers.DiagnosticSuppressionMap.IsSuppressDiagnostic(annotation))
+            {
+                DeclarationBinder.ValidateSuppressDiagnostic(annotation, Diagnostics);
+            }
+            else
+            {
+                Diagnostics.ReportAnnotationsNotAllowedOnStatement(annotation.AtToken.Location);
+            }
+        }
+
         // ADR-0122 / issue #1014: an `unsafe { … }` block enters an unsafe
         // context for the duration of its statements. The body of an
         // `unsafe func` (or any method of an `unsafe` type) is likewise an
