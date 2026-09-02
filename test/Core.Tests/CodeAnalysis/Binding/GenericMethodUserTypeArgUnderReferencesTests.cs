@@ -13,6 +13,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 using Binder = GSharp.Core.CodeAnalysis.Binding.Binder;
 
@@ -93,7 +94,7 @@ public class GenericMethodUserTypeArgUnderReferencesTests
         var result = compilation.Emit(stream);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
 
-        var assembly = Assembly.Load(stream.ToArray());
+        var assembly = EmittedFixture.Load(stream.ToArray());
         var main = assembly.GetTypes()
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
             .SingleOrDefault(method => method.Name == "main" && method.GetParameters().Length == 0);

@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -171,7 +172,7 @@ public class Issue2921LambdaBodyDefiniteReturnTests
         var result = InvokeCompiler(source, name);
 
         Assert.Equal(0, result.ExitCode);
-        var assembly = Assembly.Load(File.ReadAllBytes(result.AssemblyPath));
+        var assembly = EmittedFixture.Load(result.AssemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal(expectedOutput, RunBounded(result.AssemblyPath, name));
     }

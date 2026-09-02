@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -58,7 +59,7 @@ public class Issue3304GoVoidOperandEmitTests
     private static void AssertRuns(string source, string name, string expected)
     {
         var assemblyPath = Compile(source, name);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
 
         for (var i = 0; i < 3; i++)

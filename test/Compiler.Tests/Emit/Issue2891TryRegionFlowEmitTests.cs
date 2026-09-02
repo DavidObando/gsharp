@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -628,7 +629,7 @@ public class Issue2891TryRegionFlowEmitTests
             File.Delete(assemblyPath);
         }
 
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(bytes);
         var types = assembly.GetTypes();
         Assert.NotEmpty(types);
         var program = types.Single(type => type.Name == "<Program>");
@@ -660,7 +661,7 @@ public class Issue2891TryRegionFlowEmitTests
             });
             Assert.Equal(0, exitCode);
             IlVerifier.Verify(assemblyPath);
-            Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+            Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes());
 
             var start = new ProcessStartInfo("dotnet")
             {

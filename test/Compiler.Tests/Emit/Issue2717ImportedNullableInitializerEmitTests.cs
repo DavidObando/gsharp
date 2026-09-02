@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -87,8 +88,10 @@ public sealed class Issue2717ImportedNullableInitializerEmitTests
             Assert.True(result.ExitCode == 0, result.Diagnostics);
             IlVerifier.Verify(result.OutputPath, new[] { fixturePath });
 
-            _ = Assembly.LoadFrom(fixturePath);
-            var emitted = Assembly.LoadFrom(result.OutputPath);
+            // One context for the reference fixture and the emitted
+            // assembly that imports it, so the emitted code binds the
+            // same fixture types the test reflects over.
+            var emitted = EmittedFixture.LoadTogether(fixturePath, result.OutputPath)[1];
             var build = emitted.GetTypes()
                 .Single(type => type.Name == "<Program>")
                 .GetMethod("Build", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;

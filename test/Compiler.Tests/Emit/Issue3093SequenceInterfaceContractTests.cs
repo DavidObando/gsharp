@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -58,7 +59,7 @@ public sealed class Issue3093SequenceInterfaceContractTests
             var assemblyPath = Compile(Source, directory);
             Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", Run(assemblyPath));
 
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             var detector = assembly.GetType("Issue3093.User.Detector");
             Assert.NotNull(detector);
             Assert.All(

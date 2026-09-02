@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -138,7 +139,7 @@ public sealed class Issue2893ConstructorAccessibilityEmitTests
             var assemblyPath = Compile(Source, directory);
             IlVerifier.Verify(assemblyPath);
 
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             var types = assembly.GetTypes();
             Assert.Equal(16, types.Length);
             assertions(types);

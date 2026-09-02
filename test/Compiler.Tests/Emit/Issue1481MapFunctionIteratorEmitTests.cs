@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -302,8 +303,7 @@ public class Issue1481MapFunctionIteratorEmitTests
     {
         var outPath = CompileToFile(source, target: "exe");
 
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(outPath);
 
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
@@ -315,7 +315,7 @@ public class Issue1481MapFunctionIteratorEmitTests
     private static Assembly CompileLibrary(string source)
     {
         var outPath = CompileToFile(source, target: "library");
-        return Assembly.LoadFile(outPath);
+        return EmittedFixture.Load(outPath);
     }
 
     private static string CompileToFile(string source, string target)

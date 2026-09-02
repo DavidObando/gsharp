@@ -10,6 +10,7 @@ using System.Reflection;
 using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
@@ -982,7 +983,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
                 Console.SetError(previousErr);
             }
 
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             _ = assembly.GetTypes();
 
             var startInfo = new ProcessStartInfo("dotnet")

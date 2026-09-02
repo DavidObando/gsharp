@@ -11,6 +11,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -511,6 +512,6 @@ public class Issue2150DataClassInterfacePropertyTests
             result.Success,
             "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
 
-        _ = System.Reflection.Assembly.Load(peStream.ToArray()).GetTypes();
+        _ = EmittedFixture.Load(peStream.ToArray()).GetTypes();
     }
 }

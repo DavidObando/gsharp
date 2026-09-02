@@ -13,6 +13,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -1038,8 +1039,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
         string expectedSourceTypeName,
         bool allowDirectObjectParameter = false)
     {
-        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(contractsPath)).GetTypes());
-        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        Assert.NotEmpty(EmittedFixture.Load(contractsPath).GetTypes());
+        Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes());
 
         var loadContext = new AssemblyLoadContext(
             "Issue2918_" + Guid.NewGuid().ToString("N"),
@@ -1198,8 +1199,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
             if (exitCode == 0)
             {
                 IlVerifier.Verify(assemblyPath, additionalReferences: new[] { contractsPath });
-                Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(contractsPath)).GetTypes());
-                Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+                Assert.NotEmpty(EmittedFixture.Load(contractsPath).GetTypes());
+                Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes());
                 var runtimeOutput = Run(assemblyPath, directory);
                 throw new XunitException(
                     "Expected ambiguous delegate overloads to be rejected, "

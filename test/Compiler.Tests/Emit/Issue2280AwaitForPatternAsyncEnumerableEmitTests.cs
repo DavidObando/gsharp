@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -358,8 +359,7 @@ public class Issue2280AwaitForPatternAsyncEnumerableEmitTests
 
         IlVerifier.Verify(outPath, extraReferences);
 
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(outPath);
 
         if (extraReferences != null)
         {
@@ -373,7 +373,7 @@ public class Issue2280AwaitForPatternAsyncEnumerableEmitTests
                 {
                     if (string.Equals(Path.GetFileNameWithoutExtension(reference), name, StringComparison.OrdinalIgnoreCase))
                     {
-                        return Assembly.LoadFrom(reference);
+                        return EmittedFixture.Load(reference);
                     }
                 }
 

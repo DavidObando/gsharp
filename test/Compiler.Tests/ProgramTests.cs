@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -139,7 +140,7 @@ public class ProgramTests
             var runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json");
             Assert.True(File.Exists(runtimeConfig), "expected runtimeconfig.json beside output");
             Assert.Contains("Microsoft.NETCore.App", File.ReadAllText(runtimeConfig));
-            var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+            var assembly = EmittedFixture.Load(outPath);
             var targetFramework = assembly.GetCustomAttribute<System.Runtime.Versioning.TargetFrameworkAttribute>();
             Assert.Equal(".NETCoreApp,Version=v10.0", targetFramework?.FrameworkName);
         }
@@ -195,7 +196,7 @@ public class ProgramTests
             });
 
             Assert.Equal(0, exit);
-            var assembly = Assembly.Load(File.ReadAllBytes(outPath));
+            var assembly = EmittedFixture.Load(outPath);
             using var stream = assembly.GetManifestResourceStream("Demo.Payload");
             Assert.NotNull(stream);
             using var reader = new StreamReader(stream!);

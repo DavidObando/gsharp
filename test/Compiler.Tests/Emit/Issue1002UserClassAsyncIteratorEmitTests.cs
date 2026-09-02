@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -67,7 +68,7 @@ public class Issue1002UserClassAsyncIteratorEmitTests
             """;
 
         var outPath = CompileToFile(source, target: "library");
-        var assembly = Assembly.LoadFile(outPath);
+        var assembly = EmittedFixture.Load(outPath);
         var shapeType = assembly.GetType("T.Shape", throwOnError: true)!;
         var elementType = typeof(System.Collections.Generic.KeyValuePair<,>)
             .MakeGenericType(typeof(string), shapeType);
@@ -215,8 +216,7 @@ public class Issue1002UserClassAsyncIteratorEmitTests
     private static Assembly CompileAndRun(string source)
     {
         var outPath = CompileToFile(source, target: "exe");
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(outPath);
 
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
@@ -228,8 +228,7 @@ public class Issue1002UserClassAsyncIteratorEmitTests
     private static string CompileRunAndCaptureOutput(string source)
     {
         var outPath = CompileToFile(source, target: "exe");
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(outPath);
 
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);

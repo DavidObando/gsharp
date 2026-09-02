@@ -31,6 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\EmittedFixture.cs" Link="EmittedFixture.cs" />
     <Compile Include="..\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
     <Compile Include="..\Shared\EmittedOracleOptions.cs" Link="EmittedOracleOptions.cs" />
     <Compile Include="..\Shared\EmittedOracleResult.cs" Link="EmittedOracleResult.cs" />

@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -576,7 +577,6 @@ public class AsyncInstanceMethodEmitTests
 
         IlVerifier.Verify(outPath);
 
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 }

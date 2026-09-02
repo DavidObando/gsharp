@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -241,7 +242,7 @@ public sealed class Issue3352WhileLetEmitTests
             Assert.Equal(0, exitCode);
             IlVerifier.Verify(outputPath);
 
-            var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
+            var assembly = EmittedFixture.Load(outputPath);
             var program = assembly.GetTypes().Single(type => type.Name == "<Program>");
             var entry = program.GetMethod(
                 "<Main>$",

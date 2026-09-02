@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -63,7 +64,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             Assert.Equal($"derived{Environment.NewLine}2486{Environment.NewLine}True{Environment.NewLine}", Run(result.OutputPath));
             IlVerifier.Verify(result.OutputPath);
 
-            var assembly = Assembly.LoadFrom(result.OutputPath);
+            var assembly = EmittedFixture.Load(result.OutputPath);
             var derived = assembly.GetType("Issue2486.Derived")!;
             AssertOverrideSlot(
                 derived.GetMethod("ToString", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!,
@@ -296,7 +297,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                 """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,
                 Run(result.OutputPath));
 
-            var assembly = Assembly.Load(File.ReadAllBytes(result.OutputPath));
+            var assembly = EmittedFixture.Load(result.OutputPath);
             var types = assembly.GetTypes();
             var objectToString = typeof(object).GetMethod(nameof(object.ToString))!;
             var objectEquals = typeof(object).GetMethod(nameof(object.Equals), new[] { typeof(object) })!;
@@ -398,7 +399,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         {
             IlVerifier.Verify(result.OutputPath);
 
-            var assembly = Assembly.LoadFrom(result.OutputPath);
+            var assembly = EmittedFixture.Load(result.OutputPath);
             var type = assembly.GetType("Issue2486.Shadow")!;
             var instance = Activator.CreateInstance(type);
             var shadow = type.GetMethod("ToString", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
@@ -469,7 +470,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             Assert.Equal($"derived{Environment.NewLine}", Run(result.OutputPath));
             IlVerifier.Verify(result.OutputPath);
 
-            var assembly = Assembly.LoadFrom(result.OutputPath);
+            var assembly = EmittedFixture.Load(result.OutputPath);
             var method = assembly.GetType("Issue2443.Derived")!.GetMethod(
                 "ToString",
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!;
@@ -522,8 +523,13 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         {
             IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { ExternalBaseAssembly.Value });
 
-            var baseAssembly = Assembly.LoadFrom(ExternalBaseAssembly.Value);
-            var derivedAssembly = Assembly.LoadFrom(result.OutputPath);
+            // One context for both: the assertions below compare the
+            // derived type's base methods and return types against the
+            // external base's, which only holds when a single context
+            // supplies one identity for Issue2443Base.
+            var loaded = EmittedFixture.LoadTogether(ExternalBaseAssembly.Value, result.OutputPath);
+            var baseAssembly = loaded[0];
+            var derivedAssembly = loaded[1];
             var derived = derivedAssembly.GetType("Issue2443.Derived")!;
             var closedBase = baseAssembly.GetType("Issue2443Base.ExternalBase`1")!.MakeGenericType(typeof(int));
 
@@ -582,8 +588,13 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         var result = Compile(Source, target: "library", ExternalBaseAssembly.Value);
         try
         {
-            var baseAssembly = Assembly.LoadFrom(ExternalBaseAssembly.Value);
-            var derivedAssembly = Assembly.LoadFrom(result.OutputPath);
+            // One context for both: the assertions below compare the
+            // derived type's base methods and return types against the
+            // external base's, which only holds when a single context
+            // supplies one identity for Issue2443Base.
+            var loaded = EmittedFixture.LoadTogether(ExternalBaseAssembly.Value, result.OutputPath);
+            var baseAssembly = loaded[0];
+            var derivedAssembly = loaded[1];
             var derivedType = derivedAssembly.GetType("Issue2443.ShadowingDerived")!;
             var instance = Activator.CreateInstance(derivedType);
             var closedBase = baseAssembly.GetType("Issue2443Base.ExternalBase`1")!.MakeGenericType(typeof(int));

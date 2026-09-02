@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -140,7 +141,7 @@ public class Issue988TypeParameterConstructionEmitTests
         try
         {
             var outPath = CompileLibrary(source, tempDir);
-            var asm = Assembly.LoadFile(outPath);
+            var asm = EmittedFixture.Load(outPath);
             var factory = asm.GetTypes().First(t => t.Name.StartsWith("Factory", StringComparison.Ordinal));
             var tp = factory.GetGenericArguments().Single();
             Assert.True(

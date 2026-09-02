@@ -387,7 +387,7 @@ internal static class DriverConformanceHarness
                 additionalReferences: usesExtensions ? new[] { extensionsAssemblyPath } : null,
                 ignoredErrorCodes: knownIlIssues.ErrorCodes,
                 ignoredErrorScope: knownIlIssues.Scope);
-            Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
+            EmittedFixture.Load(outputPath).GetTypes();
             string ilDump = captureIl ? NormalizedIlDump.Create(outputPath) : null;
             IReadOnlyList<string> assemblyReferences = captureIl
                 ? NormalizedIlDump.AssemblyReferenceNames(outputPath)

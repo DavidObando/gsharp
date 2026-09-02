@@ -9,6 +9,7 @@ using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -270,7 +271,7 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
             File.Delete(assemblyPath);
         }
 
-        var assembly = Assembly.Load(peStream.ToArray());
+        var assembly = EmittedFixture.Load(peStream.ToArray());
         var program = assembly.GetTypes().Single(type => type.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });

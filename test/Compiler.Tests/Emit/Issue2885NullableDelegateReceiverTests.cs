@@ -12,6 +12,7 @@ using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -966,12 +967,11 @@ public class Issue2885NullableDelegateReceiverTests
                 assemblyPath,
                 additionalReferences: fixturePath == null ? null : new[] { fixturePath });
 
-            if (fixturePath != null)
-            {
-                Assembly.Load(File.ReadAllBytes(fixturePath));
-            }
-
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            // One context for the reference fixture and the emitted
+            // assembly that imports it.
+            var assembly = fixturePath == null
+                ? EmittedFixture.Load(assemblyPath)
+                : EmittedFixture.LoadTogether(fixturePath, assemblyPath)[1];
             _ = assembly.GetTypes();
 
             using var process = Process.Start(new ProcessStartInfo("dotnet")

@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 using Xunit.Sdk;
 
@@ -431,7 +432,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             }
 
             IlVerifier.Verify(assemblyPath);
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             _ = assembly.GetTypes();
             inspectAssembly?.Invoke(assembly);
 

@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -220,8 +221,7 @@ public class Issue652AwaitForAsyncEnumerableEmitTests
 
         IlVerifier.Verify(outPath);
 
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(outPath);
 
         // Run the entry point and capture stdout
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");

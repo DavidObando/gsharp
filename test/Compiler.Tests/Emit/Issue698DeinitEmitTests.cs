@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -43,7 +44,7 @@ public class Issue698DeinitEmitTests
         {
             // Load the produced assembly in a fresh AppDomain-ish reflection
             // context so we can inspect the emitted Finalize method.
-            var asm = Assembly.LoadFile(asmPath);
+            var asm = EmittedFixture.Load(asmPath);
             var resource = asm.GetTypes().Single(t => t.Name == "Resource");
             var finalize = resource.GetMethod(
                 "Finalize",

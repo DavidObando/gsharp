@@ -10,6 +10,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -239,14 +240,17 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
             Assert.DoesNotContain("1300", intSignature);
             Assert.DoesNotContain("1300", stringSignature);
 
-            var library = Assembly.Load(File.ReadAllBytes(libraryPath));
+            // One context for both: the assertions compare the consumer's
+            // constructed enum types against the library's definitions,
+            // and loading them together is also what resolves the
+            // consumer's reference to the library (the AppDomain-wide
+            // AssemblyResolve hook this replaced only ever fired for the
+            // default load context).
+            var loaded2898 = EmittedFixture.LoadTogether(libraryPath, consumerPath);
+            var library = loaded2898[0];
             var libraryTypes = library.GetTypes();
-            ResolveEventHandler resolveLibrary = (_, args) =>
-                new AssemblyName(args.Name).Name == library.GetName().Name ? library : null;
-            AppDomain.CurrentDomain.AssemblyResolve += resolveLibrary;
-            try
             {
-                var consumer = Assembly.Load(File.ReadAllBytes(consumerPath));
+                var consumer = loaded2898[1];
                 var consumerTypes = consumer.GetTypes();
                 var program = consumerTypes.Single(t => t.Name == "<Program>");
                 var intEnum = program.GetField("c", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).FieldType;
@@ -266,10 +270,6 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
                 Assert.Equal(6, GetMethod(program, "S").Invoke(null, null));
                 Assert.Equal(intEnum, GetMethod(program, "BI").Invoke(null, null).GetType());
                 Assert.Equal(stringEnum, GetMethod(program, "BS").Invoke(null, null).GetType());
-            }
-            finally
-            {
-                AppDomain.CurrentDomain.AssemblyResolve -= resolveLibrary;
             }
         }
         finally
@@ -458,8 +458,7 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
             var outputPath = Compile(tempDir, "test", source);
             IlVerifier.Verify(outputPath, ignoredErrorCodes: ignoredErrorCodes);
 
-            var bytes = File.ReadAllBytes(outputPath);
-            var assembly = Assembly.Load(bytes);
+            var assembly = EmittedFixture.Load(outputPath);
             _ = assembly.GetTypes();
             return assembly;
         }

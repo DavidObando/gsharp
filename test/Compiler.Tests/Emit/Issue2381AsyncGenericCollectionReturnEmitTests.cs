@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -361,7 +362,7 @@ public class Issue2381AsyncGenericCollectionReturnEmitTests
 
             IlVerifier.Verify(outPath);
 
-            var asm = Assembly.LoadFrom(outPath);
+            var asm = EmittedFixture.Load(outPath);
             var exportType = asm.GetType("issue2381meta.ExportCheckMeta", throwOnError: true)!;
             var runAsync = exportType.GetMethod("RunAsync", BindingFlags.Public | BindingFlags.Instance)!;
 

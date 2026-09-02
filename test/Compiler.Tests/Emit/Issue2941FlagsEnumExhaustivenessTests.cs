@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -104,7 +105,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
     public void NameCompleteEnumSwitches_LoadAndRunWithExactOutput()
     {
         var assemblyPath = Compile(Source);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
 
         for (var i = 0; i < 3; i++)
@@ -121,7 +122,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
     public void UnmatchedFlagsValue_FailsLoudly()
     {
         var assemblyPath = Compile(UnmatchedSource);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
 
         var result = RunBounded(assemblyPath);

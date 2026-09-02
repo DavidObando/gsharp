@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -756,7 +757,7 @@ public class Issue2888InterfacePropertyTypeMismatchTests
                 _ = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(referencePath));
             }
 
-            _ = Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
+            _ = EmittedFixture.Load(outputPath).GetTypes();
         }
         finally
         {
