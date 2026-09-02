@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -602,7 +603,7 @@ internal sealed class WellKnownReferences
             return this.nullableAttributeByteCtorRef.Value;
         }
 
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", requireExternalVisibility: false, out var attrType))
+        if (!this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableAttribute", out var attrType))
         {
             return default;
         }
@@ -637,7 +638,7 @@ internal sealed class WellKnownReferences
             return this.nullableAttributeByteArrayCtorRef.Value;
         }
 
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableAttribute", requireExternalVisibility: false, out var attrType))
+        if (!this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableAttribute", out var attrType))
         {
             return default;
         }
@@ -747,7 +748,7 @@ internal sealed class WellKnownReferences
             return this.nullableContextAttributeByteCtorRef.Value;
         }
 
-        if (!this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.NullableContextAttribute", requireExternalVisibility: false, out var attrType))
+        if (!this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.NullableContextAttribute", out var attrType))
         {
             return default;
         }
@@ -1388,6 +1389,51 @@ internal sealed class WellKnownReferences
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.objectFinalizeRef.Value;
     }
+
+    /// <summary>
+    /// Issue #3811: resolves a <em>compiler-embeddable</em> attribute — one the
+    /// C# compiler <b>synthesizes into the emitting assembly</b> when the target
+    /// framework does not publish it (<c>NullableAttribute</c>,
+    /// <c>NullableContextAttribute</c>) — and accepts the answer only when it is
+    /// <b>externally visible</b>.
+    /// <para>
+    /// The plain lookup with <c>requireExternalVisibility: false</c> is wrong
+    /// for this family. Because csc embeds a private copy into every assembly
+    /// whose target framework lacks the type, practically every
+    /// <c>netstandard2.0</c> package assembly carries an <c>internal</c>
+    /// <c>NullableAttribute</c> of its own, and the first declarer in the
+    /// reference closure is simply whichever of those the resolver reached
+    /// first — for <c>src/Sdk/Gsharp.NET.Sdk</c> that was
+    /// <c>Microsoft.Build.Framework</c>, whose copy exists only in its
+    /// <c>ref/netstandard2.0</c> asset. Scoping the TypeRef there emits a
+    /// cross-assembly reference to a type that is neither public nor present in
+    /// that package's other assets, so a downstream compilation resolving the
+    /// same package for a different TFM throws
+    /// <c>TypeLoadException: Could not find type
+    /// 'System.Runtime.CompilerServices.NullableAttribute' in assembly ''</c>
+    /// while reading the referencing assembly's nullability metadata — surfaced
+    /// as the internal-compiler-error diagnostic <c>GS9998</c>.
+    /// </para>
+    /// <para>
+    /// External visibility is exactly the right discriminator: an embedded copy
+    /// is <em>always</em> <c>internal</c>, while every targeting pack from
+    /// .NET 5 onwards declares
+    /// <c>System.Runtime.CompilerServices.NullableAttribute</c> as a
+    /// <b>public</b> type of <c>System.Runtime</c>. The resolver's
+    /// externally-visible overload additionally skips an inaccessible shim and
+    /// keeps searching for an accessible duplicate (issue #3445), so a closure
+    /// containing both an embedded copy and the real contract assembly resolves
+    /// to the contract assembly. When nothing public declares it — a genuinely
+    /// old TFM — the attribute is omitted, the lossy-but-sound outcome the
+    /// accessors already documented. Synthesizing our own embedded copy, the way
+    /// csc does, is the full-fidelity follow-up.
+    /// </para>
+    /// </summary>
+    /// <param name="fullName">The attribute's fully-qualified metadata name.</param>
+    /// <param name="attributeType">The resolved, externally visible attribute type.</param>
+    /// <returns><c>true</c> when an externally visible declaration was found; otherwise <c>false</c>.</returns>
+    private bool TryResolveEmbeddableAttribute(string fullName, [NotNullWhen(true)] out Type? attributeType)
+        => this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: true, out attributeType);
 
     private MemberReferenceHandle BuildObjectDefaultCtorReference()
     {
