@@ -2738,7 +2738,13 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!TryGetWritableClrMember(member, out _, out var targetSymbol, out _, fromDerivedType: true))
+        // Issue #3815: the WRITE must see the same symbolically-projected member
+        // type the READ path already builds through GetInheritedClrMemberType —
+        // inside `class Wrap[T] : Channel[T]`, the inherited `Reader` is
+        // `ChannelReader[T]`, not the erased `ChannelReader[object]`. Passing the
+        // receiver (the derived class) routes the projection through the nearest
+        // imported base; see MemberLookup.GetProjectionReceiverImportedType.
+        if (!TryGetWritableClrMember(member, receiver.Type, out _, out var targetSymbol, out _, fromDerivedType: true))
         {
             Diagnostics.ReportCannotAssign(assignLocation, name);
             _ = BindExpression(valueSyntax);

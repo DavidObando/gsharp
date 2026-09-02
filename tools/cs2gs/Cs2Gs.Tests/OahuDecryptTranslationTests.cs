@@ -742,8 +742,18 @@ namespace Demo
         AssertGscCompiles(printed);
     }
 
+    /// <summary>
+    /// Issue #3814: an explicit implementation of an IMPORTED GENERIC
+    /// interface's member keeps its ADR-0149 clause and its C#-faithful private
+    /// visibility. This case used to fall back to the #1911 named/forced-public
+    /// path because gsc erased the clause's type arguments while resolving the
+    /// CLR slot (GS0494); it now resolves the slot through the interface's open
+    /// definition with the symbolic arguments substituted, so the fallback — and
+    /// the duplicate-overload collisions it caused for a type implementing TWO
+    /// instantiations — is gone.
+    /// </summary>
     [Fact]
-    public void GenericImportedExplicitInterfaceQualifier_FallsBackAndCompiles()
+    public void GenericImportedExplicitInterfaceQualifier_KeepsClauseAndCompiles()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -756,9 +766,41 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func Equals(other T) bool -> true", printed);
-        Assert.DoesNotContain("(IEquatable[T])", printed);
-        Assert.DoesNotContain("private func Equals", printed);
+        Assert.Contains("private func (IEquatable[T]) Equals(other T) bool -> true", printed);
+        AssertGscCompiles(printed);
+    }
+
+    /// <summary>
+    /// Issue #3814: the shape that walled <c>test/Core.Tests</c> — one member
+    /// explicitly implemented on TWO instantiations of the same imported generic
+    /// interface. Dropping the clause made the two methods differ only in return
+    /// type, i.e. a duplicate overload (GS0264) plus an unimplemented interface
+    /// (GS0187). Both clauses must now survive.
+    /// </summary>
+    [Fact]
+    public void TwoInstantiationsOfOneImportedGenericInterface_KeepBothClauses()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System.Collections;
+    using System.Collections.Generic;
+
+    public sealed class Conflict : IReadOnlyCollection<int>, IReadOnlyCollection<string>
+    {
+        public int Count => 0;
+
+        IEnumerator<int> IEnumerable<int>.GetEnumerator() => new List<int>().GetEnumerator();
+
+        IEnumerator<string> IEnumerable<string>.GetEnumerator() => new List<string>().GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => new List<int>().GetEnumerator();
+    }
+}");
+
+        Assert.Contains("(IEnumerable[int32]) GetEnumerator() IEnumerator[int32]", printed);
+        Assert.Contains("(IEnumerable[string]) GetEnumerator() IEnumerator[string]", printed);
+        Assert.Contains("(IEnumerable) GetEnumerator() IEnumerator", printed);
         AssertGscCompiles(printed);
     }
 

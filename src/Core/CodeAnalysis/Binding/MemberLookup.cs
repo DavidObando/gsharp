@@ -2973,63 +2973,69 @@ internal sealed class MemberLookup
         MethodInfo openMethod,
         ImmutableArray<TypeSymbol> symbolicArgs)
     {
-        var clrParams = openMethod.GetParameters();
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(openMethod.Name))
         {
-            var callable = GetCallableParameters(candidate);
-            if (callable.Length != clrParams.Length)
-            {
-                continue;
-            }
-
-            if (!ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType, symbolicArgs))
-            {
-                continue;
-            }
-
-            var allMatch = true;
-            for (var i = 0; i < callable.Length; i++)
-            {
-                var clrParamType = clrParams[i].ParameterType;
-                var gsParam = callable[i];
-
-                if (clrParamType.IsByRef)
-                {
-                    if (gsParam.RefKind == RefKind.None)
-                    {
-                        allMatch = false;
-                        break;
-                    }
-
-                    if (!ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), symbolicArgs))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-                else
-                {
-                    if (gsParam.RefKind != RefKind.None)
-                    {
-                        allMatch = false;
-                        break;
-                    }
-
-                    if (!ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, symbolicArgs))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-            }
-
-            if (allMatch)
+            if (MethodMatchesSymbolicClrInterfaceSignature(candidate, openMethod, symbolicArgs))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #3814: whether one G# method satisfies <paramref name="openMethod"/>
+    /// — a method of a CLR generic interface's OPEN definition — once the
+    /// interface's <paramref name="symbolicArgs"/> are substituted in. The
+    /// per-candidate core of
+    /// <see cref="HasMatchingMethodForSymbolicClrInterface"/>, factored out so
+    /// the explicit-interface-clause resolver can ask the same question about
+    /// one specific method (its name may not even be the slot's, and it must
+    /// pick a slot rather than answer "some method matched").
+    /// </summary>
+    /// <param name="candidate">The candidate G# method.</param>
+    /// <param name="openMethod">The interface method from the open definition.</param>
+    /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
+    /// <returns><see langword="true"/> when the signatures match after substitution.</returns>
+    public static bool MethodMatchesSymbolicClrInterfaceSignature(
+        FunctionSymbol candidate,
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        var clrParams = openMethod.GetParameters();
+        var callable = GetCallableParameters(candidate);
+        if (callable.Length != clrParams.Length)
+        {
+            return false;
+        }
+
+        if (!ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType, symbolicArgs))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < callable.Length; i++)
+        {
+            var clrParamType = clrParams[i].ParameterType;
+            var gsParam = callable[i];
+
+            if (clrParamType.IsByRef)
+            {
+                if (gsParam.RefKind == RefKind.None
+                    || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType.GetElementType(), symbolicArgs))
+                {
+                    return false;
+                }
+            }
+            else if (gsParam.RefKind != RefKind.None
+                || !ParameterTypeMatchesSubstituted(gsParam.Type, clrParamType, symbolicArgs))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -3893,7 +3899,7 @@ internal sealed class MemberLookup
         PropertyInfo closedProperty,
         bool projectOnlyWhenSymbolicallyRequired = false)
     {
-        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+        if (GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
                 imported,
                 closedProperty.DeclaringType,
@@ -3955,7 +3961,7 @@ internal sealed class MemberLookup
     {
         const BindingFlags AllFields = BindingFlags.Public | BindingFlags.NonPublic
             | BindingFlags.Instance | BindingFlags.Static;
-        var imported = GetImportedTypeSymbol(targetType);
+        var imported = GetProjectionReceiverImportedType(targetType);
         var receiverClr = imported?.ClrType;
         if (targetType is NullabilityAnnotatedTypeSymbol annotated
             && receiverClr != null
@@ -4005,7 +4011,7 @@ internal sealed class MemberLookup
     /// <returns>The event handler type after symbolic receiver substitution.</returns>
     internal static TypeSymbol GetClrEventHandlerTypeSymbol(TypeSymbol targetType, EventInfo closedEvent)
     {
-        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+        if (GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
                 imported,
                 closedEvent.DeclaringType,
@@ -4111,7 +4117,7 @@ internal sealed class MemberLookup
         TypeSymbol targetType,
         MethodInfo closedMethod)
     {
-        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+        if (GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
                 imported,
                 closedMethod.DeclaringType,
@@ -4162,7 +4168,7 @@ internal sealed class MemberLookup
         MethodInfo closedMethod,
         int parameterIndex)
     {
-        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+        if (GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
                 imported,
                 closedMethod.DeclaringType,
@@ -4292,6 +4298,32 @@ internal sealed class MemberLookup
             NullabilityAnnotatedTypeSymbol { BaseType: ImportedTypeSymbol imported } => imported,
             _ => null,
         };
+
+    /// <summary>
+    /// Issue #3815: the imported type whose generic arguments a member read
+    /// through <paramref name="type"/> must be projected with.
+    /// <para>
+    /// For an imported receiver that is just <see cref="GetImportedTypeSymbol"/>.
+    /// A USER class deriving from an imported generic base
+    /// (<c>class Wrap[T] : Channel[T]</c>) inherits that base's members, and the
+    /// base's own type arguments are carried SYMBOLICALLY on
+    /// <see cref="StructSymbol.ImportedBaseType"/> — the base's
+    /// reflected <c>ClrType</c> is the erased
+    /// <c>Channel&lt;object&gt;</c>. Reflecting the inherited member off that
+    /// erased type and reading its type straight from metadata therefore bound
+    /// <c>Reader</c> as <c>ChannelReader[object]</c> instead of
+    /// <c>ChannelReader[T]</c>. Walking to the nearest imported base lets the
+    /// existing symbolic-projection machinery substitute the real arguments,
+    /// exactly as it already does when the receiver IS the imported type.
+    /// </para>
+    /// </summary>
+    /// <param name="type">The receiver type a member was reflected through.</param>
+    /// <returns>The imported type carrying the symbolic arguments, or <see langword="null"/>.</returns>
+    internal static ImportedTypeSymbol? GetProjectionReceiverImportedType(TypeSymbol type)
+        => GetImportedTypeSymbol(type)
+            ?? (type is StructSymbol userClass
+                ? TypeMemberModel.GetNearestImportedBase(userClass) as ImportedTypeSymbol
+                : null);
 
     internal static PropertyInfo? FindOpenIndexerDefinition(Type? openDefinition, PropertyInfo closedIndexer)
     {
