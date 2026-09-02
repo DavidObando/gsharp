@@ -400,8 +400,23 @@ public sealed class TranslateStage : IMigrationStage
                             includeFileAttributes: unitIndex == 0,
                             analyzerApiMode: analyzerApiMode,
                             preserveEntryType: preserveEntryType);
-                    string printed = GSharpPrinter.Print(
-                        unitTranslator.TranslateDocument(document, translationContext));
+                    string printed;
+                    try
+                    {
+                        printed = GSharpPrinter.Print(
+                            unitTranslator.TranslateDocument(document, translationContext));
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException
+                        and not TranslationCrashException)
+                    {
+                        // Issue #3804: annotate, do NOT absorb. A translator
+                        // crash stays a crash — turning it into a diagnostic
+                        // here would silently drop the file from the migrated
+                        // tree and file a cs2gs defect as a language gap. All
+                        // this adds is the one fact the artifact was missing:
+                        // which source was on the table.
+                        throw new TranslationCrashException(document.FilePath, ex);
+                    }
 
                     string gsRelativePath;
                     if (unitIndex == 0)
@@ -513,8 +528,15 @@ public sealed class TranslateStage : IMigrationStage
                     // and move on to the remaining files.
                     if (!isReferencedProject)
                     {
+                        // Issue #3804: an unreadable .resx is a tooling failure,
+                        // not a C# construct without a G# form — it gets the
+                        // crash category, and names the file it choked on.
                         artifacts.Add(context.Triage.StageCrash(
-                            MigrationStageKind.Translate, TriageCategory.TranslationUnsupported, "CS2GS0003", ex));
+                            MigrationStageKind.Translate,
+                            TriageCategory.PipelineCrash,
+                            "CS2GS0003",
+                            ex,
+                            resxPath));
                     }
 
                     continue;
@@ -941,17 +963,47 @@ public sealed class TranslateStage : IMigrationStage
                     line++;
                 }
 
-                string prior = line < priorLines.Length ? priorLines[line] : "<eof>";
-                string current = line < currentLines.Length ? currentLines[line] : "<eof>";
+                // Issue #3804: one line of each side is not enough to act on —
+                // the two renderings routinely differ in how one expression is
+                // BROKEN ACROSS lines, so the first differing line can be a
+                // bare prefix that says nothing about what actually changed.
+                // Print a short window of both.
                 throw new InvalidOperationException(
                     $"Linked source '{sourcePath}' translates differently in multiple projects. "
-                    + $"First divergence at line {line + 1}: prior `{prior.Trim()}` vs current `{current.Trim()}`.");
+                    + $"First divergence at line {line + 1}.\n"
+                    + $"  prior (as translated by the first project to reach it):\n{Window(priorLines, line)}"
+                    + $"  current (as translated by this app):\n{Window(currentLines, line)}");
             }
 
             return;
         }
 
         options.RepositoryTranslations[canonicalSourcePath] = generated;
+    }
+
+    /// <summary>
+    /// Renders a few lines of <paramref name="lines"/> around
+    /// <paramref name="index"/>, for the linked-source divergence report
+    /// (issue #3804).
+    /// </summary>
+    /// <param name="lines">The translated file, split into lines.</param>
+    /// <param name="index">The zero-based index of the first differing line.</param>
+    /// <returns>The rendered window, one indented line per entry.</returns>
+    private static string Window(string[] lines, int index)
+    {
+        const int Context = 2;
+        var window = new System.Text.StringBuilder();
+        for (int i = Math.Max(0, index - Context); i < Math.Min(lines.Length, index + Context + 1); i++)
+        {
+            window.Append(i == index ? "  > " : "    ").Append(lines[i].TrimEnd()).Append('\n');
+        }
+
+        if (index >= lines.Length)
+        {
+            window.Append("  > <eof>\n");
+        }
+
+        return window.ToString();
     }
 
     private static string OutputPathForResx(

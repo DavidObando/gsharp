@@ -734,7 +734,8 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
 Fields:
 
 - `schemaVersion`, `runId`, `timestamp`, `gscVersion`, `corpusAppId` — provenance.
-- `stage` ∈ `{translate, compile, ilverify, test-parity}`; `category` ∈ `{translation-unsupported, compile-error, ilverify-failure, test-parity-failure}`.
+- `stage` ∈ `{translate, compile, ilverify, test-parity}`; `category` ∈ `{translation-unsupported, compile-error, ilverify-failure, test-parity-failure, pipeline-crash}`.
+- **`pipeline-crash` (issue #3804).** One category does not belong to a stage: `pipeline-crash` records a stage throwing an unhandled exception, which is a defect in `cs2gs` itself rather than a property of the code being migrated. It was originally filed under the crashing stage's own category, so a translator `IndexOutOfRangeException` arrived as `translation-unsupported` with the *exception type name* rendered as the offending C# construct — a tool bug published as a language gap, which reads as already-triaged and is how one sat untouched for weeks in the self-migration corpus. `diagnostic.id` still names the stage (`PipelineException`, `GS9999`, `IlVerifyError`, `STDOUT-MISMATCH`), the translate stage annotates the throw with the C# file it had on the table so `sourceLocation.csFile` is populated (positions stay `null`), and the stack trace goes to the run log.
 - `diagnostic` — the G# diagnostic id/message/severity (for stages 2–3; for stage 4 the failing test id and expected-vs-actual).
 - `sourceLocation` — both the emitted-`.gs` location **and** the originating C# location (the translator preserves a source map so a gap points back to the C# that triggered it).
 - `offendingCSharpConstruct` — the C# construct kind plus a minimal snippet.

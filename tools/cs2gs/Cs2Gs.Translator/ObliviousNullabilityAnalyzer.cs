@@ -330,6 +330,22 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        // Issue #3804: not every IParameterSymbol hanging off a method occupies
+        // a position in that method's parameter list. Roslyn models `this` as a
+        // parameter of the enclosing method with Ordinal **-1** — and
+        // SemanticModel.GetSymbolInfo hands back exactly that symbol for a
+        // `this` expression, which the translator asks about whenever it
+        // translates a `this.…` receiver. A data row lines its values up with
+        // the declared parameters positionally, so the receiver is simply not a
+        // row column and there is nothing to look up; without this guard the
+        // row lookup below indexed at -1 and took the whole translate stage
+        // down with an IndexOutOfRangeException (the ordinal test there guards
+        // only the upper bound).
+        if (parameter.Ordinal < 0)
+        {
+            return false;
+        }
+
         foreach (AttributeData attribute in method.GetAttributes())
         {
             if (attribute.AttributeConstructor is not { Parameters.Length: 1 } constructor
@@ -797,6 +813,17 @@ internal static class ObliviousNullabilityAnalyzer
         if (symbol is IParameterSymbol parameter)
         {
             ISymbol remappedOwner = RemapMemberOwner(targetCompilation, parameter.ContainingSymbol);
+
+            // Issue #3804: the ordinal is bounded on BOTH sides, defensively.
+            // Roslyn's `this` parameter hangs off its method with Ordinal -1
+            // and holds no position in the parameter list, so there is nothing
+            // to remap it to; an upper-bound-only test would index at -1, the
+            // exact shape of the #3804 translate crash.
+            if (parameter.Ordinal < 0)
+            {
+                return null;
+            }
+
             return remappedOwner switch
             {
                 IMethodSymbol method when parameter.Ordinal < method.Parameters.Length =>
@@ -980,7 +1007,17 @@ internal static class ObliviousNullabilityAnalyzer
                 {
                     foreach (ISymbol inherited in InheritedDeclarations(owner))
                     {
+                        // Issue #3804: `>= 0` as well as `<`, defensively. A
+                        // `this` parameter (Ordinal -1) cannot reach here
+                        // today — HasAllowNullWriteContract's
+                        // DeclaringSyntaxReferences gate turns it away first,
+                        // which is precisely the gate HasNullDataRowArgument
+                        // applied to the METHOD rather than the parameter, and
+                        // that is how the #3804 crash got in. An ordinal
+                        // bounded on one side only is the bug shape; bound it
+                        // on both.
                         if (inherited is IMethodSymbol inheritedMethod
+                            && parameter.Ordinal >= 0
                             && parameter.Ordinal < inheritedMethod.Parameters.Length)
                         {
                             yield return inheritedMethod.Parameters[parameter.Ordinal];

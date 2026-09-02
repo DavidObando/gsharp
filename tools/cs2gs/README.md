@@ -168,6 +168,13 @@ triage artifact; later stages are reported as `skip`.
    `Gsharp.NET.Sdk`) and compares the passing/failing test set against the C#
    xUnit oracle. Failures → `test-parity-failure`.
 
+A fifth category cuts across all four: a stage that throws an unhandled
+exception is a defect in `cs2gs` itself, not a property of the code being
+migrated, and is recorded as `pipeline-crash` (issue #3804) with the C# file
+the stage was working on and the stack trace in the run log. It is deliberately
+*not* filed as `translation-unsupported`: a tool bug dressed up as a language
+gap reads as already-triaged.
+
 ### Native while-pattern bindings
 
 Positive single-binder C# while patterns use G# `while let` when translation

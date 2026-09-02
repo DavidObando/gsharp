@@ -800,6 +800,12 @@ public sealed class MigrationPipeline
             }
             catch (Exception ex)
             {
+                // Issue #3804: a stage crash is a cs2gs defect, and the ONLY
+                // record of where it happened is the stack. The artifact keeps
+                // the message; the log keeps the frames, so a gate run's log is
+                // enough to start a diagnosis from.
+                Console.Error.WriteLine($"cs2gs: {stageName} stage crashed for {app.Id}:");
+                Console.Error.WriteLine(ex);
                 outcome = StageOutcome.Failed(new[] { StageCrashArtifact(context.Triage, stage.Kind, ex) });
             }
 
@@ -867,15 +873,29 @@ public sealed class MigrationPipeline
         // exception's runtime type rather than its raw Message, which
         // routinely embeds run-scoped absolute paths that would otherwise
         // fingerprint the same recurring crash differently every run/machine.
-        (TriageCategory category, string diagnosticId) = stage switch
+        //
+        // Issue #3804: the category is PipelineCrash whatever the stage. A
+        // crash is a defect in the MIGRATION TOOL; filing it as the stage's
+        // own failure category made a translator IndexOutOfRangeException
+        // arrive as `translation-unsupported`, i.e. as a property of the C#
+        // being migrated, and it was triaged accordingly (which is to say, not
+        // at all). The diagnostic id still names the stage, so the two are
+        // still distinguishable at a glance.
+        string diagnosticId = stage switch
         {
-            MigrationStageKind.Compile => (TriageCategory.CompileError, "GS9999"),
-            MigrationStageKind.IlVerify => (TriageCategory.IlVerifyFailure, "IlVerifyError"),
-            MigrationStageKind.TestParity => (TriageCategory.TestParityFailure, "STDOUT-MISMATCH"),
-            _ => (TriageCategory.TranslationUnsupported, "PipelineException"),
+            MigrationStageKind.Compile => "GS9999",
+            MigrationStageKind.IlVerify => "IlVerifyError",
+            MigrationStageKind.TestParity => "STDOUT-MISMATCH",
+            _ => "PipelineException",
         };
 
-        return triage.StageCrash(stage, category, diagnosticId, ex);
+        // The wrapper (issue #3804) exists only to name the file; triage sees
+        // the exception that was actually thrown, so messages and fingerprints
+        // are unchanged by its presence.
+        string csFile = (ex as TranslationCrashException)?.SourceFilePath;
+        Exception crash = ex is TranslationCrashException wrapped ? wrapped.InnerException : ex;
+
+        return triage.StageCrash(stage, TriageCategory.PipelineCrash, diagnosticId, crash, csFile);
     }
 
     private IReadOnlyList<TriageArtifact> WriteArtifacts(
