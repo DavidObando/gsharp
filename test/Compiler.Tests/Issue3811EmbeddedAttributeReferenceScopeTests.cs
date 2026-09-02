@@ -55,11 +55,11 @@ package System.Runtime.CompilerServices
 
 import System
 
-class NullableAttribute : Attribute {
+internal class NullableAttribute : Attribute {
     init(b uint8) {}
 }
 
-class NullableContextAttribute : Attribute {
+internal class NullableContextAttribute : Attribute {
     init(b uint8) {}
 }
 ";

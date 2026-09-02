@@ -1394,59 +1394,46 @@ internal sealed class WellKnownReferences
     /// Issue #3811: resolves a <em>compiler-embeddable</em> attribute — one the
     /// C# compiler <b>synthesizes into the emitting assembly</b> when the target
     /// framework does not publish it (<c>NullableAttribute</c>,
-    /// <c>NullableContextAttribute</c>) — and accepts the answer only when it
-    /// comes from the <b>core library</b>.
+    /// <c>NullableContextAttribute</c>) — and accepts the answer only when it is
+    /// <b>externally visible</b>.
     /// <para>
-    /// The plain
-    /// <see cref="Symbols.ReferenceResolver.TryResolveType(string, bool, out System.Type)"/>
-    /// lookup with <c>requireExternalVisibility: false</c> is wrong for this
-    /// family. Under a TFM whose core library does not declare them (notably
-    /// <c>netstandard2.0</c>), the first declarer in the reference closure is
-    /// whichever <em>third-party package</em> csc happened to embed its own
-    /// private copy into — for <c>src/Sdk/Gsharp.NET.Sdk</c> that is
-    /// <c>Microsoft.Build.Framework</c>, which carries an <c>internal</c>
-    /// <c>NullableAttribute</c> that exists only in its <c>ref/netstandard2.0</c>
-    /// asset. Scoping the TypeRef there emits a cross-assembly reference to a
-    /// type that is neither public nor present in any other asset of that
-    /// package, so a downstream compilation that resolves the same package for a
-    /// different TFM throws
+    /// The plain lookup with <c>requireExternalVisibility: false</c> is wrong
+    /// for this family. Because csc embeds a private copy into every assembly
+    /// whose target framework lacks the type, practically every
+    /// <c>netstandard2.0</c> package assembly carries an <c>internal</c>
+    /// <c>NullableAttribute</c> of its own, and the first declarer in the
+    /// reference closure is simply whichever of those the resolver reached
+    /// first — for <c>src/Sdk/Gsharp.NET.Sdk</c> that was
+    /// <c>Microsoft.Build.Framework</c>, whose copy exists only in its
+    /// <c>ref/netstandard2.0</c> asset. Scoping the TypeRef there emits a
+    /// cross-assembly reference to a type that is neither public nor present in
+    /// that package's other assets, so a downstream compilation resolving the
+    /// same package for a different TFM throws
     /// <c>TypeLoadException: Could not find type
     /// 'System.Runtime.CompilerServices.NullableAttribute' in assembly ''</c>
     /// while reading the referencing assembly's nullability metadata — surfaced
     /// as the internal-compiler-error diagnostic <c>GS9998</c>.
     /// </para>
     /// <para>
-    /// Restricting the lookup to the core library keeps today's behaviour on
-    /// every TFM whose core library declares the attribute (where the emitted
-    /// row is resolvable by construction) and falls back to <em>omitting</em> the
-    /// attribute otherwise — the same lossy-but-sound outcome the accessors
-    /// already documented for "very old TFMs". Synthesizing our own embedded
-    /// copy, the way csc does, is the full-fidelity follow-up.
+    /// External visibility is exactly the right discriminator: an embedded copy
+    /// is <em>always</em> <c>internal</c>, while every targeting pack from
+    /// .NET 5 onwards declares
+    /// <c>System.Runtime.CompilerServices.NullableAttribute</c> as a
+    /// <b>public</b> type of <c>System.Runtime</c>. The resolver's
+    /// externally-visible overload additionally skips an inaccessible shim and
+    /// keeps searching for an accessible duplicate (issue #3445), so a closure
+    /// containing both an embedded copy and the real contract assembly resolves
+    /// to the contract assembly. When nothing public declares it — a genuinely
+    /// old TFM — the attribute is omitted, the lossy-but-sound outcome the
+    /// accessors already documented. Synthesizing our own embedded copy, the way
+    /// csc does, is the full-fidelity follow-up.
     /// </para>
     /// </summary>
     /// <param name="fullName">The attribute's fully-qualified metadata name.</param>
-    /// <param name="attributeType">The resolved attribute type, when it is declared by the core library.</param>
-    /// <returns><c>true</c> when the core library declares the attribute; otherwise <c>false</c>.</returns>
+    /// <param name="attributeType">The resolved, externally visible attribute type.</param>
+    /// <returns><c>true</c> when an externally visible declaration was found; otherwise <c>false</c>.</returns>
     private bool TryResolveEmbeddableAttribute(string fullName, [NotNullWhen(true)] out Type? attributeType)
-    {
-        attributeType = null;
-        if (!this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var resolved))
-        {
-            return false;
-        }
-
-        // The core library is whichever assembly declares System.Object in this
-        // compilation's reference closure — the targeting pack's contract
-        // assembly under a MetadataLoadContext, System.Private.CoreLib on the
-        // in-process/TPA path.
-        if (!ReferenceEquals(resolved.Assembly, this.emitCtx.CoreObjectType.Assembly))
-        {
-            return false;
-        }
-
-        attributeType = resolved;
-        return true;
-    }
+        => this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: true, out attributeType);
 
     private MemberReferenceHandle BuildObjectDefaultCtorReference()
     {
