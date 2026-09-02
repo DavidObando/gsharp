@@ -41,11 +41,6 @@ public sealed class DiagnosticSuppressionMap
     /// <returns>The map; <see cref="Empty"/> when no suppression is declared.</returns>
     public static DiagnosticSuppressionMap Build(IEnumerable<SyntaxTree> syntaxTrees)
     {
-        if (syntaxTrees is null)
-        {
-            return Empty;
-        }
-
         var builder = ImmutableArray.CreateBuilder<Scope>();
         foreach (var tree in syntaxTrees)
         {
@@ -63,11 +58,13 @@ public sealed class DiagnosticSuppressionMap
     /// <returns><see langword="true"/> when a scope covering the diagnostic names its ID.</returns>
     public bool IsSuppressed(Diagnostic diagnostic)
     {
-        if (diagnostic is null || this.scopes.IsDefaultOrEmpty)
+        if (this.scopes.IsDefaultOrEmpty)
         {
             return false;
         }
 
+        // `TextLocation.Text` is genuinely nullable — the driver reports its own
+        // GS9304 with a `default` location — and a null one matches no scope.
         var location = diagnostic.Location;
         if (location.Text is null)
         {
@@ -109,7 +106,7 @@ public sealed class DiagnosticSuppressionMap
     /// <returns><see langword="true"/> when the name is <c>SuppressDiagnostic</c> or <c>SuppressDiagnosticAttribute</c>.</returns>
     public static bool IsSuppressDiagnostic(AnnotationSyntax annotation)
     {
-        if (annotation is null || annotation.HasTypeArgumentList)
+        if (annotation.HasTypeArgumentList)
         {
             return false;
         }
@@ -128,7 +125,9 @@ public sealed class DiagnosticSuppressionMap
     /// <returns>The IDs, in source order.</returns>
     public static ImmutableArray<string> GetSuppressedIds(AnnotationSyntax annotation)
     {
-        if (annotation is null || annotation.Arguments is null || annotation.Arguments.Count == 0)
+        // `Arguments` is a nullable reference on the syntax node: an annotation
+        // written without a parenthesised list (`@SuppressDiagnostic`) has none.
+        if (annotation.Arguments is null || annotation.Arguments.Count == 0)
         {
             return ImmutableArray<string>.Empty;
         }
@@ -160,7 +159,7 @@ public sealed class DiagnosticSuppressionMap
         }
 
         var i = 0;
-        while (i < text!.Length && char.IsAsciiLetter(text[i]))
+        while (i < text.Length && char.IsAsciiLetter(text[i]))
         {
             i++;
         }

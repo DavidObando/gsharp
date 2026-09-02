@@ -221,6 +221,9 @@ internal sealed partial class DeclarationBinder
     /// <param name="diagnostics">The bag to report into.</param>
     internal static void ValidateSuppressDiagnostic(AnnotationSyntax annotation, DiagnosticBag diagnostics)
     {
+        // `Arguments` is a nullable reference on the syntax node: an annotation
+        // written without a parenthesised list (`@SuppressDiagnostic`) has none,
+        // which is itself a GS9305 — it names no ID.
         if (annotation.Arguments is null || annotation.Arguments.Count == 0)
         {
             diagnostics.ReportSuppressDiagnosticInvalidId(
