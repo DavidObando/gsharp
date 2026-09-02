@@ -813,6 +813,17 @@ internal static class ObliviousNullabilityAnalyzer
         if (symbol is IParameterSymbol parameter)
         {
             ISymbol remappedOwner = RemapMemberOwner(targetCompilation, parameter.ContainingSymbol);
+
+            // Issue #3804: the ordinal is bounded on BOTH sides, defensively.
+            // Roslyn's `this` parameter hangs off its method with Ordinal -1
+            // and holds no position in the parameter list, so there is nothing
+            // to remap it to; an upper-bound-only test would index at -1, the
+            // exact shape of the #3804 translate crash.
+            if (parameter.Ordinal < 0)
+            {
+                return null;
+            }
+
             return remappedOwner switch
             {
                 IMethodSymbol method when parameter.Ordinal < method.Parameters.Length =>
@@ -996,7 +1007,17 @@ internal static class ObliviousNullabilityAnalyzer
                 {
                     foreach (ISymbol inherited in InheritedDeclarations(owner))
                     {
+                        // Issue #3804: `>= 0` as well as `<`, defensively. A
+                        // `this` parameter (Ordinal -1) cannot reach here
+                        // today — HasAllowNullWriteContract's
+                        // DeclaringSyntaxReferences gate turns it away first,
+                        // which is precisely the gate HasNullDataRowArgument
+                        // applied to the METHOD rather than the parameter, and
+                        // that is how the #3804 crash got in. An ordinal
+                        // bounded on one side only is the bug shape; bound it
+                        // on both.
                         if (inherited is IMethodSymbol inheritedMethod
+                            && parameter.Ordinal >= 0
                             && parameter.Ordinal < inheritedMethod.Parameters.Length)
                         {
                             yield return inheritedMethod.Parameters[parameter.Ordinal];
