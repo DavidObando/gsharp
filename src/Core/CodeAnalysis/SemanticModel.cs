@@ -203,6 +203,15 @@ public sealed class SemanticModel
 
         foreach (var declaredStruct in program.Structs)
         {
+            // ADR-0169 / issue #3795: anchor member containment as the model's
+            // symbols surface, not only on the analyzer driver's SYMBOL-action
+            // path. A syntax-node analyzer reaches a member symbol through
+            // GetDeclaredSymbol/GetSymbolInfo and registers no symbol action,
+            // so without this its `ContainingType` is null where Roslyn's is
+            // always populated -- and every containment-keyed rule silently
+            // reports nothing.
+            SymbolContainment.AnchorMembers(declaredStruct);
+
             yield return declaredStruct;
             foreach (var property in declaredStruct.Properties.Concat(declaredStruct.StaticProperties))
             {

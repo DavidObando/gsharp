@@ -356,14 +356,38 @@ Order: GSA0001 → GSA0003 → GSA0004 → GSA0002 → GSA0005; harness and pari
     `CS2GS-ANALYZER-SNIPPET`. Note this also makes one *negative* test pass
     vacuously, for the same reason.
   - **2** — `GSA0005` (rewriter clone preservation) fires on the C# but not on
-    the translated G# shapes: an analyzer-translation parity gap, not a snippet
-    one. The markers are correctly placed.
+    the translated G# shapes. **Fixed by issue #3795**, see below.
   - **1** — the marked text `typeof(int) != type` becomes `typeof(int32) !=
     type` in G#, so the marker cannot be re-placed by text; dropped and
     reported.
   - **1** — the migrated `GSA0003` reports on a G# field symbol whose
     `Location` is empty, so the verifier cannot check the marker. It now names
     that cause instead of throwing a `NullReferenceException`.
+
+  **GSA0005 detection parity (2026-09-02, issue #3795).** The two `GSA0005`
+  failures above were a FRAMEWORK gap, not a translation one: `Symbol.
+  ContainingType` — the ADR-0169 counterpart of Roslyn's
+  `ISymbol.ContainingType` — was filled in only on the analyzer driver's
+  SYMBOL-action path, which early-returns when no symbol action is registered.
+  GSA0005 is a syntax-node analyzer; it reaches its member symbols through
+  `SemanticModel.GetDeclaredSymbol`, saw `null`, and returned before its
+  base-type walk, so it reported **nothing at all** — the failure mode that
+  passes every negative test. Anchoring now runs while the semantic model
+  indexes declared symbols (`SymbolContainment.AnchorMembers`), so both
+  surfaces agree. Every other adapted shape GSA0005 relies on (the
+  `MethodKind.Constructor`/`Ordinary` → `.ctor` rewrite, the
+  `GetMembers().Concat(GetConstructors())` augmentation, `OverriddenMethod`,
+  `DeclaringSyntaxNodes`) was already correct.
+
+  Same 2-app migration: test-parity **6 failing / 10 passing → 4 failing /
+  12 passing** (translate, compile, ILVerify stay PASS on both sides). The four
+  that remain are #3794 (×2, namespace collapse), #3796 and #3797 — the same
+  tests, failing the same way.
+
+  The corpus parity harness now covers GSA0005 as well as GSA0001
+  (`Adr0169Gsa0005ParityTests`), which is what stops a rule that quietly stops
+  firing from passing again: its negatives share one parameterised path with
+  positives that demand a diagnostic.
 - **M6 Parity + self-migration** — `AnalyzerParityStage`; extend the
   Issue3347-style self-migration ratchet to translate
   `InternalAnalyzers.csproj` live. Exit criterion: all five translated
