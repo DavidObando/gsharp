@@ -325,9 +325,13 @@ public partial class Parser
         // right after the element identifier can only start a type-argument
         // list or dotted-name tail in this array-element-type position, never
         // an index or member-access expression.
+        // ADR-0174 D2: `in`/`out` are contextual identifiers, so an element type
+        // headed by one (`[]in chan[T]{ … }`) must take the composite path or
+        // the direction would be read as the element's type name.
         if (Current.Kind != SyntaxKind.IdentifierToken
             || Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
-            || Peek(1).Kind == SyntaxKind.DotToken)
+            || Peek(1).Kind == SyntaxKind.DotToken
+            || IsChannelDirectionHead())
         {
             var nestedElementType = ParseTypeClause();
             var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) =

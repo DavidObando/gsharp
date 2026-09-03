@@ -177,7 +177,11 @@ public partial class Parser
             // type clause via `TypeClauseSyntax.CreateArray`. The common
             // `[]Identifier`/`[]Foo.Bar`/`[]List[int32]` forms keep the existing
             // flat representation so nothing regresses.
-            if (Current.Kind != SyntaxKind.IdentifierToken)
+            // ADR-0174 D2 adds one element shape that *does* begin with an
+            // identifier: `in`/`out` are contextual, so `[]in chan[T]` would
+            // otherwise take the flat path and read `in` as the element's type
+            // name.
+            if (Current.Kind != SyntaxKind.IdentifierToken || IsChannelDirectionHead())
             {
                 var nestedElement = ParseTypeClause();
                 var nestedQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;

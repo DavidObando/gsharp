@@ -885,7 +885,7 @@ public sealed class Binder
             // syntax (`go`, `chan[T]`, `<-`, `select`) never needed one.
             if (binder.scope.References.TryResolveType(ChannelRuntimeBinder.ChanTypeName, out _))
             {
-                binder.scope.TryImport(new ImportSymbol("Gsharp.Concurrency", "Gsharp.Concurrency", declaration: null));
+                binder.scope.TryImport(new ImportSymbol("Gsharp.Concurrency", "Gsharp.Concurrency", declaration: null, hoistsStatics: true));
             }
         }
 
@@ -5467,6 +5467,17 @@ public sealed class Binder
         else if (parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym)
         {
             InferTypeArguments(ps.ElementType, asym.ElementType, substitution);
+        }
+        else if (parameterType is ChannelTypeSymbol pc
+            && ChannelTypeSymbol.TryGetChannelShape(argumentType, out var argumentElement, out _, out _))
+        {
+            // ADR-0174 D2/D9: `T` in `chan[T]` — including a directional
+            // parameter taking a bidirectional argument, since `chan[int32]`
+            // converts to `in chan[int32]` and the element is what is being
+            // inferred either way. Without this, `merge(a, b)` cannot infer its
+            // element and every generic channel function has to be called with
+            // an explicit type argument.
+            InferTypeArguments(pc.ElementType, argumentElement, substitution);
         }
         else if (parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa)
         {

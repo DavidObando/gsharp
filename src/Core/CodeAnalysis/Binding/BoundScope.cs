@@ -872,7 +872,7 @@ public sealed class BoundScope
         System.Collections.Generic.HashSet<System.Type>? seen = null;
         foreach (var import in EnumerateImports())
         {
-            if (import.IsImplicit || import.IsAlias)
+            if ((import.IsImplicit && !import.HoistsStatics) || import.IsAlias)
             {
                 continue;
             }
@@ -2997,7 +2997,7 @@ public sealed class BoundScope
             // #3734, ambiguous or not.
             type ??= candidate;
 
-            if (import.IsImplicit || import.IsAlias)
+            if ((import.IsImplicit && !import.HoistsStatics) || import.IsAlias)
             {
                 continue;
             }

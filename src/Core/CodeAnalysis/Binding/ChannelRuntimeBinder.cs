@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -156,6 +157,36 @@ internal sealed class ChannelRuntimeBinder
             ImmutableArray<BoundExpression>.Empty);
     }
 
+    /// <summary>
+    /// ADR-0174 D8/D9: recognizes a non-channel <c>select</c> receive operand —
+    /// anything implementing <c>Gsharp.Concurrency.ISelectable[T]</c>, which is
+    /// how the library's timers (<c>after</c>, <c>tick</c>) join a select
+    /// without pretending to be channels.
+    /// </summary>
+    /// <param name="type">The operand's type.</param>
+    /// <param name="element">The element the operand yields.</param>
+    /// <returns><see langword="true"/> when the operand is selectable.</returns>
+    public bool TryGetSelectableElement(TypeSymbol? type, [NotNullWhen(true)] out TypeSymbol? element)
+    {
+        element = null;
+        if (type?.ClrType is not { } clr)
+        {
+            return false;
+        }
+
+        foreach (var candidate in clr.GetInterfaces())
+        {
+            if (candidate.IsGenericType
+                && candidate.GetGenericTypeDefinition().FullName == "Gsharp.Concurrency.ISelectable`1")
+            {
+                element = TypeSymbol.FromClrType(candidate.GetGenericArguments()[0]);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Binds <c>SelectWaiter.Rent(arms, context)</c> (ADR-0174 D8).</summary>
     /// <param name="syntax">The select syntax.</param>
     /// <param name="arms">The number of non-default arms.</param>
@@ -183,11 +214,12 @@ internal sealed class ChannelRuntimeBinder
     /// <param name="elementType">The arm's element type.</param>
     /// <param name="direction">The channel's direction, which selects the carrier overload.</param>
     /// <param name="arm">The arm index.</param>
+    /// <param name="selectable">Whether the operand is an <c>ISelectable[T]</c> rather than a channel carrier.</param>
     /// <returns>A call typed <c>void</c>.</returns>
-    public BoundExpression BindSelectAdd(VariableSymbol waiter, BoundExpression channel, BoundExpression? value, TypeSymbol elementType, ChannelDirection direction, int arm)
+    public BoundExpression BindSelectAdd(VariableSymbol waiter, BoundExpression channel, BoundExpression? value, TypeSymbol elementType, ChannelDirection direction, int arm, bool selectable = false)
     {
         var name = value == null ? "AddReceive" : "AddSend";
-        var carrier = CarrierFor(direction);
+        var carrier = selectable ? "ISelectable`1" : CarrierFor(direction);
         var open = Required(selectWaiterType).GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Single(m =>
                 m.Name == name

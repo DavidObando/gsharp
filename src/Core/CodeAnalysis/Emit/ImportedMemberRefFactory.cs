@@ -385,6 +385,18 @@ internal sealed class ImportedMemberRefFactory
             }
         }
 
+        // ADR-0174 D2/D9: a channel type as an array element — `[]in chan[T]`,
+        // the packed form of `merge`'s variadic. Its CLR shape is
+        // `Channel`1`/`ChannelReader`1`/`ChannelWriter`1` over an element that
+        // may itself be an open type parameter, so it encodes as a TypeSpec
+        // rather than resolving to a TypeDef or a closed TypeRef.
+        if (element is ChannelTypeSymbol)
+        {
+            var channelSigBlob = new BlobBuilder();
+            this.signatures.EncodeTypeSymbol(new BlobEncoder(channelSigBlob).TypeSpecificationSignature(), element);
+            return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(channelSigBlob));
+        }
+
         throw new NotSupportedException($"Cannot resolve element type token for '{element.Name}'.");
     }
 

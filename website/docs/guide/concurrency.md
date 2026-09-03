@@ -145,6 +145,32 @@ to await, so it blocks the thread until the callee completes; the compiler
 says so with `GS0558`. Top-level statements are the one place that block is
 right, so the entry point calls suspending functions silently.
 
+### Timers and fan-in
+
+Two helpers come with the language, by bare name — the namespace they live in is
+imported for you:
+
+```gs
+select {
+case let job = <-work {
+    handle(job)
+}
+case <-after(TimeSpan.FromSeconds(2)) {
+    Console.WriteLine("timed out")
+}
+}
+
+for value in merge(left, right) {
+    Console.WriteLine(value)
+}
+```
+
+`after(d)` fires once; `tick(d)` fires every `d` until you dispose it, so hold
+it in a `using let` when you select on it in a loop. `merge` drains every input
+concurrently and closes its result once the last input closes; the result is
+receive-only, because only `merge` writes to it. Declaring your own `after` or
+`merge` shadows these.
+
 ### Cancellation
 
 The block's `ctx` is not only for your own checks: every channel operation

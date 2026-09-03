@@ -2262,6 +2262,38 @@ implementation had to refine it.
     reached; deleting `BoundSelectStatement` and `BoundScopeStatement`
     outright, with the coverage-matrix regeneration that entails, is batched
     into the Phase 4 cleanup.
+28. **D9 as implemented (Phase 4-5).** `after`, `tick` and `merge` are
+    G#-authored in `src/Sdk/Gsharp.Extensions/Concurrency/Concurrency.gs`,
+    `package Gsharp.Concurrency`, reached by bare name because the implicit
+    import now hoists that package's statics (`ImportSymbol.HoistsStatics`, set
+    only for this one import — an implicitly imported namespace should not
+    generally add callable names, and a user-declared `after` still wins).
+    `after`/`tick` return the runtime's timers, which are `ISelectable[T]`
+    rather than channels, so a select receive arm now accepts anything
+    selectable: `case <-after(d)` works without a timer pretending to be a
+    channel. `chunks` is not here — it belongs with D10's batch surface in
+    Phase 5.
+
+    `merge` takes `...chan[T]` rather than D9's `…in chan[T]`. Inference across
+    an assembly boundary cannot see a `Channel[int]` argument as a
+    `ChannelReader[T]` parameter, so the receive-only spelling would have made
+    every call site name its element explicitly. The *result* stays
+    `in chan[T]`, which is the half that carries ownership: the caller may only
+    receive from it.
+
+    Writing that one function surfaced four gaps that no closed-element program
+    reaches, each now fixed and tested
+    (`Adr0174GenericChannelEmitTests`): a directional channel could not be an
+    array element (parser, in both the type-clause and array-literal
+    positions), such an array could not be tokenized when its element was open
+    (the emitter had no channel case), a variadic whose tail element is a
+    composite mentioning a type parameter was rejected before inference ran,
+    the element could not be inferred through a channel type at all, and — the
+    dangerous one — the `chan[T]` to `in chan[T]` view call was silently
+    dropped whenever the element was open, because the two look
+    runtime-equivalent under erasure. That last one produced IL that hands a
+    `Channel[T]` where a `ChannelReader[T]` is expected: ILVerify rejects it and
+    the JIT segfaults.
 
 ## Addendum A — The ten patterns, three ways
 

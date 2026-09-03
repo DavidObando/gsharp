@@ -859,11 +859,23 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            // All non-default arms reference a channel.
+            // A send arm references a channel; a receive arm may reference
+            // anything selectable (ADR-0174 D8/D9), which is how `case
+            // <-after(d)` works without the library's timers pretending to be
+            // channels.
             var channelSyntax = Invariant.Required(caseSyntax.Channel, "a non-default select case has a channel");
             var channelExpr = bindExpression(channelSyntax);
             ChannelTypeSymbol? chan = null;
+            TypeSymbol? selectableElement = null;
             if (channelExpr is not BoundErrorExpression
+                && caseSyntax.CaseKind != SelectCaseKind.Send
+                && !ChannelTypeSymbol.TryGetChannelShape(channelExpr.Type, out _, out _, out _)
+                && binderCtx.ChannelRuntime.IsAvailable
+                && binderCtx.ChannelRuntime.TryGetSelectableElement(channelExpr.Type, out var selectable))
+            {
+                selectableElement = selectable;
+            }
+            else if (channelExpr is not BoundErrorExpression
                 && ChannelTypeSymbol.TryGetChannelShape(channelExpr.Type, out var armElement, out var armDirection, out _))
             {
                 if (caseSyntax.CaseKind == SelectCaseKind.Send && armDirection == ChannelDirection.In)
@@ -884,7 +896,7 @@ internal sealed partial class StatementBinder
                 }
             }
 
-            if (channelExpr is BoundErrorExpression || chan == null)
+            if (channelExpr is BoundErrorExpression || (chan == null && selectableElement == null))
             {
                 if (chan == null && channelExpr is not BoundErrorExpression
                     && !ChannelTypeSymbol.TryGetChannelShape(channelExpr.Type, out _, out _, out _))
@@ -919,7 +931,7 @@ internal sealed partial class StatementBinder
             {
                 valueExpr = conversions.BindConversion(
                     Invariant.Required(caseSyntax.Value, "send select cases have a value expression"),
-                    chan.ElementType);
+                    Invariant.Required(chan, "a send arm binds a channel, never a selectable").ElementType);
                 body = Invariant.Required(BindStatement(caseSyntax.Body), "a send select case has a bound body");
             }
             else if (caseSyntax.CaseKind == SelectCaseKind.ReceiveBind)
@@ -928,7 +940,8 @@ internal sealed partial class StatementBinder
                 // the case body — matches `for v := range` lexical hygiene.
                 scope = new BoundScope(scope);
                 var identifier = Invariant.Required(caseSyntax.Identifier, "a receive-bind select case has an identifier");
-                variable = new LocalVariableSymbol(identifier.ValueText, isReadOnly: true, chan.ElementType, declaringSyntax: identifier);
+                var bindElement = selectableElement ?? Invariant.Required(chan, "a channel arm binds a channel type").ElementType;
+                variable = new LocalVariableSymbol(identifier.ValueText, isReadOnly: true, bindElement, declaringSyntax: identifier);
                 if (!scope.TryDeclareVariable(variable))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText);
@@ -1002,7 +1015,7 @@ internal sealed partial class StatementBinder
         }
 
         var runtime = binderCtx.ChannelRuntime;
-        var shapes = new (TypeSymbol Element, ChannelDirection Direction)[cases.Length];
+        var shapes = new (TypeSymbol Element, ChannelDirection Direction, bool Selectable)[cases.Length];
         for (var i = 0; i < cases.Length; i++)
         {
             if (cases[i].IsDefault)
@@ -1010,15 +1023,28 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            if (cases[i].Channel is not { } channel
-                || !ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var element, out var direction, out _))
+            if (cases[i].Channel is not { } channel)
+            {
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            if (ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var element, out var direction, out _))
+            {
+                shapes[i] = (element, direction, false);
+            }
+            else if (runtime.TryGetSelectableElement(channel.Type, out var selectableElement))
+            {
+                // A receive arm over an `ISelectable[T]` — the library's timers
+                // (ADR-0174 D9), which join a select without pretending to be
+                // channels.
+                shapes[i] = (selectableElement, ChannelDirection.In, true);
+            }
+            else
             {
                 // A recovery arm: the diagnostic is already reported, and emit
                 // never runs for a program that has one.
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
-
-            shapes[i] = (element, direction);
         }
 
         var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
@@ -1088,7 +1114,7 @@ internal sealed partial class StatementBinder
             var value = valueLocals[i] is { } valueLocal ? new BoundVariableExpression(null, valueLocal) : null;
             attempt.Add(new BoundExpressionStatement(
                 null,
-                runtime.BindSelectAdd(waiter, new BoundVariableExpression(null, channelLocal), value, shapes[i].Element, shapes[i].Direction, i)));
+                runtime.BindSelectAdd(waiter, new BoundVariableExpression(null, channelLocal), value, shapes[i].Element, shapes[i].Direction, i, shapes[i].Selectable)));
         }
 
         attempt.Add(new BoundExpressionStatement(

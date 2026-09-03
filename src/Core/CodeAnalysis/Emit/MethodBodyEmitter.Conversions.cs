@@ -36,6 +36,21 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 internal sealed partial class MethodBodyEmitter
 {
 
+    /// <summary>
+    /// ADR-0174 D2: <c>chan[T]</c> to <c>in</c>/<c>out chan[T]</c> is a real
+    /// conversion — <c>get_Reader</c> / <c>get_Writer</c> — even when the two
+    /// sides look runtime-equivalent, which they do whenever the element is an
+    /// open type parameter. Without this the view call is dropped and a generic
+    /// function taking <c>in chan[T]</c> is handed a <c>Channel[T]</c>.
+    /// </summary>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <returns><see langword="true"/> when the conversion changes a channel's direction.</returns>
+    private static bool IsChannelDirectionChange(TypeSymbol? from, TypeSymbol? to)
+        => ChannelTypeSymbol.TryGetChannelShape(from, out _, out var fromDirection, out _)
+            && ChannelTypeSymbol.TryGetChannelShape(to, out _, out var toDirection, out _)
+            && fromDirection != toDirection;
+
     private void EmitConversion(BoundConversionExpression conv)
     {
         // ADR-0122 / issues #1014, #3268, and #3285: `nil` materialises a null
@@ -50,7 +65,8 @@ internal sealed partial class MethodBodyEmitter
 
         if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
             conv.Expression.Type,
-            conv.Type))
+            conv.Type)
+            && !IsChannelDirectionChange(conv.Expression.Type, conv.Type))
         {
             this.EmitExpression(conv.Expression);
             return;
