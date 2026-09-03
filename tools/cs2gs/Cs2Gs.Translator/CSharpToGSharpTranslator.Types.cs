@@ -329,7 +329,20 @@ public sealed partial class CSharpToGSharpTranslator
             // G# arrow lambda always names the parameter type (ADR-0074).
             if (this.context.GetDeclaredSymbol(parameter) is IParameterSymbol symbol)
             {
-                return this.MapParameter(symbol, parameter);
+                // Issue #3855: the #1072 promotion is safe for a lambda
+                // parameter whose type is FIXED by the target delegate —
+                // widening an input position is contravariance, and a
+                // `(T?) -> R` literal still converts to a `(T) -> R` target.
+                // It is NOT safe when the annotation is an INPUT to the
+                // enclosing call's type-argument inference: there the widened
+                // annotation does not adapt to a fixed target, it CHOOSES the
+                // target, so `.Where((d T?) -> d != nil)` infers the whole
+                // sequence as `sequence[T?]` and every downstream member
+                // access runs on a nullable receiver.
+                return this.MapParameter(
+                    symbol,
+                    parameter,
+                    promoteNullability: !this.LambdaParameterAnnotationFeedsTypeInference(parameter));
             }
 
             GTypeReference type = parameter.Type != null

@@ -125,6 +125,140 @@ public sealed partial class CSharpToGSharpTranslator
             type is { NullableAnnotation: NullableAnnotation.Annotated }
                 && (type.IsReferenceType || type is ITypeParameterSymbol);
 
+        // Issue #3855: true when <paramref name="parameter"/> is a lambda
+        // parameter whose rendered type ANNOTATION is an input to the enclosing
+        // call's type-argument inference, so promoting it (#1072) would widen an
+        // inferred type ARGUMENT rather than merely describe this one position.
+        //
+        // The distinction that matters is whether the target type is FIXED:
+        //
+        //   * fixed target (`Action<string> a = s => { if (s == null) … };`, a
+        //     non-generic callee, or a generic callee with EXPLICIT type
+        //     arguments) — the annotation only has to be COMPATIBLE with the
+        //     target, and widening an input position is contravariance, so a
+        //     `(string?) -> R` literal still converts to a `(string) -> R`
+        //     target. The promotion is a faithful, local statement about what
+        //     this body does with the value, and nothing else observes it.
+        //
+        //   * inferred target (`xs.Where(d => d != null)`) — the annotation is
+        //     not checked against a target, it CHOOSES one. gsc infers
+        //     `TSource := T?` from `(d T?) -> …`, so the element type of the
+        //     whole chain widens and every downstream member access runs on a
+        //     nullable receiver (GS0158 / GS0154). That consequence was never
+        //     what #1072 intended.
+        //
+        // Suppressing the promotion here does not cost the `== nil` guard the
+        // promotion existed to make legal: gsc admits `x == nil` / `x != nil`
+        // on a bare reference class (BoundBinaryOperator's imported-class and
+        // `StructSymbol { IsClass: true }` arms), so `(d T) -> d != nil` binds.
+        private bool LambdaParameterAnnotationFeedsTypeInference(ParameterSyntax parameter)
+        {
+            if (parameter.FirstAncestorOrSelf<AnonymousFunctionExpressionSyntax>()
+                is not { } lambda)
+            {
+                return false;
+            }
+
+            // Only a lambda handed DIRECTLY to a call has its parameter type
+            // dictated by that call. Anywhere else (a local's initializer, a
+            // return, a collection element) the target type is already fixed.
+            SyntaxNode node = lambda;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            if (node.Parent is not ArgumentSyntax argument
+                || argument.Parent?.Parent is not InvocationExpressionSyntax invocation)
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(invocation).Symbol
+                is not IMethodSymbol { IsGenericMethod: true })
+            {
+                return false;
+            }
+
+            // Explicit type arguments (`xs.Where<Node>(d => …)`) fix the target
+            // before the lambda is ever looked at — nothing is inferred.
+            if (HasExplicitTypeArguments(invocation.Expression))
+            {
+                return false;
+            }
+
+            ITypeSymbol parameterType =
+                (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
+                    ?.Parameter?.OriginalDefinition.Type;
+            if (parameterType == null)
+            {
+                // The callee could not be resolved to a parameter position. The
+                // call IS generic and its type arguments ARE inferred, so the
+                // annotation cannot be shown to be inert; suppress.
+                return true;
+            }
+
+            int index = LambdaParameterIndex(lambda, parameter);
+            ITypeSymbol arrowPosition = DelegateParameterTypeAt(parameterType, index);
+
+            // Fall back to the whole delegate type when the arrow position
+            // cannot be isolated: a type-parameter-free delegate parameter
+            // (`Func<string, T>`'s input) proves the annotation is inert.
+            return MentionsMethodTypeParameter(arrowPosition ?? parameterType);
+        }
+
+        private static bool HasExplicitTypeArguments(ExpressionSyntax callee) => callee switch
+        {
+            GenericNameSyntax => true,
+            MemberAccessExpressionSyntax member => HasExplicitTypeArguments(member.Name),
+            MemberBindingExpressionSyntax binding => HasExplicitTypeArguments(binding.Name),
+            _ => false,
+        };
+
+        private static int LambdaParameterIndex(
+            AnonymousFunctionExpressionSyntax lambda,
+            ParameterSyntax parameter)
+        {
+            SeparatedSyntaxList<ParameterSyntax>? list = lambda switch
+            {
+                ParenthesizedLambdaExpressionSyntax paren => paren.ParameterList?.Parameters,
+                AnonymousMethodExpressionSyntax anonymous => anonymous.ParameterList?.Parameters,
+                _ => null,
+            };
+
+            return list?.IndexOf(parameter) ?? 0;
+        }
+
+        // The <paramref name="index"/>th arrow-parameter type of a delegate-typed
+        // (or `Expression<TDelegate>`-typed) callee parameter, or null when the
+        // shape is not a delegate at all.
+        private static ITypeSymbol DelegateParameterTypeAt(ITypeSymbol parameterType, int index)
+        {
+            if (parameterType is INamedTypeSymbol { Name: "Expression", TypeArguments.Length: 1, DelegateInvokeMethod: null } expression)
+            {
+                parameterType = expression.TypeArguments[0];
+            }
+
+            return parameterType is INamedTypeSymbol { DelegateInvokeMethod: { } invoke }
+                && index >= 0
+                && index < invoke.Parameters.Length
+                ? invoke.Parameters[index].Type
+                : null;
+        }
+
+        // True when <paramref name="type"/> mentions a METHOD type parameter
+        // anywhere — i.e. one the enclosing call has to infer. A CLASS type
+        // parameter is already fixed by the receiver and is not an inference
+        // input here.
+        private static bool MentionsMethodTypeParameter(ITypeSymbol type) => type switch
+        {
+            ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } => true,
+            IArrayTypeSymbol array => MentionsMethodTypeParameter(array.ElementType),
+            IPointerTypeSymbol pointer => MentionsMethodTypeParameter(pointer.PointedAtType),
+            INamedTypeSymbol named => named.TypeArguments.Any(MentionsMethodTypeParameter),
+            _ => false,
+        };
+
         private GTypeReference PromoteIfUsedAsNullable(GTypeReference type, ISymbol symbol)
         {
             if (type == null)
