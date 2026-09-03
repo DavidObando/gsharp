@@ -201,6 +201,48 @@ internal sealed partial class DeclarationBinder
                             break;
                         }
                     }
+
+                    if (method.ExplicitInterfaceSlot != null)
+                    {
+                        continue;
+                    }
+
+                    // Issue #3814: a clause naming an imported generic interface
+                    // closed over a SYMBOLIC argument (`func (IEquatable[T])
+                    // Equals(other T) bool` inside `class Value[T]`) never
+                    // matches above: `target.ClrType` is the type-ERASED
+                    // `IEquatable<object>`, so the slot reads `Equals(object)`
+                    // while the declaration says `Equals(T)` (GS0494). Match
+                    // against the OPEN definition with the interface's real
+                    // symbolic arguments substituted — the same #949 machinery
+                    // the interface-contract verification already uses — then
+                    // record the erased slot, which is what the MethodImpl row's
+                    // MemberRef is built from (its containing type carries the
+                    // symbolic arguments).
+                    if (!MemberLookup.TryGetSymbolicClrGenericInterface(target, out var openInterface, out var symbolicArgs))
+                    {
+                        continue;
+                    }
+
+                    foreach (var openSlot in openInterface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (openSlot.IsSpecialName
+                            || openSlot.Name != method.Name
+                            || !MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(method, openSlot, symbolicArgs))
+                        {
+                            continue;
+                        }
+
+                        var erasedSlot = FindErasedSlotForOpenMethod(target.ClrType, openSlot);
+                        if (erasedSlot == null)
+                        {
+                            continue;
+                        }
+
+                        method.ExplicitInterfaceSlot = erasedSlot;
+                        method.ExplicitInterfaceSlotContainingType = target;
+                        break;
+                    }
                 }
 
                 foreach (var property in structSymbol.Properties)
@@ -264,6 +306,28 @@ internal sealed partial class DeclarationBinder
             VerifyPrivateInterfaceHelpersNotOverridden(syntax, structSymbol);
             VerifyExplicitInterfaceClauseResolution(syntax, structSymbol);
         }
+    }
+
+    /// <summary>
+    /// Issue #3814: maps a method of a CLR generic interface's OPEN definition
+    /// onto the corresponding method of the ERASED closed shape the rest of the
+    /// pipeline reflects against, by metadata identity.
+    /// </summary>
+    /// <param name="erasedInterface">The erased closed interface type.</param>
+    /// <param name="openSlot">The method on the open definition.</param>
+    /// <returns>The matching method on <paramref name="erasedInterface"/>, or <see langword="null"/>.</returns>
+    private static MethodInfo? FindErasedSlotForOpenMethod(Type erasedInterface, MethodInfo openSlot)
+    {
+        foreach (var candidate in erasedInterface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (candidate.MetadataToken == openSlot.MetadataToken
+                && candidate.Module == openSlot.Module)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private static bool ExplicitClrPropertyMatches(

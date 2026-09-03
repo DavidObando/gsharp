@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -264,7 +265,7 @@ public class Issue2894LambdaBodyGenericClosureTests
 
             Assert.Equal(expectedOutput + Environment.NewLine, Run(assemblyPath, directory));
 
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             var closureTypes = assembly.GetTypes()
                 .Where(type => type.Name.StartsWith("<closure_", StringComparison.Ordinal))
                 .ToArray();

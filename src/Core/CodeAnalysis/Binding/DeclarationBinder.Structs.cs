@@ -363,7 +363,7 @@ internal sealed partial class DeclarationBinder
                 // C# records); their backing fields are synthesized below.
                 if (!syntax.IsData)
                 {
-                    fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline));
+                    fields.Add(new FieldSymbol(paramName, paramType, Accessibility.Public, isReadOnly: syntax.IsInline, declaration: paramSyntax));
                 }
             }
 
@@ -474,7 +474,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var fbBacking = SynthesizeFixedBufferBackingStruct(structSymbol, fieldName, fbElement, fbLength, fbElemSize, package);
-                var fbFieldSymbol = new FieldSymbol(fieldName, fbBacking, fieldAccessibility, isReadOnly: false);
+                var fbFieldSymbol = new FieldSymbol(fieldName, fbBacking, fieldAccessibility, isReadOnly: false, declaration: fieldSyntax);
                 fbFieldSymbol.SetFixedBuffer(fbElement, fbLength);
                 Binder.AttachDocumentation(fbFieldSymbol, fieldSyntax);
                 fields.Add(fbFieldSymbol);
@@ -494,7 +494,7 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var constFieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
+                var constFieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true, declaration: fieldSyntax);
                 Binder.AttachDocumentation(constFieldSymbol, fieldSyntax);
 
                 if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
@@ -520,7 +520,7 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline || fieldSyntax.IsReadOnly);
+            var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: syntax.IsInline || fieldSyntax.IsReadOnly, declaration: fieldSyntax);
             Binder.AttachDocumentation(fieldSymbol, fieldSyntax);
 
             // Issue #186 / ADR-0047 §3: bind any `@Foo` annotations attached
@@ -2242,7 +2242,7 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    var sharedConstField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
+                    var sharedConstField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true, declaration: fieldSyntax);
                     Binder.AttachDocumentation(sharedConstField, fieldSyntax);
 
                     if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
@@ -2271,7 +2271,7 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true);
+                var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true, declaration: fieldSyntax);
 
                 if (!fieldSyntax.Annotations.IsDefaultOrEmpty)
                 {

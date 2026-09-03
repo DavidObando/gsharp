@@ -14,6 +14,7 @@ using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 using CSharpCompilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation;
 using CSharpCompilationOptions = Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions;
@@ -626,7 +627,7 @@ public sealed class Issue3519PackageConstEmitTests
 
         public string OutputPath { get; }
 
-        public Assembly Load() => Assembly.Load(File.ReadAllBytes(OutputPath));
+        public Assembly Load() => EmittedFixture.Load(OutputPath);
 
         public void Dispose()
         {

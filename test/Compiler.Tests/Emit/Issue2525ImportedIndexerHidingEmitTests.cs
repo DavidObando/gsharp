@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -685,14 +686,18 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
             """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,
             Run(result.OutputPath));
 
-        var contracts = Assembly.LoadFrom(result.ContractsPath);
+        // One context for both: the emitted API is invoked below with
+        // instances of the contracts assembly's types, which requires a
+        // single identity for them.
+        var loaded2525 = EmittedFixture.LoadTogether(result.ContractsPath, result.OutputPath);
+        var contracts = loaded2525[0];
         var derivedType = contracts.GetType("Issue2525.Contracts.IDerived", throwOnError: true)!;
         var baseType = contracts.GetType("Issue2525.Contracts.IBase", throwOnError: true)!;
         var derivedProperty = derivedType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).Single();
         var baseProperty = baseType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).Single();
         Assert.NotEqual(baseProperty.MetadataToken, derivedProperty.MetadataToken);
 
-        var emitted = Assembly.LoadFrom(result.OutputPath);
+        var emitted = loaded2525[1];
         var api = emitted.GetType("Issue2525.Api", throwOnError: true)!;
         Assert.Equal("Issue2525.Contracts.IDerived", api.GetMethod("Read")!.GetParameters()[0].ParameterType.FullName);
         Assert.Equal("Issue2525.Contracts.IBase", api.GetMethod("ReadBase")!.GetParameters()[0].ParameterType.FullName);

@@ -1854,6 +1854,47 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #3843: the UPCAST direction of the same checked reference
+        // conversion, reached only when the source is reference-nullable and
+        // the target is not — `cast[Node](blockOrNil)`, the G# rendering of
+        // C# `(Node)node.Body`. The reverse probe above only admits the
+        // DOWNCAST direction (`Base? -> Derived`), and the identity case is
+        // already answered by `removesReferenceNullability` above, so a plain
+        // widening that also drops the `?` had no checked-conversion
+        // classification at all and reported GS0155. The runtime story is the
+        // same one ADR-0167 already guarantees for the other two directions:
+        // the value is a managed reference, `castclass`/no-op preserves nil,
+        // and a non-nil value of an incompatible runtime type still throws
+        // `InvalidCastException` — for a widening target the incompatible case
+        // is simply unreachable.
+        //
+        // BOTH SIDES MUST BE NOMINAL. This restriction is load-bearing, not
+        // decorative: "is `from -> to` implicit?" on its own also admits
+        // conversions that are not REFERENCE conversions at all — above all
+        // the issue #2850 structural-function -> named-delegate
+        // MATERIALISATION, which emits `newobj`, not `castclass`. Without the
+        // guard, `Do(Cancel(), nullableStructuralFunction)` — an IMPLICIT
+        // argument conversion with no cast written anywhere — stopped
+        // reporting GS0155 ("no conversion") and reported GS0156 ("an
+        // explicit conversion exists, are you missing a cast?"), because
+        // `Conversion.Classify(...).Exists` decides between those two
+        // regardless of whether the context permits an explicit conversion.
+        // Note this predicate is a TYPE-PAIR question consulted from implicit
+        // paths too, so "only reachable behind a written cast" is not a
+        // property the caller can supply — the shape restriction has to live
+        // here.
+        if (removesReferenceNullability
+            && IsNominalReferenceShape(from)
+            && IsNominalReferenceShape(to)
+            && ClassifyCore(
+                from,
+                to,
+                allowStructuralProjection: false,
+                allowExplicitReference: false).IsImplicit)
+        {
+            return true;
+        }
+
         if (from.ClrType is { } fromClr
             && to.ClrType is { } toClr
             && !fromClr.IsValueType
@@ -2077,6 +2118,37 @@ public sealed class Conversion
 
         return type.ClrType is { IsClass: true, IsSealed: true };
     }
+
+    /// <summary>
+    /// Issue #3843: whether <paramref name="type"/> is a NOMINAL reference
+    /// shape — a class or interface a CLR <c>castclass</c> can name. G#'s
+    /// STRUCTURAL shapes are deliberately excluded even when they look
+    /// class-like: a <see cref="FunctionTypeSymbol"/> carries a
+    /// <c>Func&lt;…&gt;</c>/<c>Action&lt;…&gt;</c> CLR backing, so
+    /// <see cref="IsClassLikeReferenceType"/> answers <see langword="true"/>
+    /// for it, but its conversion to a named delegate is a MATERIALISATION
+    /// (issue #2850) that emits <c>newobj</c> rather than a reference
+    /// conversion; slices, arrays, rectangular arrays and function pointers
+    /// likewise convert by element/signature rules of their own, each with a
+    /// dedicated arm in <see cref="ClassifyCore"/>. Only the
+    /// nullable-source WIDENING arm of
+    /// <see cref="HasCheckedReferenceConversion"/> consults this — the
+    /// pre-existing identity and downcast arms are unchanged.
+    /// </summary>
+    /// <param name="type">The type to test.</param>
+    /// <returns><see langword="true"/> for a nominal class/interface shape.</returns>
+    private static bool IsNominalReferenceShape(TypeSymbol? type)
+        => type is not null
+            && type is not FunctionTypeSymbol
+            && type is not FunctionPointerTypeSymbol
+            && type is not SliceTypeSymbol
+            && type is not ArrayTypeSymbol
+            && type is not RectangularArrayTypeSymbol
+            && type is not TupleTypeSymbol
+            && type is not SequenceTypeSymbol
+            && type is not AsyncSequenceTypeSymbol
+            && type is not TypeParameterSymbol
+            && (IsClassLikeReferenceType(type) || IsInterfaceLikeType(type));
 
     private static TypeSymbol? UnwrapReferenceNullable(TypeSymbol? type)
     {

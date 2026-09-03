@@ -8,6 +8,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.Loader;
+using GSharp.Tests;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
@@ -73,7 +74,7 @@ public class Issue2377OperatorMetadataShapeEmitTests
             func (a Meters) operator >(b Meters) bool -> a.Value > b.Value
             """);
 
-        var asm = Assembly.LoadFrom(libraryPath);
+        var asm = EmittedFixture.Load(libraryPath);
         var metersType = asm.GetTypes().Single(t => t.Name == "Meters");
         var method = metersType.GetMethod(
             clrName,
@@ -373,7 +374,7 @@ public class Issue2377OperatorMetadataShapeEmitTests
             }
             """);
 
-        var asm = Assembly.LoadFrom(libraryPath);
+        var asm = EmittedFixture.Load(libraryPath);
         var baseType = asm.GetTypes().Single(t => t.Name == "BaseVec");
         var derivedType = asm.GetTypes().Single(t => t.Name == "DerivedVec");
 

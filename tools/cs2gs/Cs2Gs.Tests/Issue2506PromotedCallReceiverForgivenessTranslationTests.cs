@@ -103,13 +103,16 @@ public sealed class Issue2506PromotedCallReceiverForgivenessTranslationTests
         Assert.Contains("FindGeneric[Item]()!!.Name", printed, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(printed, "FindFactory()!!().Name"));
         Assert.Contains("(Find())!!.Name", printed, StringComparison.Ordinal);
-        // Issue #3501: a C# reference cast preserves null, so a cast of a
-        // promoted-nullable operand now lowers to the null-preserving safe
-        // cast — the dereference carries the assertion instead of the cast
-        // (`((Item)Find()).Name` NREs at the DEREFERENCE in C#, and `!!`
-        // raises at exactly the same point).
-        Assert.Contains("((Find() as Item))!!.Name", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("cast[Item](", printed, StringComparison.Ordinal);
+        // Issue #3843: a C# reference cast over a promoted-nullable operand
+        // stays the checked conversion call. `cast[Item]` preserves nil
+        // (ADR-0167) and its result is non-nullable `Item`, so the whole
+        // receiver needs no `!!` at all: `((Item)Find()).Name` NREs at the
+        // DEREFERENCE in C#, and the emitted `.Name` raises at exactly the
+        // same point. This replaced `((Find() as Item))!!.Name` from #3501,
+        // which additionally swallowed a wrong-type Find() result into nil
+        // where C# throws InvalidCastException.
+        Assert.Contains("(cast[Item](Find())).Name", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Find() as Item", printed, StringComparison.Ordinal);
         Assert.Contains(
             "(if condition { Find() } else { Always() })!!.Name",
             printed,

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -154,8 +155,7 @@ public class Issue836IteratorTryFinallyEmitTests
     {
         var outPath = CompileToFile(source, target: "exe");
 
-        var bytes = File.ReadAllBytes(outPath);
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(outPath);
 
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);

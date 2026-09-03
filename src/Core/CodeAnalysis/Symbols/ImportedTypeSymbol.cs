@@ -114,9 +114,18 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             throw new ArgumentNullException(nameof(type));
         }
 
+        // Issue #3826: the comparer must be load-context sensitive. Keying on
+        // the assembly-qualified name alone (TypeIdentityComparer) aliases two
+        // copies of one logical type loaded into different contexts, so a
+        // symbol — and the CLR Type it carries — created by one compilation
+        // answers a later compilation's lookup. The outer bucket does not
+        // prevent that: a constructed generic like ImmutableArray[SyntaxNode]
+        // is keyed by ITS OWN assembly (the host's System.Collections.Immutable,
+        // shared by every compilation in the process) while its argument comes
+        // from a private reference context.
         var assemblyCache = Cache.GetValue(
             type.Assembly,
-            static _ => new ConcurrentDictionary<Type, ImportedTypeSymbol>(TypeIdentityComparer.Instance));
+            static _ => new ConcurrentDictionary<Type, ImportedTypeSymbol>(LoadContextSensitiveTypeComparer.Instance));
         return assemblyCache.GetOrAdd(type, static t => new ImportedTypeSymbol(t));
     }
 
@@ -339,9 +348,16 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     }
 
     /// <summary>
-    /// Legacy dispose hook. The cache is weakly keyed by assembly and each
-    /// per-assembly dictionary uses metadata identity for CLR types, so disposed
-    /// metadata contexts are collectable without process-wide clearing.
+    /// Legacy dispose hook, deliberately a NO-OP since #2341: the cache is
+    /// weakly keyed by assembly, so a disposed context's entries are
+    /// collectable without process-wide clearing.
+    /// <para>
+    /// Issue #3826: do NOT reintroduce clearing here as a fix for a
+    /// cross-compilation identity bug. Entries surviving a dispose is by
+    /// design; entries being FOUND by a different compilation's lookup was the
+    /// defect, and that is a property of the key
+    /// (<see cref="LoadContextSensitiveTypeComparer"/>), not of the lifetime.
+    /// </para>
     /// </summary>
     internal static void ClearCache()
     {

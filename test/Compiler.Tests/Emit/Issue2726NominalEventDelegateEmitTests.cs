@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -58,7 +59,7 @@ public sealed class Issue2726NominalEventDelegateEmitTests
         using var artifacts = CompileGSharp(source, "NominalEvents.dll");
         IlVerifier.Verify(artifacts.OutputPath);
 
-        var assembly = Assembly.LoadFrom(artifacts.OutputPath);
+        var assembly = EmittedFixture.Load(artifacts.OutputPath);
         var interfaceEvent = assembly.GetType("Issue2726.IChanges")!.GetEvent("InterfaceChanged")!;
         var raiser = assembly.GetType("Issue2726.Raiser")!;
 
@@ -97,7 +98,7 @@ public sealed class Issue2726NominalEventDelegateEmitTests
         using var artifacts = CompileGSharp(source, "NegativeEvents.dll");
         IlVerifier.Verify(artifacts.OutputPath);
 
-        var raiser = Assembly.LoadFrom(artifacts.OutputPath).GetType("Issue2726.Negative.Raiser")!;
+        var raiser = EmittedFixture.Load(artifacts.OutputPath).GetType("Issue2726.Negative.Raiser")!;
         AssertEventAbi(raiser.GetEvent("NonNullableSender")!, typeof(Action<object, EventArgs>));
         AssertEventAbi(raiser.GetEvent("OtherPayload")!, typeof(Action<object, string>));
         AssertEventAbi(raiser.GetEvent("NamedAction")!, typeof(Action<object, EventArgs>));
@@ -132,7 +133,7 @@ public sealed class Issue2726NominalEventDelegateEmitTests
         using var artifacts = CompileGSharp(source, "GenericEvents.dll");
         IlVerifier.Verify(artifacts.OutputPath);
 
-        var assembly = Assembly.LoadFrom(artifacts.OutputPath);
+        var assembly = EmittedFixture.Load(artifacts.OutputPath);
         var openRaiser = assembly.GetType("Issue2726.Generic.GenericRaiser`1")!;
         var typeParameter = openRaiser.GetGenericArguments().Single();
         var expectedHandler = typeof(EventHandler<>).MakeGenericType(typeParameter);
@@ -236,7 +237,7 @@ public sealed class Issue2726NominalEventDelegateEmitTests
 
         // Tie the shared metadata back to concrete CLR parameter types on the
         // loadable implementation assembly for the closed shapes.
-        var assembly = Assembly.LoadFrom(artifacts.OutputPath);
+        var assembly = EmittedFixture.Load(artifacts.OutputPath);
         var raiser = assembly.GetType("Issue2726.Refout.Raiser")!;
         var localArgs = assembly.GetType("Issue2726.Refout.LocalArgs")!;
         Assert.Equal(

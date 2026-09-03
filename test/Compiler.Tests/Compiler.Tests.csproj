@@ -10,6 +10,7 @@
     <ProjectReference Include="@(GsharpCompiler)" />
     <ProjectReference Include="@(GsharpRepl)" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" />
+    <Compile Include="..\Shared\EmittedFixture.cs" Link="EmittedFixture.cs" />
     <Compile Include="..\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
     <Compile Include="..\Shared\Issue3081CompositeLiteralCases.cs" Link="Issue3081CompositeLiteralCases.cs" />
     <!-- Issue #2215: only this test project needs a real gsgen.dll build output

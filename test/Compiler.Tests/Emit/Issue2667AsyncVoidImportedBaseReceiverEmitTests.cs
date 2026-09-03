@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -60,7 +61,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
 
         Assert.Equal($"base-opened{Environment.NewLine}async-opened{Environment.NewLine}", fixture.Run(result.OutputPath));
 
-        var assembly = Assembly.LoadFrom(result.OutputPath);
+        var assembly = EmittedFixture.Load(result.OutputPath);
         var mainWindow = assembly.GetType("Oahu.App.Avalonia.MainWindow")!;
         Assert.Contains(
             mainWindow.GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly),
@@ -124,7 +125,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
 
     private static void AssertNoForwarder(string assemblyPath, string typeName)
     {
-        var type = Assembly.LoadFrom(assemblyPath).GetType(typeName)!;
+        var type = EmittedFixture.Load(assemblyPath).GetType(typeName)!;
         Assert.DoesNotContain(
             type.GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly),
             method => method.Name.StartsWith("<>n__", StringComparison.Ordinal));

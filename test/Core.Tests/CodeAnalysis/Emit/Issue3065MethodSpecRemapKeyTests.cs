@@ -16,6 +16,7 @@ using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
@@ -92,7 +93,7 @@ public class Issue3065MethodSpecRemapKeyTests
     [Fact]
     public void GenericLambdaMethodSpecs_WithDistinctRemaps_EmitRunnableAssembly()
     {
-        var assembly = Assembly.Load(Emit());
+        var assembly = EmittedFixture.Load(Emit());
         Assert.NotEmpty(assembly.GetTypes());
         var entryPoint = Assert.IsAssignableFrom<MethodInfo>(assembly.EntryPoint);
 

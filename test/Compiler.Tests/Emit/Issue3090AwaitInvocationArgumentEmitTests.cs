@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -230,6 +231,6 @@ public sealed class Issue3090AwaitInvocationArgumentEmitTests
             $"gsc failed:{Environment.NewLine}stdout:{Environment.NewLine}{stdout}" +
             $"{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
         IlVerifier.Verify(outputPath);
-        return Assembly.Load(File.ReadAllBytes(outputPath));
+        return EmittedFixture.Load(outputPath);
     }
 }

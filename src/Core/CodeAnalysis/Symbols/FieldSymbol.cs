@@ -2,6 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Syntax;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -19,7 +22,16 @@ public sealed class FieldSymbol : Symbol
     /// <param name="isStatic">True when the field is declared inside a <c>shared</c> block (ADR-0053).</param>
     /// <param name="isConst">True when the field is a compile-time constant declared with <c>const</c> (Issue #948). Const fields are implicitly static and read-only and emitted as literal fields.</param>
     /// <param name="isEventBackingField">True when this field is the compiler-synthesized backing field of a field-like <c>event</c> declaration (issue #2083). Unlike an ordinary non-nullable field/local/parameter, an event backing field's declared (non-nullable) delegate type does not guarantee a non-null runtime value: an unsubscribed event's backing field genuinely holds <c>null</c>. The emitter uses this flag to keep the null-guarded delegate-to-delegate adaptation (issue #2066) for event snapshots while restoring the fail-fast (throwing) adaptation for every other statically non-nullable source.</param>
-    public FieldSymbol(string name, TypeSymbol type, Accessibility accessibility, bool isReadOnly = false, bool isStatic = false, bool isConst = false, bool isEventBackingField = false)
+    /// <param name="declaration">The declaring field or primary-constructor parameter syntax, or <see langword="null"/> for imported and synthesized fields.</param>
+    public FieldSymbol(
+        string name,
+        TypeSymbol type,
+        Accessibility accessibility,
+        bool isReadOnly = false,
+        bool isStatic = false,
+        bool isConst = false,
+        bool isEventBackingField = false,
+        SyntaxNode? declaration = null)
         : base(name)
     {
         Type = type;
@@ -28,10 +40,22 @@ public sealed class FieldSymbol : Symbol
         IsStatic = isStatic;
         IsConst = isConst;
         IsEventBackingField = isEventBackingField;
+        Declaration = declaration;
     }
 
     /// <inheritdoc/>
     public override SymbolKind Kind => SymbolKind.Field;
+
+    /// <summary>Gets the declaring field or primary-constructor parameter syntax, or <see langword="null"/> for imported and synthesized fields.</summary>
+    public SyntaxNode? Declaration { get; private set; }
+
+    /// <inheritdoc/>
+    public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes => Declaration switch
+    {
+        FieldDeclarationSyntax fieldDeclaration => ImmutableArray.Create<SyntaxNode>(fieldDeclaration.Identifier),
+        ParameterSyntax parameter => ImmutableArray.Create<SyntaxNode>(parameter.Identifier),
+        _ => ImmutableArray<SyntaxNode>.Empty,
+    };
 
     /// <summary>Gets the field type.</summary>
     public TypeSymbol Type { get; }
@@ -128,6 +152,13 @@ public sealed class FieldSymbol : Symbol
         IsFixedBuffer = true;
         FixedBufferElementType = elementType;
         FixedBufferLength = length;
+    }
+
+    /// <summary>Re-points this reused field symbol at the corresponding declaration in a freshly parsed syntax tree.</summary>
+    /// <param name="declaration">The corresponding declaration in the re-parsed tree.</param>
+    internal void RepointDeclaration(SyntaxNode declaration)
+    {
+        Declaration = declaration;
     }
 
     /// <summary>

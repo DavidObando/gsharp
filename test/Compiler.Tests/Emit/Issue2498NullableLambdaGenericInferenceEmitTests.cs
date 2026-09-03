@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -139,7 +140,7 @@ public sealed class Issue2498NullableLambdaGenericInferenceEmitTests
 
         WithCompiledLibrary(source, (dllPath, references) =>
         {
-            var assembly = Assembly.Load(File.ReadAllBytes(dllPath));
+            var assembly = EmittedFixture.Load(dllPath);
             var api = assembly.GetType("Issue2498.Metadata.Api2498", throwOnError: true)!;
             var nullability = new NullabilityInfoContext();
 

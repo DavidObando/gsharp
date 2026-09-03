@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -294,7 +295,7 @@ public class Issue2895InheritedFieldDeclaringTypeTests
         });
         Assert.Equal(0, exitCode);
 
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         _ = assembly.GetTypes();
         return new Artifact(directory, assemblyPath, assembly);
     }

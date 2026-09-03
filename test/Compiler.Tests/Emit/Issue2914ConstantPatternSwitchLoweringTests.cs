@@ -10,6 +10,7 @@ using System.Reflection.Emit;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -385,7 +386,7 @@ public class Issue2914ConstantPatternSwitchLoweringTests
             File.Delete(assemblyPath);
         }
 
-        var assembly = Assembly.Load(bytes);
+        var assembly = EmittedFixture.Load(bytes);
         _ = assembly.GetTypes();
         var program = GetProgram(assembly);
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;

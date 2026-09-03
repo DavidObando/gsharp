@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -541,7 +542,6 @@ public class AttributeEmitTests
         IlVerifier.Verify(outPath);
 
         // Read all bytes so the file isn't locked, then load via Assembly.Load.
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 }

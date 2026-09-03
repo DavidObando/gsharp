@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -436,7 +437,6 @@ public class UserStructMethodEmitTests
             ignoredErrorCodes: ignoredErrorScope is null ? null : IlVerifier.KnownIssues.RefStruct,
             ignoredErrorScope: ignoredErrorScope);
 
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 }

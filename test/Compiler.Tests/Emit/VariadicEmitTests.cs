@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -287,7 +288,7 @@ public class VariadicEmitTests
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
             IlVerifier.Verify(gsDll);
 
-            var asm = System.Reflection.Assembly.LoadFrom(gsDll);
+            var asm = EmittedFixture.Load(gsDll);
             var programType = asm.GetTypes().Single(t => t.Namespace == "GsVariadicLib" && t.Name == "<Program>");
 
             var sumMethod = programType.GetMethod("Sum", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
@@ -556,7 +557,7 @@ public class VariadicEmitTests
             CompileLibrary(gsSrc, gsDll);
             IlVerifier.Verify(gsDll);
 
-            var asm = System.Reflection.Assembly.LoadFrom(gsDll);
+            var asm = EmittedFixture.Load(gsDll);
             var flags = System.Reflection.BindingFlags.Public
                 | System.Reflection.BindingFlags.NonPublic
                 | System.Reflection.BindingFlags.Static
@@ -624,7 +625,7 @@ public class VariadicEmitTests
             CompileLibrary(gsSrc, gsDll);
             IlVerifier.Verify(gsDll);
 
-            var asm = System.Reflection.Assembly.LoadFrom(gsDll);
+            var asm = EmittedFixture.Load(gsDll);
             var stringJoinerType = asm.GetTypes().Single(t => t.Name == "StringJoiner");
             var invokeMethod = stringJoinerType.GetMethod("Invoke");
             Assert.NotNull(invokeMethod);

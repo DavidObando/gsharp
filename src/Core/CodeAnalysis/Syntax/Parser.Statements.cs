@@ -73,6 +73,22 @@ public partial class Parser
         if (Current.Kind == SyntaxKind.AtToken)
         {
             leadingAnnotations = ParseAnnotations();
+
+            // ADR-0175 / issue #3824: `@Ann { … }` is the annotated-block
+            // statement form, which gives `@SuppressDiagnostic` a scope
+            // narrower than a whole declaration. One token of lookahead is
+            // enough and there is no ambiguity: an `@` in statement position
+            // previously admitted only `const`/`let`/`var`, so a following `{`
+            // was always an error. Annotations also commit the brace to a
+            // block — the `{ … } + x` expression-continuation shape (#3355) is
+            // never reachable through an annotation.
+            if (Current.Kind == SyntaxKind.OpenBraceToken)
+            {
+                var annotatedBlock = ParseBlockStatement();
+                annotatedBlock.WithAnnotations(leadingAnnotations);
+                return annotatedBlock;
+            }
+
             if (Current.Kind != SyntaxKind.ConstKeyword &&
                 Current.Kind != SyntaxKind.LetKeyword &&
                 Current.Kind != SyntaxKind.VarKeyword)

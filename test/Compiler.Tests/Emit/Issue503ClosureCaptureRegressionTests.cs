@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -16,7 +17,7 @@ namespace GSharp.Compiler.Tests.Emit;
 //
 // Each test compiles a small G# source to a real DLL, IL-verifies it, loads
 // it into the current AppDomain, and exercises the closure via reflection.
-// `Assembly.Load(byte[])` is used deliberately — multiple fixtures share the
+// `EmittedFixture.Load(byte[])` is used deliberately — multiple fixtures share the
 // "MyLib" assembly name, and `Assembly.LoadFrom` would collide.
 public class Issue503ClosureCaptureRegressionTests
 {
@@ -847,8 +848,7 @@ public class Issue503ClosureCaptureRegressionTests
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
         IlVerifier.Verify(outPath);
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)

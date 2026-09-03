@@ -208,6 +208,40 @@ internal sealed partial class DeclarationBinder
         return builder.ToImmutable();
     }
 
+    /// <summary>
+    /// ADR-0175 (#3820/#3824): checks a <c>@SuppressDiagnostic</c> annotation's
+    /// arguments. Every argument must be a constant string with the shape of a
+    /// diagnostic ID; anything else is reported as GS9305 and contributes no
+    /// suppression. A typo'd ID that silently suppresses nothing is exactly the
+    /// failure mode this feature exists to close, so the shape is diagnosed
+    /// even though the ID set itself cannot be validated (an analyzer that
+    /// declares it may simply not be referenced by this project).
+    /// </summary>
+    /// <param name="annotation">The annotation to check.</param>
+    /// <param name="diagnostics">The bag to report into.</param>
+    internal static void ValidateSuppressDiagnostic(AnnotationSyntax annotation, DiagnosticBag diagnostics)
+    {
+        // `Arguments` is a nullable reference on the syntax node: an annotation
+        // written without a parenthesised list (`@SuppressDiagnostic`) has none,
+        // which is itself a GS9305 — it names no ID.
+        if (annotation.Arguments is null || annotation.Arguments.Count == 0)
+        {
+            diagnostics.ReportSuppressDiagnosticInvalidId(
+                annotation.AtToken.Location,
+                "<none>");
+            return;
+        }
+
+        foreach (var argument in annotation.Arguments)
+        {
+            var text = argument is LiteralExpressionSyntax literal ? literal.Value as string : null;
+            if (!Analyzers.DiagnosticSuppressionMap.IsWellFormedId(text))
+            {
+                diagnostics.ReportSuppressDiagnosticInvalidId(argument.Location, text ?? argument.ToString() ?? "?");
+            }
+        }
+    }
+
     private BoundAttribute? BindAttribute(
         AnnotationSyntax annotation,
         AttributeTargetKind defaultTarget,
@@ -215,6 +249,17 @@ internal sealed partial class DeclarationBinder
         string positionDescription,
         System.AttributeTargets defaultSystemTarget)
     {
+        // 0) ADR-0175 (#3820/#3824): `@SuppressDiagnostic("ID", …)` is
+        // compiler-intrinsic. It has no CLR attribute type — so a compilation
+        // needs no extra assembly reference to write one — and it produces no
+        // metadata; the analyzer driver reads it straight from the syntax tree.
+        // Validate its arguments here and consume it.
+        if (Analyzers.DiagnosticSuppressionMap.IsSuppressDiagnostic(annotation))
+        {
+            ValidateSuppressDiagnostic(annotation, Diagnostics);
+            return null;
+        }
+
         // 1) Resolve target — parser already filtered to canonical kinds; if
         // the user wrote an unrecognised one a GS0197 was already reported,
         // but we still need to map a parsed-but-unknown string back to a

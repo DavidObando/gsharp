@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -386,7 +387,7 @@ public class Issue2875DataClassSettableInterfaceTests
 
             Assert.True(exitCode == 0, "gsc failed:\n" + output);
             IlVerifier.Verify(outputPath);
-            _ = System.Reflection.Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
+            _ = EmittedFixture.Load(outputPath).GetTypes();
 
             var startInfo = new ProcessStartInfo("dotnet")
             {
@@ -429,7 +430,7 @@ public class Issue2875DataClassSettableInterfaceTests
 
             Assert.True(exitCode == 0, "gsc failed:\n" + output);
             IlVerifier.Verify(outputPath);
-            _ = System.Reflection.Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
+            _ = EmittedFixture.Load(outputPath).GetTypes();
         }
         finally
         {

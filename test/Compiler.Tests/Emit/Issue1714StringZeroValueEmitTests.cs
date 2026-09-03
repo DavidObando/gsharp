@@ -13,6 +13,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -439,7 +440,7 @@ public class Issue1714StringZeroValueEmitTests
             });
             Assert.Equal(0, exitCode);
             IlVerifier.Verify(dllPath);
-            return Assembly.Load(File.ReadAllBytes(dllPath));
+            return EmittedFixture.Load(dllPath);
         }
         finally
         {

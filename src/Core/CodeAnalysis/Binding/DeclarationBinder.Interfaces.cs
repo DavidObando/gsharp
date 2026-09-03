@@ -850,7 +850,7 @@ internal sealed partial class DeclarationBinder
                             continue;
                         }
 
-                        var constField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true);
+                        var constField = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: true, isStatic: true, isConst: true, declaration: fieldSyntax);
                         Binder.AttachDocumentation(constField, fieldSyntax);
 
                         if (fieldSyntax.Initializer == null)
@@ -886,7 +886,7 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true);
+                    var fieldSymbol = new FieldSymbol(fieldName, fieldType, fieldAccessibility, isReadOnly: fieldSyntax.IsReadOnly, isStatic: true, declaration: fieldSyntax);
                     Binder.AttachDocumentation(fieldSymbol, fieldSyntax);
 
                     if (fieldSyntax.Initializer != null)

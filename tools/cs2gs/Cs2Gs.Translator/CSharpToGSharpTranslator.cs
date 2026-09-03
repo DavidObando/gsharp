@@ -266,11 +266,20 @@ public sealed partial class CSharpToGSharpTranslator
         // cross-project use site (GS0157). G# supports a class-scoped static
         // `Main` (issue #1996), so the preserved form still runs as the entry
         // point.
+        // Issue #3837: the same erasure happens whenever the entry class
+        // declares ANY non-entry member visible outside itself, whether or not
+        // the pipeline recognized the consuming reference — an `@(ItemName)`
+        // ProjectReference, an `InternalsVisibleTo` test project, or reflection
+        // are all invisible to #3645's declared-reference scan. Preserving the
+        // class whenever hoisting would erase externally visible surface makes
+        // the decision local and total; a `private`-only entry class exports
+        // nothing and still hoists to the canonical top-level form.
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
         bool preserveEntryType = entryType is not null
             && (this.preserveEntryType
-                || entryType.GetTypeMembers().Any(type => type.TypeKind != TypeKind.Delegate));
+                || entryType.GetTypeMembers().Any(type => type.TypeKind != TypeKind.Delegate)
+                || EntryTypeExportsNonEntryMembers(entryType, entryPoint));
 
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's
@@ -499,6 +508,51 @@ public sealed partial class CSharpToGSharpTranslator
             .Select(symbol => symbol.ContainingNamespace.ToDisplayString())
             .Distinct(StringComparer.Ordinal)
             .ToList();
+
+    /// <summary>
+    /// Issue #3837: whether the C# entry class declares a member OTHER than the
+    /// entry point itself that is visible outside the class. T3's hoist drops
+    /// the enclosing class, so every such member loses its <c>Program.</c>
+    /// container — a use site that spells <c>Program.Member</c> from another
+    /// project then binds nothing (GS0157 "Cannot find type &lt;first segment&gt;").
+    /// <para>
+    /// Issue #3645 already preserves the class for a reference the pipeline can
+    /// see in declared <c>ProjectReference</c> XML, but an <c>@(ItemName)</c>
+    /// include, an <c>InternalsVisibleTo</c> test project, or reflection are all
+    /// invisible to that scan. This check needs no cross-project knowledge: if
+    /// hoisting would erase externally visible surface, keep the class. An entry
+    /// class whose non-entry members are all <c>private</c> exports nothing and
+    /// still hoists to the canonical top-level form (ADR-0115 §B.1/§B.11).
+    /// </para>
+    /// </summary>
+    /// <param name="entryType">The entry point's enclosing type.</param>
+    /// <param name="entryPoint">The bound entry-point method.</param>
+    /// <returns><c>true</c> when hoisting would erase visible surface.</returns>
+    private static bool EntryTypeExportsNonEntryMembers(
+        INamedTypeSymbol entryType,
+        IMethodSymbol entryPoint)
+    {
+        foreach (ISymbol member in entryType.GetMembers())
+        {
+            if (member.IsImplicitlyDeclared
+                || SymbolEqualityComparer.Default.Equals(member, entryPoint)
+                || member is IMethodSymbol
+                {
+                    MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor,
+                })
+            {
+                continue;
+            }
+
+            if (member.DeclaredAccessibility is not Accessibility.Private
+                and not Accessibility.NotApplicable)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static IEnumerable<MemberDeclarationSyntax> EnumerateTopLevelDeclarations(CompilationUnitSyntax root)
     {

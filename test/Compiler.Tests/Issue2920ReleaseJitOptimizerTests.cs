@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -71,7 +72,7 @@ public class Issue2920ReleaseJitOptimizerTests
             Assert.Equal(expectPdb, File.Exists(pdbPath));
             IlVerifier.Verify(outputPath);
 
-            var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
+            var assembly = EmittedFixture.Load(outputPath);
             Assert.NotEmpty(assembly.GetTypes());
             var debuggable = assembly.GetCustomAttribute<DebuggableAttribute>();
             Assert.NotNull(debuggable);

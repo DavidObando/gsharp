@@ -239,6 +239,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.AnnotationsNotAllowedOnStatement);
 
     /// <summary>
+    /// ADR-0175 (#3820/#3824): reports GS9305 when a
+    /// <c>@SuppressDiagnostic</c> annotation's argument is not a constant
+    /// string shaped like a diagnostic identifier.
+    /// </summary>
+    /// <param name="location">The source location of the offending argument.</param>
+    /// <param name="text">The rejected argument text.</param>
+    public void ReportSuppressDiagnosticInvalidId(TextLocation location, string text)
+    => Report(location, DiagnosticDescriptors.SuppressDiagnosticInvalidId, text);
+
+    /// <summary>
     /// ADR-0055: reports an interpolation hole whose alignment clause
     /// (<c>${expr,alignment}</c>) is not a constant integer.
     /// </summary>

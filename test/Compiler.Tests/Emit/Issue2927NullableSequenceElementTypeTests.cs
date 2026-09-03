@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -153,7 +154,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(NullableSequenceParameterAcceptsList));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"1,nil,3,{Environment.NewLine}", RunBounded(assemblyPath, nameof(NullableSequenceParameterAcceptsList)));
     }
@@ -177,7 +178,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"x{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
     }
@@ -208,7 +209,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"woof{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
     }
@@ -232,7 +233,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"5{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
     }
@@ -259,7 +260,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(NullableReferenceSequenceGuardLoadsVerifiesAndRuns));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"x{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(NullableReferenceSequenceGuardLoadsVerifiesAndRuns)));
     }
@@ -288,7 +289,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"A{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns)));
     }
@@ -479,7 +480,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var assemblyPath = Compile(Source, nameof(GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces));
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         var types = assembly.GetTypes();
         Assert.NotEmpty(types);
 
@@ -719,7 +720,7 @@ public class Issue2927NullableSequenceElementTypeTests
     {
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal(expected, RunBounded(assemblyPath, name));
     }
@@ -767,7 +768,7 @@ public class Issue2927NullableSequenceElementTypeTests
     {
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var assembly = EmittedFixture.Load(assemblyPath);
         Assert.NotEmpty(assembly.GetTypes());
         Assert.Equal($"{expected}{Environment.NewLine}{expected}{Environment.NewLine}", RunBounded(assemblyPath, name));
     }

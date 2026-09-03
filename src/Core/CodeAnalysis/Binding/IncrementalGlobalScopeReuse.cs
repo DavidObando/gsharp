@@ -43,7 +43,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// accessor bodies (<see cref="EventSymbol.RepointDeclaration"/>). The owning
 /// struct and interface type symbols are re-pointed too
 /// (<see cref="StructSymbol.RepointDeclaration"/>,
-/// <see cref="InterfaceSymbol.RepointDeclaration"/>). Re-binding of every
+/// <see cref="InterfaceSymbol.RepointDeclaration"/>), as are source field
+/// declarations (<see cref="FieldSymbol.RepointDeclaration"/>). Re-binding of every
 /// re-pointed body is forced by passing the edited tree as a <c>dirtyTree</c> to
 /// <see cref="Binder.BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache, System.Collections.Immutable.ImmutableHashSet{SyntaxTree})"/>;
 /// because each body's backing syntax now belongs to the dirty tree, the
@@ -150,6 +151,7 @@ public static class IncrementalGlobalScopeReuse
             || !TryBuildPositionalMap<InterfaceDeclarationSyntax>(previousTree, updatedTree, out var interfaceMap)
             || !TryBuildPositionalMap<ConstructorDeclarationSyntax>(previousTree, updatedTree, out var constructorMap)
             || !TryBuildPositionalMap<DeinitDeclarationSyntax>(previousTree, updatedTree, out var deinitMap)
+            || !TryBuildPositionalMap<FieldDeclarationSyntax>(previousTree, updatedTree, out var fieldMap)
             || !TryBuildPositionalMap<PropertyDeclarationSyntax>(previousTree, updatedTree, out var propertyMap)
             || !TryBuildPositionalMap<EventDeclarationSyntax>(previousTree, updatedTree, out var eventMap))
         {
@@ -229,11 +231,37 @@ public static class IncrementalGlobalScopeReuse
 
         var constructorsToRepoint = new List<(ConstructorSymbol Symbol, ConstructorDeclarationSyntax Updated)>();
         var deinitsToRepoint = new List<(DeinitSymbol Symbol, DeinitDeclarationSyntax Updated)>();
+        var fieldsToRepoint = new List<(FieldSymbol Symbol, SyntaxNode Updated)>();
         var propertiesToRepoint = new List<(PropertySymbol Symbol, PropertyDeclarationSyntax Updated, BlockStatementSyntax? Getter, BlockStatementSyntax? Setter)>();
         var eventsToRepoint = new List<(EventSymbol Symbol, EventDeclarationSyntax Updated, BlockStatementSyntax? Add, BlockStatementSyntax? Remove, BlockStatementSyntax? Raise)>();
 
         foreach (var structSymbol in scope.Structs)
         {
+            foreach (var field in structSymbol.Fields.Concat(structSymbol.StaticFields).Concat(structSymbol.ConstFields))
+            {
+                var declaration = field.Declaration;
+                if (declaration == null || declaration.SyntaxTree != previousTree)
+                {
+                    continue;
+                }
+
+                SyntaxNode? updated = declaration switch
+                {
+                    FieldDeclarationSyntax fieldDeclaration when fieldMap.TryGetValue(fieldDeclaration, out var updatedField) => updatedField,
+                    ParameterSyntax when structSymbol.Declaration is { } structDeclaration
+                        && structMap.TryGetValue(structDeclaration, out var updatedStruct)
+                        => updatedStruct.PrimaryConstructorParameters?.FirstOrDefault(
+                            parameter => parameter.Identifier.ValueText == field.Name),
+                    _ => null,
+                };
+                if (updated == null)
+                {
+                    return false;
+                }
+
+                fieldsToRepoint.Add((field, updated));
+            }
+
             // Constructors (ADR-0063 §9). Synthesized primary constructors carry
             // no declaration node and have no rebindable body — skip them.
             if (!structSymbol.ExplicitConstructors.IsDefaultOrEmpty)
@@ -324,6 +352,26 @@ public static class IncrementalGlobalScopeReuse
             }
         }
 
+        foreach (var interfaceSymbol in scope.Interfaces)
+        {
+            foreach (var field in interfaceSymbol.StaticFields.Concat(interfaceSymbol.ConstFields))
+            {
+                var declaration = field.Declaration;
+                if (declaration == null || declaration.SyntaxTree != previousTree)
+                {
+                    continue;
+                }
+
+                if (declaration is not FieldDeclarationSyntax fieldDeclaration
+                    || !fieldMap.TryGetValue(fieldDeclaration, out var updated))
+                {
+                    return false;
+                }
+
+                fieldsToRepoint.Add((field, updated));
+            }
+        }
+
         // ---- Phase 2: all validation passed — apply the re-point. This is the
         // only mutation, and it only swaps backing syntax (signatures and
         // accessor shapes are byte-identical).
@@ -348,6 +396,11 @@ public static class IncrementalGlobalScopeReuse
         }
 
         foreach (var (symbol, updated) in deinitsToRepoint)
+        {
+            symbol.RepointDeclaration(updated);
+        }
+
+        foreach (var (symbol, updated) in fieldsToRepoint)
         {
             symbol.RepointDeclaration(updated);
         }

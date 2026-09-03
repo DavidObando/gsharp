@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
@@ -382,8 +383,12 @@ public class Issue2388NullableCustomEqualityEmitTests
 
         IlVerifier.Verify(consumerPath, additionalReferences: new[] { libraryPath });
 
-        var libraryAsm = Assembly.LoadFrom(libraryPath);
-        var consumerAsm = Assembly.LoadFrom(consumerPath);
+        // One context for both: the consumer's methods are invoked with
+        // instances of the library's types, which requires a single
+        // identity for them.
+        var loaded2388 = EmittedFixture.LoadTogether(libraryPath, consumerPath);
+        var libraryAsm = loaded2388[0];
+        var consumerAsm = loaded2388[1];
         var metersType = libraryAsm.GetTypes().Single(t => t.Name == "Meters");
         var programType = consumerAsm.GetTypes().Single(t => t.Name == "<Program>");
 

@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -68,8 +69,9 @@ public sealed class Issue2615ImportedEventEmitTests
     public void ImportedInheritedPropertyChanged_AddRemove_Runs()
     {
         using var artifacts = Compile(OahuSource);
-        _ = Assembly.LoadFrom(artifacts.FixturePath);
-        var assembly = Assembly.LoadFrom(artifacts.OutputPath);
+        // One context for the reference fixture and the emitted assembly
+        // that imports it.
+        var assembly = EmittedFixture.LoadTogether(artifacts.FixturePath, artifacts.OutputPath)[1];
         var probeType = assembly.GetType("Oahu.Core.UI.Avalonia.ViewModels.Probe");
         var probe = Activator.CreateInstance(probeType!);
 

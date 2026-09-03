@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -194,7 +195,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
     {
         var assemblyPath = Compile(name, source);
         IlVerifier.Verify(assemblyPath);
-        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes());
         Assert.Equal(expectedOutput, RunBounded(name, assemblyPath));
     }
 
@@ -252,7 +253,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
         }
 
         IlVerifier.Verify(assemblyPath);
-        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes());
         Assert.Equal($"ok{Environment.NewLine}", RunBounded(name, assemblyPath));
     }
 

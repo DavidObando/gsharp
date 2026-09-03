@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -80,7 +81,7 @@ public class Issue2668AsyncLambdaPrivateStaticAccessEmitTests
             Assert.Equal(0, Compile(sourcePath, outputPath));
             IlVerifier.Verify(outputPath);
 
-            var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
+            var assembly = EmittedFixture.Load(outputPath);
             var httpEndpoints = assembly.GetType("Oahu.Cli.Server.HttpEndpoints", throwOnError: true)!;
             var nestedNames = httpEndpoints.GetNestedTypes(BindingFlags.NonPublic)
                 .Select(type => type.Name)

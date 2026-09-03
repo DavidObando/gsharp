@@ -104,7 +104,7 @@ public class Issue3081CompositeLiteralInheritedFieldTests
 
             Assert.True(compile.ExitCode == 0, $"{name} emit failed:\n{compile.Stdout}\n{compile.Stderr}");
             Assert.Equal(string.Empty, compile.Stderr);
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var assembly = EmittedFixture.Load(assemblyPath);
             Assert.NotEmpty(assembly.GetTypes());
 
             using var process = Process.Start(new ProcessStartInfo("dotnet")

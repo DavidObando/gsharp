@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -729,8 +730,7 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
             $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
         IlVerifier.Verify(outPath);
 
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 
     private static int RunAndGetIntResult(string source)
@@ -838,8 +838,7 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
             $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
         IlVerifier.Verify(outPath);
 
-        var bytes = File.ReadAllBytes(outPath);
-        return Assembly.Load(bytes);
+        return EmittedFixture.Load(outPath);
     }
 
     private static string CompileLibrary(string source)

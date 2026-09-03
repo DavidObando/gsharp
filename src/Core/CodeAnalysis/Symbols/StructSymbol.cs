@@ -1149,7 +1149,8 @@ public sealed class StructSymbol : TypeSymbol
                     var hiddenByDerived = false;
                     foreach (var existing in builder)
                     {
-                        if (BoundScope.FunctionSignaturesEqual(existing, m))
+                        if (BoundScope.FunctionSignaturesEqual(existing, m)
+                            && ExplicitInterfaceClauseTargetsMatch(existing, m))
                         {
                             hiddenByDerived = true;
                             break;
@@ -1887,7 +1888,11 @@ public sealed class StructSymbol : TypeSymbol
         var substitutedFields = ImmutableArray.CreateBuilder<FieldSymbol>(definition.Fields.Length);
         foreach (var f in definition.Fields)
         {
-            substitutedFields.Add(new FieldSymbol(f.Name, SubstituteTypeForConstruction(f.Type, subst, mapClrType), f.Accessibility));
+            substitutedFields.Add(new FieldSymbol(
+                f.Name,
+                SubstituteTypeForConstruction(f.Type, subst, mapClrType),
+                f.Accessibility,
+                declaration: f.Declaration));
         }
 
         var substitutedPrimary = ImmutableArray<ParameterSymbol>.Empty;
@@ -2198,6 +2203,46 @@ public sealed class StructSymbol : TypeSymbol
         return value;
     }
 
+    /// <summary>
+    /// Issue #3814 / ADR-0149: decides whether two same-signature methods occupy
+    /// the same slot for the purposes of the hiding rule in
+    /// <see cref="GetMethodsIncludingInherited(string)"/>.
+    /// <para>
+    /// Two explicit interface implementations of the SAME member on DIFFERENT
+    /// instantiations of one generic interface (<c>func (IAsyncEnumerable[int32])
+    /// GetAsyncEnumerator(…)</c> and <c>func (IAsyncEnumerable[string])
+    /// GetAsyncEnumerator(…)</c>) have identical callable signatures — the
+    /// interface's type argument only shows up in the RETURN type, which
+    /// <see cref="BoundScope.FunctionSignaturesEqual"/> deliberately ignores.
+    /// Without this guard the second one was dropped from the overload set as if
+    /// it were an override of the first, and the interface-implementation check
+    /// then reported the second interface unimplemented (GS0187). They are two
+    /// distinct CLR slots and must both stay visible.
+    /// </para>
+    /// </summary>
+    /// <param name="a">The first method.</param>
+    /// <param name="b">The second method.</param>
+    /// <returns><see langword="true"/> when both carry the same explicit-interface clause target (including none at all).</returns>
+    private static bool ExplicitInterfaceClauseTargetsMatch(FunctionSymbol a, FunctionSymbol b)
+    {
+        var targetA = a.ExplicitInterfaceClauseTarget;
+        var targetB = b.ExplicitInterfaceClauseTarget;
+        if (ReferenceEquals(targetA, targetB))
+        {
+            return true;
+        }
+
+        if (targetA == null || targetB == null)
+        {
+            return false;
+        }
+
+        return string.Equals(
+            Display.SymbolDisplay.ToTypeDisplayString(targetA),
+            Display.SymbolDisplay.ToTypeDisplayString(targetB),
+            StringComparison.Ordinal);
+    }
+
     private TypeSymbol? GetSubstitutedImportedBaseType()
     {
         var source = Definition.ImportedBaseType;
@@ -2260,7 +2305,8 @@ public sealed class StructSymbol : TypeSymbol
                     f.IsReadOnly,
                     f.IsStatic,
                     f.IsConst,
-                    f.IsEventBackingField);
+                    f.IsEventBackingField,
+                    f.Declaration);
                 if (f.IsConst)
                 {
                     substituted.SetConstantValue(f.ConstantValue);

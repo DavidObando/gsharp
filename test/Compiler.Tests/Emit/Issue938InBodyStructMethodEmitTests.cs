@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -238,6 +239,6 @@ public class Issue938InBodyStructMethodEmitTests
         IlVerifier.Verify(outPath);
 
         var bytes = File.ReadAllBytes(outPath);
-        return (Assembly.Load(bytes), diagnostics);
+        return (EmittedFixture.Load(bytes), diagnostics);
     }
 }

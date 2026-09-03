@@ -209,9 +209,15 @@ public sealed class ReferenceResolver : IDisposable
 
         public Assembly LoadReference(string path)
         {
-            directories.Add(Path.GetDirectoryName(path) ?? string.Empty);
+            AddProbeDirectory(path);
             return LoadFromAssemblyPath(path);
         }
+
+        // Issue #3818: a reference reused from the host context (rather than
+        // loaded here) still contributes its directory, so a private
+        // dependency sitting beside it stays resolvable from this context.
+        public void AddProbeDirectory(string path)
+            => directories.Add(Path.GetDirectoryName(path) ?? string.Empty);
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
@@ -245,13 +251,13 @@ public sealed class ReferenceResolver : IDisposable
         metadataContext?.Dispose();
         runtimeContext?.Unload();
 
-        // The static ImportedTypeSymbol cache may hold Type instances that
-        // originated from the now-disposed MetadataLoadContext. Those entries
-        // are unreachable from future compilations and pin the disposed
-        // context's managed object graph. Clearing the cache allows them to
-        // be collected. This is safe because each compilation rebuilds the
-        // cache organically; the only cost is a cold cache on the next
-        // compilation that reuses the same process.
+        // Kept as a call site for symmetry with the caches below, but note
+        // that ImportedTypeSymbol.ClearCache is deliberately a NO-OP: that
+        // cache is weakly keyed by assembly, so a disposed context's entries
+        // become collectable on their own (#2341). Cross-compilation IDENTITY
+        // — a symbol from one compilation answering another's lookup — is not
+        // a lifetime question and is not addressed here; it is handled by the
+        // load-context-sensitive key that cache uses (#3826).
         ImportedTypeSymbol.ClearCache();
 
         // FunctionTypeSymbol eagerly closes a host-runtime Func/Action over
@@ -509,7 +515,27 @@ public sealed class ReferenceResolver : IDisposable
                 }
 
                 var fullPath = Path.GetFullPath(path);
-                var assembly = runtimeContext.LoadReference(fullPath);
+
+                // Issue #3818: a reference the host has ALREADY loaded from
+                // this exact path must resolve to the host's instance, not to
+                // a second private copy. Loading it again into the driver
+                // context mints a rival identity for every type in it, and any
+                // Type that leaks between two compilations in one process
+                // (through the binder's process-wide symbol/member caches) then
+                // becomes a cross-context type: `MakeGenericMethod` rejects it,
+                // the only candidate is dropped, and the call reports the
+                // opaque "Cannot find function <name>" — order-dependently,
+                // because it needs an earlier compilation to have created the
+                // rival copy. Same file plus same identity means reuse is
+                // always safe; a genuinely different assembly does not match by
+                // path and is still loaded privately.
+                Assembly? reused = TryReuseHostLoadedAssembly(fullPath);
+                if (reused is not null)
+                {
+                    runtimeContext.AddProbeDirectory(fullPath);
+                }
+
+                var assembly = reused ?? runtimeContext.LoadReference(fullPath);
                 RegisterAssemblyOriginalPath(assembly, fullPath);
                 runtimeAssemblies.Add(assembly);
             }
@@ -1578,6 +1604,38 @@ public sealed class ReferenceResolver : IDisposable
         }
 
         AssemblyOriginalPaths.AddOrUpdate(assembly, path);
+    }
+
+    /// <summary>
+    /// Issue #3818: finds an assembly the default load context already holds
+    /// for <paramref name="fullPath"/>, so a runtime reference to it reuses the
+    /// host's identity instead of minting a second copy.
+    /// </summary>
+    /// <param name="fullPath">The absolute reference path.</param>
+    /// <returns>The already-loaded assembly, or <see langword="null"/>.</returns>
+    private static Assembly? TryReuseHostLoadedAssembly(string fullPath)
+    {
+        foreach (var loaded in AssemblyLoadContext.Default.Assemblies)
+        {
+            string location;
+            try
+            {
+                location = loaded.Location;
+            }
+            catch (NotSupportedException)
+            {
+                // Dynamic / in-memory assemblies have no location to match.
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(location)
+                && string.Equals(location, fullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return loaded;
+            }
+        }
+
+        return null;
     }
 
     private static ImmutableArray<Assembly> BuildHostAssemblies()
