@@ -538,7 +538,13 @@ namespace Cs2Gs.Tests
 
                     public static partial class Program
                     {
-                        public static string Probe() => typeof(Timer).FullName!;
+                        // Issue #3837: `private` keeps this entry class on the
+                        // FLATTENING path — a `public`/`internal` non-entry
+                        // member is consumable surface the hoist would erase,
+                        // so it now preserves the class instead. The subject
+                        // here is the contributing-declaration graph, not the
+                        // preserve/flatten choice, so keep it flattened.
+                        private static string Probe() => typeof(Timer).FullName!;
 
                         public static void Main()
                         {
@@ -552,7 +558,7 @@ namespace Cs2Gs.Tests
 
                     public static partial class Program
                     {
-                        public static int Unemitted() => 1;
+                        private static int Unemitted() => 1;
                     }
                     """));
 
