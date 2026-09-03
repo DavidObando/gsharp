@@ -885,21 +885,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 translated = EnsureNonNullAssertion(translated);
             }
-            else if (!this.IsWithinExpressionTreeLambda(recv) && this.ReceiverIsNullPreservingSafeCast(recv))
-            {
-                // Issue #3683: a C# reference cast whose operand is nullable on
-                // the G# side lowers to the null-preserving `expr as T`
-                // (issue #3501), whose result is `T?`. When the operand's
-                // nullability comes from an ANNOTATED declaration read by an
-                // OBLIVIOUS file — `((BoundVariableExpression)faExpr.Receiver)`
-                // in a `#nullable disable` test over an annotated
-                // `BoundExpression? Receiver` — Roslyn reports nothing
-                // maybe-null at this site, so none of the predicates above
-                // fire and the dereference of the `T?` was left un-forgiven
-                // (gsc GS0158 / GS0116). Asserting here is faithful: C# would
-                // raise a NullReferenceException at this same dereference.
-                translated = EnsureNonNullAssertion(translated);
-            }
             else if (!this.IsWithinExpressionTreeLambda(recv) && this.IsLocalBoundFromAsExpression(recv))
             {
                 // ADR-0160: a local bound from a C# `as` (`var p = o as object[];`)
@@ -919,23 +904,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return ParenthesizeIfBareNumericLiteral(translated);
-        }
-
-        // Issue #3683: true when `recv` is (possibly parenthesized) a C# reference
-        // cast that TranslateCast lowers to the null-preserving safe cast
-        // `expr as T` (issue #3501), so the receiver's G# type is `T?`. See the
-        // dereference assertion in
-        // <see cref="TranslateReceiverWithNullForgiveness"/>.
-        private bool ReceiverIsNullPreservingSafeCast(ExpressionSyntax recv)
-        {
-            ExpressionSyntax unwrapped = recv;
-            while (unwrapped is ParenthesizedExpressionSyntax parenthesized)
-            {
-                unwrapped = parenthesized.Expression;
-            }
-
-            return unwrapped is CastExpressionSyntax cast
-                && this.CastLowersToNullPreservingSafeCast(cast);
         }
 
         /// <summary>
@@ -1452,11 +1420,14 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case CastExpressionSyntax cast
                     when cast.Type is not NullableTypeSyntax
-                        && this.CastUsesCheckedReferenceConversion(cast)
-                        && !this.CastLowersToNullPreservingSafeCast(cast):
-                    // Issue #3501: a cast that lowers to the null-preserving
-                    // `expr as T` is NOT statically non-null — its dereference
-                    // needs the ordinary receiver forgiveness.
+                        && this.CastUsesCheckedReferenceConversion(cast):
+                    // Issue #3843: EVERY checked reference cast now lowers to
+                    // `cast[T](expr)`, whose static result is non-nullable `T`
+                    // regardless of the operand's nullability — exactly as C#
+                    // `(T)x` is statically `T`. (Both languages let a nil slip
+                    // through that non-nullable static type; that is the
+                    // shared, documented ADR-0167 behaviour, not a G#-only
+                    // hole.)
                     return true;
 
                 case ConditionalExpressionSyntax conditional:

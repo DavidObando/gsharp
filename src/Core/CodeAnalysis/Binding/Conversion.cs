@@ -1854,6 +1854,32 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #3843: the UPCAST direction of the same checked reference
+        // conversion, reached only when the source is reference-nullable and
+        // the target is not — `cast[Node](blockOrNil)`, the G# rendering of
+        // C# `(Node)node.Body`. The reverse probe above only admits the
+        // DOWNCAST direction (`Base? -> Derived`), and the identity case is
+        // already answered by `removesReferenceNullability` above, so a plain
+        // widening that also drops the `?` had no checked-conversion
+        // classification at all and reported GS0155. The runtime story is the
+        // same one ADR-0167 already guarantees for the other two directions:
+        // the value is a managed reference, `castclass`/no-op preserves nil,
+        // and a non-nil value of an incompatible runtime type still throws
+        // `InvalidCastException` — for a widening target the incompatible case
+        // is simply unreachable. Restricted to `removesReferenceNullability`
+        // so a non-nullable widening keeps classifying as the implicit upcast
+        // it is and no IMPLICIT nullability-dropping path is opened: this arm
+        // is only ever consulted behind an explicitly written conversion.
+        if (removesReferenceNullability
+            && ClassifyCore(
+                from,
+                to,
+                allowStructuralProjection: false,
+                allowExplicitReference: false).IsImplicit)
+        {
+            return true;
+        }
+
         if (from.ClrType is { } fromClr
             && to.ClrType is { } toClr
             && !fromClr.IsValueType

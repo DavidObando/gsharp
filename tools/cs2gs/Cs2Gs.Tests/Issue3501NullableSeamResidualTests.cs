@@ -15,9 +15,15 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Issue #3501 residual nullability seams:
-/// (1) a C# reference cast PRESERVES null, so a cast of a promoted-nullable
-/// operand must emit the null-preserving safe cast (`expr as T`) rather than
-/// `cast[T](expr)`, whose operand must be non-null; and
+/// (1) a C# reference cast PRESERVES null — and so does `cast[T](expr)`
+/// (ADR-0167), including over a nullable operand, so the cast of a
+/// promoted-nullable operand stays `cast[T](expr)`. This assertion was
+/// INVERTED by issue #3843: it previously demanded `expr as T`, on the premise
+/// that `cast[T]` required a non-null operand. That premise was false for the
+/// identity and downcast directions and has since been closed for the upcast
+/// direction too, and `as` was the wrong rendering anyway — it yields `T?`
+/// (breaking a non-nullable continuation) and returns nil where C# throws
+/// `InvalidCastException`; and
 /// (2) an iterator's element is the method's return sink, so a tainted
 /// iterator (yielding promoted-nullable values) must render `sequence[T?]` —
 /// previously the yield-seam bridge correctly stood down (the return IS
@@ -26,7 +32,7 @@ namespace Cs2Gs.Tests;
 public class Issue3501NullableSeamResidualTests
 {
     [Fact]
-    public void Oblivious_ReferenceCastOfPromotedOperand_UsesNullPreservingSafeCast()
+    public void Oblivious_ReferenceCastOfPromotedOperand_StaysCheckedConversionCall()
     {
         string printed = TranslateOblivious(@"
 namespace Demo
@@ -48,8 +54,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("as Base", printed);
-        Assert.DoesNotContain("cast[Base](", printed);
+        Assert.Contains("cast[Base](", printed);
+        Assert.DoesNotContain("as Base", printed);
     }
 
     [Fact]

@@ -11,16 +11,16 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #3683: a C# reference cast whose operand is nullable on the G# side
-/// lowers to the null-preserving safe cast <c>expr as T</c> (issue #3501),
-/// whose result is <c>T?</c>. When the operand's nullability comes from an
-/// ANNOTATED declaration read by an OBLIVIOUS file — the shape all of
-/// <c>test/Core.Tests</c> has, since the NRT migration was production-only —
-/// Roslyn reports nothing maybe-null at the dereference, so none of the
-/// ordinary forgiveness predicates fire and the emitted
-/// <c>((x as T)).Member</c> was rejected by gsc with GS0158. The receiver now
-/// carries its <c>!!</c>, which is faithful: C# raises a
-/// NullReferenceException at exactly this dereference.
+/// Issue #3683, as re-based by issue #3843: a C# reference cast whose operand
+/// is nullable on the G# side used to lower to the safe cast <c>expr as T</c>,
+/// whose <c>T?</c> result then needed a <c>!!</c> on every dereference. The
+/// cast now stays <c>cast[T](expr)</c>, whose result is non-nullable <c>T</c>
+/// exactly as the C# cast's type is <c>T</c>, so no safe cast and no
+/// null-forgiveness appear at all. Runtime faithfulness is unchanged and now
+/// exact: <c>cast[T](nil)</c> yields nil (ADR-0167), and the dereference that
+/// follows raises the same NullReferenceException C# raises — while a
+/// wrong-type non-nil operand throws InvalidCastException, which the old
+/// <c>as</c> rendering silently swallowed into nil.
 /// </summary>
 public class Issue3683ObliviousCastReceiverForgivenessTests
 {
@@ -42,7 +42,7 @@ namespace Demo
 }";
 
     [Fact]
-    public void ObliviousReadOfAnnotatedReference_CastReceiver_KeepsNullForgiveness()
+    public void ObliviousReadOfAnnotatedReference_CastReceiver_StaysCheckedConversionCall()
     {
         string printed = TranslateObliviousConsumer(@"
 namespace Demo
@@ -56,11 +56,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("((faExpr.Receiver as BoundVariableExpression))!!.Variable", printed);
+        Assert.Contains("cast[BoundVariableExpression](faExpr.Receiver).Variable", printed);
+        Assert.DoesNotContain("as BoundVariableExpression", printed);
     }
 
     [Fact]
-    public void ObliviousReadOfAnnotatedReference_CastReceiverInLoop_KeepsNullForgiveness()
+    public void ObliviousReadOfAnnotatedReference_CastReceiverInLoop_StaysCheckedConversionCall()
     {
         string printed = TranslateObliviousConsumer(@"
 namespace Demo
@@ -77,7 +78,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("as BoundVariableExpression))!!.Variable", printed);
+        Assert.Contains("cast[BoundVariableExpression](items[i].Receiver).Variable", printed);
+        Assert.DoesNotContain("as BoundVariableExpression", printed);
     }
 
     [Fact]
@@ -97,7 +99,7 @@ namespace Demo
 
         // A provably non-null operand keeps the checked-reference-cast form, so
         // no safe cast and no assertion are introduced.
-        Assert.DoesNotContain("as BoundVariableExpression))!!", printed);
+        Assert.DoesNotContain("as BoundVariableExpression", printed);
     }
 
     private static string TranslateObliviousConsumer(string obliviousSource)
