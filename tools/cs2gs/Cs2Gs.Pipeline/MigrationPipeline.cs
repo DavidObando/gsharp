@@ -233,6 +233,22 @@ public sealed class MigrationPipeline
                 this.options.RepositoryAdditionalFiles.Add(mirroredProject);
             }
 
+            // Issue #3862: the mirror must BE a repository before anything runs
+            // inside it, not only after. Repository-anchored code — a test that
+            // walks up from its output directory looking for `GSharp.sln`, an
+            // MSBuild target that resolves a path relative to the solution —
+            // executes during the per-app stage loop below (compile, ilverify
+            // and `dotnet test` all run in the mirror). Generating the
+            // solutions after that loop left every such probe looking at a tree
+            // whose root anchor did not exist yet, which failed 37 of the 86
+            // migrated `test/Sdk.Tests` tests. Nothing here depends on stage
+            // output: the project mapping is complete above.
+            RepositorySolutionGenerator.Generate(
+                this.options.SourceRoot,
+                destinationRoot,
+                this.options.GeneratedProjectPaths,
+                repositoryFiles);
+
             var loadedProjects = new Dictionary<string, LoadedCSharpProject>(StringComparer.OrdinalIgnoreCase);
             foreach (CorpusApp app in apps)
             {
@@ -304,11 +320,6 @@ public sealed class MigrationPipeline
                 }
             }
 
-            RepositorySolutionGenerator.Generate(
-                this.options.SourceRoot,
-                destinationRoot,
-                this.options.GeneratedProjectPaths,
-                repositoryFiles);
             if (runResult.Succeeded)
             {
                 try
