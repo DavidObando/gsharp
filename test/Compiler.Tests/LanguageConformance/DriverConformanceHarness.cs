@@ -33,8 +33,7 @@ internal static class DriverConformanceHarness
         string goldenPath = null)
     {
         var extensionsAssembly = Assembly.Load("Gsharp.Extensions");
-        bool usesExtensions = File.ReadAllText(sourcePath)
-            .Contains("Gsharp.Extensions", StringComparison.Ordinal);
+        bool usesExtensions = NeedsExtensions(File.ReadAllText(sourcePath));
         string extensionsReference = usesExtensions
             ? "/r:" + extensionsAssembly.Location
             : null;
@@ -337,8 +336,7 @@ internal static class DriverConformanceHarness
 
         try
         {
-            bool usesExtensions = sourcePaths.Any(path =>
-                File.ReadAllText(path).Contains("Gsharp.Extensions", StringComparison.Ordinal));
+            bool usesExtensions = sourcePaths.Any(path => NeedsExtensions(File.ReadAllText(path)));
             string extensionsAssemblyPath = Assembly.Load("Gsharp.Extensions").Location;
             if (usesExtensions)
             {
@@ -595,4 +593,12 @@ internal static class DriverConformanceHarness
         int ExitCode,
         string StandardOutput,
         string StandardError);
+    // A sample needs `/r:Gsharp.Extensions` when it names that namespace, and
+    // also when it names `Gsharp.Concurrency` — ADR-0174 D9's `after`, `tick`
+    // and `merge` are G#-authored and live in the Extensions assembly even
+    // though the package is imported implicitly.
+    private static bool NeedsExtensions(string source)
+        => source.Contains("Gsharp.Extensions", StringComparison.Ordinal)
+            || source.Contains("Gsharp.Concurrency", StringComparison.Ordinal);
+
 }

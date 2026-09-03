@@ -19,6 +19,7 @@ Wave-3 user-porting cluster (#502–#575).
 | `ShortCircuitAnd.gs` / `ShortCircuitOr.gs` | `&&` / `\|\|` with side-effecting RHS — `SideEffectSpiller` (#476) and the lowering of short-circuit operators | P0-1 family |
 | `ReturnInTryFinally.gs` | `return` inside a `try`/`finally` — must lower to `leave`/`endfinally` | P0-2 |
 | `YieldInTryFinally.gs` | `yield` inside `try`/`finally` — iterator-side `TryDispatchPlanner` | P0-3 |
+| `Timeout.gs` | Uses ADR-0174 D9's `after(d)`, which is G#-authored and lives in `Gsharp.Extensions`. The gate compiles each sample with a plain `Compilation` and no `/r:` for that assembly, exactly as it cannot compile the three `GsharpExtensions*.gs` samples. `SampleConformanceTests` stages the reference and covers this sample end to end across all three drivers. |
 | `AwaitInFieldAssignment.gs` | `await` inside a field-assignment position — `SpillSequenceSpiller` field-assignment arm | P0-4 |
 | `AwaitInIndexAssignment.gs` | `await` inside an array-index-assignment position — spiller index-assignment arm | P0-4 |
 | `AwaitInUnary.gs` | `await` inside a unary-operator position — spiller unary arm | P0-4 |

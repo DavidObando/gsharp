@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -400,5 +401,36 @@ public class SelectWaiterTests
             Assert.Equal(0, w.TryNow());
             w.Return();
         }
+    }
+    [Fact]
+    public async Task Select_LosingTaskArm_DoesNotRetainTheWaiter()
+    {
+        // A task arm that loses must have its continuation removed, or a
+        // long-running task keeps the (pooled) waiter alive and later completes
+        // into a waiter that has been reused. `TaskArm.Deregister` cancels the
+        // continuation's registration; this reads the field that holds it.
+        var slot = typeof(Task).GetField("m_continuationObject", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(slot);
+
+        var pending = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new Chan<int>(1);
+        ready.Writer.TryWrite(7);
+
+        var waiter = SelectWaiter.Rent(2, CancellationToken.None);
+        waiter.AddReceive<int>(ready, 0);
+        waiter.AddTask(pending.Task, 1);
+        Assert.Equal(0, await waiter.WaitAsync().AsTask().WaitAsync(Timeout));
+        waiter.Return();
+
+        // The continuation is removed asynchronously by the cancellation the
+        // arm's Deregister raises; give it a bounded moment to settle.
+        var deadline = DateTime.UtcNow + Timeout;
+        while (slot!.GetValue(pending.Task) != null && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Null(slot.GetValue(pending.Task));
+        pending.TrySetResult(1);
     }
 }

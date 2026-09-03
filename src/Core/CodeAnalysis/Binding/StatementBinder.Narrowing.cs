@@ -1334,6 +1334,14 @@ internal sealed partial class StatementBinder
         {
             expression = bridge.Arguments[0];
         }
+        else if (AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(resultType, out var produced))
+        {
+            // An `async func` call (ADR-0023) is typed `Task[R]` and carries no
+            // caller-side await, and a CLR method may return `ValueTask[R]`
+            // outright. The binding names `R` either way; the child consumes
+            // the task on the goroutine, as `go` already does.
+            resultType = produced;
+        }
 
         if (expression is not BoundCallExpression and
             not BoundIndirectCallExpression and

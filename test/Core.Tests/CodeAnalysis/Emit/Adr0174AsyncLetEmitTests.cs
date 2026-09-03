@@ -337,4 +337,42 @@ public class Adr0174AsyncLetEmitTests
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
         Assert.Equal(4, result.Value);
     }
+    [Fact]
+    public void AnAsyncFuncInitializer_BindsTheAwaitedResult()
+    {
+        // An `async func` call is typed `Task[R]` and carries no caller-side
+        // await (ADR-0023), so the binding must name `R`, not the task. The
+        // child consumes the task on the goroutine, as `go` already does.
+        var result = EmittedOracle.Evaluate("""
+            package P0174AsyncLetOverAsyncFunc
+            import System.Threading.Tasks
+
+            async func fetch() int32 {
+                await Task.Delay(1)
+                return 5
+            }
+
+            func plain() int32 {
+                let ch = chan[int32](1)
+                ch <- 9
+                return <-ch
+            }
+
+            func run() int32 {
+                var total = 0
+                scope {
+                    async let a = fetch()
+                    async let b = plain()
+                    total = (await a) + (await b)
+                }
+
+                return total
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(14, result.Value);
+    }
 }

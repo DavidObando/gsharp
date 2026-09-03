@@ -52,8 +52,9 @@ for i < 4 {
 Console.WriteLine("open ports: $opened")
 
 // Timeout demo: a slow worker that never arrives, raced against a buffered
-// "timeout" channel pre-loaded with a sentinel. The select picks the ready
-// arm deterministically (source order, TryRead succeeds first).
+// "timeout" channel pre-loaded with a sentinel. Only one arm is ever ready, so
+// the choice is deterministic without depending on the order the arms are
+// written — see Timeout.gs for the same shape written with `after(d)`.
 let slow = chan[int32](1)
 let timeoutCh = chan[int32](1)
 timeoutCh <- 1
