@@ -56,7 +56,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The element, or the zero value when closed.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask<T> ReceiveValueAsync<T>(Channel<T>? channel, Context context) => ReceiveValueAsync(channel, context.Token);
+    public static ValueTask<T> ReceiveValueAsync<T>(Channel<T>? channel, Context? context) => ReceiveValueAsync(channel, context?.Token ?? default);
 
     /// <summary>Receives one value from a reader under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -64,7 +64,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The element, or the zero value when closed.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask<T> ReceiveValueAsync<T>(ChannelReader<T>? reader, Context context) => ReceiveValueAsync(reader, context.Token);
+    public static ValueTask<T> ReceiveValueAsync<T>(ChannelReader<T>? reader, Context? context) => ReceiveValueAsync(reader, context?.Token ?? default);
 
     /// <summary>The suspending two-value receive under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -72,7 +72,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The element and whether the channel delivered it.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask<(T Value, bool Ok)> ReceiveTupleAsync<T>(Channel<T>? channel, Context context) => ReceiveTupleAsync(channel, context.Token);
+    public static ValueTask<(T Value, bool Ok)> ReceiveTupleAsync<T>(Channel<T>? channel, Context? context) => ReceiveTupleAsync(channel, context?.Token ?? default);
 
     /// <summary>The suspending two-value receive from a reader under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -80,7 +80,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The element and whether the channel delivered it.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask<(T Value, bool Ok)> ReceiveTupleAsync<T>(ChannelReader<T>? reader, Context context) => ReceiveTupleAsync(reader, context.Token);
+    public static ValueTask<(T Value, bool Ok)> ReceiveTupleAsync<T>(ChannelReader<T>? reader, Context? context) => ReceiveTupleAsync(reader, context?.Token ?? default);
 
     private static ValueTask<T> Unwrap<T>(ValueTask<ReceiveResult<T>> pending)
     {

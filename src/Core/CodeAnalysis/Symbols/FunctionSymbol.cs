@@ -27,6 +27,9 @@ internal enum NullableSequenceSpecializationKind
 /// </summary>
 public sealed class FunctionSymbol : Symbol
 {
+    /// <summary>The unspeakable name of the hidden <c>Context</c> parameter (ADR-0174 D7).</summary>
+    public const string HiddenContextParameterName = "<>ctx";
+
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionSymbol"/> class.
     /// </summary>
@@ -164,6 +167,38 @@ public sealed class FunctionSymbol : Symbol
     public ImmutableArray<ParameterSymbol> Parameters { get; }
 
     /// <summary>
+    /// Gets the hidden leading <c>Context</c> parameter a suspending function
+    /// carries (ADR-0174 D7), or <see langword="null"/> for every other
+    /// function. It is deliberately absent from <see cref="Parameters"/> —
+    /// overload resolution, arity checks, hover and signature help must never
+    /// see it, and binding runs again on every keystroke in the language
+    /// server — and appears only in <see cref="EmittedParameters"/>, the list
+    /// the CLR signature, slot assignment and state-machine hoisting use.
+    /// It is emitted as a trailing optional parameter, so a caller written
+    /// against the function's declared signature — C#, reflection with
+    /// <see cref="System.Type.Missing"/>, another G# assembly — still binds.
+    /// </summary>
+    public ParameterSymbol? HiddenContextParameter { get; private set; }
+
+    /// <summary>
+    /// Gets the parameter this function's channel operations park on
+    /// (ADR-0174 D7): a <c>Context</c> the author declared in the signature, or
+    /// the synthesized <see cref="HiddenContextParameter"/>, or
+    /// <see langword="null"/> when the function carries neither.
+    /// </summary>
+    public ParameterSymbol? AmbientContextParameter { get; private set; }
+
+    /// <summary>
+    /// Gets the parameters as the CLR sees them: <see cref="Parameters"/>, then
+    /// the hidden <c>Context</c> of a suspending function (ADR-0174 D7). Every
+    /// emit-time consumer — signature encoding, parameter rows, argument slots,
+    /// state-machine hoisting — uses this list. The context goes last, and is
+    /// emitted optional, so a caller that does not know about it (C#, another
+    /// G# assembly) still binds the signature it was written to call.
+    /// </summary>
+    public ImmutableArray<ParameterSymbol> EmittedParameters => emittedParameters.IsDefault ? Parameters : emittedParameters;
+
+    /// <summary>
     /// Gets the type of the function.
     /// </summary>
     public TypeSymbol Type { get; }
@@ -251,6 +286,7 @@ public sealed class FunctionSymbol : Symbol
 
 #pragma warning disable SA1201
     private ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+    private ImmutableArray<ParameterSymbol> emittedParameters;
 #pragma warning restore SA1201
 
     /// <summary>Gets or sets the generic type parameters declared on this function (Phase 4.1 / ADR-0020). Empty for non-generic functions.</summary>
@@ -479,6 +515,61 @@ public sealed class FunctionSymbol : Symbol
     internal bool IsExpressionInitializer { get; set; }
 
     internal NullableSequenceSpecializationKind NullableSequenceSpecialization { get; set; }
+
+    /// <summary>
+    /// Prepends the hidden <c>Context</c> parameter of ADR-0174 D7, so channel
+    /// operations in this function's body observe the caller's scope. Called
+    /// once, by the suspension inference pass, after the fixed point.
+    /// </summary>
+    /// <param name="contextType">The runtime's <c>Context</c> type.</param>
+    /// <returns>
+    /// The parameter this function's channel operations observe: a
+    /// <c>Context</c> the author declared, else the freshly added hidden one,
+    /// else <see langword="null"/> when the function cannot carry one — a
+    /// variadic function, whose <c>...T</c> parameter must stay positionally
+    /// last. A function without one runs its channel operations under
+    /// <c>Context.None</c>: it loses cross-call cancellation, not correctness.
+    /// </returns>
+    public ParameterSymbol? AddHiddenContextParameter(TypeSymbol contextType)
+    {
+        if (AmbientContextParameter is { } existing)
+        {
+            return existing;
+        }
+
+        // ADR-0174 D7: an author who writes `ctx Context` in the signature has
+        // said how the context arrives. Use theirs — visible, callable from C#,
+        // and passed by every caller explicitly — instead of adding a second.
+        var declaredContextTypeName = contextType.ClrType?.FullName;
+        foreach (var parameter in Parameters)
+        {
+            if (declaredContextTypeName != null && parameter.Type.ClrType?.FullName == declaredContextTypeName)
+            {
+                AmbientContextParameter = parameter;
+                return parameter;
+            }
+        }
+
+        foreach (var parameter in Parameters)
+        {
+            if (parameter.IsVariadic)
+            {
+                return null;
+            }
+        }
+
+        var hidden = new ParameterSymbol(HiddenContextParameterName, contextType);
+
+        // Optional with a null default: a caller that predates the parameter —
+        // C#, another G# assembly, a reflection caller passing Type.Missing —
+        // binds the signature it was written against, and the runtime reads a
+        // missing context as `Context.None`.
+        hidden.SetExplicitDefaultValue(null);
+        HiddenContextParameter = hidden;
+        AmbientContextParameter = hidden;
+        emittedParameters = Parameters.Add(hidden);
+        return hidden;
+    }
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) function symbol at the

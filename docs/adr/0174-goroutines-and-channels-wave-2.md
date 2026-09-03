@@ -2183,6 +2183,46 @@ implementation had to refine it.
     Step two is the hidden `Context` parameter (P3-4b, moved here), which
     carries the same context *across calls* so an operation inside a callee
     observes its caller's scope.
+24. **The D7 ABI as implemented: a trailing optional parameter, not a leading
+    one plus a bridge.** D7's table specifies a hidden *leading* `Context` and,
+    for public API, a synthesized public bridge that supplies `Context.None`.
+    Implemented instead: the context is appended as the **last** parameter and
+    emitted **optional with a `nil` default**. This meets the same goals — a
+    foreign caller binds the signature the G# source declares, and the ABI does
+    not lie — without a bridge per public function. That mattered concretely:
+    G# top-level declarations are public by default (ADR-0006), so nearly every
+    suspending function would need one, and the extra MethodDef row would have
+    to be planned, named and ordered in each of the ten emission loops that
+    build method rows. The trade is honest and recorded:
+
+    | Caller | Leading + bridge (specified) | Trailing optional (implemented) |
+    | --- | --- | --- |
+    | C# source | `f(args)` | `f(args)`, or `f(args, ctx)` to pass one |
+    | Another G# assembly | binds the impl through the bridge | binds the declared signature; the pass supplies the context |
+    | Reflection `Invoke` | `Invoke(o, args)` | must supply the parameter or `Type.Missing` |
+    | Cost | a bridge per public suspending function | none |
+
+    Only the reflection row is worse, and a caller that reflects over a
+    `ValueTask`-returning G# function is already writing against ADR-0174's
+    breaking change. `CSharpConsumer_CallsTheDeclaredSignature_AndMayPassAContext`
+    compiles a real C# program against a G# library and runs it.
+25. **Two D7 cases the table leaves implicit.** An author who *declares* a
+    `ctx Context` parameter gets exactly that — the signature is untouched and
+    the operations park on their parameter (D7's "explicit" row, now also the
+    way a C# caller passes a context). A **variadic** function carries no
+    context at all: `...T` must stay positionally last, so appending one would
+    corrupt the call convention. Placing it *before* the variadic instead was
+    measured and rejected — the declaration is legal, but the parameter is not
+    skippable positionally, so `f(ch, 2, 3)` fails to compile (`CS1503`), and
+    when the variadic's element type is compatible with `Context` the call
+    compiles and *silently* binds the first variadic argument to the context.
+    So a variadic function runs its operations under `Context.None` — it loses
+    cross-call cancellation, not correctness — and an author who wants
+    cancellation declares `ctx Context` before the variadic, which works
+    (`AVariadicFunction_WithADeclaredContext_IsCancellable`). Giving the
+    compiler a way to inject one anyway would mean a companion overload for
+    this shape alone: the bridge idea of erratum 24, applied where it is the
+    only option rather than everywhere.
 
 ## Addendum A — The ten patterns, three ways
 

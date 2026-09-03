@@ -152,7 +152,7 @@ public static class AsyncStateMachineTypeBuilder
             sm.ThisField = thisField;
         }
 
-        var hoist = AsyncCaptureWalker.Analyze(loweredBody, kickoff.Parameters);
+        var hoist = AsyncCaptureWalker.Analyze(loweredBody, kickoff.EmittedParameters);
 
         foreach (var parameter in hoist.Parameters)
         {

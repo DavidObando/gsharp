@@ -49,9 +49,12 @@ public class Adr0174AmbientContextTests
     }
 
     [Fact]
-    public void Operations_OutsideEveryScope_KeepTheUncancellableDefault()
+    public void Operations_OutsideEveryScope_ParkOnTheFunctionsHiddenContext()
     {
-        var calls = ChannelOpCalls("""
+        // No lexical scope encloses these, so they observe whatever context the
+        // caller passed in — the hidden parameter D7 gives every suspending
+        // function. A caller inside a `scope` therefore cancels them too.
+        var program = Bind("""
             package P
             func f() {
                 let ch = chan[int32](1)
@@ -60,9 +63,46 @@ public class Adr0174AmbientContextTests
             }
             """);
 
+        var function = program.Functions.Single(p => p.Key.Name == "f").Key;
+        Assert.True(function.IsSuspending);
+        var hidden = Assert.IsType<ParameterSymbol>(function.HiddenContextParameter);
+        Assert.Equal("<>ctx", hidden.Name);
+
+        // The hidden parameter is emit-only: it leads the CLR signature and is
+        // absent from the parameters overload resolution, hover and signature
+        // help see — binding runs again on every keystroke, and a shifted
+        // parameter list would break every call site the second time around.
+        Assert.Same(hidden, function.EmittedParameters[0]);
+        Assert.DoesNotContain(hidden, function.Parameters);
+
+        var calls = ChannelOps(program.Functions.Single(p => p.Key.Name == "f").Value);
         Assert.Equal(2, calls.Count);
-        Assert.All(calls, call => Assert.Equal("System.Threading.CancellationToken", ContextArgumentType(call)));
-        Assert.All(calls, call => Assert.IsType<BoundDefaultExpression>(call.Arguments[^1]));
+        Assert.All(calls, call => Assert.Equal("Gsharp.Concurrency.Context", ContextArgumentType(call)));
+        Assert.All(calls, call => Assert.Same(hidden, Assert.IsType<BoundVariableExpression>(call.Arguments[^1]).Variable));
+    }
+
+    [Fact]
+    public void Operations_InABoundaryFunction_KeepTheUncancellableDefault()
+    {
+        // An `open` method cannot be inferred suspending (its signature is a
+        // contract), so it never gains a hidden context and its operations stay
+        // uncancellable — the shape every channel operation had before D7.
+        var program = Bind("""
+            package P
+            open class Reader {
+                open func Take(ch chan[int32]) int32 {
+                    return <-ch
+                }
+            }
+            """);
+
+        var take = program.Functions.Single(p => p.Key.Name == "Take");
+        Assert.False(take.Key.IsSuspending);
+        Assert.Null(take.Key.HiddenContextParameter);
+
+        var call = Assert.Single(ChannelOps(take.Value));
+        Assert.Equal("System.Threading.CancellationToken", ContextArgumentType(call));
+        Assert.IsType<BoundDefaultExpression>(call.Arguments[^1]);
     }
 
     [Fact]
@@ -84,6 +124,60 @@ public class Adr0174AmbientContextTests
         Assert.Equal(2, calls.Count);
         Assert.All(calls, call => Assert.Equal("Receive2", call.Function.Name));
         Assert.All(calls, call => Assert.Equal("Gsharp.Concurrency.Context", ContextArgumentType(call)));
+    }
+
+    [Fact]
+    public void ADeclaredContextParameter_IsUsedInsteadOfAddingAHiddenOne()
+    {
+        // ADR-0174 D7: an author who writes `ctx Context` has said how the
+        // context arrives. The signature stays exactly as written — visible,
+        // and callable from C# — and the operations park on their parameter.
+        var program = Bind("""
+            package P
+            import Gsharp.Concurrency
+            func worker(ch in chan[int32], ctx Context) int32 {
+                return <-ch
+            }
+            """);
+
+        var worker = program.Functions.Single(p => p.Key.Name == "worker");
+        Assert.True(worker.Key.IsSuspending);
+        Assert.Null(worker.Key.HiddenContextParameter);
+        Assert.Equal(worker.Key.Parameters.Length, worker.Key.EmittedParameters.Length);
+
+        var declared = worker.Key.Parameters.Single(p => p.Name == "ctx");
+        Assert.Same(declared, worker.Key.AmbientContextParameter);
+
+        var call = Assert.Single(ChannelOps(worker.Value));
+        Assert.Same(declared, Assert.IsType<BoundVariableExpression>(call.Arguments[^1]).Variable);
+    }
+
+    [Fact]
+    public void AVariadicFunction_CarriesNoContext_BecauseItsLastParameterMustStayLast()
+    {
+        // The context is appended, and `...T` must be positionally last, so a
+        // variadic suspending function keeps its signature and runs its
+        // operations uncancelled rather than gaining a broken one.
+        var program = Bind("""
+            package P
+            func sumAll(ch in chan[int32], extras ...int32) int32 {
+                var total = <-ch
+                for e in extras {
+                    total = total + e
+                }
+
+                return total
+            }
+            """);
+
+        var sumAll = program.Functions.Single(p => p.Key.Name == "sumAll");
+        Assert.True(sumAll.Key.IsSuspending);
+        Assert.Null(sumAll.Key.HiddenContextParameter);
+        Assert.Null(sumAll.Key.AmbientContextParameter);
+        Assert.Equal(sumAll.Key.Parameters.Length, sumAll.Key.EmittedParameters.Length);
+
+        var call = Assert.Single(ChannelOps(sumAll.Value));
+        Assert.Equal("System.Threading.CancellationToken", ContextArgumentType(call));
     }
 
     [Fact]

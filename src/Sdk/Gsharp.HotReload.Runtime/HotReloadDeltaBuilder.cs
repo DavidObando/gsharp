@@ -350,8 +350,34 @@ internal sealed class HotReloadDeltaBuilder
             return false; // a synthesized state machine
         }
 
-        key = GetMethodDisplayName(reader, handle) + "/" + method.GetParameters().Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        // The count excludes a trailing `Context` (ADR-0174 D7): gaining or
+        // losing suspension gains or loses that parameter, and the key has to
+        // pair the two versions of the same method across exactly that change.
+        var parameterCount = method.GetParameters().Count;
+        if (parameterCount > 0 && HasTrailingHiddenContext(reader, method))
+        {
+            parameterCount--;
+        }
+
+        key = GetMethodDisplayName(reader, handle) + "/" + parameterCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return true;
+    }
+
+    private static bool HasTrailingHiddenContext(MetadataReader reader, MethodDefinition method)
+    {
+        var last = default(Parameter);
+        var found = false;
+        foreach (var handle in method.GetParameters())
+        {
+            var parameter = reader.GetParameter(handle);
+            if (!found || parameter.SequenceNumber > last.SequenceNumber)
+            {
+                last = parameter;
+                found = true;
+            }
+        }
+
+        return found && reader.GetString(last.Name) == "<>ctx";
     }
 
     // The compiler stamps [Gsharp.Concurrency.Suspending] on every suspending

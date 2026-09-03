@@ -338,14 +338,15 @@ internal sealed class FunctionEmitter
                 }
 
                 var emittedParameterIndex = 0;
-                for (var i = 0; i < function.Parameters.Length; i++)
+                var emittedParameters = function.EmittedParameters;
+                for (var i = 0; i < emittedParameters.Length; i++)
                 {
-                    if (ReferenceEquals(function.Parameters[i], function.ThisParameter))
+                    if (ReferenceEquals(emittedParameters[i], function.ThisParameter))
                     {
                         continue;
                     }
 
-                    parameters[function.Parameters[i]] = emittedParameterIndex + paramSlotShift;
+                    parameters[emittedParameters[i]] = emittedParameterIndex + paramSlotShift;
                     emittedParameterIndex++;
                 }
 
@@ -415,7 +416,7 @@ internal sealed class FunctionEmitter
     {
         var sigBlob = new BlobBuilder();
         bool emitsExplicitReceiver = function.IsExtension && !function.IsInstanceMethod;
-        var signatureParameterCount = function.Parameters.Length
+        var signatureParameterCount = function.EmittedParameters.Length
             - (function.ExplicitReceiverParameter != null && !emitsExplicitReceiver ? 1 : 0);
         new BlobEncoder(sigBlob).MethodSignature(
                 isInstanceMethod: function.IsInstanceMethod,
@@ -448,7 +449,7 @@ internal sealed class FunctionEmitter
                 },
                 ps =>
                 {
-                    foreach (var p in function.Parameters)
+                    foreach (var p in function.EmittedParameters)
                     {
                         if (ReferenceEquals(p, function.ThisParameter)
                             && !emitsExplicitReceiver)
@@ -664,7 +665,7 @@ internal sealed class FunctionEmitter
             ? ImmutableArray<byte>.Empty
             : NullableFlagsBuilder.Build(function.Type);
         var paramFlagsList = new List<ImmutableArray<byte>>();
-        foreach (var p in function.Parameters)
+        foreach (var p in function.EmittedParameters)
         {
             if (ReferenceEquals(p, function.ThisParameter)
                 && !(function.IsExtension && !function.IsInstanceMethod))
@@ -708,7 +709,7 @@ internal sealed class FunctionEmitter
         var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle, ImmutableArray<byte> NullableFlags)>();
         var sequenceNumber = 1;
         var flagsIndex = 0;
-        foreach (var p in function.Parameters)
+        foreach (var p in function.EmittedParameters)
         {
             if (ReferenceEquals(p, function.ThisParameter))
             {

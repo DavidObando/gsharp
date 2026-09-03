@@ -154,6 +154,25 @@ forever, `defer`s run, and the block collapses. An operation that already
 completed its transfer keeps its value — cancellation wins only before the
 transfer commits, so a receive never drops an element it has already taken.
 
+### How the context reaches a function
+
+Cancellation follows calls, not just blocks. A suspending function receives the
+caller's context as a trailing optional parameter the compiler supplies, so a
+receive inside a helper unwinds when the caller's `scope` is cancelled without
+either of you writing a parameter. Two cases are yours to steer:
+
+- Write `ctx Context` in the signature when you want it visible — a public API
+  whose callers choose the context, or one a C# caller passes to. The compiler
+  then uses your parameter and adds nothing.
+- A variadic function (`...T`) carries no context, because that parameter must
+  stay last and one placed before it could not be skipped by callers. Its
+  operations run uncancelled; declare `ctx Context` before the variadic
+  parameter when you need cancellation, and callers pass it there.
+
+From C#, a G# suspending function is an ordinary `ValueTask`-returning method:
+call it as its signature reads, or pass a `Gsharp.Concurrency.Context` as the
+last argument to make it cancellable.
+
 ### Debugging and hot reload through suspension
 
 A suspending function is compiled to a state machine, but the tooling keeps the

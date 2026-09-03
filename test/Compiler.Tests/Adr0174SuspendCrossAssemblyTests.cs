@@ -9,6 +9,10 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using GSharp.Compiler;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -112,6 +116,124 @@ public class Adr0174SuspendCrossAssemblyTests
         Assert.True(exit == 0, compileLog);
         Assert.Contains("GS0558", compileLog);
         Assert.Equal("30", output.Trim());
+    }
+
+    private const string ClassLibrary = """
+        package Lib
+        public class Reader {
+            public func Take(ch in chan[int32]) int32 {
+                return <-ch
+            }
+
+            public func Fill(ch out chan[int32], n int32) {
+                for i in 1 ... n + 1 {
+                    ch <- i
+                }
+            }
+        }
+        """;
+
+    [Fact]
+    public void HiddenContext_IsTheLastParameter_OptionalWithANullDefault()
+    {
+        // The ABI contract every foreign caller depends on: the context D7
+        // threads is appended, not inserted, and it is optional — so a caller
+        // written against the declared signature still binds.
+        var tempDir = Directory.CreateTempSubdirectory("gs_0174_abi_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var log = Compile(tempDir, "Lib.gs", ClassLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + log);
+
+            using var stream = File.OpenRead(libPath);
+            using var peReader = new PEReader(stream);
+            var metadata = peReader.GetMetadataReader();
+            var take = metadata.MethodDefinitions
+                .Select(metadata.GetMethodDefinition)
+                .Single(m => metadata.GetString(m.Name) == "Take");
+
+            var parameters = take.GetParameters().Select(metadata.GetParameter).OrderBy(p => p.SequenceNumber).ToList();
+            var hidden = parameters[^1];
+            Assert.Equal("<>ctx", metadata.GetString(hidden.Name));
+            Assert.True(hidden.Attributes.HasFlag(System.Reflection.ParameterAttributes.Optional));
+            Assert.True(hidden.Attributes.HasFlag(System.Reflection.ParameterAttributes.HasDefault));
+            Assert.False(hidden.GetDefaultValue().IsNil);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CSharpConsumer_CallsTheDeclaredSignature_AndMayPassAContext()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_0174_csharp_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var log = Compile(tempDir, "Lib.gs", ClassLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + log);
+
+            const string ConsumerSource = """
+                using System;
+                using System.Threading.Tasks;
+                using Gsharp.Concurrency;
+                using Lib;
+
+                public static class Consumer
+                {
+                    public static async Task<int> Main()
+                    {
+                        var ch = new Chan<int>(4);
+                        var reader = new Reader();
+
+                        // Exactly the signatures the G# source declares: the
+                        // hidden context is optional, so C# omits it.
+                        await reader.Fill(ch, 3);
+                        Console.WriteLine("first=" + await reader.Take(ch));
+
+                        // ... and a C# caller that wants cancellation passes one.
+                        using var ctx = Context.None.WithCancel();
+                        Console.WriteLine("second=" + await reader.Take(ch, ctx));
+                        return 0;
+                    }
+                }
+                """;
+
+            var references = TrustedPlatformAssemblies()
+                .Concat(new[] { libPath, Path.Combine(tempDir, "Gsharp.Runtime.Channels.dll") })
+                .Where(File.Exists)
+                .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+                .ToList();
+
+            var compilation = CSharpCompilation.Create(
+                "Consumer",
+                new[] { CSharpSyntaxTree.ParseText(ConsumerSource) },
+                references,
+                new CSharpCompilationOptions(OutputKind.ConsoleApplication));
+
+            var consumerPath = Path.Combine(tempDir, "Consumer.dll");
+            var result = compilation.Emit(consumerPath);
+            Assert.True(
+                result.Success,
+                "C# consumer must compile against the G# signatures:\n"
+                    + string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+
+            var runtimeConfig = "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":"
+                + "{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" + Environment.Version.ToString(3) + "\"}}}";
+            File.WriteAllText(Path.Combine(tempDir, "Consumer.runtimeconfig.json"), runtimeConfig);
+
+            var (exit, output) = RunDotnet(consumerPath);
+            Assert.Equal(0, exit);
+            Assert.Contains("first=1", output, StringComparison.Ordinal);
+            Assert.Contains("second=2", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     private static (int Exit, string Output, string CompileLog) CompileAndRun(string appSource)

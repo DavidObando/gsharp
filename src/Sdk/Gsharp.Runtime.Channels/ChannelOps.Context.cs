@@ -21,7 +21,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The received value, or the zero value when closed and drained.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T Receive<T>(Channel<T>? channel, Context context) => Receive(channel, context.Token);
+    public static T Receive<T>(Channel<T>? channel, Context? context) => Receive(channel, context?.Token ?? default);
 
     /// <summary>Receives one value from a reader under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -29,7 +29,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The received value, or the zero value when closed and drained.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T Receive<T>(ChannelReader<T>? reader, Context context) => Receive(reader, context.Token);
+    public static T Receive<T>(ChannelReader<T>? reader, Context? context) => Receive(reader, context?.Token ?? default);
 
     /// <summary>The two-value receive under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -37,7 +37,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The value and whether the channel delivered it.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static (T Value, bool Ok) Receive2<T>(Channel<T>? channel, Context context) => Receive2(channel, context.Token);
+    public static (T Value, bool Ok) Receive2<T>(Channel<T>? channel, Context? context) => Receive2(channel, context?.Token ?? default);
 
     /// <summary>The two-value receive from a reader under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -45,7 +45,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The value and whether the channel delivered it.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static (T Value, bool Ok) Receive2<T>(ChannelReader<T>? reader, Context context) => Receive2(reader, context.Token);
+    public static (T Value, bool Ok) Receive2<T>(ChannelReader<T>? reader, Context? context) => Receive2(reader, context?.Token ?? default);
 
     /// <summary>Sends one value under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -53,7 +53,7 @@ public static partial class ChannelOps
     /// <param name="value">The value.</param>
     /// <param name="context">The ambient context.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void Send<T>(Channel<T>? channel, T value, Context context) => Send(channel, value, context.Token);
+    public static void Send<T>(Channel<T>? channel, T value, Context? context) => Send(channel, value, context?.Token ?? default);
 
     /// <summary>Sends one value through a writer under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -61,7 +61,7 @@ public static partial class ChannelOps
     /// <param name="value">The value.</param>
     /// <param name="context">The ambient context.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void Send<T>(ChannelWriter<T>? writer, T value, Context context) => Send(writer, value, context.Token);
+    public static void Send<T>(ChannelWriter<T>? writer, T value, Context? context) => Send(writer, value, context?.Token ?? default);
 
     /// <summary>The suspending receive under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -69,7 +69,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The value and whether the channel delivered it.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask<ReceiveResult<T>> ReceiveAsync<T>(Channel<T>? channel, Context context) => ReceiveAsync(channel, context.Token);
+    public static ValueTask<ReceiveResult<T>> ReceiveAsync<T>(Channel<T>? channel, Context? context) => ReceiveAsync(channel, context?.Token ?? default);
 
     /// <summary>The suspending receive from a reader under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -77,7 +77,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>The value and whether the channel delivered it.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask<ReceiveResult<T>> ReceiveAsync<T>(ChannelReader<T>? reader, Context context) => ReceiveAsync(reader, context.Token);
+    public static ValueTask<ReceiveResult<T>> ReceiveAsync<T>(ChannelReader<T>? reader, Context? context) => ReceiveAsync(reader, context?.Token ?? default);
 
     /// <summary>The suspending send under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -86,7 +86,7 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>A task that completes when the value has been accepted.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask SendAsync<T>(Channel<T>? channel, T value, Context context) => SendAsync(channel, value, context.Token);
+    public static ValueTask SendAsync<T>(Channel<T>? channel, T value, Context? context) => SendAsync(channel, value, context?.Token ?? default);
 
     /// <summary>The suspending send through a writer under <paramref name="context"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -95,5 +95,5 @@ public static partial class ChannelOps
     /// <param name="context">The ambient context.</param>
     /// <returns>A task that completes when the value has been accepted.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ValueTask SendAsync<T>(ChannelWriter<T>? writer, T value, Context context) => SendAsync(writer, value, context.Token);
+    public static ValueTask SendAsync<T>(ChannelWriter<T>? writer, T value, Context? context) => SendAsync(writer, value, context?.Token ?? default);
 }

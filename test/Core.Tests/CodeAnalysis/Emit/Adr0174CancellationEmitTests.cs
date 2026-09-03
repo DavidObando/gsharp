@@ -14,6 +14,15 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// parked forever — while an operation that already committed keeps its value.
 /// </summary>
 /// <remarks>
+/// A variadic function is the one shape that cannot be given a context
+/// implicitly: <c>...T</c> must stay positionally last, and an optional
+/// parameter placed before it is not skippable — a caller writing
+/// <c>f(ch, 2, 3)</c> either fails to compile or, when the variadic element
+/// type is compatible with <c>Context</c>, silently loses its first argument
+/// to it. Declaring <c>ctx Context</c> before the variadic is the supported
+/// way, and it is exercised here.
+/// </remarks>
+/// <remarks>
 /// Discrimination witness (ADR-0154): a mutant that binds channel operations
 /// against the default token instead of the block's <c>ctx</c> (the shape
 /// before D7) leaves the parked receive in
@@ -69,6 +78,191 @@ public class Adr0174CancellationEmitTests
             """);
 
         // The rendezvous channel warns by design (GS0548); nothing may error.
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal("cancelled / ScopeException", result.Value);
+    }
+
+    [Fact]
+    public void ParkedReceive_InsideACallee_UnwindsWithTheCallersScope()
+    {
+        // D7's cross-call half: `worker` has no lexical scope of its own, so it
+        // can only observe the caller's cancellation through the ambient
+        // context the compiler threads into it.
+        var result = EmittedOracle.Evaluate("""
+            package P0174CalleeCancel
+            import System
+            import System.Threading
+
+            func fail() {
+                Thread.Sleep(20)
+                throw Exception("child failed")
+            }
+
+            func rescue(ch chan[int32]) {
+                Thread.Sleep(3000)
+                ch.Close()
+            }
+
+            func worker(ch in chan[int32]) string {
+                try {
+                    let v = <-ch
+                    return "received " + v.ToString()
+                } catch (cancelled OperationCanceledException) {
+                    return "cancelled"
+                }
+            }
+
+            func run() string {
+                let ch = chan[int32]()
+                var outcome = "parked"
+                try {
+                    scope {
+                        go fail()
+                        go rescue(ch)
+                        outcome = worker(ch)
+                    }
+                } catch (scopeFailure Exception) {
+                    outcome = outcome + " / " + scopeFailure.GetType().Name
+                }
+
+                return outcome
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal("cancelled / ScopeException", result.Value);
+    }
+
+    [Fact]
+    public void ADeclaredContextParameter_CarriesTheCallersCancellation()
+    {
+        var result = EmittedOracle.Evaluate("""
+            package P0174DeclaredCtx
+            import System
+            import System.Threading
+            import Gsharp.Concurrency
+
+            func fail() {
+                Thread.Sleep(20)
+                throw Exception("child failed")
+            }
+
+            func rescue(ch chan[int32]) {
+                Thread.Sleep(3000)
+                ch.Close()
+            }
+
+            func worker(ch in chan[int32], ctx Context) string {
+                try {
+                    let v = <-ch
+                    return "received " + v.ToString()
+                } catch (cancelled OperationCanceledException) {
+                    return "cancelled"
+                }
+            }
+
+            func run() string {
+                let ch = chan[int32]()
+                var outcome = "parked"
+                try {
+                    scope {
+                        go fail()
+                        go rescue(ch)
+                        outcome = worker(ch, ctx)
+                    }
+                } catch (scopeFailure Exception) {
+                    outcome = outcome + " / " + scopeFailure.GetType().Name
+                }
+
+                return outcome
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal("cancelled / ScopeException", result.Value);
+    }
+
+    [Fact]
+    public void AVariadicSuspendingFunction_StillRuns()
+    {
+        var result = EmittedOracle.Evaluate("""
+            package P0174Variadic
+            func sumAll(ch in chan[int32], extras ...int32) int32 {
+                var total = <-ch
+                for e in extras {
+                    total = total + e
+                }
+
+                return total
+            }
+
+            let ch = chan[int32](1)
+            ch <- 1
+            sumAll(ch, 2, 3)
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void AVariadicFunction_WithADeclaredContext_IsCancellable()
+    {
+        // The documented way to get cancellation into a variadic function: put
+        // `ctx Context` before the variadic parameter yourself. The compiler
+        // cannot inject one there — see the class remarks.
+        var result = EmittedOracle.Evaluate("""
+            package P0174VariadicCtx
+            import System
+            import System.Threading
+            import Gsharp.Concurrency
+
+            func fail() {
+                Thread.Sleep(20)
+                throw Exception("child failed")
+            }
+
+            func rescue(ch chan[int32]) {
+                Thread.Sleep(3000)
+                ch.Close()
+            }
+
+            func sumAll(ch in chan[int32], ctx Context, extras ...int32) string {
+                try {
+                    var total = <-ch
+                    for e in extras {
+                        total = total + e
+                    }
+
+                    return "received " + total.ToString()
+                } catch (cancelled OperationCanceledException) {
+                    return "cancelled"
+                }
+            }
+
+            func run() string {
+                let ch = chan[int32]()
+                var outcome = "parked"
+                try {
+                    scope {
+                        go fail()
+                        go rescue(ch)
+                        outcome = sumAll(ch, ctx, 2, 3)
+                    }
+                } catch (scopeFailure Exception) {
+                    outcome = outcome + " / " + scopeFailure.GetType().Name
+                }
+
+                return outcome
+            }
+
+            run()
+            """);
+
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
         Assert.Equal("cancelled / ScopeException", result.Value);
     }

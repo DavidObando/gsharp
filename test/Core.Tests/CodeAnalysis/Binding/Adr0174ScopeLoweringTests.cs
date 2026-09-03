@@ -62,7 +62,7 @@ public class Adr0174ScopeLoweringTests
     }
 
     [Fact]
-    public void NestedScope_EntersUnderTheEnclosingCtx_OutermostUnderDefault()
+    public void NestedScope_EntersUnderTheEnclosingCtx_OutermostUnderTheCallersContext()
     {
         var program = Bind("""
             package P
@@ -74,10 +74,16 @@ public class Adr0174ScopeLoweringTests
             }
             """);
 
-        var run = Body(program, "run");
-        var enters = Collect<BoundImportedCallExpression>(run).Where(c => c.Function.Name == "Enter").ToList();
+        var run = program.Functions.Single(p => p.Key.Name == "run");
+        var enters = Collect<BoundImportedCallExpression>(run.Value).Where(c => c.Function.Name == "Enter").ToList();
         Assert.Equal(2, enters.Count);
-        Assert.IsType<BoundDefaultExpression>(Assert.Single(enters[0].Arguments));
+
+        // A function containing a scope suspends, so its outermost block enters
+        // under the hidden context its caller supplies (ADR-0174 D7) — that is
+        // what makes cancelling the caller collapse this block.
+        var hidden = Assert.IsType<ParameterSymbol>(run.Key.HiddenContextParameter);
+        Assert.Same(hidden, Assert.IsType<BoundVariableExpression>(Assert.Single(enters[0].Arguments)).Variable);
+
         var inner = Assert.IsType<BoundClrPropertyAccessExpression>(Assert.Single(enters[1].Arguments));
         Assert.Equal("Context", inner.Member.Name);
         var outerFrame = Assert.IsType<BoundVariableExpression>(inner.Receiver).Variable;

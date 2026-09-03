@@ -72,7 +72,7 @@ public sealed class AsyncStateMachineFieldMap
 
         var structType = stateMachine.MaterializeAsStructSymbol();
         var map = new AsyncStateMachineFieldMap(stateMachine, structType);
-        var hoist = AsyncCaptureWalker.Analyze(loweredBody, stateMachine.KickoffMethod.Parameters);
+        var hoist = AsyncCaptureWalker.Analyze(loweredBody, stateMachine.KickoffMethod.EmittedParameters);
         var fields = stateMachine.Fields;
         var fieldIndex = 2;
         if (stateMachine.ThisField != null)

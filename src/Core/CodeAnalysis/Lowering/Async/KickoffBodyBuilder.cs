@@ -69,8 +69,11 @@ public static class KickoffBodyBuilder
             throw new ArgumentNullException(nameof(fieldMap));
         }
 
-        var parameterCopies = ImmutableArray.CreateBuilder<KickoffParameterCopy>(kickoffMethod.Parameters.Length);
-        foreach (var parameter in kickoffMethod.Parameters)
+        var parameterCopies = ImmutableArray.CreateBuilder<KickoffParameterCopy>(kickoffMethod.EmittedParameters.Length);
+
+        // ADR-0174 D7: the hidden context is a parameter like any other here —
+        // the kickoff copies it into the state machine so the body can read it.
+        foreach (var parameter in kickoffMethod.EmittedParameters)
         {
             parameterCopies.Add(new KickoffParameterCopy(parameter, fieldMap.GetParameterField(parameter)));
         }

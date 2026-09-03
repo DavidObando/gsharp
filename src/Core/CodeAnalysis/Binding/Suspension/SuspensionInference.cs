@@ -96,6 +96,20 @@ internal static class SuspensionInference
             }
         }
 
+        // ADR-0174 D7: every suspending function carries a hidden leading
+        // `Context` parameter, so its channel operations observe the caller's
+        // scope. Prepending it here — after the fixed point, after overload
+        // resolution and every arity check have run — keeps it out of every
+        // user-facing surface while the CLR signature, state-machine hoisting
+        // and slot assignment pick it up like any other parameter.
+        foreach (var function in ordered)
+        {
+            if (function.IsSuspending)
+            {
+                function.AddHiddenContextParameter(runtime.ContextType);
+            }
+        }
+
         var bag = new DiagnosticBag();
         var newlySuspending = inferred.ToImmutableHashSet();
         foreach (var function in ordered)

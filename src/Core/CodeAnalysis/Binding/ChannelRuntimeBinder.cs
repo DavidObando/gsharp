@@ -106,6 +106,15 @@ internal sealed class ChannelRuntimeBinder
         return new BoundImportedCallExpression(syntax, function, ImmutableArray.Create(ambient ?? new BoundDefaultExpression(null, ContextType)));
     }
 
+    /// <summary>Binds <c>Context.None</c>, the ambient context of a call site that no scope encloses (ADR-0174 D7).</summary>
+    /// <returns>A static property read typed <c>Context</c>.</returns>
+    public BoundExpression BindContextNone()
+    {
+        var property = Required(contextType).GetProperty("None", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Context.None is missing from the channel runtime.");
+        return new BoundClrPropertyAccessExpression(null, receiver: null, property, ContextType, staticContainerType: ContextType);
+    }
+
     /// <summary>Binds <c>frame.Context</c>, the block's implicit <c>ctx</c> (ADR-0174 D6).</summary>
     /// <param name="frame">The frame local.</param>
     /// <returns>A property read typed <c>Context</c>.</returns>
@@ -361,6 +370,106 @@ internal sealed class ChannelRuntimeBinder
     public static bool IsFacadeCall(BoundImportedCallExpression call, string name)
         => call.Function.Name == name
             && call.Function.ImportedClass.ClassType.FullName == ChannelOpsTypeName;
+
+    /// <summary>
+    /// ADR-0174 D7: rebinds a facade call that was bound with the
+    /// uncancellable default token so it parks on <paramref name="context"/>
+    /// instead. Used by the suspension pass for operations that no lexical
+    /// scope encloses, whose context is the function's hidden parameter.
+    /// </summary>
+    /// <param name="call">A <c>ChannelOps</c> call.</param>
+    /// <param name="context">The ambient context to park on.</param>
+    /// <returns>The rebound call, or <paramref name="call"/> when it is not a defaulted facade operation.</returns>
+    public BoundExpression RetargetFacadeCancellation(BoundImportedCallExpression call, BoundExpression context)
+    {
+        if (call.Function.ImportedClass.ClassType.FullName != ChannelOpsTypeName
+            || call.Arguments.Length == 0
+            || call.Arguments[^1] is not BoundDefaultExpression defaulted
+            || defaulted.Type?.ClrType?.FullName != CancellationTokenTypeName)
+        {
+            return call;
+        }
+
+        var element = ElementTypeOf(call);
+        var direction = DirectionOf(call);
+        return call.Function.Name switch
+        {
+            "Receive" => BindReceive(call.Syntax, call.Arguments[0], element, direction, context),
+            "Receive2" => BindReceive2(call.Syntax, call.Arguments[0], element, direction, context),
+            "Send" => ((BoundExpressionStatement)BindSend(call.Syntax, call.Arguments[0], call.Arguments[1], element, direction, context)).Expression,
+            _ => call,
+        };
+    }
+
+    /// <summary>
+    /// ADR-0174 D7: rebinds a <c>ScopeFrame.Enter(default)</c> — the outermost
+    /// scope of a function, which had no enclosing block to inherit from — so
+    /// it enters under <paramref name="context"/> instead. The block's <c>ctx</c>
+    /// then links to the caller's scope, and cancelling the caller cancels it.
+    /// </summary>
+    /// <param name="call">An imported call.</param>
+    /// <param name="context">The ambient context to enter under.</param>
+    /// <returns>The rebound call, or <paramref name="call"/> when it is not a defaulted scope entry.</returns>
+    public BoundExpression RetargetScopeEnter(BoundImportedCallExpression call, BoundExpression context)
+    {
+        if (call.Function.Name != "Enter"
+            || call.Function.ImportedClass.ClassType.FullName != "Gsharp.Concurrency.ScopeFrame"
+            || call.Arguments.Length != 1
+            || call.Arguments[0] is not BoundDefaultExpression)
+        {
+            return call;
+        }
+
+        return BindScopeEnter(call.Syntax, context);
+    }
+
+    /// <summary>
+    /// ADR-0174 D7, the cross-assembly half: supplies the ambient context to a
+    /// call on an imported suspending function. The importing compilation binds
+    /// that function's declared signature — the hidden context is a trailing
+    /// optional parameter it knows nothing about — so the argument is appended
+    /// here, or replaces the <c>nil</c> the resolver filled in.
+    /// </summary>
+    /// <param name="call">An imported call.</param>
+    /// <param name="context">The ambient context.</param>
+    /// <returns>The call with the context supplied, or <paramref name="call"/> when it takes none.</returns>
+    public static BoundExpression SupplyImportedContext(BoundImportedCallExpression call, BoundExpression context)
+    {
+        if (!ImportedFunctionSymbol.IsSuspendingMethod(call.Function.Method))
+        {
+            return call;
+        }
+
+        var parameters = call.Function.Method.GetParameters();
+        if (parameters.Length == 0
+            || parameters[^1].ParameterType.FullName != "Gsharp.Concurrency.Context"
+            || parameters[^1].Name != FunctionSymbol.HiddenContextParameterName)
+        {
+            return call;
+        }
+
+        ImmutableArray<BoundExpression> arguments;
+        if (call.Arguments.Length == parameters.Length - 1)
+        {
+            arguments = call.Arguments.Add(context);
+        }
+        else if (call.Arguments.Length == parameters.Length && call.Arguments[^1] is BoundDefaultExpression or BoundLiteralExpression)
+        {
+            arguments = call.Arguments.SetItem(call.Arguments.Length - 1, context);
+        }
+        else
+        {
+            return call;
+        }
+
+        return new BoundImportedCallExpression(
+            call.Syntax,
+            call.Function,
+            arguments,
+            call.ArgumentRefKinds,
+            call.TypeArgumentSymbols,
+            call.StaticContainerType);
+    }
 
     /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>
     /// <param name="call">A facade call.</param>
