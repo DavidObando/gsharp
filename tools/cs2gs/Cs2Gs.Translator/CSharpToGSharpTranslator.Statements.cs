@@ -1614,8 +1614,7 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax operand = binary.Right.IsKind(SyntaxKind.NullLiteralExpression) ? binary.Left
                 : binary.Left.IsKind(SyntaxKind.NullLiteralExpression) ? binary.Right
                 : null;
-            if (operand == null
-                || this.context.GetSymbolInfo(operand).Symbol is not IParameterSymbol { IsParams: true })
+            if (!this.IsParamsArrayOperand(operand))
             {
                 return false;
             }
@@ -1623,6 +1622,20 @@ public sealed partial class CSharpToGSharpTranslator
             folded = LiteralExpression.Bool(!isEquals);
             return true;
         }
+
+        /// <summary>
+        /// ADR-0159 / issue #3501: true when <paramref name="operand"/> reads a
+        /// C# <c>params</c> parameter. Such a parameter translates to a G#
+        /// variadic, which always materializes an array, so any nil comparison
+        /// against it is statically decided and gsc reports GS0523. Shared by
+        /// the <c>args == null</c> binary spelling
+        /// (<see cref="TryFoldParamsArrayNullCheck"/>) and the <c>args is
+        /// null</c> / <c>args is not null</c> pattern spelling
+        /// (<c>TranslatePatternTest</c> / <c>TranslateNotPatternTest</c>).
+        /// </summary>
+        private bool IsParamsArrayOperand(ExpressionSyntax operand)
+            => operand != null
+                && this.context.GetSymbolInfo(operand).Symbol is IParameterSymbol { IsParams: true };
 
         /// <summary>
         /// Issue #3501: true when the arm a <c>goto case</c>/<c>goto
