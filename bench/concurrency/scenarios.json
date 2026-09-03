@@ -1,0 +1,64 @@
+{
+  "$comment": [
+    "ADR-0174 D11: the scenario registry the concurrency benchmark runs.",
+    "Each row pairs a G# scenario with the Go program's counterpart, so the",
+    "runner can report both a within-runtime regression check (the gate) and a",
+    "G#-vs-Go ratio (informational, because it moves with the Go toolchain and",
+    "the machine).",
+    "",
+    "`gsharp` is the scenario name Bench.gs prints; `go` is the row name",
+    "main.go prints. A null `go` row means the scenario has no Go counterpart",
+    "yet and only the within-runtime check applies."
+  ],
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "name": "buf64",
+      "gsharp": "buf64",
+      "go": "go-buf64",
+      "what": "A bounded channel driven producer-to-consumer: one pipeline stage."
+    },
+    {
+      "name": "rendezvous",
+      "gsharp": "rendezvous",
+      "go": "go-pingpong",
+      "what": "Capacity 0, so the number is the hand-off rather than the buffer."
+    },
+    {
+      "name": "closed-recv",
+      "gsharp": "closed-recv",
+      "go": "go-closed",
+      "what": "A receive from a closed, drained channel — the exception-based defect D2 removes."
+    },
+    {
+      "name": "spawn",
+      "gsharp": "spawn",
+      "go": "go-spawn",
+      "what": "Spawn cost: `go` is a thread-pool work item, not a Task."
+    },
+    {
+      "name": "select-ready",
+      "gsharp": "select-ready",
+      "go": "go-select2",
+      "what": "A select whose arms are ready: no registration, no park."
+    },
+    {
+      "name": "select-park",
+      "gsharp": "select-park",
+      "go": null,
+      "what": "A select with no ready arm: registration on every arm, a park, a hand-off. Wave 1 could not measure this at all."
+    },
+    {
+      "name": "chunk64",
+      "gsharp": "chunk64",
+      "go": "go-chunk64",
+      "what": "D10 batching at 64 elements per chunk."
+    },
+    {
+      "name": "chunk1k",
+      "gsharp": "chunk1k",
+      "go": "go-chunk1k",
+      "what": "D10 batching at 1024 elements per chunk. The curve between this and chunk64 is the point, not either number."
+    }
+  ]
+}

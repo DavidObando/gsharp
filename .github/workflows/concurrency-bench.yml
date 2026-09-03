@@ -1,0 +1,85 @@
+name: concurrency-bench
+
+# ADR-0174 D11: the paired G# / Go concurrency benchmark.
+#
+# The ADR's performance claims are only worth something if a harness can refute
+# them, and only that harness may write the numbers they rest on. Two gates,
+# deliberately unequal:
+#
+#   within-runtime — G# against its own last recorded median, from
+#                    bench/concurrency/baseline.json. Stable enough to fail the
+#                    run: a scenario fails only when its median is above the
+#                    recorded ceiling AND the confidence intervals are disjoint
+#                    AND the hardware class matches.
+#   G# versus Go   — informational. It moves with the Go toolchain and the
+#                    machine, so it is reported and never gates.
+#
+# Nightly by default. A PR can opt in with the `bench:concurrency` label when it
+# touches the runtime or the lowering; that run reports and does not gate,
+# because a shared CI runner is too noisy to fail a PR on.
+
+on:
+  schedule:
+    - cron: '23 05 * * *'
+  workflow_dispatch:
+    inputs:
+      launches:
+        description: 'Process launches per side'
+        required: false
+        default: '7'
+  pull_request:
+    types: [labeled, synchronize]
+
+env:
+  NBGV_SetCloudBuildVersionVars: false
+
+jobs:
+  bench:
+    # Nightly and manual runs always; a PR only when it carries the label.
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'bench:concurrency')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bench/concurrency/go/go.mod
+
+      - name: Restore
+        run: dotnet restore GSharp.sln --locked-mode
+
+      # Release on both sides is normative, not a preference: tiered JIT
+      # depresses cold Debug numbers by 2-3x and a Debug comparison is invalid.
+      - name: Build (Release)
+        run: dotnet build src/Compiler src/Sdk/Gsharp.Extensions -c Release
+
+      - name: Verify the harness
+        run: python3 build/verify-concurrency-bench.py --smoke
+
+      - name: Run
+        run: |
+          python3 build/run-concurrency-bench.py \
+            --launches "${{ github.event.inputs.launches || '7' }}" \
+            --go \
+            --json "$RUNNER_TEMP/concurrency.json" \
+            --check-baseline bench/concurrency/baseline.json
+        # A PR run reports; only the nightly gates.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrency-bench
+          path: ${{ runner.temp }}/concurrency.json
+          if-no-files-found: warn

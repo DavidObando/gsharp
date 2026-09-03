@@ -4,12 +4,18 @@ Evidence harness for **ADR-0174** (goroutines and channels, wave 2). It exists
 to make the ADR's performance claims refutable, and to stop new ones from
 being asserted without measurement.
 
-> **Status: baseline plus the Phase 1 runtime.** The Phase-0 spike measured
-> *today's* lowering and the CLR primitives the ADR proposes to adopt. ADR-0174
-> Phase 1 added two rows over the real `Gsharp.Runtime.Channels` assembly
-> (`gs-rendezvous`, `closed-chan`). There is still no G#-*language* side until
-> Phases 2–3 land, and the harness is **not** wired into CI. D11 Phase 5 turns
-> this into the gated suite.
+> **Status: the G# side and the runner exist; no budget has been measured.**
+> The Phase-0 spike measured *today's* lowering and the CLR primitives the ADR
+> proposes to adopt; Phase 1 added two rows over the real
+> `Gsharp.Runtime.Channels` assembly. Phase 5-2 adds the missing half: eight
+> paired scenarios written in **G#**, a registry, a runner with the two gates,
+> and a nightly workflow.
+>
+> **Every median in `baseline.json` is `null`, deliberately.** A budget that was
+> not measured is worse than no budget, because it reads as evidence. The gate
+> is armed by the first nightly runs, and `target_status` stays `provisional`
+> until a ratio has met its target on three separate nights on the same
+> hardware class (ADR-0174 P5-3).
 
 ## Phase 3-4a rows (`ctx-param`, `ctx-asynclocal`, `spawn-noec`, `spawn-ec`)
 
@@ -23,13 +29,29 @@ errata 12.
 
 | Path | What it is |
 | --- | --- |
-| `clr/` | C# baseline. Reproduces the exact call sequences the G# emitter produces today (`gs-*` rows), plus the CLR primitives ADR-0174 proposes (`best-*` rows). |
+| `gsharp/Bench.gs` | **The G# side.** Eight scenarios in the language itself, three in-process warm-up rounds, one `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
+| `scenarios.json` | The registry: which G# scenario pairs with which Go row, and what each one measures. |
+| `baseline.json` | The recorded medians, ceilings and Go ratios. Written only by `--update-baseline`, never by hand. |
+| `clr/` | C# baseline. Reproduces the exact call sequences the G# emitter produces today (`gs-*` rows), plus the CLR primitives ADR-0174 proposes (`best-*` rows). Kept as the spike reference now that the G# side exists. |
 | `go/` | Go baseline for the same scenarios. |
 
 ## Running
 
 ```sh
-# CLR side — Release is mandatory, Debug numbers are meaningless
+# The paired run: builds the G# program, launches both sides several times,
+# reports medians with a bootstrap confidence interval, and checks the gate.
+python3 build/run-concurrency-bench.py --go --check-baseline bench/concurrency/baseline.json
+
+# One scenario, fewer launches, while iterating
+python3 build/run-concurrency-bench.py --scenario rendezvous --launches 3
+
+# Record what was measured. Refuses to loosen a ceiling without a stated reason.
+python3 build/run-concurrency-bench.py --go --update-baseline bench/concurrency/baseline.json
+
+# Check the harness still hangs together (this runs on every PR)
+python3 build/verify-concurrency-bench.py --smoke
+
+# CLR spike reference — Release is mandatory, Debug numbers are meaningless
 cd clr && dotnet run -c Release
 # --quick skips the 60 s starvation demonstration (a correctness result, not a number)
 cd clr && dotnet run -c Release -- --quick
@@ -57,6 +79,10 @@ spike:
 5. **Separate the two gates.** Within-runtime regression (G# against its own
    last recorded number) is stable and can gate a PR. The G#-vs-Go ratio
    depends on the Go toolchain and the machine and must stay informational.
+   The runner enforces this: a scenario fails only when its median is above the
+   recorded ceiling **and** the confidence intervals are disjoint **and** the
+   hardware class matches. Any one of those alone produces false failures often
+   enough to get the gate switched off, which is the real failure mode.
 
 ## Known limits of the current numbers
 
