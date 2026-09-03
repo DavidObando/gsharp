@@ -219,7 +219,15 @@ internal sealed partial class MethodBodyEmitter
                 // instance/extension paths do.
                 if (impCall.StaticContainerType != null)
                 {
-                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(impCall.Function.Method, impCall.StaticContainerType));
+                    // Issue #3868: pass the method type-argument vector too.
+                    // The #1330 path never supplied one (it declines generic
+                    // methods), but the params/defaulted fallback that now also
+                    // carries a symbolic container can, and dropping it would
+                    // emit the placeholder-closed MethodSpec.
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
+                        impCall.Function.Method,
+                        impCall.TypeArgumentSymbols,
+                        impCall.StaticContainerType));
                     break;
                 }
 
@@ -1789,7 +1797,43 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(nc.Receiver);
         this.EmitStoreVariable(nc.Capture);
         this.EmitLoadVariable(nc.Capture);
+
+        // Issue #3867: an OPEN type parameter receiver (`func F[T](v T)` then
+        // `v?.M()`) is neither a `NullableTypeSymbol` nor a known reference
+        // type, so it fell through to here and `brtrue`-d a raw `!!T` stack
+        // slot. `!!T` is not a branchable object reference — ilverify rejects
+        // it (StackUnexpected), and at runtime the null probe degenerates into
+        // a value test, so `F[int32](0)` took the NIL path and silently
+        // produced `nil` instead of calling `M()` on `0`. `box !!T` first
+        // (ECMA-335 §III.4.1: boxing an unconstrained type parameter yields
+        // `null` only for an empty `Nullable<T>`, a real object reference for
+        // every other value type, and the reference itself when `T` is a
+        // reference type) — exactly csc's lowering of `v?.M()`.
+        TypeSymbol? probeBoxType = GetOpenTypeParameterProbeBoxType(nc.Receiver.Type);
+        if (probeBoxType is not null)
+        {
+            this.il.OpCode(ILOpCode.Box);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(probeBoxType));
+        }
+
         this.il.Branch(ILOpCode.Brtrue, nonNullTarget);
+    }
+
+    // Issue #3867: the type to `box` before a null-conditional receiver's
+    // `brtrue` probe, or null when the receiver already occupies the stack as
+    // an object reference. Only OPEN type parameters need it: `T` (whose CLR
+    // representation is unknown at emit time) and `T?` over an open `T` that
+    // the `NullableTypeSymbol` branch above did not claim — boxing the
+    // underlying `T` there is still correct, since an empty `Nullable<T>`
+    // boxes to `null`.
+    private static TypeSymbol? GetOpenTypeParameterProbeBoxType(TypeSymbol? receiverType)
+    {
+        return receiverType switch
+        {
+            TypeParameterSymbol typeParameter => typeParameter,
+            NullableTypeSymbol { UnderlyingType: TypeParameterSymbol underlying } => underlying,
+            _ => null,
+        };
     }
 
     private void EmitTupleLiteral(BoundTupleLiteralExpression tuple)

@@ -3062,7 +3062,27 @@ internal sealed partial class ExpressionBinder
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
 
-                BoundExpression staticCall = new BoundImportedCallExpression(ce, staticFn, staticArguments, refKinds, staticTypeArgSymbolsForCall);
+                // Issue #3868: the narrow #1330 path above declines params-
+                // expanded, defaulted and named-argument shapes, but the
+                // PARENT INSTANTIATION is not optional — a static call on
+                // `Verifier[X]` where `X` is a same-compilation user type must
+                // still be parented at the constructed `Verifier<X>` TypeSpec.
+                // Falling through with no container emitted the type-erased
+                // `Verifier<object>::M(...)`, which compiles clean, fails
+                // ilverify with UnsatisfiedMethodParentInst and throws
+                // TypeLoadException ("GenericArguments[0], 'System.Object' …
+                // violates the constraint of type parameter") the first time
+                // the method runs. Arguments and the return were bound against
+                // the erased closed method, which is exactly what the emitted
+                // signature encodes, so carrying the symbolic container changes
+                // only the parent token.
+                BoundExpression staticCall = new BoundImportedCallExpression(
+                    ce,
+                    staticFn,
+                    staticArguments,
+                    refKinds,
+                    staticTypeArgSymbolsForCall,
+                    classSymbol.SymbolicReceiver);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
 

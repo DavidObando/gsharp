@@ -1,0 +1,23 @@
+# Issue #1933 / #1985 unsafe-IL allowance, scoped to the fixture types below
+# (issue #3863). `Core.Tests.csproj` sets <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+# and Issue2852ImportedPointerFields exists precisely to be an unmanaged-pointer
+# fixture:
+#
+#     public unsafe struct Issue2852ImportedPointerFields
+#     {
+#         public int* Pointer { get; set; }
+#         public delegate* unmanaged<int, int> FunctionPointer { get; set; }
+#     }
+#
+# A property setter that stores an unmanaged pointer is unverifiable BY
+# CONSTRUCTION — ilverify reports `UnmanagedPointer` ("Unmanaged pointers are
+# not a verifiable type") for it, and the CSC-COMPILED baseline of this very
+# project fails identically:
+#
+#     [IL]: Error [UnmanagedPointer]: [out/bin/Release/Core.Tests/GSharp.Core.Tests.dll :
+#       GSharp.Core.Tests.CodeAnalysis.Binding.Issue2852ImportedPointerFields::set_Pointer(int32*)]
+#       [offset 0x00000001] Unmanaged pointers are not a verifiable type.
+#
+# so it is not a gsc emit defect. The allowance is type-scoped, not app-wide:
+# any unsafe-IL finding elsewhere in Core.Tests still gates.
+GSharp.Core.Tests.CodeAnalysis.Binding.Issue2852ImportedPointerFields
