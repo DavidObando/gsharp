@@ -732,7 +732,10 @@ public open class ReplApp : Column {
   private func RunCommandCore(command string) bool {
     let normalized = command.Trim()
     if normalized == "reset" {
-      if let running = worker { running.Cancel() }
+      if worker != nil {
+        message = "cancel the running evaluation before resetting"
+        return false
+      }
       engine.Reset()
       transcriptSource.Reset()
       editor.Text = ""
