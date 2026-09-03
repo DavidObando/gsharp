@@ -10,7 +10,7 @@ draft: false
 the [`Gsharp.Repl`](https://www.nuget.org/packages/Gsharp.Repl/) .NET
 global tool and is the fastest way to try the language without creating a
 project. It is a full-screen, keyboard-first TUI built on
-Spectre.Console that reuses the same `Core` compilation engine and
+SharpTUI that reuses the same `Core` compilation engine and
 `LanguageServer` analysis as the compiler, so the prompt behaves like a
 small editor (live syntax colors, completion, hover, and diagnostics)
 rather than a plain line reader.
@@ -65,13 +65,21 @@ up definitions incrementally:
 ```
 
 The REPL is organised into keyboard-selectable tabs — **REPL**,
-**History**, **Variables**, **Diagnostics**, **Help**, and **Settings** —
-and includes a command palette (open it with `:`) for session commands:
+**History**, **Variables**, **Diagnostics**, **Help**, and **Settings**.
+Use `Ctrl+1` through `Ctrl+6` or `Alt+1` through `Alt+6` to select a tab.
+When the tab strip has focus, Left and Right select a tab and Tab enters
+its content.
+
+Open the command palette with `Ctrl+P`, or enter `:` while the editor is
+empty. `/` opens session search from an empty editor and `?` opens Help.
+These characters remain normal G# input while the editor contains text.
 
 | Command | Effect |
 | --- | --- |
 | `reset` | Clear all accumulated session state and start fresh. |
 | `clear` | Clear the current editor input. |
+| `show tree` | Toggle syntax-tree output for transcript cells. |
+| `show il` | Toggle emitted IL output for new transcript cells. |
 | `theme [name]` | Switch the color theme, or cycle themes when no name is given. |
 | `load <file.gs>` | Evaluate a `.gs` file into the current session. |
 | `exit` / `quit` | Leave the REPL. |

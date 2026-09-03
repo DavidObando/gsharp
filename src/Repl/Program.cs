@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Execution;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -143,7 +145,7 @@ public static class Program
     /// </summary>
     private static int RunInteractive(List<string> references)
     {
-        if (Console.IsInputRedirected)
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
         {
             Console.Error.WriteLine("gsi requires an interactive terminal");
             return 1;
@@ -198,8 +200,21 @@ public static class Program
 
     internal static int ReportUnhandledException(Exception ex)
     {
-        Console.Error.WriteDiagnostics(new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
+        DiagnosticWriter.WriteDiagnostics(Console.Error, new Diagnostic[] { Compilation.CreateInternalErrorDiagnostic(ex) });
         return 1;
+    }
+
+    internal static string GetVersion()
+    {
+        var info = Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (string.IsNullOrEmpty(info))
+        {
+            return "1.0";
+        }
+
+        var plus = info.IndexOf('+');
+        return plus >= 0 ? info.Substring(0, plus) : info;
     }
 
     /// <summary>

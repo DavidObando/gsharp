@@ -1652,7 +1652,19 @@ public static class SemanticLookup
                 return implicitThis;
             }
 
-            return this.globals.TryGetValue(token.Text, out var global) ? global : ResolvePrimitiveOrImportedType(token.Text);
+            if (this.globals.TryGetValue(token.Text, out var global))
+            {
+                return global;
+            }
+
+            if (this.compilation.GlobalScope.SubmissionImports is { } submissions
+                && submissions.TryFindGlobalVariable(
+                    this.compilation.References ?? ReferenceResolver.Default(), token.Text, out _, out var variable))
+            {
+                return variable;
+            }
+
+            return ResolvePrimitiveOrImportedType(token.Text);
         }
 
         public IReadOnlyList<VariableSymbol> GetLocals(FunctionDeclarationSyntax declaration)

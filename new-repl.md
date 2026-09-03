@@ -5,8 +5,10 @@
 > the engine is the emitted submission-chaining `EmittedSessionEngine`, not
 > the `Compilation.ContinueWith`/`Evaluate` `SessionEngine` described below —
 > Phase 3c deleted that evaluator engine, `Compilation.Evaluate`, and the
-> `--engine evaluator` escape hatch. This document is a historical design
-> record; read it for the TUI architecture, not the eval core.
+> `--engine evaluator` escape hatch. The original implementation used
+> Spectre.Console; the current retained UI uses SharpTUI. This document is a
+> historical design record; read it for the product goals, not the current
+> evaluation or UI framework implementation.
 
 ## 1. Goal
 
