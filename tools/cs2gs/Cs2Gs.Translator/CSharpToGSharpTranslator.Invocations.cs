@@ -2922,7 +2922,16 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
-                    GExpression value = this.TranslateExpression(assignment.Right);
+                    // Issue #3860: an object-initializer member is an ASSIGNMENT
+                    // position, so C# performs the same implicit array-covariance
+                    // conversion here it performs for a plain assignment
+                    // (`Compile = new[] { new TaskItem(...) }` into an
+                    // `ITaskItem[]` property — the test/Sdk.Tests wall). G#
+                    // slices are invariant (#2516/#3685), so the upcast has to be
+                    // spelled; without it gsc reports GS0156.
+                    GExpression value = this.CoerceCovariantArrayConversion(
+                        assignment.Right,
+                        this.TranslateExpression(assignment.Right));
                     fieldInitializers.Add(new FieldInitializer(
                         this.EmittedName(name, name.Identifier),
                         this.ForgiveObjectInitializerValue(assignment, value)));
@@ -2991,11 +3000,16 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
+                    // Issue #3860: same array-covariance assignment position as in
+                    // TranslateObjectInitializerFields, for the construction-with-
+                    // initializer-suffix form `T(args) { Field = value }`.
                     memberInitializers.Add(new FieldInitializer(
                         this.EmittedName(name, name.Identifier),
                         this.ForgiveObjectInitializerValue(
                             assignment,
-                            this.TranslateExpression(assignment.Right))));
+                            this.CoerceCovariantArrayConversion(
+                                assignment.Right,
+                                this.TranslateExpression(assignment.Right)))));
                 }
                 else
                 {
