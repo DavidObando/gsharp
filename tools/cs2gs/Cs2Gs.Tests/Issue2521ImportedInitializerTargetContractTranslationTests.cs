@@ -300,12 +300,31 @@ public sealed class Issue2521ImportedInitializerTargetContractTranslationTests
 
         string compact = Compact(Translate(consumer, new[] { consumer.Compilation }));
 
+        // Issue #3865: the contract still cannot be PROMOTED by consumer taint —
+        // that is what this test pins and it still holds. What changed is the
+        // bridge: `Issue2521.PrebuiltTarget` is compiled `#nullable disable`, so
+        // every one of these sinks is an imported OBLIVIOUS reference type, and
+        // gsc's import rule (`ClrNullability.IsPositionNonNull`: non-null iff the
+        // byte is 1) maps oblivious and absent metadata alike to `T?`. The
+        // already-emitted contract these sinks bind to is therefore `string?`,
+        // which accepts the nullable value with no assertion. `!!` is a RUNTIME
+        // null check in G#, so emitting one here made a legal null assignment
+        // throw; `Issue3865ImportedObliviousArgumentAssertionTests` compiles and
+        // RUNS the initializer/indexer shapes to prove it.
+        //
+        // `GenericTarget<T>.Value` declares the TYPE PARAMETER `T`, which
+        // carries no obliviousness signal, so it keeps its assertion — the
+        // control for the exclusion. Note this test's source-referenced sibling
+        // (`ImportedTargets_UseAlreadyEmittedContracts_ForAllInitializerSinks`)
+        // deliberately still asserts everywhere: a project cs2gs is itself
+        // migrating has no frozen contract to read.
         Assert.Contains(
-            "Target{Value: source.Value!!, InitValue: source.Value!!, BaseValue: source.Value!!}",
+            "Target{Value: source.Value, InitValue: source.Value, BaseValue: source.Value}",
             compact);
-        Assert.Contains("T{Value: source.Value!!}", compact);
-        Assert.Contains("ImportedBag(){ source.Value!! }", compact);
-        Assert.Contains("[\"key\"] = source.Value!!", compact);
+        Assert.Contains("GenericTarget[string]{Value: source.Value!!}", compact);
+        Assert.Contains("ImportedBag(){ source.Value }", compact);
+        Assert.Contains("[\"key\"] = source.Value", compact);
+        Assert.DoesNotContain("Target{Value: source.Value!!", compact);
     }
 
     [Fact]

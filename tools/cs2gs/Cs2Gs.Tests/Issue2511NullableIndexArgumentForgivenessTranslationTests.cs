@@ -94,11 +94,25 @@ public sealed class Issue2511NullableIndexArgumentForgivenessTranslationTests
             }
             """);
 
-        Assert.Contains("imported!![key!!] = \"value\"", printed, StringComparison.Ordinal);
-        Assert.Contains("let first = imported!![key!!]", printed, StringComparison.Ordinal);
+        // Issue #3865: the RECEIVER assertions stay — `imported` is a value read
+        // whose imported oblivious type gsc maps to `T?`, so `imported!!` is
+        // what makes the indexer access bind at all. The KEY assertions are
+        // gone: `ImportedLookup.this[string key]` is declared in a
+        // `#nullable disable` region, so gsc imports the parameter as `string?`
+        // and it accepts a nullable key with no bridge. `!!` is a RUNTIME check
+        // in G#, so asserting there turned a legal null key into a throw.
+        // `Issue3865ImportedObliviousArgumentAssertionTests` compiles and RUNS
+        // this exact shape to prove the removal is gratuitous, not lost
+        // checking. `GenericLookup<TKey>.this[TKey key]` declares a TYPE
+        // PARAMETER, which carries no obliviousness signal, so its key keeps the
+        // assertion — the control that pins the exclusion.
+        Assert.Contains("imported!![key] = \"value\"", printed, StringComparison.Ordinal);
+        Assert.Contains("let first = imported!![key]", printed, StringComparison.Ordinal);
         Assert.Contains("let second = generic[key!!]", printed, StringComparison.Ordinal);
+        // `third` reads `imported[key!]` — a USER-AUTHORED C# suppression, which
+        // is preserved as `!!` regardless of the target contract.
         Assert.Contains("let third = imported!![key!!]", printed, StringComparison.Ordinal);
-        Assert.Contains("imported?[key!!]", printed, StringComparison.Ordinal);
+        Assert.Contains("imported?[key]", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("key!!!!", printed, StringComparison.Ordinal);
     }
 

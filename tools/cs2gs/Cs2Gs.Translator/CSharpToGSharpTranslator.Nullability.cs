@@ -1283,11 +1283,88 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #3865: an IMPORTED target with no nullable metadata at all
+            // is oblivious, and gsc's import rule is the INVERSE of C#'s —
+            // `ClrNullability.IsPositionNonNull` reads "non-null iff the byte is
+            // 1", so oblivious AND absent metadata both map to `T?`. The
+            // imported parameter/field therefore already accepts a nullable
+            // value and no `!!` bridge is needed. This is the write-side mirror
+            // of the read-side rule `IsImportedObliviousNullableMember` has
+            // applied since issue #2113.
+            //
+            // Getting this backwards is not a readability wart: `x!!` is a
+            // RUNTIME assertion in G# (it lowers to `dup; brtrue; pop; newobj
+            // NullReferenceException; throw`), unlike C#'s erased `x!`, so a
+            // gratuitous assertion on a legitimately-null argument turns a legal
+            // C# call into a crash that translate, compile and ILVerify all pass.
+            if (this.IsImportedObliviousNullableTarget(targetSymbol))
+            {
+                return false;
+            }
+
             bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences
                 .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)) == true;
 
             return !(targetDeclaredInThisCompilation
                 && this.ShouldPromoteToNullableReference(targetSymbol));
+        }
+
+        // Issue #3865: true when <paramref name="targetSymbol"/> is a WRITE sink
+        // (parameter, field or property) that exists only as CLR metadata and
+        // whose own declared reference type carries no nullable annotation.
+        //
+        // Scope, and why each restriction is load-bearing:
+        //
+        //  * Metadata only. A symbol with any `DeclaringSyntaxReference`, or one
+        //    declared in an assembly cs2gs is itself migrating, gets a G#
+        //    declaration whose nullability this translator decides
+        //    (`ShouldPromoteToNullableReference`); an oblivious source parameter
+        //    can legitimately be emitted non-nullable, and a nullable argument to
+        //    it really does need the bridge. Only a contract already frozen in
+        //    metadata is read by gsc's import rule.
+        //  * ORIGINAL definition's type. `List<string>.Add(T item)` substitutes
+        //    to `string`, but the DECLARED parameter type is the type parameter
+        //    `T`, whose `NullableAnnotation.None` says nothing about
+        //    obliviousness — gsc binds the substituted `string` as non-null. Only
+        //    a member whose own declared type is a concrete oblivious reference
+        //    type qualifies, exactly as `IsImportedObliviousNullableMember` scopes
+        //    the read side.
+        private bool IsImportedObliviousNullableTarget(ISymbol targetSymbol)
+        {
+            if (targetSymbol is not (IParameterSymbol or IFieldSymbol or IPropertySymbol))
+            {
+                return false;
+            }
+
+            ISymbol original = targetSymbol.OriginalDefinition;
+            if (!original.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            // A sibling/repository project loaded as a plain metadata reference
+            // has no syntax either, but cs2gs is emitting its declaration in this
+            // same run — its contract is not frozen, so it stays on the
+            // promotion path above.
+            if (original.ContainingAssembly?.Name is { } assemblyName
+                && (assemblyName == this.context.Compilation.AssemblyName
+                    || (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
+                        compilation => compilation.AssemblyName == assemblyName) == true))
+            {
+                return false;
+            }
+
+            ITypeSymbol declaredType = original switch
+            {
+                IParameterSymbol parameter => parameter.Type,
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
+
+            return declaredType is { IsReferenceType: true }
+                and not ITypeParameterSymbol
+                && declaredType.NullableAnnotation == NullableAnnotation.None;
         }
 
         // A skipped source-generated property is recreated from its hand-written
