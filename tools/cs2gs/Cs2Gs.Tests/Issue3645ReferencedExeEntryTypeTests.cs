@@ -42,6 +42,29 @@ public sealed class Issue3645ReferencedExeEntryTypeTests
         }
         """;
 
+    /// <summary>
+    /// Issue #3837: the same entry class with a <c>private</c> helper instead of
+    /// a public one. Nothing outside the class can consume it, so T3 flattening
+    /// erases no surface and the canonical top-level form still applies.
+    /// </summary>
+    private const string PrivateHelperEntrySource = """
+        using System;
+        using System.IO;
+
+        namespace Demo.Cli;
+
+        public static class DemoProgram
+        {
+            public static int Main(string[] args) => Run(args, Console.Out);
+
+            private static int Run(string[] args, TextWriter stdout)
+            {
+                stdout.WriteLine(args.Length);
+                return 0;
+            }
+        }
+        """;
+
     [Fact]
     public void PreserveEntryType_KeepsEntryClassAsConsumableType()
     {
@@ -58,10 +81,14 @@ public sealed class Issue3645ReferencedExeEntryTypeTests
     [Fact]
     public void DefaultTranslation_StillFlattensEntryClass()
     {
-        string printed = TranslateEntrySource(preserveEntryType: false);
+        string printed = TranslateEntrySource(preserveEntryType: false, source: PrivateHelperEntrySource);
 
         // The unreferenced-executable shape is unchanged: T3 flattening drops
-        // the entry class and hoists its members to top level.
+        // the entry class and hoists its members to top level. Issue #3837
+        // narrowed this to an entry class with nothing but `private` non-entry
+        // members — a `public`/`internal` helper is consumable surface that
+        // flattening would erase, so it now preserves the class even without
+        // this opt-in (see Issue3837EntryTypeExportedSurfaceTests).
         Assert.DoesNotContain("class DemoProgram", printed);
         Assert.Contains("func Run", printed);
     }
@@ -125,10 +152,10 @@ public sealed class Issue3645ReferencedExeEntryTypeTests
         }
     }
 
-    private static string TranslateEntrySource(bool preserveEntryType)
+    private static string TranslateEntrySource(bool preserveEntryType, string source = EntrySource)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("DemoProgram.cs", EntrySource) },
+            new[] { ("DemoProgram.cs", source) },
             outputKind: OutputKind.ConsoleApplication);
         Assert.True(
             project.BoundWithoutErrors,
