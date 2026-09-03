@@ -24,6 +24,44 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// </summary>
 public class IncrementalGlobalScopeReuseTests
 {
+    [Fact]
+    public void BodyOnlyEdit_RepointsFieldLocation()
+    {
+        var original = Parse("A.gs", """
+            package P
+            class Cache {
+                var count int32
+                func Resize() {
+                    var size = 1
+                }
+                shared {
+                    var entries int32
+                }
+            }
+            """);
+        var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(original));
+        var instanceField = scope.Structs.Single().Fields.Single();
+        var staticField = scope.Structs.Single().StaticFields.Single();
+        var edited = Parse("A.gs", """
+            package P
+            class Cache {
+                var count int32
+                func Resize() {
+                    var size = 100000
+                }
+                shared {
+                    var entries int32
+                }
+            }
+            """);
+
+        Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, original, edited));
+        Assert.Same(edited.Text, instanceField.Location.Text);
+        Assert.Equal("count", instanceField.Location.Text!.ToString(instanceField.Location.Span));
+        Assert.Same(edited.Text, staticField.Location.Text);
+        Assert.Equal("entries", staticField.Location.Text!.ToString(staticField.Location.Span));
+    }
+
     /// <summary>
     /// A body-only edit to one file in a multi-file project reuses the cached
     /// bodies of every unchanged file (cache hits, same symbol identity) and
@@ -520,18 +558,25 @@ public class IncrementalGlobalScopeReuseTests
         var fileA = Parse("A.gs", """
             package P
             interface IGreeter {
+                shared {
+                    var Calls int32
+                }
                 func Hello() string {
                     return "hi"
                 }
             }
             """);
         var scope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(fileA));
+        var field = scope.Interfaces.Single().StaticFields.Single();
         var cache = new BoundBodyCache();
         Binder.BindProgram(scope, references: null, cache);
 
         var editedA = Parse("A.gs", """
             package P
             interface IGreeter {
+                shared {
+                    var Calls int32
+                }
                 func Hello() string {
                     return "hello"
                 }
@@ -539,6 +584,8 @@ public class IncrementalGlobalScopeReuseTests
             """);
 
         Assert.True(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope, fileA, editedA));
+        Assert.Same(editedA.Text, field.Location.Text);
+        Assert.Equal("Calls", field.Location.Text!.ToString(field.Location.Span));
         var fast = Binder.BindProgram(scope, references: null, cache, ImmutableHashSet.Create(editedA));
 
         var fullScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(editedA));
