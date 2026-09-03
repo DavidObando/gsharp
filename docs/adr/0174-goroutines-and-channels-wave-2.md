@@ -2340,6 +2340,53 @@ implementation had to refine it.
     operands now suppress both, under the same rule a statement header uses — a
     non-empty `Pair{Value: 41}` cannot open a body and is still a literal.
 
+31. **D15 as implemented (Phase 4-7).** `async let` is an ordinary `let`
+    carrying the `async` modifier — `VariableDeclarationSyntax.AsyncModifier`,
+    declared before `Keyword` so reflection-driven child enumeration stays in
+    source order — rather than a new statement node. Every existing declaration
+    shape (a type clause, an annotation, span and first/last-token lookups)
+    therefore keeps working, and no new `SyntaxKind` or coverage-matrix row was
+    needed.
+
+    The binder emits the cell and a `go` whose sink *and* result cell are both
+    it; the suspension pass wraps the operand in `cell.Run(…)`, choosing the
+    overload from the operand's **rewritten** type. That placement is
+    load-bearing: an inferred callee is typed `R` when the binder sees the
+    call and `ValueTask[R]` only after the fixed point, so a bind-time overload
+    choice would be wrong for half the programs. The same pass suppresses the
+    `Discard[T]` shaping an ordinary `go` wants — the whole point here is that
+    the result is kept.
+
+    `AsyncLetCell` is **not** generic in the result. A generic cell closes over
+    `System.Object` in metadata whenever the result is a same-compilation type,
+    while the call site believes it is closed over the user's type, and the
+    awaiter then dispatches through the wrong `IValueTaskSource[T]` — measured
+    as an `EntryPointNotFoundException`. The type parameter lives on
+    `Run[R]` and `AwaitAsync[R]` instead, where the compiler's symbolic
+    method-type-argument machinery already carries it. This is the same shape
+    `ChannelOps` uses for a channel element, and the reason `Chan[T]` can be
+    generic while this cannot is that a channel's element reaches the emitter
+    through a declared `chan[T]` type clause.
+
+    The child runs under the **cell's** context, not the enclosing block's. The
+    two are linked, so cancelling the block still collapses the child; the
+    separation is what lets scope exit cancel one unread binding without
+    disturbing its siblings. Before this the unread child was never unwound at
+    all, because it had never observed the context being cancelled.
+
+    Two deliberate deviations from D15's table, both worth stating:
+
+    - A failing `async let` does **not** cancel its siblings. D15 says the
+      child "participates in cancellation exactly as a `go` child does", and a
+      `go` child's failure cancels the frame. But `try { await a } catch { }`
+      must not kill `b`; that is Swift's rule for the same construct, for the
+      same reason. The failure still reaches the scope when nobody reads it.
+    - GS0569 is enforced twice — at name resolution, which gives the read's own
+      span, and by a walk over the block's bound body, which catches a receiver
+      position (`user.Name`) that resolves the symbol through another path. The
+      walk reports at the declaration, so the precise-span case is the one that
+      matters and the walk is the backstop.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

@@ -1348,7 +1348,7 @@ internal sealed partial class StatementBinder
         var runtime = binderCtx.ChannelRuntime;
         var frame = binderCtx.ScopeFrames.Peek();
         var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
-        var cell = new LocalVariableSymbol($"<asynclet$cell${id}>", isReadOnly: true, runtime.AsyncLetCellType(resultType));
+        var cell = new LocalVariableSymbol($"<asynclet$cell${id}>", isReadOnly: true, runtime.AsyncLetCellType);
         scope.TryDeclareVariable(cell);
 
         var binding = new AsyncLetVariableSymbol(syntax.Identifier.Text, resultType, cell, syntax.Identifier);
@@ -1361,7 +1361,7 @@ internal sealed partial class StatementBinder
         return new BoundBlockStatement(
             syntax,
             ImmutableArray.Create<BoundStatement>(
-                new BoundVariableDeclaration(syntax, cell, runtime.BindAsyncLetStart(syntax, frame, resultType)),
+                new BoundVariableDeclaration(syntax, cell, runtime.BindAsyncLetStart(syntax, frame)),
                 new BoundGoStatement(
                     syntax,
                     expression,

@@ -211,6 +211,39 @@ would otherwise be silently unreachable. Cancellation is consulted only after
 the channel arms, so a select that can do its work does it rather than bail
 out.
 
+### Spawn now, use later
+
+`go` covers fire-and-forget. When you want the value a child produces, use
+`async let`.
+
+```gs
+scope {
+    async let user   = fetchUser(id)
+    async let orders = fetchOrders(id)
+    return render(await user, await orders)
+}
+```
+
+Both fetches start immediately, as children of the block, and run
+concurrently. The binding names the result, not a task: `await user` is a
+`User`. Reading it a second time returns the completed value without
+suspending.
+
+The `await` is required at every use. The read is where the suspension
+happens, and this language keeps suspension visible, so a bare `user` is
+`GS0569`.
+
+An `async let` needs a `scope` to own it (`GS0551` when there is none), which
+is what makes the spawn impossible to leak: the binding is not a value, so it
+cannot be stored, returned, or collected. A binding you never read has its
+child cancelled at the end of the block and joined there. If that child had
+already failed, the failure still reaches the block, so nothing is silently
+swallowed. `GS0559` points out that you started work only to cancel it.
+
+A failing `async let` does not cancel its siblings. Catching one child's
+failure leaves the others running, which is the difference between `async let`
+and a `go` inside the same block.
+
 ### Cancellation
 
 The block's `ctx` is not only for your own checks: every channel operation

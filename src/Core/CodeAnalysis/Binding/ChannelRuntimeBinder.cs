@@ -52,7 +52,7 @@ internal sealed class ChannelRuntimeBinder
     public const string SelectWaiterTypeName = "Gsharp.Concurrency.SelectWaiter";
 
     private const string CancellationTokenTypeName = "System.Threading.CancellationToken";
-    private const string AsyncLetCellTypeName = "Gsharp.Concurrency.AsyncLetCell`1";
+    private const string AsyncLetCellTypeName = "Gsharp.Concurrency.AsyncLetCell";
 
     private readonly ReferenceResolver references;
     private readonly Type? chanOpen;
@@ -65,10 +65,11 @@ internal sealed class ChannelRuntimeBinder
     private readonly Type? selectWaiterType;
     private readonly Type? contextType;
     private readonly Type? goroutineRuntimeType;
-    private readonly Type? asyncLetCellOpen;
+    private readonly Type? asyncLetCellType;
     private ImportedClassSymbol? channelOpsClass;
     private ImportedClassSymbol? blockingClass;
     private ImportedClassSymbol? scopeFrameClass;
+    private ImportedClassSymbol? asyncLetCellClass;
     private ImportedClassSymbol? selectWaiterClass;
     private ImportedClassSymbol? goroutineRuntimeClass;
 
@@ -87,7 +88,7 @@ internal sealed class ChannelRuntimeBinder
         references.TryResolveType("Gsharp.Concurrency.SelectWaiter", out selectWaiterType);
         references.TryResolveType("Gsharp.Concurrency.Context", out contextType);
         references.TryResolveType("Gsharp.Concurrency.GoroutineRuntime", out goroutineRuntimeType);
-        references.TryResolveType(AsyncLetCellTypeName, out asyncLetCellOpen);
+        references.TryResolveType(AsyncLetCellTypeName, out asyncLetCellType);
     }
 
     /// <summary>Gets a value indicating whether the runtime assembly is in the reference set.</summary>
@@ -95,6 +96,9 @@ internal sealed class ChannelRuntimeBinder
 
     /// <summary>Gets the runtime's <c>ScopeFrame</c> type symbol (ADR-0174 D6).</summary>
     public TypeSymbol ScopeFrameType => TypeSymbol.FromClrType(Required(scopeFrameType));
+
+    /// <summary>Gets the runtime's <c>AsyncLetCell</c> type (ADR-0174 D15).</summary>
+    public TypeSymbol AsyncLetCellType => TypeSymbol.FromClrType(Required(asyncLetCellType));
 
     /// <summary>Gets the runtime's <c>SelectWaiter</c> type symbol (ADR-0174 D8).</summary>
     public TypeSymbol SelectWaiterType => TypeSymbol.FromClrType(Required(selectWaiterType));
@@ -425,17 +429,6 @@ internal sealed class ChannelRuntimeBinder
     /// <returns><see langword="true"/> for <c>ScopeFrame.Exit</c>.</returns>
     public static bool IsScopeExit(BoundImportedInstanceCallExpression call)
         => call.Method.Name == "Exit" && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.ScopeFrame";
-
-    /// <summary>Turns a blocking <c>CancelIfUnread</c> into the awaited <c>CancelIfUnreadAsync</c> (ADR-0174 D15).</summary>
-    /// <param name="join">The blocking join call.</param>
-    /// <returns>An await expression typed <c>void</c>.</returns>
-    public BoundExpression BindAsyncLetCancelIfUnreadAwait(BoundImportedInstanceCallExpression join)
-    {
-        var async = Required(join.Method.DeclaringType).GetMethod("CancelIfUnreadAsync", BindingFlags.Public | BindingFlags.Instance)
-            ?? throw new InvalidOperationException("AsyncLetCell.CancelIfUnreadAsync is missing from the channel runtime.");
-        var call = new BoundImportedInstanceCallExpression(join.Syntax, join.Receiver, async, ValueTaskType, join.Arguments);
-        return Await(join.Syntax, call, TypeSymbol.Void);
-    }
 
     /// <summary>Turns a blocking scope exit into the awaited <c>ExitAsync</c> (inside a state machine).</summary>
     /// <param name="exit">The blocking exit call.</param>
@@ -805,42 +798,25 @@ internal sealed class ChannelRuntimeBinder
         return TypeSymbol.FromClrType(call.Function.Method.GetGenericArguments()[0]);
     }
 
-    /// <summary>
-    /// Gets the runtime's <c>AsyncLetCell[R]</c> closed over
-    /// <paramref name="resultType"/> (ADR-0174 D15).
-    /// </summary>
-    /// <param name="resultType">The child's result type.</param>
-    /// <returns>The constructed cell type.</returns>
-    public TypeSymbol AsyncLetCellType(TypeSymbol resultType)
-    {
-        var (closed, _) = ProjectElement(resultType);
-        return TypeSymbol.FromClrType(Required(asyncLetCellOpen).MakeGenericType(closed));
-    }
-
-    /// <summary>Binds <c>AsyncLetCell[R].Start(frame)</c> (ADR-0174 D15).</summary>
+    /// <summary>Binds <c>AsyncLetCell.Start(frame)</c> (ADR-0174 D15).</summary>
     /// <param name="syntax">The declaration's syntax.</param>
     /// <param name="frame">The enclosing scope's frame local.</param>
-    /// <param name="resultType">The child's result type.</param>
-    /// <returns>A call typed <c>AsyncLetCell[R]</c>.</returns>
-    public BoundExpression BindAsyncLetStart(SyntaxNode? syntax, VariableSymbol frame, TypeSymbol resultType)
+    /// <returns>A call typed <c>AsyncLetCell</c>.</returns>
+    public BoundExpression BindAsyncLetStart(SyntaxNode? syntax, VariableSymbol frame)
     {
-        var (closed, symbolic) = ProjectElement(resultType);
-        var cell = Required(asyncLetCellOpen).MakeGenericType(closed);
+        var cell = Required(asyncLetCellType);
         var start = cell.GetMethod("Start", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException("AsyncLetCell.Start is missing from the channel runtime.");
-        var cellClass = new ImportedClassSymbol(cell, declaration: null, references: references);
-        var returnType = AsyncLetCellType(resultType);
-        var function = new ImportedFunctionSymbol("Start", cellClass, start, declaration: null, returnTypeOverride: returnType);
+        asyncLetCellClass ??= new ImportedClassSymbol(cell, declaration: null, references: references);
+        var function = new ImportedFunctionSymbol("Start", asyncLetCellClass, start, declaration: null, returnTypeOverride: AsyncLetCellType);
         return new BoundImportedCallExpression(
             syntax,
             function,
-            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, frame)),
-            argumentRefKinds: default,
-            typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(resultType) : default);
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, frame)));
     }
 
     /// <summary>
-    /// Binds <c>cell.Run(body)</c>, the goroutine body of an <c>async let</c>
+    /// Binds <c>cell.Run[R](body)</c>, the goroutine body of an <c>async let</c>
     /// (ADR-0174 D15). The overload follows the operand's type after the
     /// suspension pass has rewritten it: a suspending call yields
     /// <c>ValueTask[R]</c>, an <c>async func</c> a <c>Task[R]</c>, and an
@@ -852,15 +828,14 @@ internal sealed class ChannelRuntimeBinder
     /// <returns>A call typed <c>ValueTask</c>.</returns>
     public BoundExpression BindAsyncLetRun(BoundExpression cell, BoundExpression body, TypeSymbol resultType)
     {
-        var (closed, symbolic) = ProjectElement(resultType);
-        var cellType = Required(asyncLetCellOpen).MakeGenericType(closed);
         var shape = BodyShapeOf(body.Type);
-        var run = cellType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        var open = Required(asyncLetCellType).GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Single(m => m.Name == "Run" && ParameterShapeOf(m.GetParameters()[0].ParameterType) == shape);
+        var (closedResult, symbolic) = ProjectElement(resultType);
         return new BoundImportedInstanceCallExpression(
             null,
             cell,
-            run,
+            open.MakeGenericMethod(closedResult),
             ValueTaskType,
             ImmutableArray.Create(body),
             typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(resultType) : default);
@@ -876,7 +851,7 @@ internal sealed class ChannelRuntimeBinder
     /// <returns>A property read typed <c>Context</c>.</returns>
     public BoundExpression BindAsyncLetContext(BoundExpression cell)
     {
-        var property = Required(cell.Type?.ClrType).GetProperty("Context", BindingFlags.Public | BindingFlags.Instance)
+        var property = Required(asyncLetCellType).GetProperty("Context", BindingFlags.Public | BindingFlags.Instance)
             ?? throw new InvalidOperationException("AsyncLetCell.Context is missing from the channel runtime.");
         return new BoundClrPropertyAccessExpression(null, cell, property, ContextType);
     }
@@ -885,22 +860,30 @@ internal sealed class ChannelRuntimeBinder
     /// <param name="cell">The cell local.</param>
     /// <returns>A call typed <c>void</c>.</returns>
     public BoundExpression BindAsyncLetCancelIfUnread(VariableSymbol cell)
-        => BindAsyncLetCall(cell, "CancelIfUnread", TypeSymbol.Void);
+    {
+        var method = Required(asyncLetCellType).GetMethod("CancelIfUnread", BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)
+            ?? throw new InvalidOperationException("AsyncLetCell.CancelIfUnread is missing from the channel runtime.");
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, cell),
+            method,
+            TypeSymbol.Void,
+            ImmutableArray<BoundExpression>.Empty);
+    }
 
-    /// <summary>Binds <c>cell.AwaitAsync()</c>, the read of an <c>async let</c> binding (ADR-0174 D15).</summary>
+    /// <summary>Binds <c>cell.AwaitAsync[R]()</c>, the read of an <c>async let</c> binding (ADR-0174 D15).</summary>
     /// <param name="cell">The cell local.</param>
     /// <param name="resultType">The child's result type.</param>
     /// <returns>A call typed <c>ValueTask[R]</c>.</returns>
     public BoundExpression BindAsyncLetAwait(VariableSymbol cell, TypeSymbol resultType)
     {
-        var (closed, symbolic) = ProjectElement(resultType);
-        var cellType = Required(asyncLetCellOpen).MakeGenericType(closed);
-        var method = cellType.GetMethod("AwaitAsync", BindingFlags.Public | BindingFlags.Instance)
+        var open = Required(asyncLetCellType).GetMethod("AwaitAsync", BindingFlags.Public | BindingFlags.Instance)
             ?? throw new InvalidOperationException("AsyncLetCell.AwaitAsync is missing from the channel runtime.");
+        var (closedResult, symbolic) = ProjectElement(resultType);
         return new BoundImportedInstanceCallExpression(
             null,
             new BoundVariableExpression(null, cell),
-            method,
+            open.MakeGenericMethod(closedResult),
             ValueTaskOf(resultType),
             ImmutableArray<BoundExpression>.Empty,
             typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(resultType) : default);
@@ -911,8 +894,18 @@ internal sealed class ChannelRuntimeBinder
     /// <returns><see langword="true"/> for a blocking <c>CancelIfUnread</c> call.</returns>
     public static bool IsAsyncLetCancelIfUnread(BoundExpression node)
         => node is BoundImportedInstanceCallExpression { Method.Name: "CancelIfUnread" } call
-            && call.Method.DeclaringType is { IsGenericType: true } declaring
-            && declaring.GetGenericTypeDefinition().FullName == AsyncLetCellTypeName;
+            && call.Method.DeclaringType?.FullName == AsyncLetCellTypeName;
+
+    /// <summary>Turns a blocking <c>CancelIfUnread</c> into the awaited <c>CancelIfUnreadAsync</c> (ADR-0174 D15).</summary>
+    /// <param name="join">The blocking join call.</param>
+    /// <returns>An await expression typed <c>void</c>.</returns>
+    public BoundExpression BindAsyncLetCancelIfUnreadAwait(BoundImportedInstanceCallExpression join)
+    {
+        var async = Required(asyncLetCellType).GetMethod("CancelIfUnreadAsync", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("AsyncLetCell.CancelIfUnreadAsync is missing from the channel runtime.");
+        var call = new BoundImportedInstanceCallExpression(join.Syntax, join.Receiver, async, ValueTaskType, join.Arguments);
+        return Await(join.Syntax, call, TypeSymbol.Void);
+    }
 
     /// <summary>The <c>ValueTask</c> / <c>ValueTask[R]</c> type a suspending call is typed with; symbolic when <paramref name="resultType"/> is.</summary>
     /// <param name="resultType">The logical result type.</param>
@@ -1037,19 +1030,6 @@ internal sealed class ChannelRuntimeBinder
             "System.Threading.Tasks.Task`1" => "task",
             _ => "value",
         };
-    }
-
-    private BoundExpression BindAsyncLetCall(VariableSymbol cell, string name, TypeSymbol returnType)
-    {
-        var cellType = Required(cell.Type.ClrType);
-        var method = cellType.GetMethod(name, BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)
-            ?? throw new InvalidOperationException($"AsyncLetCell.{name} is missing from the channel runtime.");
-        return new BoundImportedInstanceCallExpression(
-            null,
-            new BoundVariableExpression(null, cell),
-            method,
-            returnType,
-            ImmutableArray<BoundExpression>.Empty);
     }
 
     private (Type Closed, bool Symbolic) ProjectElement(TypeSymbol elementType)

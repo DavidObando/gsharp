@@ -135,6 +135,7 @@ G# has `const`, `let`, and `var` declarations. A constant or `let` binding requi
 
 ```ebnf
 VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
+             | "async" "let" identifier TypeClause? "=" Expression   (* ADR-0174 D15: starts a child of the enclosing scope; read with `await name` *)
              | "var" identifier TypeClause
              | "let" "(" identifier { "," identifier } ")" "=" Expression
              | "let" "{" identifier "=" identifier { "," identifier "=" identifier } "}" "=" Expression .
@@ -1844,7 +1845,12 @@ Statement         ::= Block
                     | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt | LockStmt
                     | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | GotoStmt | CheckedStmt
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
-VariableDecl      ::= ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeParamList? TypeClause? '=' Expression
+VariableDecl      ::= 'async' 'let' identifier TypeClause? '=' Expression
+                      (* ADR-0174 D15: `async let` starts the initializer as a child of the enclosing `scope`
+                         and binds the name to its eventual result. The binding is a value of type R, not a
+                         handle, so it cannot outlive its owner; every read is `await name` (GS0569). Outside
+                         a `scope` it is GS0551; never read, GS0559. *)
+                    | ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeParamList? TypeClause? '=' Expression
                       (* TypeParamList is 'let'-only: `let Name[T] = func (...) ... { ... }` hangs a generic
                          parameter list off the binding, since the anonymous function-literal initializer has nowhere
                          else to carry one. *)
