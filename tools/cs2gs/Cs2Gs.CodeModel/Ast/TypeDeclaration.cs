@@ -36,6 +36,7 @@ public sealed class TypeDeclaration : GMember
     /// <param name="hasBody">Whether to render a body block (false emits the bodyless primary-ctor form).</param>
     /// <param name="attributes">The type attributes.</param>
     /// <param name="isUnsafe">Whether the type is <c>unsafe</c> (its body is an unsafe context).</param>
+    /// <param name="isRefLike">Whether the type is a by-ref-like <c>ref struct</c> (ADR-0058 / issue #367).</param>
     public TypeDeclaration(
         TypeDeclarationKind kind,
         string name,
@@ -52,7 +53,8 @@ public sealed class TypeDeclaration : GMember
         bool isPartial = false,
         bool hasBody = true,
         IReadOnlyList<AttributeUse> attributes = null,
-        bool isUnsafe = false)
+        bool isUnsafe = false,
+        bool isRefLike = false)
     {
         Kind = kind;
         Name = name;
@@ -70,6 +72,7 @@ public sealed class TypeDeclaration : GMember
         HasBody = hasBody;
         Attributes = attributes ?? new List<AttributeUse>();
         IsUnsafe = isUnsafe;
+        IsRefLike = isRefLike;
     }
 
     /// <summary>Gets the aggregate kind.</summary>
@@ -126,6 +129,16 @@ public sealed class TypeDeclaration : GMember
     /// issue #1014); its whole body is an unsafe context.
     /// </summary>
     public bool IsUnsafe { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the type is a by-ref-like
+    /// <c>ref struct</c> (ADR-0058 / issue #367). Dropping this modifier is not
+    /// cosmetic: it changes the emitted type's CLR identity — without
+    /// <c>System.Runtime.CompilerServices.IsByRefLikeAttribute</c> a type that
+    /// holds a <c>Span[T]</c> instance field cannot be loaded by the runtime at
+    /// all (<c>TypeLoadException</c> out of <c>GetExportedTypes()</c>, #3869).
+    /// </summary>
+    public bool IsRefLike { get; }
 }
 
 /// <summary>

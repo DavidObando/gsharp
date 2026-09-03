@@ -1626,6 +1626,19 @@ public sealed partial class CSharpToGSharpTranslator
                 (otherParts != null && otherParts.Any(p => p.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword))));
             bool isPartial = sourceWasPartial && (this.preservePartialParts || this.markMergedTypePartial);
 
+            // ADR-0058 / issue #367 (issue #3869): a C# `ref struct` is by-ref-like.
+            // Dropping the modifier does not merely lose a hint — it changes the
+            // emitted type's CLR identity: without `IsByRefLikeAttribute` the type
+            // is an ordinary struct, and one holding a `Span<T>` instance field
+            // then fails to type-load (`TypeLoadException` out of
+            // `GetExportedTypes()`), which silently emptied a whole migrated test
+            // assembly. `symbol.IsRefLikeType` is the semantic truth; the syntactic
+            // `ref` modifier (on this part or any other part of a partial type) is
+            // the fallback when the type did not bind.
+            bool isRefLike = symbol?.IsRefLikeType == true ||
+                node.Modifiers.Any(SyntaxKind.RefKeyword) ||
+                (otherParts != null && otherParts.Any(p => p.Modifiers.Any(SyntaxKind.RefKeyword)));
+
             return new TypeDeclaration(
                 kind.Value,
                 this.EmittedName(symbol, node.Identifier.ValueText),
@@ -1640,7 +1653,8 @@ public sealed partial class CSharpToGSharpTranslator
                 isAbstract: false,
                 attributes: this.MapAttributes(mergedAttributeLists),
                 isUnsafe: isUnsafe,
-                isPartial: isPartial);
+                isPartial: isPartial,
+                isRefLike: isRefLike);
         }
 
         private bool ShouldAttachOwnedExtensions(

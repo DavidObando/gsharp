@@ -112,6 +112,240 @@ public sealed class TestParityStage : IMigrationStage
                 RegexOptions.Multiline | RegexOptions.CultureInvariant);
     }
 
+    /// <summary>
+    /// Issue #3869: the number of test cases the VSTest run summary reports as
+    /// having actually EXECUTED, summed across every summary line (one per
+    /// target framework / test assembly), or <see langword="null"/> when the
+    /// output carries no run summary at all — i.e. no test run ever happened.
+    /// </summary>
+    /// <param name="output">The captured <c>dotnet test</c> output.</param>
+    /// <returns>The executed test-case total, or <see langword="null"/> if no run summary is present.</returns>
+    internal static int? ExecutedTestCount(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return null;
+        }
+
+        MatchCollection matches = Regex.Matches(
+            output,
+            @"^\s*(?:Passed|Failed)!\s+-\s+Failed:.*?\bTotal:\s*(\d+)",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+        if (matches.Count == 0)
+        {
+            return null;
+        }
+
+        int total = 0;
+        foreach (Match match in matches)
+        {
+            total += int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Issue #3869: decides whether an exit-code-0 <c>dotnet test</c> run on a
+    /// mirrored test project is genuinely green.
+    /// <para>
+    /// <c>dotnet test</c> exits <b>0</b> when it discovers no tests at all — so
+    /// an assembly that cannot even be enumerated (e.g. a
+    /// <c>TypeLoadException</c> out of <c>GetExportedTypes()</c>, as when a
+    /// translator drops the <c>ref</c> from a <c>ref struct</c>) reports
+    /// "test-parity PASS" while running ZERO tests. Passing on the exit code
+    /// alone makes every future assembly-discovery defect turn the whole app
+    /// green: the #1831 class, one stage further along.
+    /// </para>
+    /// <para>
+    /// A green mirrored run must therefore show positive evidence that tests
+    /// RAN: a VSTest run summary, a non-zero executed count, and — so a
+    /// <i>silent</i> coverage drop is caught too — at least as many executed
+    /// cases as the original C# project has <c>[Fact]</c>-attributed test
+    /// methods. Only <c>[Fact]</c> is counted (never <c>[Theory]</c>, whose row
+    /// count is a runtime property of its data source), which makes
+    /// <paramref name="minimumExpected"/> a sound lower bound on the number of
+    /// discovered cases rather than a tuned threshold.
+    /// </para>
+    /// </summary>
+    /// <param name="output">The captured <c>dotnet test</c> output.</param>
+    /// <param name="minimumExpected">
+    /// The lower bound on executed cases derived from the original C# sources
+    /// (see <see cref="CountCSharpFactMethods"/>); 0 disables the comparison.
+    /// </param>
+    /// <returns>
+    /// <see langword="null"/> when the run is genuinely green, otherwise the
+    /// human-readable reason it is not.
+    /// </returns>
+    internal static string DescribeHollowTestRun(string output, int minimumExpected)
+    {
+        int? executed = ExecutedTestCount(output);
+        if (executed is null)
+        {
+            return "NO-TESTS-RAN: `dotnet test` exited 0 but produced no VSTest run summary — " +
+                "no test run completed. `dotnet test` exits 0 when it discovers nothing " +
+                "(e.g. the migrated assembly fails to type-load and xunit enumerates no types), " +
+                "so exit code 0 alone is not evidence of a passing suite (#3869).";
+        }
+
+        if (executed.Value == 0)
+        {
+            return "NO-TESTS-RAN: `dotnet test` exited 0 having executed 0 test cases. " +
+                "A zero-test run is not a pass (#3869).";
+        }
+
+        if (minimumExpected > 0 && executed.Value < minimumExpected)
+        {
+            return $"TEST-COVERAGE-DROP: only {executed.Value} test case(s) executed, but the " +
+                $"original C# project declares {minimumExpected} [Fact] test method(s) — each of " +
+                "which is exactly one test case. Tests were silently lost between the C# original " +
+                "and the migrated assembly (#3869).";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #3869: counts the <c>[Fact]</c>-attributed test methods declared by
+    /// the ORIGINAL C# sources of this app — the authoritative lower bound on how
+    /// many test cases the migrated assembly must run. The inputs are the exact
+    /// C# files the translator consumed for THIS project
+    /// (<see cref="EmittedGsFile.CsFilePath"/>, excluding files pulled in from a
+    /// referenced project), so the count can never drift from what was migrated.
+    /// <para>
+    /// Only <c>[Fact]</c> methods in <c>public</c>, concrete, non-generic,
+    /// non-static types are counted (see <see cref="IsDiscoverableTestClass"/>):
+    /// a <c>[Theory]</c>'s case count is a property of its data source, xunit
+    /// does not discover non-public test classes, an abstract type contributes
+    /// cases only through its derivations, and a generic test class only through
+    /// its closures — counting any of those would make the bound unsound and
+    /// manufacture false failures on legitimately green apps.
+    /// </para>
+    /// </summary>
+    /// <param name="context">The stage context.</param>
+    /// <returns>The number of <c>[Fact]</c> test methods, or 0 when none can be determined.</returns>
+    internal static int CountCSharpFactMethods(StageExecutionContext context)
+    {
+        var counted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int facts = 0;
+        foreach (EmittedGsFile file in context.EmittedFiles)
+        {
+            if (file.IsFromReferencedProject ||
+                string.IsNullOrEmpty(file.CsFilePath) ||
+                !counted.Add(file.CsFilePath) ||
+                !File.Exists(file.CsFilePath))
+            {
+                continue;
+            }
+
+            string source;
+            try
+            {
+                source = File.ReadAllText(file.CsFilePath);
+            }
+            catch (IOException)
+            {
+                // The bound is best-effort evidence, never a reason to crash the
+                // stage: an unreadable input simply contributes nothing.
+                continue;
+            }
+
+            facts += CountFactMethods(source);
+        }
+
+        return facts;
+    }
+
+    /// <summary>
+    /// Issue #3869: the verdict half of <see cref="RunMirroredTestProject"/>,
+    /// split from the process invocation so BOTH directions of the gate — a
+    /// hollow run must fail, a genuinely green run must still pass — are
+    /// testable at stage-outcome level without shelling out to
+    /// <c>dotnet test</c>.
+    /// </summary>
+    /// <param name="context">The stage context.</param>
+    /// <param name="result">The captured <c>dotnet test</c> result.</param>
+    /// <returns>The stage outcome.</returns>
+    internal StageOutcome EvaluateMirroredTestRun(
+        StageExecutionContext context, ProcessRunResult result)
+    {
+        this.Note(context, result.Output ?? string.Empty);
+        if (result.ExitCode == 0)
+        {
+            // Issue #3869: exit code 0 is NOT evidence that tests ran. `dotnet
+            // test` exits 0 when it discovers nothing, so a migrated assembly
+            // that cannot be enumerated at all scored a full green here. Require
+            // positive evidence instead: a completed run, a non-zero executed
+            // count, and no silent drop against the C# original's [Fact] count.
+            int minimumExpected = CountCSharpFactMethods(context);
+            string hollow = DescribeHollowTestRun(result.Output ?? string.Empty, minimumExpected);
+            if (hollow is null)
+            {
+                string ranNote = $"mirrored test run: {ExecutedTestCount(result.Output)} case(s) executed " +
+                    $"(>= {minimumExpected} expected from the C# original's [Fact] methods).";
+                this.Note(context, ranNote);
+                return StageOutcome.Passed();
+            }
+
+            this.Note(context, "mirrored test-parity FAILED: " + hollow);
+            return StageOutcome.Failed(new[]
+            {
+                context.Triage.TestParityNoTestsRan(
+                    hollow, result.Output ?? string.Empty, EmittedGsRelative(context)),
+            });
+        }
+
+        // Issue #2867: a non-zero `dotnet test` exit means EITHER the project
+        // failed to build OR it built, ran, and the tests failed. Only the
+        // former is a translator/SDK regression; conflating them sends triage
+        // after the emitter when the real signal is a runtime failure, and
+        // discards the per-test outcomes.
+        string output = result.Output ?? "dotnet test failed without output.";
+        return StageOutcome.Failed(new[]
+        {
+            CompletedTestRun(output)
+                ? context.Triage.TestParityLibraryTestFailure(output, EmittedGsRelative(context))
+                : context.Triage.TestParityLibraryBuildFailure(output, EmittedGsRelative(context)),
+        });
+    }
+
+    private static int CountFactMethods(string source)
+    {
+        Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax root =
+            Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseCompilationUnit(source);
+        return root.DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax>()
+            .Count(method =>
+                HasFactAttribute(method) &&
+                method.Ancestors()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>()
+                    .All(IsDiscoverableTestClass));
+    }
+
+    /// <summary>
+    /// Whether a containing type declaration can itself host xunit-discoverable
+    /// test cases. Every condition here EXCLUDES cases from the bound, never adds
+    /// them: xunit only discovers tests on <c>public</c> classes, an abstract
+    /// type contributes cases only through its derivations, and a generic test
+    /// class only through its closures. Anything uncertain is left uncounted so
+    /// the bound stays a bound.
+    /// </summary>
+    private static bool IsDiscoverableTestClass(
+        Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax type) =>
+        type.TypeParameterList is null &&
+        type.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PublicKeyword)) &&
+        !type.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AbstractKeyword)) &&
+        !type.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StaticKeyword));
+
+    private static bool HasFactAttribute(Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax method) =>
+        method.AttributeLists
+            .SelectMany(list => list.Attributes)
+            .Select(attribute => attribute.Name.ToString())
+            .Select(name => name.Contains('.') ? name.Substring(name.LastIndexOf('.') + 1) : name)
+            .Any(name =>
+                string.Equals(name, "Fact", StringComparison.Ordinal) ||
+                string.Equals(name, "FactAttribute", StringComparison.Ordinal));
+
     private static bool IsStdoutEligible(StageExecutionContext context) =>
         context.App.TargetKind == TargetKind.Exe &&
         !string.IsNullOrEmpty(context.App.StdoutGolden) &&
@@ -134,24 +368,7 @@ public sealed class TestParityStage : IMigrationStage
             context.ArtifactDir,
             context.Options.Config,
             context.Options.GeneratedProjectPaths);
-        this.Note(context, result.Output ?? string.Empty);
-        if (result.ExitCode == 0)
-        {
-            return StageOutcome.Passed();
-        }
-
-        // Issue #2867: a non-zero `dotnet test` exit means EITHER the project
-        // failed to build OR it built, ran, and the tests failed. Only the
-        // former is a translator/SDK regression; conflating them sends triage
-        // after the emitter when the real signal is a runtime failure, and
-        // discards the per-test outcomes.
-        string output = result.Output ?? "dotnet test failed without output.";
-        return StageOutcome.Failed(new[]
-        {
-            CompletedTestRun(output)
-                ? context.Triage.TestParityLibraryTestFailure(output, EmittedGsRelative(context))
-                : context.Triage.TestParityLibraryBuildFailure(output, EmittedGsRelative(context)),
-        });
+        return this.EvaluateMirroredTestRun(context, result);
     }
 
     private static bool IsTestProject(string projectPath)
