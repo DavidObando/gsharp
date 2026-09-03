@@ -56,7 +56,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("cast[BoundVariableExpression](faExpr.Receiver).Variable", printed);
+        Assert.Contains("(cast[BoundVariableExpression](faExpr.Receiver)).Variable", printed);
         Assert.DoesNotContain("as BoundVariableExpression", printed);
     }
 
@@ -78,7 +78,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("cast[BoundVariableExpression](items[i].Receiver).Variable", printed);
+        Assert.Contains("(cast[BoundVariableExpression](items[i].Receiver)).Variable", printed);
         Assert.DoesNotContain("as BoundVariableExpression", printed);
     }
 

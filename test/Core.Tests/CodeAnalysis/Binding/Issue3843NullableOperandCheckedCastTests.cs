@@ -43,11 +43,15 @@ public sealed class Issue3843NullableOperandCheckedCastTests
         Assert.True(Conversion.Classify(
             NullableTypeSymbol.Get(stringType), interfaceType).IsExplicit);
 
-        // The directions that already worked keep working, unchanged.
+        // The downcast direction, which already worked, keeps working.
+        // (The IDENTITY direction `T? -> T` is deliberately NOT a
+        // classified conversion — dropping an annotation without changing
+        // the runtime type is the binder's null-forgiveness question, not a
+        // conversion — and reaches `cast[T]` through the conversion binder
+        // instead. Its runtime behaviour is covered by the executing test
+        // below.)
         Assert.True(Conversion.Classify(
             NullableTypeSymbol.Get(baseType), derivedType).IsExplicit);
-        Assert.True(Conversion.Classify(
-            NullableTypeSymbol.Get(derivedType), derivedType).IsExplicit);
 
         // The new arm does NOT open an implicit nullability-dropping path:
         // a nullable-to-nullable widening stays implicit, and an unrelated
@@ -98,6 +102,11 @@ public sealed class Issue3843NullableOperandCheckedCastTests
             //    needs no `!!` — this line would not bind otherwise.
             let hit Base3843? = Derived3843()
             Console.WriteLine(cast[Derived3843](hit).Extra)
+
+            // 6. IDENTITY direction — `T? -> T` drops the annotation and
+            //    still carries nil through, as C# `(Derived)maybeDerived` does.
+            let sameType Derived3843? = nil
+            Console.WriteLine(cast[Derived3843](sameType) == nil)
             """);
 
         Assert.Empty(result.Diagnostics);
@@ -108,7 +117,8 @@ public sealed class Issue3843NullableOperandCheckedCastTests
                 "InvalidCastException",
                 "True",
                 "b",
-                "7") + Environment.NewLine,
+                "7",
+                "True") + Environment.NewLine,
             result.Output);
         Assert.Equal(string.Empty, result.ErrorOutput);
         Assert.Equal(0, result.ExitCode);

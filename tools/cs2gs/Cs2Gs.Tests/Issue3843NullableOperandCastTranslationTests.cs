@@ -72,10 +72,16 @@ namespace Demo
         Assert.Contains("cast[Pragma](", printed);
         Assert.DoesNotContain("as Pragma", printed);
 
-        // ...so the element type is the SAME on both lambdas. The old `as`
-        // lowering printed `(d Pragma?)` for `Where` and `(d Pragma)` for
-        // `OrderBy` in the very same chain.
-        Assert.DoesNotContain("Pragma?)", printed);
+        // ...and the chain is INTERNALLY CONSISTENT: every lambda in it
+        // takes the same element type, and the dereference that follows the
+        // filter carries its own assertion. The `as` lowering printed
+        // `.Where((d Pragma?) -> ...)` immediately followed by
+        // `.OrderBy((d Pragma) -> d.SpanStart)` — a nullable element feeding
+        // a non-nullable continuation, which is what stopped compiling
+        // (GS0158 / GS0154). `Translate` above proves it binds; these pin the
+        // shape so a future regression is legible.
+        Assert.Contains(".Where((d Pragma?) -> d != nil)", printed);
+        Assert.Contains(".OrderBy((d Pragma?) -> d!!.SpanStart)", printed);
     }
 
     [Fact]
