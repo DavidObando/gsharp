@@ -1519,9 +1519,13 @@ GoStmt     = "go" ( Expression | Block ) .   (* ADR-0174 D14: `go { … }` spawn
 ScopeStmt  = "scope" Block .
 SelectStmt = "select" "{" SelectCase* "}" .
 SelectCase = "default" Block
-           | "case" "<-" Expression Block
-           | "case" "let" identifier "=" "<-" Expression Block
-           | "case" Expression "<-" Expression Block .
+           | "case" "<-" Expression Guard? Block
+           | "case" "let" identifier "=" "<-" Expression Guard? Block
+           | "case" Expression "<-" Expression Guard? Block
+           | "case" "await" Expression Guard? Block                      (* ADR-0174 D8: a Task arm *)
+           | "case" "let" identifier "=" "await" Expression Guard? Block (* ADR-0174 D8: a Task[T] arm *)
+           | "case" "cancelled" Guard? Block .                           (* ADR-0174 D8: the ambient context's cancellation *)
+Guard      = "when" Expression .   (* ADR-0174 D8: evaluated once on entry; a false guard keeps the arm out of the select *)
 ```
 
 ### Throw, try, catch, and finally
@@ -1920,9 +1924,13 @@ ScopeStmt         ::= 'scope' Block
 AwaitForRangeStmt ::= 'await' 'for' identifier 'in' Expression Block
 SelectStmt        ::= 'select' '{' SelectCase* '}'
 SelectCase        ::= 'default' Block
-                    | 'case' '<-' Expression Block
-                    | 'case' 'let' identifier '=' '<-' Expression Block
-                    | 'case' Expression '<-' Expression Block
+                    | 'case' '<-' Expression Guard? Block
+                    | 'case' 'let' identifier '=' '<-' Expression Guard? Block
+                    | 'case' Expression '<-' Expression Guard? Block
+                    | 'case' 'await' Expression Guard? Block
+                    | 'case' 'let' identifier '=' 'await' Expression Guard? Block
+                    | 'case' 'cancelled' Guard? Block
+Guard             ::= 'when' Expression
 ChannelSendStmt   ::= Expression '<-' Expression
 
 Expression        ::= Assignment

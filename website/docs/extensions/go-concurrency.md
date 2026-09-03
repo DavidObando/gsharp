@@ -215,8 +215,39 @@ on the same three pieces: directional parameters, `for job in jobs`, and a
 ## `select` over channel operations
 
 `select` waits on a set of channel operations and runs the first one
-that becomes ready. Cases cover receive (with or without a binding),
-send, and a `default` arm that runs when nothing is ready.
+that becomes ready.
+
+Cases cover receive (with or without a binding), send, a `default` arm that
+runs when nothing is ready, a `Task` arm, and the ambient context's
+cancellation. When more than one arm is ready the winner is chosen uniformly
+at random, as in Go, so no arm can be starved by its position in the source.
+
+Every arm may carry a `when` guard. It is evaluated once, when the select is
+entered, and a false guard keeps the arm out of the select entirely — G#'s
+spelling of Go's "set the channel to `nil` to disable this case".
+
+```gs
+select {
+case let job = <-work when accepting {
+    handle(job)
+}
+case let page = await fetch {
+    render(page)
+}
+case <-after(TimeSpan.FromSeconds(2)) {
+    Console.WriteLine("timed out")
+}
+case cancelled {
+    Console.WriteLine("giving up")
+}
+}
+```
+
+`case cancelled` replaces Go's `case <-ctx.Done()`. It needs a context to
+observe: an enclosing `scope`, a declared `ctx Context` parameter, or the one
+the compiler threads through a suspending call. Without one the arm would be
+unreachable, and `GS0557` says so. A select with no such arm unwinds with an
+`OperationCanceledException` when its context is cancelled.
 
 ```gsharp title="Select.gs"
 package GSharp.Samples.Select

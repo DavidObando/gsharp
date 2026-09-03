@@ -2295,6 +2295,51 @@ implementation had to refine it.
     `Channel[T]` where a `ChannelReader[T]` is expected: ILVerify rejects it and
     the JIT segfaults.
 
+29. **The remaining D8 arms as implemented (Phase 4-6).** A `when` guard is
+    bound *before* a receive arm opens its scope, so `case let v = <-ch when v > 0`
+    is an error rather than a subtle one: the guard decides whether the arm is
+    registered at all, long before a value arrives. It is evaluated exactly
+    once, into a local outside the reprobe loop, and gates the arm's `Add*`
+    call. A disabled arm is never registered and so can never win, which is
+    what makes the "last arm is unconditional" dispatch still exact.
+
+    `case cancelled` is validated by the *suspension pass*, not the binder.
+    Whether a function has a context to observe is only known after the fixed
+    point has decided which functions carry one, so GS0557 is reported when the
+    lowered `AddCancelled` call is rewritten in a container with no ambient
+    context. This is also why a non-suspending boundary — an `open` method, an
+    interface implementation — now *adopts* a declared `ctx Context` parameter
+    as its ambient context: it never gains a hidden one, but an author who
+    spelled the parameter has said how the context arrives, and its channel
+    operations, scopes and selects should observe it too.
+
+    `SelectWaiter.Rent` is bound with a defaulted context and retargeted by the
+    same pass, exactly as `ScopeFrame.Enter` already was. This closes a Phase
+    4-4 gap that no test had reached: a `select` in a callee, with no lexical
+    `scope` of its own, parked on the default token and never saw the caller's
+    cancellation.
+
+    `case await` accepts `Task` and `Task[T]` only, because `SelectWaiter`
+    attaches its claiming continuation to a `Task`. A `ValueTask` operand
+    reports GS0133. A same-compilation result type travels symbolically for the
+    same reason a channel element does — `Task[T]` is invariant, so closing
+    `AddTask` over `object` would unbox a value that was never boxed.
+
+    Cancellation is consulted only *after* the gated channel arms, in both the
+    parking path and the non-blocking probe. Go's `ctx.Done()` is an ordinary
+    channel and takes part in the uniform choice; G# deliberately prefers
+    progress, so a select whose channel is ready does its work rather than bail
+    out. The probe had ignored the cancelled arm entirely, which made
+    `case cancelled` alongside `default` silently take `default`.
+
+30. **Select arm operands suppress bare struct literals (Phase 4-6).** Errata
+    item 27 recorded that a call-tailed operand swallowed the arm's body
+    through the trailing-object-initializer ambiguity. The other half of the
+    same collision is issue #1575's: `case <-ch { }`, an arm with an empty
+    body, read `ch { }` as an empty struct literal and reported GS0157. Arm
+    operands now suppress both, under the same rule a statement header uses — a
+    non-empty `Pair{Value: 41}` cannot open a body and is still a literal.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

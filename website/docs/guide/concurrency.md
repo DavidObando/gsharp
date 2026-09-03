@@ -171,6 +171,46 @@ concurrently and closes its result once the last input closes; the result is
 receive-only, because only `merge` writes to it. Declaring your own `after` or
 `merge` shadows these.
 
+### Choosing among more than channels
+
+Three arm shapes cover what Go reaches for other tools to express.
+
+```gs
+scope {
+    var draining = false
+    select {
+    case let job = <-work when !draining {
+        handle(job)
+    }
+    case let page = await fetch {
+        render(page)
+    }
+    case cancelled {
+        Console.WriteLine("giving up")
+    }
+    }
+}
+```
+
+A `when` guard decides once, when the select is entered, whether its arm takes
+part at all. A false guard keeps the arm out of the waiter entirely, so it can
+never win — this is what Go expresses by setting a channel variable to `nil`.
+The guard is evaluated before the arm's binding exists, so it cannot mention
+`job`.
+
+`case await task` and `case let v = await task` let a `Task` or `Task[T]` race
+the channels on the same waiter. A losing task's continuation is removed when
+the select finishes, so a long-running one does not retain it.
+
+`case cancelled` turns the ambient context's cancellation into an arm. Without
+it a cancelled select unwinds with an `OperationCanceledException`; with it the
+arm runs instead. The arm needs a context to observe — an enclosing `scope`, a
+declared `ctx Context` parameter, or the one the compiler threads through a
+suspending call — and `GS0557` says so when there is none, because the arm
+would otherwise be silently unreachable. Cancellation is consulted only after
+the channel arms, so a select that can do its work does it rather than bail
+out.
+
 ### Cancellation
 
 The block's `ctx` is not only for your own checks: every channel operation
