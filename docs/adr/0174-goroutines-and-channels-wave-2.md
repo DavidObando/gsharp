@@ -2223,6 +2223,20 @@ implementation had to refine it.
     compiler a way to inject one anyway would mean a companion overload for
     this shape alone: the bridge idea of erratum 24, applied where it is the
     only option rather than everywhere.
+26. **Cleanup shielding as implemented (the rest of D7).** A `defer` body is
+    lowered under a shielded context: the binder declares
+    `<defer$shield$N> = <ambient>.ShieldedForCleanup()` before the body and
+    disposes it after, and because that is an ordinary `Context` local the
+    suspension pass already reads it as the ambient context for the calls
+    inside — no new machinery. So cleanup that needs a channel completes while
+    the block around it is being cancelled, bounded by
+    `GsharpRuntime.DeferGraceBudget`. Shielding `Context.None` returns
+    `Context.None`, so a `defer` outside any scope — the common case — costs
+    nothing. `using` and `lock` cleanup are not shielded: their cleanup is
+    `Dispose`/`Monitor.Exit`, which never suspends. GS0565 (the advisory
+    warning that a deferred call suspends) is not emitted; the shield it
+    announces is applied unconditionally, so the warning is informational and
+    is deferred with GS0560 and GS0563.
 
 ## Addendum A — The ten patterns, three ways
 

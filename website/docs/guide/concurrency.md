@@ -154,6 +154,15 @@ forever, `defer`s run, and the block collapses. An operation that already
 completed its transfer keeps its value — cancellation wins only before the
 transfer commits, so a receive never drops an element it has already taken.
 
+### Cleanup during cancellation
+
+A `defer` body runs shielded: it does not observe the cancellation that is
+unwinding the block, so cleanup that drains a channel or sends a completion
+signal still completes instead of being skipped. The shield carries a grace
+budget (five seconds by default, `GSHARP_DEFER_GRACE_MS`), so cleanup that
+blocks forever cannot hold cancellation up — when the budget expires the
+cleanup is abandoned and `GsharpRuntime.DeferGraceExpired` reports it.
+
 ### How the context reaches a function
 
 Cancellation follows calls, not just blocks. A suspending function receives the

@@ -54,7 +54,8 @@ public class GsharpRuntimeTests
         try
         {
             var budget = TimeSpan.FromMilliseconds(50);
-            var shielded = Context.None.Shielded(budget);
+            var cancellable = Context.None.WithCancel();
+            var shielded = cancellable.Shielded(budget);
             Assert.False(shielded.IsCancelled);
 
             var observed = await reported.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -72,11 +73,21 @@ public class GsharpRuntimeTests
     [Fact]
     public void ShieldedWithInfiniteGrace_IsAnUnboundedShield()
     {
-        var shielded = Context.None.Shielded(Timeout.InfiniteTimeSpan);
+        var shielded = Context.None.WithCancel().Shielded(Timeout.InfiniteTimeSpan);
 
         Assert.True(shielded.IsShielded);
         Assert.False(shielded.IsCancelled);
         Assert.Equal(CancellationToken.None, shielded.Token);
+    }
+
+    [Fact]
+    public void ShieldingNone_IsNone_SoCleanupOutsideAScopeCostsNothing()
+    {
+        // A `defer` outside any scope is the common case; there is nothing to
+        // be shielded from, so no context and no grace timer are allocated.
+        Assert.Same(Context.None, Context.None.Shielded());
+        Assert.Same(Context.None, Context.None.Shielded(TimeSpan.FromSeconds(5)));
+        Assert.Same(Context.None, Context.None.ShieldedForCleanup());
     }
 
     [Fact]

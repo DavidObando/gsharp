@@ -574,7 +574,7 @@ internal sealed partial class StatementBinder
             return Invariant.Required(defer.ErrorStatement, "an invalid defer lowering has an error statement");
         }
 
-        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, defer.Cleanup);
+        var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, defer.Cleanup, shieldCleanup: true);
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.AddRange(defer.PrefixStatements);
         statements.Add(tryStmt);

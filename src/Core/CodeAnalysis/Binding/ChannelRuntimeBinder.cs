@@ -115,6 +115,41 @@ internal sealed class ChannelRuntimeBinder
         return new BoundClrPropertyAccessExpression(null, receiver: null, property, ContextType, staticContainerType: ContextType);
     }
 
+    /// <summary>
+    /// Binds <c>ambient.ShieldedForCleanup()</c> — the cancellation-immune
+    /// context a <c>defer</c> body runs under, bounded by the host's grace
+    /// budget (ADR-0174 D7). Shielding <c>Context.None</c> yields
+    /// <c>Context.None</c>, so cleanup outside any scope costs nothing.
+    /// </summary>
+    /// <param name="ambient">The context being unwound, or <c>null</c> for none.</param>
+    /// <returns>A call typed <c>Context</c>.</returns>
+    public BoundExpression BindShieldedContext(BoundExpression? ambient)
+    {
+        var method = Required(contextType).GetMethod("ShieldedForCleanup", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("Context.ShieldedForCleanup is missing from the channel runtime.");
+        return new BoundImportedInstanceCallExpression(
+            null,
+            ambient ?? BindContextNone(),
+            method,
+            ContextType,
+            ImmutableArray<BoundExpression>.Empty);
+    }
+
+    /// <summary>Binds <c>shield.Dispose()</c>, releasing a cleanup shield's grace timer.</summary>
+    /// <param name="shield">The shield local.</param>
+    /// <returns>A call typed <c>void</c>.</returns>
+    public BoundExpression BindContextDispose(VariableSymbol shield)
+    {
+        var method = Required(contextType).GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("Context.Dispose is missing from the channel runtime.");
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, shield),
+            method,
+            TypeSymbol.Void,
+            ImmutableArray<BoundExpression>.Empty);
+    }
+
     /// <summary>Binds <c>frame.Context</c>, the block's implicit <c>ctx</c> (ADR-0174 D6).</summary>
     /// <param name="frame">The frame local.</param>
     /// <returns>A property read typed <c>Context</c>.</returns>

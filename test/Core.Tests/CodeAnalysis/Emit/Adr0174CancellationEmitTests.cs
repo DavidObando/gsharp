@@ -14,6 +14,13 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// parked forever — while an operation that already committed keeps its value.
 /// </summary>
 /// <remarks>
+/// Discrimination witness (ADR-0154): removing the shield from the <c>defer</c>
+/// lowering leaves
+/// <see cref="DeferredCleanup_RunsShielded_WhileTheScopeIsBeingCancelled"/>
+/// reporting <c>not run</c> — the cleanup observes the cancellation it was
+/// meant to be immune to. Run and confirmed.
+/// </remarks>
+/// <remarks>
 /// A variadic function is the one shape that cannot be given a context
 /// implicitly: <c>...T</c> must stay positionally last, and an optional
 /// parameter placed before it is not skippable — a caller writing
@@ -265,6 +272,58 @@ public class Adr0174CancellationEmitTests
 
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
         Assert.Equal("cancelled / ScopeException", result.Value);
+    }
+
+    [Fact]
+    public void DeferredCleanup_RunsShielded_WhileTheScopeIsBeingCancelled()
+    {
+        // D7's cleanup shield. The deferred body waits on a channel while the
+        // block it belongs to is already cancelled; shielded it completes, and
+        // unshielded it observes the cancellation and is abandoned — which is
+        // what this test's expected value distinguishes.
+        var result = EmittedOracle.Evaluate("""
+            package P0174DeferShield
+            import System
+            import System.Threading
+
+            var cleanupResult = "not run"
+
+            func closeLater(gate chan[int32]) {
+                Thread.Sleep(150)
+                gate.Close()
+            }
+
+            func waitForGate(gate in chan[int32]) {
+                let (v, ok) = <-gate
+                cleanupResult = "cleanup finished ok=" + ok.ToString()
+            }
+
+            func fail() {
+                Thread.Sleep(20)
+                throw Exception("child failed")
+            }
+
+            func run() string {
+                let gate = chan[int32]()
+                go closeLater(gate)
+                try {
+                    scope {
+                        defer waitForGate(gate)
+                        go fail()
+                        Thread.Sleep(50)
+                    }
+                } catch (scopeFailure Exception) {
+                    return scopeFailure.GetType().Name + " / " + cleanupResult
+                }
+
+                return "clean / " + cleanupResult
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal("ScopeException / cleanup finished ok=False", result.Value);
     }
 
     [Fact]

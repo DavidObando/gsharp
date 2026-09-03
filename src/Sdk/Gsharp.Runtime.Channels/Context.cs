@@ -76,7 +76,15 @@ public sealed class Context : IDisposable
 
     /// <summary>Derives a cancellation-immune child for cleanup that must run during an unwind (ADR-0174 D7).</summary>
     /// <returns>A context whose token never cancels and whose <see cref="Parent"/> is this context.</returns>
-    public Context Shielded() => new(CancellationToken.None, source: null, parent: this, isShielded: true);
+    public Context Shielded() => ReferenceEquals(this, None) ? None : new(CancellationToken.None, source: null, parent: this, isShielded: true);
+
+    /// <summary>
+    /// Derives the shield a <c>defer</c> body runs under (ADR-0174 D7), using
+    /// the host's current <see cref="GsharpRuntime.DeferGraceBudget"/>. The
+    /// compiler calls this where it lowers deferred cleanup.
+    /// </summary>
+    /// <returns>A shielded context, or <see cref="None"/> when nothing can cancel this one.</returns>
+    public Context ShieldedForCleanup() => Shielded(GsharpRuntime.DeferGraceBudget);
 
     /// <summary>
     /// Derives a cancellation-immune child with a bounded grace budget
@@ -90,7 +98,10 @@ public sealed class Context : IDisposable
     /// <returns>A shielded context whose <see cref="Parent"/> is this context.</returns>
     public Context Shielded(TimeSpan grace)
     {
-        if (grace == Timeout.InfiniteTimeSpan)
+        // Nothing can cancel a body running under `None`, so it needs no shield
+        // and no grace timer. This is the common case for cleanup outside any
+        // scope, and keeping it allocation-free keeps `defer` cheap.
+        if (ReferenceEquals(this, None) || grace == Timeout.InfiniteTimeSpan)
         {
             return Shielded();
         }
