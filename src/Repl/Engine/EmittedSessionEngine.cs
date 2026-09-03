@@ -18,6 +18,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using CompletionItem = GSharp.LanguageServer.Protocol.CompletionItem;
 
 namespace GSharp.Repl.Engine;
 
@@ -92,17 +93,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         try
         {
             var tree = SyntaxTree.Parse(SourceText.From(text, string.Empty));
-            var compilation = new Compilation(GetAnalysisResolver(), tree)
-            {
-                Submission = new SubmissionBindingOptions
-                {
-                    Imports = SubmissionImports.Create(
-                        submissions.Select(s => new SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)).ToImmutableArray()),
-                    DefaultPackageName = "gsi$analysis",
-                    ReplayImports = sessionImports.ToImmutableArray(),
-                    CaptureTrailingExpression = false,
-                },
-            };
+            var compilation = CreateAnalysisCompilation(tree);
             var diagnostics = tree.Diagnostics.Concat(compilation.GlobalScope.Diagnostics).Concat(compilation.BoundProgram.Diagnostics);
             return AnalysisBridge.WithDiagnostics(baseline, diagnostics, tree.Text);
         }
@@ -110,6 +101,18 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         {
             return baseline;
         }
+    }
+
+    public IReadOnlyList<CompletionItem> Completions(string text, int line, int col)
+    {
+        var content = AnalysisBridge.Build(text);
+        return AnalysisBridge.Completions(content, CreateAnalysisCompilation(content.SyntaxTree), line, col, Snapshot());
+    }
+
+    public string? Hover(string text, int line, int col)
+    {
+        var content = AnalysisBridge.Build(text);
+        return AnalysisBridge.Hover(content, CreateAnalysisCompilation(content.SyntaxTree), line, col, Snapshot());
     }
 
     /// <inheritdoc/>
@@ -174,7 +177,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                 {
                     if (seenTypes.Add(s.Name))
                     {
-                        types.Add(Describe("struct", s, submission));
+                        types.Add(Describe(s.IsClass ? "class" : "struct", s, submission));
                     }
                 }
 
@@ -288,6 +291,19 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         analysisSubmissionCount = submissions.Count;
         return analysisResolver;
     }
+
+    private Compilation CreateAnalysisCompilation(SyntaxTree tree)
+        => new(GetAnalysisResolver(), tree)
+        {
+            Submission = new SubmissionBindingOptions
+            {
+                Imports = SubmissionImports.Create(
+                    submissions.Select(s => new SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)).ToImmutableArray()),
+                DefaultPackageName = "gsi$analysis",
+                ReplayImports = sessionImports.ToImmutableArray(),
+                CaptureTrailingExpression = false,
+            },
+        };
 
     private Cell EvaluateCore(string text, CancellationToken cancellationToken)
     {

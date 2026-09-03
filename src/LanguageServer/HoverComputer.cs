@@ -23,9 +23,9 @@ namespace GSharp.LanguageServer;
 
 public static class HoverComputer
 {
-    public static Hover? ComputeHover(DocumentContent content, Position position, CancellationToken ct = default)
+    public static Hover? ComputeHover(DocumentContent content, Position position, CancellationToken ct = default, Compilation? compilation = null)
     {
-        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
+        compilation ??= content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         if (token is null)
@@ -1586,9 +1586,9 @@ public static class SignatureHelpComputer
 
 public static class CompletionComputer
 {
-    public static IReadOnlyList<CompletionItem> ComputeCompletions(DocumentContent content, Position position, CancellationToken ct = default)
+    public static IReadOnlyList<CompletionItem> ComputeCompletions(DocumentContent content, Position position, CancellationToken ct = default, Compilation? compilation = null)
     {
-        var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
+        compilation ??= content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
 
         // Issue #917: completion-as-you-type. When the caret sits in (or immediately

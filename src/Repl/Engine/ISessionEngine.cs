@@ -55,6 +55,10 @@ public interface ISessionEngine
 
     EditorAnalysis AnalyzeEditor(string text);
 
+    IReadOnlyList<GSharp.LanguageServer.Protocol.CompletionItem> Completions(string text, int line, int col);
+
+    string? Hover(string text, int line, int col);
+
     /// <summary>Builds a snapshot of the accumulated session state for the REPL sidebar.</summary>
     /// <returns>The snapshot; <see cref="ReplState.Empty"/> when nothing has been evaluated.</returns>
     ReplState Snapshot();

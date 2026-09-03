@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.LanguageServer;
@@ -25,9 +26,27 @@ public static class AnalysisBridge
         => Safe(() => AddSessionCompletions(
             CompletionComputer.ComputeCompletions(Build(text), new Position(line, col)), state), Array.Empty<CompletionItem>());
 
+    internal static IReadOnlyList<CompletionItem> Completions(
+        DocumentContent content,
+        Compilation compilation,
+        int line,
+        int col,
+        ReplState state)
+        => Safe(() => AddSessionCompletions(
+            CompletionComputer.ComputeCompletions(content, new Position(line, col), compilation: compilation), state), Array.Empty<CompletionItem>());
+
     public static string? Hover(string text, int line, int col, ReplState? state = null)
         => Safe(() => HoverComputer.ComputeHover(Build(text), new Position(line, col))?.Contents?.MarkupContent?.Value
             ?? SessionHover(text, line, col, state), null);
+
+    internal static string? Hover(
+        DocumentContent content,
+        Compilation compilation,
+        int line,
+        int col,
+        ReplState state)
+        => Safe(() => HoverComputer.ComputeHover(content, new Position(line, col), compilation: compilation)?.Contents?.MarkupContent?.Value
+            ?? SessionHover(content.SyntaxTree.Text.ToString(), line, col, state), null);
 
     public static EditorAnalysis Analyze(string text)
         => Safe(() => AnalyzeCore(text), EditorAnalysis.Empty);
@@ -127,7 +146,7 @@ public static class AnalysisBridge
         return tokens;
     }
 
-    private static DocumentContent Build(string text)
+    internal static DocumentContent Build(string text)
     {
         var lines = new List<int>();
         var i = text.IndexOf('\n');

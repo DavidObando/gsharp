@@ -487,7 +487,7 @@ public open class ReplApp : Column {
     if !editor.IsFocused || editor.Text == "" { return }
     let at = CaretCharacter()
     completionItems = MatchingCompletions(
-      AnalysisBridge.Completions(editor.Text, editor.Caret.LineIndex, at, engine.Snapshot()), CurrentPrefix())
+      engine.Completions(editor.Text, editor.Caret.LineIndex, at), CurrentPrefix())
     if completionItems.Count == 0 {
       message = "no completions"
       return
@@ -519,7 +519,7 @@ public open class ReplApp : Column {
     if editor.Text == "" { return }
     let at = CaretCharacter()
     let items = MatchingCompletions(
-      AnalysisBridge.Completions(editor.Text, editor.Caret.LineIndex, at, engine.Snapshot()), CurrentPrefix())
+      engine.Completions(editor.Text, editor.Caret.LineIndex, at), CurrentPrefix())
     if items.Count == 0 {
       message = "no completions"
       return
@@ -680,7 +680,7 @@ public open class ReplApp : Column {
         "Type code, place the caret on a symbol, then press Ctrl+K or F1 to show its type and symbol information.")
       return
     }
-    let text = AnalysisBridge.Hover(editor.Text, editor.Caret.LineIndex, CaretCharacter(), engine.Snapshot())
+    let text = engine.Hover(editor.Text, editor.Caret.LineIndex, CaretCharacter())
     OpenTextOverlay(hoverOverlay, "hover at editor caret", text ?? "No symbol information at the editor caret.")
   }
 

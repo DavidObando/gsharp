@@ -98,7 +98,7 @@ public sealed class ReplLayoutTests
     public void SessionSymbolsDriveCompletionHoverAndStructuredRows()
     {
         using var engine = new EmittedSessionEngine();
-        engine.Evaluate("import System.Text\nfunc Greet() string { return \"hi\" }\nlet answer = 123\nlet empty string? = nil\nstruct Thing {}");
+        engine.Evaluate("import System.Text\nfunc Greet() string { return \"hi\" }\nlet answer = 123\nlet empty string? = nil\nlet sb = StringBuilder()\nstruct Thing {}\nclass Widget {}");
         var state = engine.Snapshot();
 
         Assert.Contains(state.Imports, symbol => symbol.Name == "System.Text" && symbol.Kind == "import");
@@ -106,8 +106,11 @@ public sealed class ReplLayoutTests
         Assert.Contains(state.Variables, symbol => symbol.Name == "answer" && symbol.Value == "123");
         Assert.Contains(state.Variables, symbol => symbol.Name == "empty" && symbol.Value == "nil");
         Assert.Contains(state.Types, symbol => symbol.Name == "Thing" && symbol.Kind == "struct");
+        Assert.Contains(state.Types, symbol => symbol.Name == "Widget" && symbol.Kind == "class");
         Assert.Contains(AnalysisBridge.Completions("ans", 0, 3, state), item => item.Label == "answer");
         Assert.Contains("answer", AnalysisBridge.Hover("answer", 0, 3, state), StringComparison.Ordinal);
+        Assert.Contains(engine.Completions("sb.", 0, 3), item => item.Label == "Length");
+        Assert.Contains("Length", engine.Hover("sb.Length", 0, 5), StringComparison.Ordinal);
         Assert.Empty(engine.AnalyzeEditor("answer + 1").Diagnostics);
         Assert.NotEmpty(engine.AnalyzeEditor("missingName + 1").Diagnostics);
 

@@ -11,14 +11,38 @@ import System.Text
 
 public class EditorLineSource : RichLineSource {
   private let lines List[string]
-  private let analysis EditorAnalysis
+  private let tokens Dictionary[int32, List[EditorToken]]
+  private let diagnostics Dictionary[int32, List[EditorDiagnostic]]
   private let palette ReplPalette
   private let maximumWidth int32
 
   public init(text string, analysis EditorAnalysis, palette ReplPalette) {
-    this.analysis = analysis
     this.palette = palette
     lines = TextLines(text)
+    tokens = Dictionary[int32, List[EditorToken]]()
+    diagnostics = Dictionary[int32, List[EditorDiagnostic]]()
+    for token in analysis.Tokens {
+      if token.Line < 0 || token.Line >= lines.Count { continue }
+      var existing List[EditorToken]
+      if !tokens.TryGetValue(token.Line, out existing) {
+        existing = List[EditorToken]()
+        tokens.Add(token.Line, existing)
+      }
+      existing.Add(token)
+    }
+    for diagnostic in analysis.Diagnostics {
+      var line = Math.Max(0, diagnostic.StartLine)
+      let last = Math.Min(lines.Count - 1, Math.Max(line, diagnostic.EndLine))
+      while line <= last {
+        var existing List[EditorDiagnostic]
+        if !diagnostics.TryGetValue(line, out existing) {
+          existing = List[EditorDiagnostic]()
+          diagnostics.Add(line, existing)
+        }
+        existing.Add(diagnostic)
+        line = line + 1
+      }
+    }
     var width = 0
     for line in lines {
       let measured = CellText.MeasureWidth(line)
@@ -54,22 +78,24 @@ public class EditorLineSource : RichLineSource {
   }
 
   private func KindAt(line int32, character int32) int32 {
-    for token in analysis.Tokens {
-      if token.Line == line && character >= token.StartCharacter
-        && character < token.StartCharacter + token.Length{
-          return token.Kind
-        }
+    var lineTokens List[EditorToken]
+    if !tokens.TryGetValue(line, out lineTokens) { return -1 }
+    for token in lineTokens {
+      if character >= token.StartCharacter && character < token.StartCharacter + token.Length {
+        return token.Kind
+      }
     }
     return -1
   }
 
   private func DiagnosticAt(line int32, character int32) bool {
-    for diagnostic in analysis.Diagnostics {
-      if line < diagnostic.StartLine || line > diagnostic.EndLine { continue }
+    var lineDiagnostics List[EditorDiagnostic]
+    if !diagnostics.TryGetValue(line, out lineDiagnostics) { return false }
+    for diagnostic in lineDiagnostics {
       if diagnostic.StartLine == diagnostic.EndLine {
         var end = diagnostic.EndCharacter
         if end <= diagnostic.StartCharacter { end = diagnostic.StartCharacter + 1 }
-        if line == diagnostic.StartLine && character >= diagnostic.StartCharacter && character < end { return true }
+        if character >= diagnostic.StartCharacter && character < end { return true }
         continue
       }
       if line == diagnostic.StartLine && character >= diagnostic.StartCharacter { return true }
@@ -109,6 +135,7 @@ public class TranscriptSource : VirtualListSource {
   private let collapsed HashSet[int32]
   private let analyses Dictionary[int32, EditorAnalysis]
   private let rendered Dictionary[string, List[List[TextRun]]]
+  private var renderedWidth int32
   private var palette ReplPalette
   private var showTree bool
   private var showIl bool
@@ -120,6 +147,7 @@ public class TranscriptSource : VirtualListSource {
     collapsed = HashSet[int32]()
     analyses = Dictionary[int32, EditorAnalysis]()
     rendered = Dictionary[string, List[List[TextRun]]]()
+    renderedWidth = -1
     showTree = false
     showIl = false
     ascii = false
@@ -209,8 +237,12 @@ public class TranscriptSource : VirtualListSource {
 
   private func Lines(cell Cell, width int32) List[List[TextRun]] {
     let available = Math.Max(1, width)
+    if renderedWidth != available {
+      rendered.Clear()
+      renderedWidth = available
+    }
     let options = showTree.ToString() + ":" + showIl.ToString() + ":" + ascii.ToString()
-    let key = cell.Index.ToString() + ":" + available.ToString() + ":" + options + ":" + palette.Name
+    let key = cell.Index.ToString() + ":" + options + ":" + palette.Name
     var existing List[List[TextRun]]
     if rendered.TryGetValue(key, out existing) { return existing }
     let result = List[List[TextRun]]()
