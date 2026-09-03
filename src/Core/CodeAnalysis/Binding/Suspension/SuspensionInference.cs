@@ -108,6 +108,13 @@ internal static class SuspensionInference
             {
                 function.AddHiddenContextParameter(runtime.ContextType);
             }
+            else
+            {
+                // A boundary never gains a hidden parameter, but an author who
+                // spelled `ctx Context` there still expects the body to observe
+                // it — and `case cancelled` to be live (ADR-0174 D7/D8).
+                function.AdoptDeclaredContextParameter(runtime.ContextType);
+            }
         }
 
         var bag = new DiagnosticBag();

@@ -1040,18 +1040,23 @@ public partial class Parser
     /// brace. Issue #1023's defect in another position: a call- or
     /// indexer-tailed operand (<c>case ch &lt;- Pair(41) { … }</c>) would
     /// otherwise read the arm's <c>{</c> as its own object initializer and
-    /// swallow the body.
+    /// swallow the body. Bare struct literals are suppressed for the same
+    /// reason and by the same rule as a statement header's (issue #1575): an
+    /// empty <c>{ }</c> body after a name operand — <c>case &lt;-ch { }</c> —
+    /// is a body, not an empty struct literal.
     /// </summary>
     /// <returns>The parsed operand.</returns>
     private ExpressionSyntax ParseArmOperand()
     {
         suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
         try
         {
             return ParseExpression();
         }
         finally
         {
+            suppressStructLiteral--;
             suppressTrailingObjectInitializer--;
         }
     }

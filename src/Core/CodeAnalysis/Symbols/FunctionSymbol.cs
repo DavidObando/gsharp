@@ -572,6 +572,41 @@ public sealed class FunctionSymbol : Symbol
     }
 
     /// <summary>
+    /// ADR-0174 D7: adopts a declared <c>ctx Context</c> parameter as this
+    /// function's ambient context <em>without</em> adding a hidden one. This is
+    /// the non-suspending case — a boundary such as an <c>open</c> method or an
+    /// interface implementation never gains the hidden parameter, but an author
+    /// who spelled <c>ctx Context</c> in the signature still expects the body's
+    /// channel operations, scopes and selects to observe it.
+    /// </summary>
+    /// <param name="contextType">The runtime's <c>Context</c> type.</param>
+    /// <returns>The declared parameter, or <see langword="null"/> when there is none.</returns>
+    public ParameterSymbol? AdoptDeclaredContextParameter(TypeSymbol contextType)
+    {
+        if (AmbientContextParameter is { } existing)
+        {
+            return existing;
+        }
+
+        var declaredContextTypeName = contextType.ClrType?.FullName;
+        if (declaredContextTypeName == null)
+        {
+            return null;
+        }
+
+        foreach (var parameter in Parameters)
+        {
+            if (parameter.Type.ClrType?.FullName == declaredContextTypeName)
+            {
+                AmbientContextParameter = parameter;
+                return parameter;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) function symbol at the
     /// declaration node of a freshly-parsed syntax tree whose member signature
     /// is byte-identical to the previous one (a body-only edit). Only the

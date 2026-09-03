@@ -859,6 +859,30 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
+            if (caseSyntax.CaseKind == SelectCaseKind.Cancelled)
+            {
+                // ADR-0174 D8: `case cancelled` has no operand — it observes the
+                // ambient context. Whether there is one to observe is settled by
+                // the suspension pass (GS0557), which knows which functions end
+                // up carrying a context.
+                var cancelledGuard = BindSelectArmGuard(caseSyntax);
+                var cancelledBody = BindStatement(caseSyntax.Body);
+                bound.Add(new BoundSelectCase(
+                    SelectCaseKind.Cancelled,
+                    channel: null,
+                    value: null,
+                    variable: null,
+                    cancelledGuard,
+                    Invariant.Required(cancelledBody, "a cancelled select case has a bound body")));
+                continue;
+            }
+
+            if (caseSyntax.CaseKind is SelectCaseKind.AwaitBind or SelectCaseKind.AwaitDiscard)
+            {
+                bound.Add(BindSelectAwaitCase(caseSyntax));
+                continue;
+            }
+
             // A send arm references a channel; a receive arm may reference
             // anything selectable (ADR-0174 D8/D9), which is how `case
             // <-after(d)` works without the library's timers pretending to be
@@ -927,6 +951,12 @@ internal sealed partial class StatementBinder
             VariableSymbol? variable = null;
             BoundStatement body;
 
+            // The guard is bound here, before a receive arm opens its scope, so
+            // `case let v = <-ch when v > 0` cannot see `v`: the guard decides
+            // whether the arm is registered at all, long before any value
+            // arrives (ADR-0174 D8).
+            var guard = BindSelectArmGuard(caseSyntax);
+
             if (caseSyntax.CaseKind == SelectCaseKind.Send)
             {
                 valueExpr = conversions.BindConversion(
@@ -957,8 +987,10 @@ internal sealed partial class StatementBinder
                 body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-discard select case has a bound body");
             }
 
-            bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
+            bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, guard, body));
         }
+
+        ReportChannelsTalkingToThemselves(bound);
         }
         finally
         {
@@ -974,6 +1006,127 @@ internal sealed partial class StatementBinder
         }
 
         return lowered;
+    }
+
+    // ADR-0174 D8: an arm's `when` guard. It is evaluated once, when the select
+    // is entered, and a false guard keeps the arm out of the waiter entirely —
+    // which is how G# spells Go's "set the channel to nil to disable the arm".
+    private BoundExpression? BindSelectArmGuard(SelectCaseSyntax caseSyntax)
+    {
+        if (caseSyntax.Guard is not { } guardSyntax)
+        {
+            return null;
+        }
+
+        var guard = bindExpression(guardSyntax);
+        if (guard is BoundErrorExpression)
+        {
+            return null;
+        }
+
+        if (guard.Type != TypeSymbol.Bool)
+        {
+            Diagnostics.ReportSelectArmGuardIsNotBoolean(guardSyntax.Location, guard.Type);
+            return null;
+        }
+
+        return guard;
+    }
+
+    // ADR-0174 D8: `case await task { … }` and `case let v = await task { … }`.
+    // The arm joins the select through `SelectWaiter.AddTask`, so the operand
+    // must be a `Task` or `Task[T]` — the only shape the waiter can attach a
+    // claiming continuation to.
+    private BoundSelectCase BindSelectAwaitCase(SelectCaseSyntax caseSyntax)
+    {
+        var taskSyntax = Invariant.Required(caseSyntax.Channel, "an await select case has a task expression");
+        var task = bindExpression(taskSyntax);
+        var guard = BindSelectArmGuard(caseSyntax);
+        TypeSymbol? result = null;
+        var recognized = task is BoundErrorExpression;
+        if (task is not BoundErrorExpression)
+        {
+            if (task.Type?.ClrType?.FullName == "System.Threading.Tasks.Task")
+            {
+                recognized = true;
+            }
+            else if (AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(task.Type ?? TypeSymbol.Error, out var awaited, out var isValueTask)
+                && !isValueTask)
+            {
+                recognized = true;
+                result = awaited;
+            }
+            else
+            {
+                Diagnostics.ReportTypeIsNotAwaitable(taskSyntax.Location, task.Type ?? TypeSymbol.Error);
+            }
+        }
+
+        if (!recognized || caseSyntax.CaseKind == SelectCaseKind.AwaitDiscard)
+        {
+            var discardBody = BindStatement(caseSyntax.Body);
+            return new BoundSelectCase(
+                caseSyntax.CaseKind,
+                task,
+                value: null,
+                variable: null,
+                guard,
+                Invariant.Required(discardBody, "an await select case has a bound body"));
+        }
+
+        // `case let v = await task`: `v` is visible only inside the arm body,
+        // exactly as a receive arm's binding is.
+        scope = new BoundScope(scope);
+        var identifier = Invariant.Required(caseSyntax.Identifier, "an await-bind select case has an identifier");
+        var variable = new LocalVariableSymbol(
+            identifier.ValueText,
+            isReadOnly: true,
+            result ?? TypeSymbol.Error,
+            declaringSyntax: identifier);
+        if (!scope.TryDeclareVariable(variable))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText);
+        }
+
+        var body = Invariant.Required(BindStatement(caseSyntax.Body), "an await-bind select case has a bound body");
+        scope = scope.Pop();
+        return new BoundSelectCase(caseSyntax.CaseKind, task, value: null, variable, guard, body);
+    }
+
+    // ADR-0174 D8 / GS0564: a select that both sends to and receives from one
+    // channel can complete by talking to itself, which is almost never what the
+    // author meant. Reported on the second arm, once per channel.
+    private void ReportChannelsTalkingToThemselves(ImmutableArray<BoundSelectCase>.Builder cases)
+    {
+        var sent = new Dictionary<VariableSymbol, int>();
+        var received = new Dictionary<VariableSymbol, int>();
+        for (var i = 0; i < cases.Count; i++)
+        {
+            // A receive operand is wrapped in the `in chan[T]` view conversion
+            // and a send operand is not, so the comparison is on the symbol.
+            if (Unwrap(cases[i].Channel) is not BoundVariableExpression { Variable: { } symbol } operand)
+            {
+                continue;
+            }
+
+            var (mine, theirs) = cases[i].CaseKind == SelectCaseKind.Send ? (sent, received) : (received, sent);
+            if (theirs.ContainsKey(symbol))
+            {
+                // The conversion wrapper carries no syntax, so the span comes
+                // from the operand underneath it.
+                Diagnostics.ReportSelectChannelSentAndReceived(
+                    operand.Syntax?.Location
+                        ?? Invariant.Required(cases[i].Body.Syntax, "a select arm has a body").Location,
+                    symbol.Name);
+                theirs.Remove(symbol);
+                continue;
+            }
+
+            mine.TryAdd(symbol, i);
+        }
+
+        static BoundExpression? Unwrap(BoundExpression? expression)
+            => expression is BoundConversionExpression conversion ? Unwrap(conversion.Expression) : expression;
     }
 
     /// <summary>
@@ -1015,10 +1168,10 @@ internal sealed partial class StatementBinder
         }
 
         var runtime = binderCtx.ChannelRuntime;
-        var shapes = new (TypeSymbol Element, ChannelDirection Direction, bool Selectable)[cases.Length];
+        var shapes = new (TypeSymbol? Element, ChannelDirection Direction, bool Selectable)[cases.Length];
         for (var i = 0; i < cases.Length; i++)
         {
-            if (cases[i].IsDefault)
+            if (cases[i].IsDefault || cases[i].CaseKind == SelectCaseKind.Cancelled)
             {
                 continue;
             }
@@ -1028,7 +1181,13 @@ internal sealed partial class StatementBinder
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
             }
 
-            if (ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var element, out var direction, out _))
+            if (cases[i].CaseKind is SelectCaseKind.AwaitBind or SelectCaseKind.AwaitDiscard)
+            {
+                // The element is the task's result type, or null for a bare
+                // `Task` whose completion carries no value.
+                shapes[i] = (cases[i].Variable?.Type, ChannelDirection.In, false);
+            }
+            else if (ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var element, out var direction, out _))
             {
                 shapes[i] = (element, direction, false);
             }
@@ -1055,6 +1214,7 @@ internal sealed partial class StatementBinder
         // observable (D8 step 1).
         var channelLocals = new VariableSymbol?[cases.Length];
         var valueLocals = new VariableSymbol?[cases.Length];
+        var guardLocals = new VariableSymbol?[cases.Length];
         var armCount = 0;
         for (var i = 0; i < cases.Length; i++)
         {
@@ -1064,11 +1224,13 @@ internal sealed partial class StatementBinder
             }
 
             armCount++;
-            var channel = Invariant.Required(cases[i].Channel, "a non-default select arm binds a channel");
-            var channelLocal = new LocalVariableSymbol($"<select$ch${id}${i}>", isReadOnly: true, channel.Type!);
-            scope.TryDeclareVariable(channelLocal);
-            channelLocals[i] = channelLocal;
-            statements.Add(new BoundVariableDeclaration(null, channelLocal, channel));
+            if (cases[i].Channel is { } channel)
+            {
+                var channelLocal = new LocalVariableSymbol($"<select$ch${id}${i}>", isReadOnly: true, channel.Type!);
+                scope.TryDeclareVariable(channelLocal);
+                channelLocals[i] = channelLocal;
+                statements.Add(new BoundVariableDeclaration(null, channelLocal, channel));
+            }
 
             if (cases[i].CaseKind == SelectCaseKind.Send)
             {
@@ -1077,6 +1239,16 @@ internal sealed partial class StatementBinder
                 scope.TryDeclareVariable(valueLocal);
                 valueLocals[i] = valueLocal;
                 statements.Add(new BoundVariableDeclaration(null, valueLocal, value));
+            }
+
+            // The guard is evaluated exactly once, here, outside the reprobe
+            // loop: an arm's enablement cannot change under the select's feet.
+            if (cases[i].Guard is { } guard)
+            {
+                var guardLocal = new LocalVariableSymbol($"<select$guard${id}${i}>", isReadOnly: true, TypeSymbol.Bool);
+                scope.TryDeclareVariable(guardLocal);
+                guardLocals[i] = guardLocal;
+                statements.Add(new BoundVariableDeclaration(null, guardLocal, guard));
             }
         }
 
@@ -1106,15 +1278,46 @@ internal sealed partial class StatementBinder
         var attempt = ImmutableArray.CreateBuilder<BoundStatement>();
         for (var i = 0; i < cases.Length; i++)
         {
-            if (channelLocals[i] is not { } channelLocal)
+            BoundExpression register;
+            if (cases[i].CaseKind == SelectCaseKind.Cancelled)
+            {
+                register = runtime.BindSelectAddCancelled(waiter, cases[i].Body.Syntax?.Parent, i);
+            }
+            else if (channelLocals[i] is not { } channelLocal)
             {
                 continue;
             }
+            else if (cases[i].CaseKind is SelectCaseKind.AwaitBind or SelectCaseKind.AwaitDiscard)
+            {
+                register = runtime.BindSelectAddTask(waiter, new BoundVariableExpression(null, channelLocal), shapes[i].Element, i);
+            }
+            else
+            {
+                var value = valueLocals[i] is { } valueLocal ? new BoundVariableExpression(null, valueLocal) : null;
+                register = runtime.BindSelectAdd(
+                    waiter,
+                    new BoundVariableExpression(null, channelLocal),
+                    value,
+                    Invariant.Required(shapes[i].Element, "a channel arm has an element type"),
+                    shapes[i].Direction,
+                    i,
+                    shapes[i].Selectable);
+            }
 
-            var value = valueLocals[i] is { } valueLocal ? new BoundVariableExpression(null, valueLocal) : null;
-            attempt.Add(new BoundExpressionStatement(
-                null,
-                runtime.BindSelectAdd(waiter, new BoundVariableExpression(null, channelLocal), value, shapes[i].Element, shapes[i].Direction, i, shapes[i].Selectable)));
+            BoundStatement registration = new BoundExpressionStatement(null, register);
+            if (guardLocals[i] is { } guardLocal)
+            {
+                // A disabled arm is simply never registered, so it can never win
+                // and its body is unreachable — the same shape as Go's nil
+                // channel, without the nil.
+                registration = new BoundIfStatement(
+                    null,
+                    new BoundVariableExpression(null, guardLocal),
+                    registration,
+                    elseStatement: null);
+            }
+
+            attempt.Add(registration);
         }
 
         attempt.Add(new BoundExpressionStatement(
@@ -1140,7 +1343,10 @@ internal sealed partial class StatementBinder
                 ArmIs(winner, i),
                 new BoundExpressionStatement(
                     null,
-                    new BoundAssignmentExpression(null, bindVariable, runtime.BindSelectTakeValue(waiter, shapes[i].Element))),
+                    new BoundAssignmentExpression(
+                        null,
+                        bindVariable,
+                        runtime.BindSelectTakeValue(waiter, Invariant.Required(shapes[i].Element, "a binding arm has an element type")))),
                 elseStatement: null));
         }
 

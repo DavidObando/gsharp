@@ -48,6 +48,9 @@ internal sealed class ChannelRuntimeBinder
     /// <summary>The runtime's static operation facade.</summary>
     public const string ChannelOpsTypeName = "Gsharp.Concurrency.ChannelOps";
 
+    /// <summary>The runtime's <c>select</c> waiter.</summary>
+    public const string SelectWaiterTypeName = "Gsharp.Concurrency.SelectWaiter";
+
     private const string CancellationTokenTypeName = "System.Threading.CancellationToken";
 
     private readonly ReferenceResolver references;
@@ -204,8 +207,102 @@ internal sealed class ChannelRuntimeBinder
             function,
             ImmutableArray.Create(
                 new BoundLiteralExpression(null, arms, TypeSymbol.Int32),
-                context ?? BindContextNone()));
+                context ?? new BoundDefaultExpression(null, ContextType)));
     }
+
+    /// <summary>
+    /// ADR-0174 D7/D8: rebinds a <c>SelectWaiter.Rent(n, default)</c> — a select
+    /// bound outside any lexical <c>scope</c> — so it parks under
+    /// <paramref name="context"/>. Without this a select in a callee never
+    /// observes the caller's scope, and a <c>case cancelled</c> arm is dead.
+    /// </summary>
+    /// <param name="call">An imported call.</param>
+    /// <param name="context">The ambient context to park under.</param>
+    /// <returns>The rebound call, or <paramref name="call"/> when it is not a defaulted rent.</returns>
+    public BoundExpression RetargetSelectRent(BoundImportedCallExpression call, BoundExpression context)
+    {
+        if (call.Function.Name != "Rent"
+            || call.Function.ImportedClass.ClassType.FullName != SelectWaiterTypeName
+            || call.Arguments.Length != 2
+            || call.Arguments[1] is not BoundDefaultExpression)
+        {
+            return call;
+        }
+
+        return new BoundImportedCallExpression(
+            call.Syntax,
+            call.Function,
+            ImmutableArray.Create(call.Arguments[0], context));
+    }
+
+    /// <summary>
+    /// Binds <c>waiter.AddTask(task, arm)</c> or <c>waiter.AddTask[T](task, arm)</c>
+    /// — the <c>case await task</c> arms of ADR-0174 D8.
+    /// </summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <param name="task">The task operand, already evaluated into a local.</param>
+    /// <param name="resultType">The task's result type, or <see langword="null"/> for a bare <c>Task</c>.</param>
+    /// <param name="arm">The arm index.</param>
+    /// <returns>A call typed <c>void</c>.</returns>
+    public BoundExpression BindSelectAddTask(VariableSymbol waiter, BoundExpression task, TypeSymbol? resultType, int arm)
+    {
+        var candidates = Required(selectWaiterType).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(m => m.Name == "AddTask");
+        var arguments = ImmutableArray.Create(task, new BoundLiteralExpression(null, arm, TypeSymbol.Int32));
+        if (resultType == null)
+        {
+            return new BoundImportedInstanceCallExpression(
+                null,
+                new BoundVariableExpression(null, waiter),
+                candidates.Single(m => !m.IsGenericMethodDefinition),
+                TypeSymbol.Void,
+                arguments);
+        }
+
+        // `Task<T>` is invariant, so a same-compilation result type must travel
+        // symbolically for the same reason a channel element does (issue #2965).
+        var (closedResult, symbolic) = ProjectElement(resultType);
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, waiter),
+            candidates.Single(m => m.IsGenericMethodDefinition).MakeGenericMethod(closedResult),
+            TypeSymbol.Void,
+            arguments,
+            typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(resultType) : default);
+    }
+
+    /// <summary>
+    /// Binds <c>waiter.AddCancelled(arm)</c> — the <c>case cancelled</c> arm of
+    /// ADR-0174 D8. The syntax travels with the call so the suspension pass can
+    /// report GS0557 against the arm when the container turns out to have no
+    /// ambient context to observe.
+    /// </summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <param name="syntax">The arm's syntax.</param>
+    /// <param name="arm">The arm index.</param>
+    /// <returns>A call typed <c>void</c>.</returns>
+    public BoundExpression BindSelectAddCancelled(VariableSymbol waiter, SyntaxNode? syntax, int arm)
+    {
+        var method = Required(selectWaiterType).GetMethod("AddCancelled", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("SelectWaiter.AddCancelled is missing from the channel runtime.");
+        return new BoundImportedInstanceCallExpression(
+            syntax,
+            new BoundVariableExpression(null, waiter),
+            method,
+            TypeSymbol.Void,
+            ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, arm, TypeSymbol.Int32)));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="node"/> is the <c>AddCancelled</c> call a
+    /// <c>case cancelled</c> arm lowers to (ADR-0174 D8).
+    /// </summary>
+    /// <param name="node">A bound node.</param>
+    /// <returns><see langword="true"/> for a cancelled-arm registration.</returns>
+    public static bool IsSelectAddCancelled(BoundExpression node)
+        => node is BoundImportedInstanceCallExpression call
+            && call.Method.Name == "AddCancelled"
+            && call.Method.DeclaringType?.FullName == SelectWaiterTypeName;
 
     /// <summary>Binds <c>waiter.AddReceive[T](channel, arm)</c> or <c>AddSend[T](channel, value, arm)</c> (ADR-0174 D8).</summary>
     /// <param name="waiter">The waiter local.</param>

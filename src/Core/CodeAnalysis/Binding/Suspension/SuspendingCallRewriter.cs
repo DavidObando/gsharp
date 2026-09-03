@@ -158,6 +158,24 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     }
 
     /// <inheritdoc/>
+    protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+    {
+        var rewritten = (BoundImportedInstanceCallExpression)base.RewriteImportedInstanceCallExpression(node);
+
+        // ADR-0174 D8: `case cancelled` observes the ambient context. Whether
+        // there is one is only known here, after the fixed point has decided
+        // which functions carry a context; in a boundary or a root without a
+        // `scope` the arm would silently never be taken.
+        if (Ambient is null && ChannelRuntimeBinder.IsSelectAddCancelled(rewritten) && rewritten.Syntax is { } syntax)
+        {
+            diagnostics.ReportSelectCancelledArmNeedsContext(
+                syntax is SelectCaseSyntax arm ? arm.Keyword.Location : syntax.Location);
+        }
+
+        return rewritten;
+    }
+
+    /// <inheritdoc/>
     protected override BoundExpression RewriteImportedCallExpression(BoundImportedCallExpression node)
     {
         var rewritten = (BoundImportedCallExpression)base.RewriteImportedCallExpression(node);
@@ -183,6 +201,15 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
             if (!ReferenceEquals(scopeRetargeted, rewritten))
             {
                 return scopeRetargeted;
+            }
+
+            // A select bound outside any lexical `scope` parks under the
+            // container's context, so cancelling the caller unwinds it and a
+            // `case cancelled` arm is reachable (ADR-0174 D7/D8).
+            var rentRetargeted = runtime.RetargetSelectRent(rewritten, ambient);
+            if (!ReferenceEquals(rentRetargeted, rewritten))
+            {
+                return rentRetargeted;
             }
 
             // A suspending function imported from another assembly takes the

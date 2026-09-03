@@ -353,4 +353,52 @@ public class SelectWaiterTests
 
         Assert.Equal(new[] { 0, 1, 2 }, seen.OrderBy(x => x));
     }
+    [Fact]
+    public void TryNow_WithCancelledArm_TakesItWhenAlreadyCancelled()
+    {
+        // The `default` path probes without registering or parking. An
+        // already-cancelled context is a ready arm — Go's `ctx.Done()` is a
+        // ready channel — so `default` must not win over it (ADR-0174 D8).
+        var ch = new Chan<int>();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var w = SelectWaiter.Rent(2, cts.Token);
+        w.AddReceive<int>(ch, 0);
+        w.AddCancelled(1);
+        Assert.Equal(1, w.TryNow());
+        w.Return();
+    }
+
+    [Fact]
+    public void TryNow_WithCancelledArm_ReportsNothingReadyWhileLive()
+    {
+        var ch = new Chan<int>();
+        using var cts = new CancellationTokenSource();
+        var w = SelectWaiter.Rent(2, cts.Token);
+        w.AddReceive<int>(ch, 0);
+        w.AddCancelled(1);
+        Assert.Equal(-1, w.TryNow());
+        w.Return();
+    }
+
+    [Fact]
+    public void TryNow_PrefersAReadyChannel_OverAnAlreadyCancelledContext()
+    {
+        // Deliberate, and the same rule the parking path already follows: the
+        // gated channel arms are probed first, and cancellation is consulted
+        // only when nothing else can make progress. A select that can do its
+        // work does it rather than bail out.
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        for (var i = 0; i < 200; i++)
+        {
+            var ch = new Chan<int>(1);
+            ch.Writer.TryWrite(7);
+            var w = SelectWaiter.Rent(2, cts.Token);
+            w.AddReceive<int>(ch, 0);
+            w.AddCancelled(1);
+            Assert.Equal(0, w.TryNow());
+            w.Return();
+        }
+    }
 }

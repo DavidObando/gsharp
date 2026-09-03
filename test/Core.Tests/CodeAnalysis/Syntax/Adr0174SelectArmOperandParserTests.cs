@@ -48,4 +48,56 @@ public class Adr0174SelectArmOperandParserTests
 
         Assert.Empty(tree.Diagnostics.Where(diagnostic => diagnostic.IsError));
     }
+    [Theory]
+    [InlineData("case <-ch { }")]
+    [InlineData("case let got = <-ch { }")]
+    [InlineData("case ch <- got { }")]
+    [InlineData("case <-ch when got > 0 { }")]
+    public void AnEmptyArmBodyIsNotAnEmptyStructLiteral(string arm)
+    {
+        // The other half of the same ambiguity (issue #1575's shape): a name
+        // operand followed by an empty `{ }` is an arm with an empty body, not
+        // a construction of a type called `ch`.
+        var source = $$"""
+            package P
+            func run(ch chan[int32], got int32) int32 {
+                select {
+                {{arm}}
+                default { }
+                }
+
+                return got
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics.Where(diagnostic => diagnostic.IsError));
+    }
+
+    [Fact]
+    public void ANonEmptyStructLiteralIsStillAnArmOperand()
+    {
+        // Suppression stops at the genuinely ambiguous shape: `Pair{Value: 41}`
+        // cannot open a body, so it stays a struct literal.
+        var source = """
+            package P
+            data struct Pair(Value int32)
+
+            func run(ch chan[Pair]) int32 {
+                var used = 0
+                select {
+                case ch <- Pair{Value: 41} {
+                    used = 1
+                }
+                }
+
+                return used
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.Empty(tree.Diagnostics.Where(diagnostic => diagnostic.IsError));
+    }
 }
