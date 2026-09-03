@@ -24,9 +24,14 @@ namespace Gsharp.Concurrency;
 /// context alone rethrows the <see cref="OperationCanceledException"/>; and
 /// cancellation the frame inflicted on itself (a child failed) reports the
 /// causing failure and discards the siblings' cancellations.</para>
-/// <para>This Phase 3 frame is a <see cref="TaskCompletionSource"/> and an
-/// interlocked counter; Phase 4 replaces the internals with a pooled
-/// <c>IValueTaskSource</c> while keeping this shape.</para>
+/// <para>The frame is a <see cref="TaskCompletionSource"/> and an interlocked
+/// counter — one allocation per scope. Pooling it behind an
+/// <c>IValueTaskSource</c> is a Phase 5 refinement, gated on the concurrency
+/// benchmark showing the allocation matters (ADR-0174 errata).</para>
+/// <para>A join that outlives <see cref="GsharpRuntime.ScopeStallTimeout"/>
+/// raises <see cref="GsharpRuntime.ScopeStalled"/> and keeps waiting: a scope
+/// that promised to join keeps its promise, and the hook exists so a host can
+/// see a goroutine that never completes.</para>
 /// </remarks>
 public sealed class ScopeFrame : IGoroutineSink
 {
@@ -83,7 +88,7 @@ public sealed class ScopeFrame : IGoroutineSink
     public async ValueTask ExitAsync(Exception? bodyException = null)
     {
         Complete();
-        await completion.Task.ConfigureAwait(false);
+        await JoinAsync().ConfigureAwait(false);
         Context.Dispose();
         var exception = BuildExitException(bodyException);
         if (exception != null)
@@ -95,6 +100,35 @@ public sealed class ScopeFrame : IGoroutineSink
     /// <summary>The blocking form of <see cref="ExitAsync"/>, for the synthesized root that may block (ADR-0174 D4).</summary>
     /// <param name="bodyException">The exception the block body threw, or <see langword="null"/>.</param>
     public void Exit(Exception? bodyException = null) => ExitAsync(bodyException).AsTask().GetAwaiter().GetResult();
+
+    // Waits for every registration, reporting a stall through the runtime hook
+    // if the join outlives GsharpRuntime.ScopeStallTimeout (ADR-0174 D6: the
+    // documented partial mitigation for a goroutine that never completes). The
+    // join is never abandoned — a scope that promised to join keeps its promise.
+    private async ValueTask JoinAsync()
+    {
+        var stallTimeout = GsharpRuntime.ScopeStallTimeout;
+        if (stallTimeout == Timeout.InfiniteTimeSpan || completion.Task.IsCompleted)
+        {
+            await completion.Task.ConfigureAwait(false);
+            return;
+        }
+
+        var waited = TimeSpan.Zero;
+        while (true)
+        {
+            var stall = Task.Delay(stallTimeout);
+            var finished = await Task.WhenAny(completion.Task, stall).ConfigureAwait(false);
+            if (ReferenceEquals(finished, completion.Task))
+            {
+                await completion.Task.ConfigureAwait(false);
+                return;
+            }
+
+            waited += stallTimeout;
+            GsharpRuntime.RaiseScopeStalled(waited, Pending);
+        }
+    }
 
     private void RecordFailure(Exception exception)
     {

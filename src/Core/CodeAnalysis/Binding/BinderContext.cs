@@ -151,6 +151,14 @@ internal sealed class BinderContext
     public Stack<VariableSymbol> ScopeFrames { get; } = new();
 
     /// <summary>
+    /// Gets the implicit <c>ctx</c> local of each enclosing <c>scope</c> block
+    /// (ADR-0174 D7), innermost on top. A channel operation binds against the
+    /// innermost one, so cancelling the block unblocks operations parked inside
+    /// it; outside every scope the operations run under <c>Context.None</c>.
+    /// </summary>
+    public Stack<VariableSymbol> ScopeContexts { get; } = new();
+
+    /// <summary>
     /// Gets the binder's initial scope. Unlike <see cref="RootScope"/>, this
     /// remains stable while nested statement binding pushes child scopes.
     /// </summary>
@@ -665,6 +673,15 @@ internal sealed class BinderContext
         IsCheckedContext = isChecked;
         return new CheckedContextScope(this, previous);
     }
+
+    /// <summary>
+    /// The ambient context a channel operation should observe here, or
+    /// <see langword="null"/> when no <c>scope</c> encloses this position
+    /// (ADR-0174 D7).
+    /// </summary>
+    /// <returns>A read of the innermost scope's <c>ctx</c>, or <see langword="null"/>.</returns>
+    public BoundExpression? AmbientContext()
+        => ScopeContexts.Count > 0 ? new BoundVariableExpression(null, ScopeContexts.Peek()) : null;
 
     /// <summary>
     /// Disposable token returned by <see cref="PushUnsafeContext"/> that

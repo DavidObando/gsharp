@@ -81,7 +81,7 @@ internal sealed partial class StatementBinder
             return null;
         }
 
-        return binderCtx.ChannelRuntime.BindReceive2(receive, operand, elementType, direction);
+        return binderCtx.ChannelRuntime.BindReceive2(receive, operand, elementType, direction, binderCtx.AmbientContext());
     }
 
     /// <summary>
@@ -245,7 +245,8 @@ internal sealed partial class StatementBinder
             syntax.Collection,
             new BoundVariableExpression(null, channelTemp),
             elementType,
-            direction);
+            direction,
+            binderCtx.AmbientContext());
         var (tupleTemp, elements) = CreateTupleDeconstructionPlan(
             syntax.Collection,
             Invariant.Required(tupleValue.Type as TupleTypeSymbol, "a two-value receive is tuple-typed"));

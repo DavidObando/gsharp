@@ -2163,6 +2163,26 @@ implementation had to refine it.
     (the pass received the caller's `null`); inference now uses the root
     scope's resolver, so `new Compilation(tree)` and the hot-reload agent's
     candidate builds colour functions exactly like `gsc` does.
+22. **Phase 4-1 as implemented.** `GsharpRuntime` carries the host-observable
+    budgets and diagnostics: `DeferGraceBudget` (5 s, `GSHARP_DEFER_GRACE_MS`),
+    `ScopeStallTimeout` (off by default, `GSHARP_SCOPE_STALL_MS`), the
+    `DeferGraceExpired` and `ScopeStalled` events, and counters. A stalled join
+    is *reported and still awaited* — a scope that promised to join keeps its
+    promise. `Context.Shielded(grace)` is the bounded shield D7 calls for: it
+    ignores the outer cancellation but cancels itself when the budget expires
+    and raises the hook. Pooling `ScopeFrame` behind an `IValueTaskSource`
+    (A5's sketch) is deferred to Phase 5, where the concurrency benchmark can
+    say whether one allocation per scope is worth the stale-completion risk.
+23. **D7 in two steps.** Step one (this phase) makes a channel operation park
+    on the innermost enclosing `scope`'s `ctx`, so a failing goroutine now
+    collapses siblings that are parked on a channel rather than leaving them
+    waiting forever — the semantics the D6 exit table always described but
+    that no operation could observe while every operation ran under
+    `Context.None`. It covers every operation lexically inside the block:
+    single- and two-value receives, sends, and channel `for … in` loops.
+    Step two is the hidden `Context` parameter (P3-4b, moved here), which
+    carries the same context *across calls* so an operation inside a callee
+    observes its caller's scope.
 
 ## Addendum A — The ten patterns, three ways
 

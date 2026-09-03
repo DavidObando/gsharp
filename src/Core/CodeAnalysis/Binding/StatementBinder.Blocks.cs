@@ -813,7 +813,7 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
-        return binderCtx.ChannelRuntime.BindSend(syntax, channel, value, elementType, direction);
+        return binderCtx.ChannelRuntime.BindSend(syntax, channel, value, elementType, direction, binderCtx.AmbientContext());
     }
 
     private BoundStatement BindSelectStatement(SelectStatementSyntax syntax)
@@ -1003,6 +1003,7 @@ internal sealed partial class StatementBinder
         var contextToken = new SyntaxToken(syntax.SyntaxTree, SyntaxKind.IdentifierToken, syntax.ScopeKeyword.Span.Start, "ctx", "ctx");
         var context = bindLocalVariable(contextToken, isReadOnly: true, type: runtime.ContextType);
         binderCtx.ScopeFrames.Push(frame);
+        binderCtx.ScopeContexts.Push(context);
         BoundStatement body;
         try
         {
@@ -1010,6 +1011,7 @@ internal sealed partial class StatementBinder
         }
         finally
         {
+            binderCtx.ScopeContexts.Pop();
             binderCtx.ScopeFrames.Pop();
         }
 

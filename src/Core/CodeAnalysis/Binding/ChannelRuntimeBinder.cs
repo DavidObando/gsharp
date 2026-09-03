@@ -230,20 +230,22 @@ internal sealed class ChannelRuntimeBinder
     /// <param name="channel">The channel operand.</param>
     /// <param name="elementType">The element type.</param>
     /// <param name="direction">The operand's direction (never <see cref="ChannelDirection.Out"/>).</param>
+    /// <param name="context">The ambient <c>Context</c> to park on (ADR-0174 D7), or <see langword="null"/> for no cancellation.</param>
     /// <returns>A call typed as the element type.</returns>
-    public BoundExpression BindReceive(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType, ChannelDirection direction)
-        => Call(syntax, "Receive", CarrierFor(direction), elementType, elementType, ImmutableArray.Create(channel, DefaultToken()));
+    public BoundExpression BindReceive(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType, ChannelDirection direction, BoundExpression? context = null)
+        => Call(syntax, "Receive", CarrierFor(direction), elementType, elementType, ImmutableArray.Create(channel, context ?? DefaultToken()));
 
     /// <summary>Binds the two-value receive as a <c>(T, bool)</c> tuple.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="channel">The channel operand.</param>
     /// <param name="elementType">The element type.</param>
     /// <param name="direction">The operand's direction (never <see cref="ChannelDirection.Out"/>).</param>
+    /// <param name="context">The ambient <c>Context</c> to park on (ADR-0174 D7), or <see langword="null"/> for no cancellation.</param>
     /// <returns>A call typed as <c>(T, bool)</c>.</returns>
-    public BoundExpression BindReceive2(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType, ChannelDirection direction)
+    public BoundExpression BindReceive2(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType, ChannelDirection direction, BoundExpression? context = null)
     {
         var tuple = TupleTypeSymbol.Get(ImmutableArray.Create(elementType, TypeSymbol.Bool));
-        return Call(syntax, "Receive2", CarrierFor(direction), elementType, tuple, ImmutableArray.Create(channel, DefaultToken()));
+        return Call(syntax, "Receive2", CarrierFor(direction), elementType, tuple, ImmutableArray.Create(channel, context ?? DefaultToken()));
     }
 
     /// <summary>Binds <c>ch &lt;- v</c>.</summary>
@@ -252,11 +254,12 @@ internal sealed class ChannelRuntimeBinder
     /// <param name="value">The value, already converted to the element type.</param>
     /// <param name="elementType">The element type.</param>
     /// <param name="direction">The operand's direction (never <see cref="ChannelDirection.In"/>).</param>
+    /// <param name="context">The ambient <c>Context</c> to park on (ADR-0174 D7), or <see langword="null"/> for no cancellation.</param>
     /// <returns>An expression statement wrapping the call.</returns>
-    public BoundStatement BindSend(SyntaxNode? syntax, BoundExpression channel, BoundExpression value, TypeSymbol elementType, ChannelDirection direction)
+    public BoundStatement BindSend(SyntaxNode? syntax, BoundExpression channel, BoundExpression value, TypeSymbol elementType, ChannelDirection direction, BoundExpression? context = null)
         => new BoundExpressionStatement(
             syntax,
-            Call(syntax, "Send", CarrierFor(direction), elementType, TypeSymbol.Void, ImmutableArray.Create(channel, value, DefaultToken())));
+            Call(syntax, "Send", CarrierFor(direction), elementType, TypeSymbol.Void, ImmutableArray.Create(channel, value, context ?? DefaultToken())));
 
     /// <summary>
     /// ADR-0174 D4: the suspending form of <c>&lt;-ch</c> — an awaited

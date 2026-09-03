@@ -15,7 +15,7 @@ namespace Gsharp.Concurrency;
 /// or a public bridge supplies when no scope is ambient.
 /// </summary>
 /// <remarks>
-/// A <see cref="Shielded"/> context is cancellation-immune: a <c>defer</c> body
+/// A <see cref="Shielded()"/> context is cancellation-immune: a <c>defer</c> body
 /// runs under one so cleanup that needs a channel still completes during an
 /// unwind (D7). The grace budget that bounds a shielded region is enforced by
 /// the scope machinery, not by the context itself.
@@ -23,6 +23,7 @@ namespace Gsharp.Concurrency;
 public sealed class Context : IDisposable
 {
     private readonly CancellationTokenSource? source;
+    private TimeSpan graceBudget;
 
     private Context(CancellationToken token, CancellationTokenSource? source, Context? parent, bool isShielded)
     {
@@ -76,6 +77,31 @@ public sealed class Context : IDisposable
     /// <summary>Derives a cancellation-immune child for cleanup that must run during an unwind (ADR-0174 D7).</summary>
     /// <returns>A context whose token never cancels and whose <see cref="Parent"/> is this context.</returns>
     public Context Shielded() => new(CancellationToken.None, source: null, parent: this, isShielded: true);
+
+    /// <summary>
+    /// Derives a cancellation-immune child with a bounded grace budget
+    /// (ADR-0174 D7). Cleanup running under it does not observe the outer
+    /// cancellation, but it does not get to run forever either: when the budget
+    /// expires the context cancels, the abandoned cleanup unwinds, and
+    /// <see cref="GsharpRuntime.DeferGraceExpired"/> reports it. An infinite
+    /// budget is an unbounded shield.
+    /// </summary>
+    /// <param name="grace">How long the shielded body may run; <see cref="Timeout.InfiniteTimeSpan"/> for no deadline.</param>
+    /// <returns>A shielded context whose <see cref="Parent"/> is this context.</returns>
+    public Context Shielded(TimeSpan grace)
+    {
+        if (grace == Timeout.InfiniteTimeSpan)
+        {
+            return Shielded();
+        }
+
+        var budget = new CancellationTokenSource();
+        var shielded = new Context(budget.Token, budget, parent: this, isShielded: true);
+        shielded.graceBudget = grace;
+        budget.Token.Register(static state => GsharpRuntime.RaiseDeferGraceExpired(((Context)state!).graceBudget), shielded);
+        budget.CancelAfter(grace);
+        return shielded;
+    }
 
     /// <summary>Requests cancellation of this context and every descendant, when this context owns its cancellation.</summary>
     /// <returns><see langword="true"/> when a cancellation was requested; <see langword="false"/> for <see cref="None"/>, a foreign-token wrapper, a shielded context, or a disposed one.</returns>

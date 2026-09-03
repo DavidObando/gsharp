@@ -145,6 +145,15 @@ to await, so it blocks the thread until the callee completes; the compiler
 says so with `GS0558`. Top-level statements are the one place that block is
 right, so the entry point calls suspending functions silently.
 
+### Cancellation
+
+The block's `ctx` is not only for your own checks: every channel operation
+inside a `scope` parks on it. When one goroutine fails, its siblings waiting on
+a channel unwind with an `OperationCanceledException` instead of waiting
+forever, `defer`s run, and the block collapses. An operation that already
+completed its transfer keeps its value — cancellation wins only before the
+transfer commits, so a receive never drops an element it has already taken.
+
 ### Debugging and hot reload through suspension
 
 A suspending function is compiled to a state machine, but the tooling keeps the

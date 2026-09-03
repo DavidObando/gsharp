@@ -1682,7 +1682,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        return binderCtx.ChannelRuntime.BindReceive(syntax, operand, elementType, direction);
+        return binderCtx.ChannelRuntime.BindReceive(syntax, operand, elementType, direction, binderCtx.AmbientContext());
     }
 
     /// <summary>
