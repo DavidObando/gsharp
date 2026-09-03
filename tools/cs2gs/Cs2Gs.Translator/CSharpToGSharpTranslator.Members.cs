@@ -2529,6 +2529,23 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
 
+            // Issue #3839: a C# `ref`/`ref readonly` PROPERTY has no canonical G#
+            // form — the by-ref return (issue #490 / ADR-0060) exists on `func`
+            // only; `prop P ref T` is not in the grammar (gsc parses the `ref` as
+            // a type name and cascades). Translating it silently as `prop P T`
+            // compiles, but returns a COPY: every write through the returned
+            // reference is lost. That is a behaviour change no compile error
+            // catches, so it gaps loudly here — the same verdict the USE site
+            // already reaches for a ref-returning indexer (#1987).
+            if (symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly))
+            {
+                string refPropertyMessage =
+                    $"ref-returning property '{node.Identifier.Text}' has no canonical G# form: G#'s by-ref return " +
+                    "(issue #490 / ADR-0060) is a `func` feature and `prop` has no `ref` return spelling. Emitting it " +
+                    "as an ordinary property would silently return a copy and drop the aliasing (issue #3839).";
+                this.context.ReportUnsupported(node, refPropertyMessage);
+            }
+
             // Issue #2362, ADR-0149: explicit interface PROPERTY implementations
             // get the exact same treatment as explicit interface METHODS (issues
             // #1911/#2010/#2181) — see the extensive comment on this same

@@ -1155,7 +1155,7 @@
     "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/IndexerDeclaration.cs",
-    "notes": "User indexers (issue #944)."
+    "notes": "User indexers (issue #944). A \u0060ref\u0060/\u0060ref readonly\u0060-returning indexer gaps loudly at the declaration site: G#\u0027s by-ref return is a \u0060func\u0060 feature (issue #490 / ADR-0060) and there is no \u0060prop this[...] ref T\u0060 spelling, so translating it would silently return a copy (issue #3839)."
   },
   {
     "kind": "IndexerMemberCref",
@@ -1768,7 +1768,8 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs",
+    "notes": "A \u0060ref\u0060/\u0060ref readonly\u0060-returning property gaps loudly at the declaration site: G#\u0027s by-ref return is a \u0060func\u0060 feature (issue #490 / ADR-0060) and there is no \u0060prop P ref T\u0060 spelling, so translating it would silently return a copy (issue #3839)."
   },
   {
     "kind": "PropertyPatternClause",

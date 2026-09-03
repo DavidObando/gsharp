@@ -189,6 +189,22 @@ public sealed partial class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
+            // Issue #3839: a C# `ref`/`ref readonly` INDEXER has no canonical G#
+            // form either — G#'s by-ref return is a `func` feature (issue #490 /
+            // ADR-0060) and `prop this[...] ref T` is not in the grammar.
+            // Emitting `prop this[...] T` compiles and silently returns a copy,
+            // so writes through the reference vanish. cs2gs already gaps at the
+            // USE site of such an indexer (#1987); the DECLARATION site was the
+            // hole that let the copy-returning form through.
+            if (symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly))
+            {
+                string refIndexerMessage =
+                    "ref-returning indexer has no canonical G# form: G#'s by-ref return (issue #490 / ADR-0060) is a " +
+                    "`func` feature and `prop this[...]` has no `ref` return spelling. Emitting it as an ordinary " +
+                    "indexer would silently return a copy and drop the aliasing (issue #3839).";
+                this.context.ReportUnsupported(node, refIndexerMessage);
+            }
+
             // ADR-0149 (issue #944 follow-up): G# interfaces can now declare an
             // indexer MEMBER (the prior gsc limitation — DeclarationBinder
             // unconditionally rejecting `this[...]` inside an `interface` body
@@ -1746,6 +1762,14 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement only = block.Statements[0];
             return only switch
             {
+                // Issue #3839: a ref return is NOT foldable. G#'s arrow form has
+                // no `-> ref lvalue` spelling (issue #490 / ADR-0060 gives the
+                // by-ref return only the block form `func F(...) ref T { return
+                // ref lvalue }`), so folding one drops the `ref` from the
+                // returned expression and gsc rejects the member with GS0252
+                // ("returns by reference; use 'return ref <lvalue>'"). Keep the
+                // block body, which prints the aliasing return verbatim.
+                ReturnStatement refReturn when refReturn.IsRef => null,
                 ReturnStatement r when r.Expression != null => r,
                 ExpressionStatement => only,
                 AssignmentStatement => only,
@@ -1954,12 +1978,22 @@ public sealed partial class CSharpToGSharpTranslator
             // flow-proven `!!` assertion (e.g. `prop OperationTask Task ->
             // Continuation!!`). Using plain TranslateExpression here left
             // expression-bodied members without the assertion → GS0155.
+            // Issue #3839: `=> ref lvalue` is a BY-REF return, exactly as
+            // `return ref lvalue;` is in statement form — and the statement form
+            // has always carried `isRef` here (see the ReturnStatementSyntax case
+            // in TranslateStatements). Dropping it on the expression-bodied path
+            // emitted a plain `return` out of a member still declared `ref T`,
+            // which gsc rejects with GS0252.
+            bool isRefReturn = expression is RefExpressionSyntax;
             return new BlockStatement(this.WithSpillSeam(() => this.WithHoistedPostfix(
                 expression,
                 () => this.WithHoistedAssignments(
                     expression,
                     includeSelf: true,
-                    () => new List<GStatement> { new ReturnStatement(this.TranslateValueWithNullForgiveness(expression)) })).ToList()).ToList());
+                    () => new List<GStatement>
+                    {
+                        new ReturnStatement(this.TranslateValueWithNullForgiveness(expression), isRef: isRefReturn),
+                    })).ToList()).ToList());
         }
 
         private BlockStatement TranslateBlock(BlockSyntax block)

@@ -1723,6 +1723,35 @@ internal sealed partial class DeclarationBinder
                 // Create backing field for auto-properties
                 if (isAutoProperty)
                 {
+                    // Issue #3873 / #367: an auto-property's `<P>k__BackingField`
+                    // is an ordinary instance field, so it is bound by the same
+                    // CLR rules as one the user spelled out — the field-declaration
+                    // path above (`!syntax.IsRef && IsByRefLike`) simply never saw
+                    // it. Without this the whole type is silently unloadable:
+                    // `TypeLoadException: A ByRef or ByRef-like type cannot be used
+                    // as the type for an instance field in a non-ByRef-like type`
+                    // out of `GetExportedTypes()` — which is the call xunit
+                    // discovery makes, so a migrated test assembly ran zero tests
+                    // and still reported green (#3869).
+                    if (!syntax.IsRef && TypeSymbol.IsByRefLike(propType))
+                    {
+                        Diagnostics.ReportByRefLikeEscape(
+                            propSyntax.Identifier.Location,
+                            propType,
+                            $"be used as the type of auto-property '{propName}' (its compiler-synthesized backing field is an instance field of a non-`ref struct`)");
+                    }
+
+                    // ADR-0039 §4 / ADR-0058: likewise, a managed pointer (`*T`)
+                    // cannot be a field type — CLR metadata has no
+                    // ELEMENT_TYPE_BYREF slot in a FieldDef signature. Reaching
+                    // emit with one crashed the signature encoder (GS9998) rather
+                    // than reporting the real, user-facing rule.
+                    if (propType is ByRefTypeSymbol byRefPropType)
+                    {
+                        Diagnostics.ReportPointerTypeCannotBeFieldType(
+                            propSyntax.Identifier.Location, byRefPropType.Name);
+                    }
+
                     var backingField = new FieldSymbol(
                         $"<{propName}>k__BackingField",
                         propType,
@@ -2689,6 +2718,29 @@ internal sealed partial class DeclarationBinder
 
                 if (isAutoProperty)
                 {
+                    // Issue #3873 / #367: a `shared` auto-property's backing field
+                    // is a STATIC field, which is rooted on the heap — so unlike
+                    // the instance case there is no `ref struct` container that
+                    // makes it legal, exactly as for a spelled-out static field
+                    // (BindStructSharedFields). The runtime is explicit about the
+                    // difference: `TypeLoadException: A ByRef or ByRef-like type
+                    // cannot be used as the type for a static field`.
+                    if (TypeSymbol.IsByRefLike(propType))
+                    {
+                        Diagnostics.ReportByRefLikeEscape(
+                            propSyntax.Identifier.Location,
+                            propType,
+                            $"be used as the type of shared auto-property '{propName}' (its compiler-synthesized backing field is a static field)");
+                    }
+
+                    // ADR-0039 §4 / ADR-0058: a managed pointer (`*T`) cannot be a
+                    // field type.
+                    if (propType is ByRefTypeSymbol byRefStaticPropType)
+                    {
+                        Diagnostics.ReportPointerTypeCannotBeFieldType(
+                            propSyntax.Identifier.Location, byRefStaticPropType.Name);
+                    }
+
                     var backingField = new FieldSymbol(
                         $"<{propName}>k__BackingField",
                         propType,
