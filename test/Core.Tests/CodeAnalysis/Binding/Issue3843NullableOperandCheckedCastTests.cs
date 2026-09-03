@@ -53,8 +53,12 @@ public sealed class Issue3843NullableOperandCheckedCastTests
         Assert.True(Conversion.Classify(
             NullableTypeSymbol.Get(baseType), derivedType).IsExplicit);
 
-        // The new arm does NOT open an implicit nullability-dropping path:
-        // a nullable-to-nullable widening stays implicit, and an unrelated
+        // The new arm classifies the widening EXPLICIT, never implicit — the
+        // property every implicit context relies on to keep rejecting a nil.
+        Assert.False(Conversion.Classify(
+            NullableTypeSymbol.Get(derivedType), baseType).IsImplicit);
+
+        // A nullable-to-nullable widening stays implicit, and an unrelated
         // pair still has no conversion at all.
         Assert.True(Conversion.Classify(
             NullableTypeSymbol.Get(derivedType),
@@ -62,6 +66,80 @@ public sealed class Issue3843NullableOperandCheckedCastTests
         Assert.False(Conversion.Classify(
             NullableTypeSymbol.Get(stringType),
             TypeSymbol.FromClrType(typeof(Uri))).Exists);
+    }
+
+    [Fact]
+    public void NullableReferencePassedImplicitlyToNonNullableParameter_IsStillRejected()
+    {
+        // Issue #3843 review: the widening arm is a TYPE-PAIR predicate, so it
+        // is consulted from implicit paths too — "only reachable behind a
+        // written cast" is not something a caller can supply. This pins the
+        // property that actually matters: a nil must never reach a
+        // non-nullable slot. Every one of these is an IMPLICIT conversion with
+        // no cast written anywhere.
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            open class Base3843Implicit { var Tag string = "b" }
+            class Derived3843Implicit : Base3843Implicit {}
+            interface IThing3843 {}
+            class Thing3843 : Base3843Implicit, IThing3843 {}
+
+            func TakeBase(b Base3843Implicit) {}
+            func TakeInterface(i IThing3843) {}
+
+            let missing Derived3843Implicit? = nil
+            TakeBase(missing)
+
+            let absent Thing3843? = nil
+            TakeInterface(absent)
+
+            let widened Base3843Implicit = missing
+            """);
+
+        // Three rejections, one per site. The argument positions report
+        // GS0154; the initializer reports GS0156 ("an explicit conversion
+        // exists") rather than the GS0155 it reported before #3843, because a
+        // `cast[Base3843Implicit](…)` genuinely is available now — the value
+        // is still rejected, which is the invariant under test.
+        Assert.Equal(3, result.Diagnostics.Length);
+        Assert.All(
+            result.Diagnostics,
+            diagnostic => Assert.True(
+                diagnostic.Id is "GS0154" or "GS0155" or "GS0156",
+                $"every site must still be rejected as a nullability error, got {diagnostic.Id}: {diagnostic.Message}"));
+    }
+
+    [Fact]
+    public void NullableStructuralFunction_ToNonNullableNamedDelegate_HasNoConversionAtAll()
+    {
+        // Issue #3843 review, the regression that caught the first cut of this
+        // change. A `FunctionTypeSymbol` carries a `Func<…>`/`Action<…>` CLR
+        // backing, so it LOOKS class-like, but its conversion to a named
+        // delegate is the issue #2850 MATERIALISATION (`newobj`), not a
+        // reference conversion. Probing "is `from -> to` implicit?" without
+        // the nominal-shape guard admitted it as a checked reference cast, and
+        // `Do(Cancel(), nullableStructuralFunction)` — an implicit argument
+        // conversion — degraded from GS0155 ("no conversion") to GS0156 ("are
+        // you missing a cast?"), advertising a cast that must not exist.
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            interface ICanc3843 { prop IsCancelled bool { get } }
+
+            delegate Conv3843[T ICanc3843](book int32, ctx T, cb (string) -> void) void;
+
+            class Cancel3843 : ICanc3843 { prop IsCancelled bool -> false }
+
+            func Do3843[T ICanc3843](ctx T, convertAction Conv3843[T]) {}
+
+            var ca ((int32, Cancel3843, (string) -> void) -> void)? = nil
+            Do3843(Cancel3843(), ca)
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0155");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0156");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
     }
 
     [Fact]
