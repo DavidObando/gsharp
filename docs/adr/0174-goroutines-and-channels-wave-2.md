@@ -2393,7 +2393,9 @@ implementation had to refine it.
     `Channel[T]` overload of each, because extension lookup on a plain
     `chan[T]` receiver does not apply the directional view conversion first.
     Without those overloads `ch.ReceiveBatch(…)` on a `chan[T]` is
-    member-not-found, which is not a distinction worth teaching.
+    member-not-found, which is not a distinction worth teaching. Filed as issue
+    #3877 — a G#-declared extension on `in chan[T]` binds on that receiver, so
+    only the imported path is missing the classification.
 
     Writing them surfaced a real gap in D4: an imported `[Suspending]`
     *extension* method was never completed at the call site. A suspending
@@ -2410,7 +2412,8 @@ implementation had to refine it.
     (errata 28): a `chan[T]` argument whose element is open is not applicable
     to a `ChannelReader[T]` — or a `Channel[T]` — parameter. Constructor
     applicability is a third path that neither the variadic nor the inference
-    fix from P4-5 covered.
+    fix from P4-5 covered. Filed as issue #3876; the static factory exists only
+    to route around it, and should be reconsidered once that lands.
 
     `ChunkReader[T]` reads with `atLeast: 1`. A full-fill barrier here would
     stall any pipeline whose producer is slower than the chunk size, which is
