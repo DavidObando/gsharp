@@ -489,6 +489,10 @@ public abstract class BoundTreeWalker
     protected virtual void VisitGoStatement(BoundGoStatement node)
     {
         VisitExpression(node.Expression);
+        if (node.Sink != null)
+        {
+            VisitExpression(node.Sink);
+        }
     }
 
     protected virtual void VisitSelectStatement(BoundSelectStatement node)

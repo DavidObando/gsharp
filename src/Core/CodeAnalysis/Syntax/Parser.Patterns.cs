@@ -760,6 +760,32 @@ public partial class Parser
     private StatementSyntax ParseGoStatement()
     {
         var keyword = MatchToken(SyntaxKind.GoKeyword);
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            // ADR-0174 D14: `go { body }` is the block form — sugar for spawning
+            // a zero-parameter function literal and invoking it. The literal's
+            // `func ( )` and the invocation's `( )` are zero-width synthesized
+            // tokens anchored at the block, so the block's own tokens stay real.
+            var block = ParseBlockStatement();
+            var start = block.Span.Start;
+            var end = block.Span.End;
+            var literal = new FunctionLiteralExpressionSyntax(
+                syntaxTree,
+                new SyntaxToken(syntaxTree, SyntaxKind.FuncKeyword, start, string.Empty, null),
+                new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, start, string.Empty, null),
+                new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty),
+                new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, start, string.Empty, null),
+                returnTypeClause: null,
+                block);
+            var invocation = new CallExpressionSyntax(
+                syntaxTree,
+                literal,
+                new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, end, string.Empty, null),
+                new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
+                new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, end, string.Empty, null));
+            return new GoStatementSyntax(syntaxTree, keyword, invocation);
+        }
+
         var expression = ParseExpression();
         return new GoStatementSyntax(syntaxTree, keyword, expression);
     }

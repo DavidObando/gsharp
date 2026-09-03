@@ -161,7 +161,7 @@ public static class AsyncExceptionHandlerRewriter
             foreach (var clause in node.CatchClauses)
             {
                 var rewrittenBody = RewriteStatement(clause.Body);
-                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, rewrittenBody));
+                rewrittenClauses.Add(clause.WithBody(rewrittenBody));
             }
 
             var rewrittenFinally = node.FinallyBlock != null ? RewriteStatement(node.FinallyBlock) : null;

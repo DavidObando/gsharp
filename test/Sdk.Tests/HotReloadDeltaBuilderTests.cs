@@ -289,6 +289,76 @@ public class HotReloadDeltaBuilderTests
     }
 
     [Fact]
+    public void MethodThatStartsSuspending_ReportsGshr1002RestartDiagnostic()
+    {
+        // ADR-0174 P3-9: adding a channel receive to a plain func flips its
+        // compiled shape (int32 -> ValueTask[int32] state machine) — a body
+        // edit at the source level that is a signature change in metadata.
+        var baseline = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[int32]) int32 { return 1 }
+            """);
+        var current = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[int32]) int32 { return <-ch }
+            """);
+
+        var update = new HotReloadDeltaBuilder(baseline).CreateUpdate(current);
+
+        Assert.Equal(HotReloadDeltaStatus.Unsupported, update.Status);
+        Assert.StartsWith("GSHR1002: method 'HotReloadTests.<Program>.Value' changed suspension", update.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("now performs a channel operation", update.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("Restart required", update.Diagnostic, StringComparison.Ordinal);
+        Assert.Empty(update.MetadataDelta);
+        Assert.Empty(update.IlDelta);
+    }
+
+    [Fact]
+    public void MethodThatStopsSuspending_ReportsGshr1002RestartDiagnostic()
+    {
+        var baseline = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[int32]) int32 { return <-ch }
+            """);
+        var current = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[int32]) int32 { return 1 }
+            """);
+
+        var update = new HotReloadDeltaBuilder(baseline).CreateUpdate(current);
+
+        Assert.Equal(HotReloadDeltaStatus.Unsupported, update.Status);
+        Assert.StartsWith("GSHR1002: method 'HotReloadTests.<Program>.Value' changed suspension", update.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("no longer performs a channel operation", update.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SuspendingMethod_BodyEdit_KeepsSuspending_IsNotGshr1002()
+    {
+        // The same method suspending before and after is an ordinary body edit
+        // as far as the suspension check goes; whatever else the delta builder
+        // says about it, it must not be blamed on a suspension change.
+        var baseline = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[int32]) int32 { return <-ch }
+            """);
+        var current = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[int32]) int32 { return <-ch + 1 }
+            """);
+
+        var update = new HotReloadDeltaBuilder(baseline).CreateUpdate(current);
+
+        Assert.DoesNotContain("GSHR1002", update.Diagnostic ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RenamedMethod_ReportsMetadataShapeRestartDiagnostic()
     {
         var baseline = Emit(

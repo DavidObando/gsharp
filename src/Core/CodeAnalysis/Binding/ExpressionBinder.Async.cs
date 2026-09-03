@@ -800,6 +800,20 @@ internal sealed partial class ExpressionBinder
             return operand;
         }
 
+        // ADR-0174 D4: a call to a suspending function is already awaited
+        // implicitly (CompleteSuspendingCall), so an explicit `await` on top
+        // is redundant but legal — `await twice(ch)` is what a C# or Go
+        // programmer (and cs2gs) writes, and rejecting it with GS0133 "int32
+        // cannot be awaited" would point at a type the source never spelled.
+        // In a not-yet-inferred plain caller the completion is a
+        // `Blocking.Wait` bridge that the inference pass turns into an await
+        // once the caller is coloured; either way the completed call is the
+        // result.
+        if (IsCompletedSuspendingCall(operand))
+        {
+            return operand;
+        }
+
         if (!TryGetTaskElementType(operand.Type, out var element))
         {
             Diagnostics.ReportTypeIsNotAwaitable(syntax.Expression.Location, operand.Type);
@@ -808,6 +822,13 @@ internal sealed partial class ExpressionBinder
 
         return new BoundAwaitExpression(null, operand, element, TryGetAwaiterTypeSymbol(operand.Type));
     }
+
+    // The implicit await produced by CompleteSuspendingCall yields the logical
+    // type R; a genuine nested await (`await (await f())` on a `Task[Task[T]]`)
+    // yields a Task and is left to the ordinary path.
+    private static bool IsCompletedSuspendingCall(BoundExpression operand)
+        => (operand is BoundAwaitExpression && !TryGetTaskElementType(operand.Type, out _))
+            || (operand is BoundImportedCallExpression bridge && Suspension.LockRegions.IsBlockingBridge(bridge));
 
     // Issue #1785: `Task[T?]` for a same-compilation user value type
     // (struct/enum) wraps T in a NullableTypeSymbol, whose ClrType is null

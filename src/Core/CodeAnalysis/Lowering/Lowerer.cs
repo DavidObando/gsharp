@@ -1722,7 +1722,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 var flatCatches = ImmutableArray.CreateBuilder<BoundCatchClause>();
                 foreach (var clause in t.CatchClauses)
                 {
-                    flatCatches.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, Flatten(clause.Body)));
+                    flatCatches.Add(clause.WithBody(Flatten(clause.Body)));
                 }
 
                 var flatFinally = t.FinallyBlock == null ? null : (BoundStatement)Flatten(t.FinallyBlock);

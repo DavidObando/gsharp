@@ -2084,11 +2084,85 @@ implementation had to refine it.
     G1: the hidden `Context` parameter stands (D7). G2: not flowing
     `ExecutionContext` stands as the default (D5); the measured capture cost
     is small enough that an opt-in host hook restoring it is viable later.
+    The hidden-parameter ABI itself (P3-4b) lands together with the D7
+    cancellation points in Phase 4, where the first consumer of an ambient
+    context appears; until then suspending functions take no context
+    parameter and channel operations run under `Context.None`. Both the
+    `ValueTask` return shape (Phase 3) and the hidden parameter (Phase 4)
+    precede the first release that carries either, so C# callers see one
+    ABI change, not two.
 13. **`go` inside a state-machine body.** Before Phase 3 a `go` statement in an
     `async func` was a GS9998 (the closure synthesized for it was keyed by
     bound-node identity, which the async rewriters do not preserve). Inference
     made that shape common, so the closure is now found by the statement's
     syntax; the rewriters preserve it.
+14. **Phase 3-5 as implemented.** `scope { … }` is lowered by the *binder* onto
+    `ScopeFrame` (`Enter`, the implicit `ctx`, `try { body } catch { record }
+    finally { Exit(bodyException) }`); the async pipeline turns `Exit` into an
+    awaited `ExitAsync` inside a state machine, and a scope is a suspension
+    point for inference. `go` dispatches through
+    `GoroutineRuntime.Start(Func<ValueTask>, IGoroutineSink?)` with the
+    enclosing frame as sink — one delegate and one work item per spawn, no
+    `Task`; the synthesized closure deriving from `GoroutineWorkItem` directly
+    (D5's no-delegate form) is a Phase 5 refinement. The bespoke scope
+    emitter and its `List<Task>`/`WhenAll` join are gone. GS0563 (free `go`
+    outside a scope) is not yet reported.
+15. **`go { … }` as implemented (Phase 3-6).** The parser desugars the block
+    form into the invocation of a synthesized zero-parameter function literal
+    over the block (`go func() { … }()`), with zero-width `func ( ) ( )`
+    tokens anchored at the block; the binder, closure synthesis and emitter
+    see the shape they already handle. A dedicated `GoStatementSyntax.Block`
+    is not needed for semantics; the formatter prints the desugared shape.
+16. **Nested scopes link their contexts.** A nested `scope` enters its frame
+    under the enclosing block's `ctx` (`ScopeFrame.Enter(outerCtx)`), so
+    `ctx.Parent` is the outer context and cancelling the outer block cancels
+    the inner one; only an outermost scope enters under `Context.None`. The
+    ambient-context plumbing for suspending functions (the hidden `Context`
+    parameter, D7) is still Phase 4.
+17. **An explicit `await` on a suspending call is a no-op.** The call is
+    already completed as an implicit await (or, in a not-yet-inferred plain
+    caller, as the `Blocking.Wait` bridge the inference pass later replaces);
+    `await twice(ch)` yields the completed call unchanged instead of GS0133
+    against the logical type. A genuine nested await (`await` on a call that
+    returns `Task[T]`) is unaffected. This is what C# and Go programmers — and
+    cs2gs — write, and it keeps the two spellings equivalent.
+18. **The scope catch exits through its finally.** The binder's synthesized
+    `catch (Exception e) { bodyException = e }` never completes normally
+    because `ScopeFrame.Exit(bodyException)` always throws when handed one;
+    `BoundCatchClause.ExitsThroughFinally` records that invariant so
+    control-flow and definite-assignment analysis treat the handler as
+    terminating — `func f() int32 { scope { return 1 } }` and an `out`
+    parameter assigned inside a scope both remain legal (issues #1615, #1642).
+19. **cs2gs (Phase 3-7).** A C# `async ValueTask`/`ValueTask<T>` method that
+    carries `[Suspending]` or names a `Gsharp.Concurrency` type or member
+    translates to `suspend func` with the awaited result type (ADR-0115 B.23
+    refinement); other `async ValueTask<T>` methods keep their explicit
+    envelope. The planned `G15-Concurrency-Console` corpus fixture is deferred:
+    the corpus is deliberately severed from the repository build, so a C#
+    fixture cannot reference the channel runtime without a `HintPath` into
+    `out/`, which the pipeline's reference partitioning would duplicate
+    against the SDK's implicit runtime reference on the G# side. The
+    translation is covered by in-memory translator tests that compile against
+    the real runtime and round-trip-bind the emitted G#.
+20. **Debugging gate as implemented (Phase 3-8).** Kickoffs carry
+    `[AsyncStateMachine(typeof(SM))]` (the state machine is nested in the
+    kickoff's declaring type and now marked `[CompilerGenerated]`, the two
+    conditions under which the runtime's `StackTrace` resolves `MoveNext`
+    frames to the logical function) and `[DebuggerStepThrough]`;
+    the Portable PDB carries the async-method-stepping blob per `MoveNext`
+    (catch handler offset, one yield/resume pair per await, from the hidden
+    await markers the lowering already emits). `StateMachineHoistedLocalScopes`
+    is not emitted yet — hoisted locals still appear under their field names
+    in a debugger — a follow-up rather than a gate. The e2e gate
+    (`debugger-e2e.sh`) breaks inside an inferred-suspending function by
+    file:line and steps over a channel receive onto the next two source lines;
+    the frame's displayed name is whatever the debugger derives from the
+    attribute, which netcoredbg may still print as `MoveNext`. Found on the
+    way: a compilation created without an explicit reference set bound
+    channel operations against the default resolver but skipped inference
+    (the pass received the caller's `null`); inference now uses the root
+    scope's resolver, so `new Compilation(tree)` and the hot-reload agent's
+    candidate builds colour functions exactly like `gsc` does.
 
 ## Addendum A — The ten patterns, three ways
 

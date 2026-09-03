@@ -411,7 +411,8 @@ internal sealed class StateMachineEmitter
             IReadOnlyList<LocalInfo>? locals,
             IReadOnlyList<LocalConstantInfo>? constants,
             int codeSize,
-            StandaloneSignatureHandle localsSignature)
+            StandaloneSignatureHandle localsSignature,
+            AsyncMethodSteppingInfo? asyncStepping = null)
         {
             this.BodyOffset = bodyOffset;
             this.SequencePoints = sequencePoints;
@@ -419,6 +420,7 @@ internal sealed class StateMachineEmitter
             this.Constants = constants;
             this.CodeSize = codeSize;
             this.LocalsSignature = localsSignature;
+            this.AsyncStepping = asyncStepping;
         }
 
         public int BodyOffset { get; }
@@ -435,6 +437,8 @@ internal sealed class StateMachineEmitter
         public int CodeSize { get; }
 
         public StandaloneSignatureHandle LocalsSignature { get; }
+
+        public AsyncMethodSteppingInfo? AsyncStepping { get; }
     }
 
     private static ImmutableArray<TypeParameterSymbol> GetIteratorTypeParametersInScope(FunctionSymbol function)
@@ -1597,7 +1601,7 @@ internal sealed class StateMachineEmitter
         // method post-lowering; sequence points and locals captured here surface
         // in debugger stack traces, locals window, and `step` commands across
         // `await` points.
-        this.emitCtx.Pdb?.RecordMethod(moveNextHandle, bodyResult.SequencePoints, bodyResult.Locals, bodyResult.Constants, bodyResult.CodeSize, bodyResult.LocalsSignature, plan.KickoffMethod?.Declaration?.SyntaxTree);
+        this.emitCtx.Pdb?.RecordMethod(moveNextHandle, bodyResult.SequencePoints, bodyResult.Locals, bodyResult.Constants, bodyResult.CodeSize, bodyResult.LocalsSignature, plan.KickoffMethod?.Declaration?.SyntaxTree, bodyResult.AsyncStepping);
     }
 
     /// <summary>

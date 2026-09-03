@@ -266,6 +266,19 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitTryStatement(BoundTryStatement node)
     {
+        this.tryDepth++;
+        try
+        {
+            this.EmitTryStatementCore(node);
+        }
+        finally
+        {
+            this.tryDepth--;
+        }
+    }
+
+    private void EmitTryStatementCore(BoundTryStatement node)
+    {
         var endLabel = this.il.DefineLabel();
         var hasCatches = node.CatchClauses.Length > 0;
         var finallyBlock = node.FinallyBlock;
@@ -342,6 +355,13 @@ internal sealed partial class MethodBodyEmitter
 
             this.il.MarkLabel(handlerStart);
 
+            // ADR-0174 P3-8: a MoveNext body's outermost catch is the
+            // builder's SetException route; the async-stepping blob names it.
+            if (this.tryDepth == 1 && this.outermostCatchHandlerOffset < 0)
+            {
+                this.outermostCatchHandlerOffset = this.il.Offset;
+            }
+
             // Stack contains the caught exception; store into the catch variable.
             // Issue #420 (P3-6): the binder is currently expected to always
             // provide a catch variable with an allocated slot, but if a future
@@ -392,52 +412,29 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitGoStatement(BoundGoStatement node)
     {
-        // Hold the scope rather than a `hasScope` bool: the slot lookup below
-        // needs the key, and a separate flag would not carry its presence.
-        this.goEnclosingScopes.TryGetValue(node, out var enclosingScope);
-        if (enclosingScope != null)
-        {
-            this.il.LoadLocal(this.scopeFrameSlots[enclosingScope].Tasks);
-        }
-
+        // ADR-0174 D5: newobj <go_N>(captures); ldftn InvokeAction; newobj
+        // Func<ValueTask>; <sink or null>; call GoroutineRuntime.Start. The
+        // runtime's work item registers with the sink before queueing and
+        // consumes the body's ValueTask exactly once; no Task is allocated.
         this.EmitGoAction(node);
 
-        if (!this.outer.closures.TryGetGoClosure(node, out var closure))
+        if (node.Sink != null)
         {
-            throw new InvalidOperationException("Go statement has no synthesized display class.");
-        }
-
-        var isAsync = ClosureEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
-
-        MethodInfo run;
-        if (isAsync)
-        {
-            run = BclMember.Method(
-                typeof(System.Threading.Tasks.Task),
-                nameof(System.Threading.Tasks.Task.Run),
-                typeof(Func<System.Threading.Tasks.Task>));
+            this.EmitExpression(node.Sink);
         }
         else
         {
-            run = BclMember.Method(
-                typeof(System.Threading.Tasks.Task),
-                nameof(System.Threading.Tasks.Task.Run),
-                typeof(Action));
+            this.il.OpCode(ILOpCode.Ldnull);
         }
 
-        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(run));
+        if (!this.outer.emitCtx.References.TryResolveType("Gsharp.Concurrency.GoroutineRuntime", requireExternalVisibility: false, out var runtimeType) || runtimeType == null)
+        {
+            throw new InvalidOperationException("The channel runtime (Gsharp.Concurrency.GoroutineRuntime) is not in the reference set; the binder should have reported GS0546.");
+        }
 
-        if (enclosingScope != null)
-        {
-            var listType = typeof(List<System.Threading.Tasks.Task>);
-            var add = BclMember.Method(listType, nameof(List<System.Threading.Tasks.Task>.Add), typeof(System.Threading.Tasks.Task));
-            this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(add));
-        }
-        else
-        {
-            this.il.OpCode(ILOpCode.Pop);
-        }
+        var start = runtimeType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == "Start" && m.GetParameters().Length == 2);
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(start));
     }
 
     private void EmitGoAction(BoundGoStatement node)
@@ -491,144 +488,22 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(fieldToken);
         }
 
-        var isAsync = ClosureEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
         var invokeToken = closureIsGeneric
             ? this.outer.userTokens.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
             : invokeHandle;
 
-        if (isAsync)
-        {
-            var funcTaskCtor = BclMember.Ctor(typeof(Func<System.Threading.Tasks.Task>), typeof(object), typeof(nint));
-            this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(invokeToken);
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.memberRefs.GetCtorReference(funcTaskCtor));
-        }
-        else
-        {
-            var actionCtor = BclMember.Ctor(typeof(Action), typeof(object), typeof(nint));
-            this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(invokeToken);
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.memberRefs.GetCtorReference(actionCtor));
-        }
+        var funcValueTaskCtor = BclMember.Ctor(typeof(Func<System.Threading.Tasks.ValueTask>), typeof(object), typeof(nint));
+        this.il.OpCode(ILOpCode.Ldftn);
+        this.il.Token(invokeToken);
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.memberRefs.GetCtorReference(funcValueTaskCtor));
     }
 
     private void EmitScopeStatement(BoundScopeStatement node)
     {
-        var slots = this.scopeFrameSlots[node];
-        var listType = typeof(List<System.Threading.Tasks.Task>);
-        var listCtor = BclMember.Ctor(listType);
-        var ctsCtor = BclMember.Ctor(typeof(System.Threading.CancellationTokenSource));
-
-        this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.memberRefs.GetCtorReference(listCtor));
-        this.il.StoreLocal(slots.Tasks);
-
-        this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.memberRefs.GetCtorReference(ctsCtor));
-        this.il.StoreLocal(slots.Cts);
-
-        var tryStart = this.il.DefineLabel();
-        var finallyStart = this.il.DefineLabel();
-        var finallyEnd = this.il.DefineLabel();
-        var endLabel = this.il.DefineLabel();
-
-        this.il.MarkLabel(tryStart);
-
-        // Issue #1615: the scope body is a protected region just like a
-        // try block — `return`/`break`/`goto` out of it must emit `leave`,
-        // not a bare `ret`/`br`. EmitProtectedRegion pushes the body's label
-        // set so region-crossing gotos are translated to `leave`.
-        this.EmitProtectedRegion((BoundBlockStatement)node.Body);
-        this.il.Branch(ILOpCode.Leave, endLabel);
-
-        this.il.MarkLabel(finallyStart);
-        this.EmitScopeWaitAndDispose(slots);
-        this.il.OpCode(ILOpCode.Endfinally);
-        this.il.MarkLabel(finallyEnd);
-        this.il.MarkLabel(endLabel);
-
-        this.ControlFlow.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
-    }
-
-    private void EmitScopeWaitAndDispose((int Tasks, int Cts, int Awaiter) slots)
-    {
-        var outerTryStart = this.il.DefineLabel();
-        var innerTryStart = this.il.DefineLabel();
-        var innerTryEnd = this.il.DefineLabel();
-        var catchStart = this.il.DefineLabel();
-        var catchEnd = this.il.DefineLabel();
-        var disposeStart = this.il.DefineLabel();
-        var disposeEnd = this.il.DefineLabel();
-        var afterNested = this.il.DefineLabel();
-
-        this.il.MarkLabel(outerTryStart);
-        this.il.MarkLabel(innerTryStart);
-        this.EmitScopeWait(slots);
-        this.il.Branch(ILOpCode.Leave, afterNested);
-        this.il.MarkLabel(innerTryEnd);
-
-        this.il.MarkLabel(catchStart);
-        this.il.OpCode(ILOpCode.Pop);
-        var cancel = BclMember.Method(
-            typeof(System.Threading.CancellationTokenSource),
-            nameof(System.Threading.CancellationTokenSource.Cancel),
-            Type.EmptyTypes);
-        this.il.LoadLocal(slots.Cts);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(cancel));
-        this.il.OpCode(ILOpCode.Rethrow);
-        this.il.MarkLabel(catchEnd);
-
-        this.il.MarkLabel(disposeStart);
-        var dispose = BclMember.Method(
-            typeof(System.Threading.CancellationTokenSource),
-            nameof(System.Threading.CancellationTokenSource.Dispose),
-            Type.EmptyTypes);
-        this.il.LoadLocal(slots.Cts);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(dispose));
-        this.il.OpCode(ILOpCode.Endfinally);
-        this.il.MarkLabel(disposeEnd);
-        this.il.MarkLabel(afterNested);
-
-        this.ControlFlow.AddCatchRegion(
-            innerTryStart,
-            innerTryEnd,
-            catchStart,
-            catchEnd,
-            (EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(Exception)));
-        this.ControlFlow.AddFinallyRegion(outerTryStart, disposeStart, disposeStart, disposeEnd);
-    }
-
-    private void EmitScopeWait((int Tasks, int Cts, int Awaiter) slots)
-    {
-        var listType = typeof(List<System.Threading.Tasks.Task>);
-        var toArray = BclMember.Method(listType, nameof(List<System.Threading.Tasks.Task>.ToArray), Type.EmptyTypes);
-        var whenAll = BclMember.Method(
-            typeof(System.Threading.Tasks.Task),
-            nameof(System.Threading.Tasks.Task.WhenAll),
-            typeof(System.Threading.Tasks.Task[]));
-        var getAwaiter = BclMember.Method(
-            typeof(System.Threading.Tasks.Task),
-            nameof(System.Threading.Tasks.Task.GetAwaiter),
-            Type.EmptyTypes);
-        var getResult = BclMember.Method(
-            typeof(System.Runtime.CompilerServices.TaskAwaiter),
-            nameof(System.Runtime.CompilerServices.TaskAwaiter.GetResult),
-            Type.EmptyTypes);
-
-        this.il.LoadLocal(slots.Tasks);
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(toArray));
-        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(whenAll));
-        this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getAwaiter));
-        this.il.StoreLocal(slots.Awaiter);
-        this.il.LoadLocalAddress(slots.Awaiter);
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getResult));
+        // ADR-0174 D5/D6: `scope` is lowered by the binder into a ScopeFrame
+        // try/catch/finally; a BoundScopeStatement no longer reaches the emitter.
+        throw new InvalidOperationException("scope statements are lowered in the binder (ADR-0174 D6); none should reach the emitter.");
     }
 
     private void EmitSelectStatement(BoundSelectStatement node)

@@ -168,6 +168,48 @@ public class Adr0174SuspendFuncBindingTests
     }
 
     [Fact]
+    public void ExplicitAwait_OnASuspendingCall_IsRedundantAndLegal()
+    {
+        // The call is already completed as an implicit await; a spelled-out
+        // `await` (what a C# or Go programmer, and cs2gs, writes) must not
+        // report GS0133 against the logical type `int32`.
+        var program = Bind("""
+            package P
+            suspend func twice(ch in chan[int32]) int32 {
+                return <-ch * 2
+            }
+            suspend func run(ch chan[int32]) int32 {
+                let a = await twice(ch)
+                return a
+            }
+            """);
+
+        var run = program.Functions.Single(p => p.Key.Name == "run");
+        var await = Assert.Single(Collect<BoundAwaitExpression>(run.Value));
+        Assert.Equal(TypeSymbol.Int32, await.Type);
+        Assert.Empty(program.Diagnostics);
+    }
+
+    [Fact]
+    public void ExplicitAwait_OnAGenuineNestedTask_StillAwaitsTwice()
+    {
+        var program = Bind("""
+            package P
+            import System.Threading.Tasks
+            suspend func inner() Task[int32] {
+                return Task.FromResult(3)
+            }
+            suspend func run() int32 {
+                return await inner()
+            }
+            """);
+
+        var run = program.Functions.Single(p => p.Key.Name == "run");
+        Assert.Equal(2, Collect<BoundAwaitExpression>(run.Value).Count);
+        Assert.Empty(program.Diagnostics);
+    }
+
+    [Fact]
     public void VoidSuspendFunc_CallIsAnAwaitedStatement()
     {
         var program = Bind("""

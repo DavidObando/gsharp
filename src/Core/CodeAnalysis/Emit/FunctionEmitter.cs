@@ -150,6 +150,7 @@ internal sealed class FunctionEmitter
         IReadOnlyList<LocalConstantInfo>? capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
+        AsyncMethodSteppingInfo? capturedAsyncStepping = null;
         if (!this.emitCtx.MetadataOnly)
         {
             var moveNextBody = MoveNextBodyRewriter.Build(plan);
@@ -201,6 +202,7 @@ internal sealed class FunctionEmitter
             capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(session.ConstValues);
             capturedCodeSize = il.Offset;
             capturedLocalsSignature = localsSignature;
+            capturedAsyncStepping = emitter.AsyncStepping;
         }
 
         return new StateMachineEmitter.MoveNextBodyResult(
@@ -209,7 +211,8 @@ internal sealed class FunctionEmitter
             capturedLocals,
             capturedConstants,
             capturedCodeSize,
-            capturedLocalsSignature);
+            capturedLocalsSignature,
+            capturedAsyncStepping);
     }
 
     internal MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)

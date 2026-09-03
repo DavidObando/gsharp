@@ -2374,7 +2374,12 @@ public sealed class Binder
         var entryBodyWasTheStatementBlock = globalScope.EntryPoint is { } entryBefore
             && functionBodies.TryGetValue(entryBefore, out var entryBodyBefore)
             && ReferenceEquals(entryBodyBefore, statement);
-        Suspension.SuspensionInference.Run(functionBodies, globalScope.EntryPoint, references, diagnostics);
+
+        // The root scope already fell back to ReferenceResolver.Default() when
+        // the caller passed none; inference must see the same references the
+        // bodies were bound against, or a references-less compilation would
+        // bind channel operations yet never colour the functions around them.
+        Suspension.SuspensionInference.Run(functionBodies, globalScope.EntryPoint, parentScope.References, diagnostics);
         if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
         {
             // The synthesized top-level block IS the entry point's body; a user

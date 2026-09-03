@@ -2159,6 +2159,12 @@ public static class GSharpPrinter
         {
             sb.Append("async ");
         }
+        else if (method.IsSuspend)
+        {
+            // ADR-0174 D4: a suspending function; the return type is the
+            // logical result, the `suspend` modifier supplies the ValueTask.
+            sb.Append("suspend ");
+        }
 
         sb.Append("func ");
         if (method.Receiver != null)

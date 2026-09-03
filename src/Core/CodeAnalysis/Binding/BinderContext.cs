@@ -144,6 +144,13 @@ internal sealed class BinderContext
     public ChannelRuntimeBinder ChannelRuntime => channelRuntime ??= new ChannelRuntimeBinder(References);
 
     /// <summary>
+    /// Gets the hidden <c>ScopeFrame</c> locals of the enclosing (ADR-0174 D5/D6)
+    /// <c>scope</c> blocks, innermost on top. A <c>go</c> statement reports to
+    /// the top frame; an empty stack means the runtime's free sink.
+    /// </summary>
+    public Stack<VariableSymbol> ScopeFrames { get; } = new();
+
+    /// <summary>
     /// Gets the binder's initial scope. Unlike <see cref="RootScope"/>, this
     /// remains stable while nested statement binding pushes child scopes.
     /// </summary>

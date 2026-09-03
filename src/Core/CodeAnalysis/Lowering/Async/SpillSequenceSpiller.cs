@@ -358,7 +358,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(decl.Initializer);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundVariableDeclaration(null, decl.Variable, spilled.Value));
+            builder.Add(new BoundVariableDeclaration(decl.Syntax, decl.Variable, spilled.Value));
             return true;
         }
 
@@ -396,7 +396,7 @@ public static class SpillSequenceSpiller
             FlushSideEffects(spilled, builder);
             if (spilled.Value is not BoundLiteralExpression)
             {
-                builder.Add(new BoundExpressionStatement(null, spilled.Value));
+                builder.Add(new BoundExpressionStatement(exprStmt.Syntax, spilled.Value));
             }
 
             return true;
@@ -417,7 +417,7 @@ public static class SpillSequenceSpiller
             // would leak an un-rewritten await to the emitter (issue #132).
             var spilled = SpillExpression(ret.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundReturnStatement(null, spilled.Value));
+            builder.Add(new BoundReturnStatement(ret.Syntax, spilled.Value));
             return true;
         }
 
@@ -597,7 +597,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(goStatement.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundGoStatement(goStatement.Syntax, spilled.Value));
+            builder.Add(new BoundGoStatement(goStatement.Syntax, spilled.Value, goStatement.Sink));
             return true;
         }
 
@@ -671,7 +671,7 @@ public static class SpillSequenceSpiller
                 return false;
             }
 
-            builder.Add(new BoundIfStatement(null, condition, thenStmt, elseStmt));
+            builder.Add(new BoundIfStatement(ifStmt.Syntax, condition, thenStmt, elseStmt));
             return true;
         }
 
@@ -705,7 +705,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(gotoStmt.Condition);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundConditionalGotoStatement(null, gotoStmt.Label, spilled.Value, gotoStmt.JumpIfTrue));
+            builder.Add(new BoundConditionalGotoStatement(gotoStmt.Syntax, gotoStmt.Label, spilled.Value, gotoStmt.JumpIfTrue));
             return true;
         }
 
@@ -730,7 +730,7 @@ public static class SpillSequenceSpiller
                 var body = RewriteNestedBody(clause.Body, out var clauseChanged);
                 catchesChanged |= clauseChanged;
                 catchBuilder.Add(clauseChanged
-                    ? new BoundCatchClause(clause.ExceptionType, clause.Variable, body)
+                    ? clause.WithBody(body)
                     : clause);
             }
 

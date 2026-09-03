@@ -47,6 +47,31 @@ public static class GoroutineRuntime
         new DelegateGoroutine(sink ?? FreeSink, body).Start();
     }
 
+    /// <summary>
+    /// Erases a goroutine body's result: <c>go f(x)</c> where <c>f</c> yields a
+    /// value discards it (ADR-0022), so the synthesized body returns a plain
+    /// <see cref="ValueTask"/>. A completed result costs nothing; a pending one
+    /// is observed through its task.
+    /// </summary>
+    /// <typeparam name="T">The discarded result type.</typeparam>
+    /// <param name="pending">The body's pending result.</param>
+    /// <returns>A task that completes when <paramref name="pending"/> does, faulting the same way.</returns>
+    public static ValueTask Discard<T>(ValueTask<T> pending)
+    {
+        if (pending.IsCompletedSuccessfully)
+        {
+            _ = pending.Result;
+            return ValueTask.CompletedTask;
+        }
+
+        return new ValueTask(pending.AsTask());
+    }
+
+    /// <summary>Wraps a goroutine body that yields a <see cref="Task"/> (an <c>async func</c> operand).</summary>
+    /// <param name="pending">The body's task.</param>
+    /// <returns>A <see cref="ValueTask"/> over it.</returns>
+    public static ValueTask Wrap(Task pending) => new(pending);
+
     internal static void OnStarted() => Interlocked.Increment(ref live);
 
     internal static void OnFinished() => Interlocked.Decrement(ref live);

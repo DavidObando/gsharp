@@ -749,6 +749,20 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, expression);
         }
 
+        // ADR-0174 D4/D5: the goroutine, not the spawning function, consumes
+        // a suspending operand's ValueTask — unwrap the caller-side completion
+        // (implicit await or root bridge) the call binder applied.
+        if (expression is BoundAwaitExpression awaited)
+        {
+            expression = awaited.Expression;
+        }
+        else if (expression is BoundImportedCallExpression { Function.Name: "Wait" } bridge
+            && bridge.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking"
+            && bridge.Arguments.Length == 1)
+        {
+            expression = bridge.Arguments[0];
+        }
+
         if (expression is not BoundCallExpression and
             not BoundIndirectCallExpression and
             not BoundUserInstanceCallExpression and
@@ -759,7 +773,14 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
-        return new BoundGoStatement(syntax, expression);
+        if (!binderCtx.ChannelRuntime.IsAvailable)
+        {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(syntax.Expression.Location, "Gsharp.Concurrency.GoroutineRuntime");
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        var sink = binderCtx.ScopeFrames.Count > 0 ? new BoundVariableExpression(null, binderCtx.ScopeFrames.Peek()) : null;
+        return new BoundGoStatement(syntax, binderCtx.ChannelRuntime.ShapeGoOperand(expression), sink);
     }
 
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
@@ -944,16 +965,77 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)
     {
-        // Phase 5.7 / ADR-0022: structured concurrency. The body's `go`
-        // statements register with the scope at evaluation time; the binder
-        // itself just wraps the body. Open a fresh lexical scope so any
-        // future implicit binding (e.g. `ctx`) can be introduced without
-        // leaking into the enclosing function.
+        // ADR-0174 D5/D6: `scope { body }` lowers to
+        //   let <frame> = ScopeFrame.Enter(ambient)
+        //   let ctx = <frame>.Context
+        //   var <ex> Exception = default
+        //   try { body } catch (Exception <caught>) { <ex> = <caught> } finally { <frame>.Exit(<ex>) }
+        // The frame is the completion sink every `go` in the body reports to;
+        // Exit joins them, cancels siblings on the first failure, and throws per
+        // the D6 precedence table (the body's exception unwrapped, or a
+        // ScopeException). In a suspending body the async pipeline awaits
+        // ExitAsync instead of blocking on Exit.
+        if (!binderCtx.ChannelRuntime.IsAvailable)
+        {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(syntax.ScopeKeyword.Location, "Gsharp.Concurrency.ScopeFrame");
+            return BindErrorStatement();
+        }
+
+        var exceptionType = ResolveExceptionType();
+        if (exceptionType == null)
+        {
+            Diagnostics.ReportUndefinedType(syntax.ScopeKeyword.Location, "System.Exception");
+            return BindErrorStatement();
+        }
+
+        var runtime = binderCtx.ChannelRuntime;
+        var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var frame = new LocalVariableSymbol($"<scope$frame${id}>", isReadOnly: true, runtime.ScopeFrameType);
+        scope.TryDeclareVariable(frame);
+        var bodyException = new LocalVariableSymbol($"<scope$ex${id}>", isReadOnly: false, exceptionType);
+        scope.TryDeclareVariable(bodyException);
+
+        // A nested scope's context is linked to the enclosing scope's `ctx` (ADR-0174 D6): cancelling the
+        // outer block cancels the inner one, and `ctx.Parent` is the outer context.
+        var ambient = binderCtx.ScopeFrames.Count > 0 ? runtime.BindScopeContext(binderCtx.ScopeFrames.Peek()) : null;
+
         scope = new BoundScope(scope);
-        var body = Invariant.Required(BindStatement(syntax.Body), "a scope statement has a bound body");
+        var contextToken = new SyntaxToken(syntax.SyntaxTree, SyntaxKind.IdentifierToken, syntax.ScopeKeyword.Span.Start, "ctx", "ctx");
+        var context = bindLocalVariable(contextToken, isReadOnly: true, type: runtime.ContextType);
+        binderCtx.ScopeFrames.Push(frame);
+        BoundStatement body;
+        try
+        {
+            body = Invariant.Required(BindStatement(syntax.Body), "a scope statement has a bound body");
+        }
+        finally
+        {
+            binderCtx.ScopeFrames.Pop();
+        }
 
         scope = scope.Pop();
-        return new BoundScopeStatement(syntax, body);
+
+        var caught = new LocalVariableSymbol($"<scope$caught${id}>", isReadOnly: true, exceptionType);
+        var catchBody = new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(syntax, new BoundAssignmentExpression(syntax, bodyException, new BoundVariableExpression(syntax, caught)))));
+        var finallyBody = new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(syntax, runtime.BindScopeExit(frame, bodyException))));
+        var tryStatement = new BoundTryStatement(
+            syntax,
+            new BoundBlockStatement(syntax, ImmutableArray.Create(body)),
+            ImmutableArray.Create(new BoundCatchClause(exceptionType, caught, catchBody, exitsThroughFinally: true)),
+            finallyBody);
+
+        return new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(syntax, frame, runtime.BindScopeEnter(syntax, ambient)),
+                new BoundVariableDeclaration(syntax, context, runtime.BindScopeContext(frame)),
+                new BoundVariableDeclaration(syntax, bodyException, new BoundDefaultExpression(syntax, exceptionType)),
+                tryStatement));
     }
 
     // ADR-0125 / issue #1026: binds a `fixed name *T = source { … }` pinning

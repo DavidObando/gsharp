@@ -21,17 +21,24 @@ is documented in [Go-flavored concurrency](../extensions/go-concurrency).
 
 ## `scope` — structured concurrency
 
-`scope { ... }` runs its body and, before returning, joins every async
-operation that was registered with it. The two things that register with
-the enclosing scope are:
+`scope { ... }` runs its body and, before returning, joins every
+goroutine started inside it with `go call(...)`. Inside the block an
+implicit `ctx` of type `Gsharp.Concurrency.Context` is bound: the first
+failing goroutine cancels it immediately, so siblings that observe
+`ctx.IsCancelled` (or park on a channel) stop before the join completes.
+Exceptions are never dropped:
 
-1. `await expr` inside the scope — the awaited task becomes part of the
-   scope's join set.
-2. `go call(...)` inside the scope — the goroutine is registered and
-   joined.
+- the body throws and every goroutine succeeds — the body's exception
+  propagates unchanged;
+- goroutines fail — the scope throws a `Gsharp.Concurrency.ScopeException`
+  (an `AggregateException`) whose `FirstFailure` is the cause and whose
+  inner exceptions list every failure in completion order; sibling
+  cancellations caused by that failure are not listed;
+- both fail — the body's exception is first.
 
-Either way, exceptions from registered work surface as the scope
-unwinds, instead of being silently dropped.
+A `scope` is a suspension point: a function containing one is compiled as
+a suspending function (see below), so the join parks the state machine
+rather than a thread; only the entry point blocks.
 
 ```gsharp
 import System
@@ -137,6 +144,19 @@ contract. Inside those boundaries a call to a suspending function has nowhere
 to await, so it blocks the thread until the callee completes; the compiler
 says so with `GS0558`. Top-level statements are the one place that block is
 right, so the entry point calls suspending functions silently.
+
+### Debugging and hot reload through suspension
+
+A suspending function is compiled to a state machine, but the tooling keeps the
+logical view. Its entry method carries `[AsyncStateMachine]`, so
+`Environment.StackTrace`, exception traces, and debuggers show
+`Pkg.<Program>.take(…)` rather than `<take>d__1.MoveNext`; the Portable PDB
+records where every receive, send, or suspending call yields and resumes, so
+stepping over a channel operation that parks lands on the next source line
+once the value arrives. Hot reload treats a change to whether a function
+suspends as the signature change it is: adding the first channel operation to
+a plain `func`, or removing the last one, is rejected with `GSHR1002` naming
+the function, and the process must be restarted.
 
 ## Sequences and async sequences
 

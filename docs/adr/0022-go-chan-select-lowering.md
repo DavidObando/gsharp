@@ -21,7 +21,7 @@ preserves both backend descriptions as a historical implementation record:
 
 ### `go f(args)` statement
 
-`go` is a **statement** (not an expression). Its operand must be a function-call expression (`go f(args)`, `go obj.Method(args)`, `go lambda()`). Free-standing `go { … }` blocks are not legal — wrap them in a lambda: `go func() { … }()`.
+`go` is a **statement** (not an expression). Its operand must be a function-call expression (`go f(args)`, `go obj.Method(args)`, `go lambda()`). Free-standing `go { … }` blocks were not legal at the time — they had to be wrapped in a lambda, `go func() { … }()`; ADR-0174 D14 later made the block form legal.
 
 Lowering:
 

@@ -261,10 +261,7 @@ internal sealed class SlotPlanner
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement? currentScope)
+        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots)
     {
         var allocator = new PatternSwitchSlotAllocator(
             this.cache,
@@ -274,10 +271,7 @@ internal sealed class SlotPlanner
             typePatternScratchSlots,
             switchExpressionSlots,
             channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes,
-            currentScope);
+            selectStatementSlots);
         allocator.Visit(node);
     }
 
@@ -291,10 +285,7 @@ internal sealed class SlotPlanner
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
         private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
-        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
-        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
-        private BoundScopeStatement? currentScope;
 
         public PatternSwitchSlotAllocator(
             MetadataTokenCache cache,
@@ -304,10 +295,7 @@ internal sealed class SlotPlanner
             Dictionary<BoundTypePattern, int> typePatternScratchSlots,
             Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
             Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-            Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-            BoundScopeStatement? currentScope)
+            Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots)
         {
             this.cache = cache;
             this.locals = locals;
@@ -316,10 +304,7 @@ internal sealed class SlotPlanner
             this.typePatternScratchSlots = typePatternScratchSlots;
             this.switchExpressionSlots = switchExpressionSlots;
             this.channelOpSlots = channelOpSlots;
-            this.scopeFrameSlots = scopeFrameSlots;
             this.selectStatementSlots = selectStatementSlots;
-            this.goEnclosingScopes = goEnclosingScopes;
-            this.currentScope = currentScope;
         }
 
         public override void VisitExpression(BoundExpression? node)
@@ -417,31 +402,6 @@ internal sealed class SlotPlanner
             base.VisitAddressOfExpression(node);
         }
 
-        protected override void VisitGoStatement(BoundGoStatement node)
-        {
-            if (this.currentScope != null)
-            {
-                this.goEnclosingScopes[node] = this.currentScope;
-            }
-
-            base.VisitGoStatement(node);
-        }
-
-        protected override void VisitScopeStatement(BoundScopeStatement node)
-        {
-            AllocateScopeFrameSlots(node, this.localTypes, this.scopeFrameSlots);
-            var saved = this.currentScope;
-            this.currentScope = node;
-            try
-            {
-                base.VisitScopeStatement(node);
-            }
-            finally
-            {
-                this.currentScope = saved;
-            }
-        }
-
         // ADR-0125 / issue #1026: allocate IL slots for a `fixed` statement's
         // synthetic pinned local and its user-visible `*T` pointer local. The
         // pinned local's slot type is a PinnedTypeSymbol so the local-signature
@@ -506,25 +466,6 @@ internal sealed class SlotPlanner
 
                 VisitExpression(arm.Result);
             }
-        }
-
-        private static void AllocateScopeFrameSlots(
-            BoundScopeStatement node,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots)
-        {
-            if (scopeFrameSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var tasks = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(List<System.Threading.Tasks.Task>)));
-            var cts = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.CancellationTokenSource)));
-            var awaiter = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
-            scopeFrameSlots[node] = (tasks, cts, awaiter);
         }
 
         private static TypeSymbol ConstructChannelOperationType(Type openDefinition, TypeSymbol elementType)

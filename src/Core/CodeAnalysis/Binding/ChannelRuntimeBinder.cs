@@ -56,8 +56,13 @@ internal sealed class ChannelRuntimeBinder
     private readonly Type? valueTaskOpen;
     private readonly Type? valueTask;
     private readonly Type? blockingType;
+    private readonly Type? scopeFrameType;
+    private readonly Type? contextType;
+    private readonly Type? goroutineRuntimeType;
     private ImportedClassSymbol? channelOpsClass;
     private ImportedClassSymbol? blockingClass;
+    private ImportedClassSymbol? scopeFrameClass;
+    private ImportedClassSymbol? goroutineRuntimeClass;
 
     /// <summary>Initializes a new instance of the <see cref="ChannelRuntimeBinder"/> class.</summary>
     /// <param name="references">The compilation's reference resolver.</param>
@@ -70,10 +75,136 @@ internal sealed class ChannelRuntimeBinder
         references.TryResolveType("System.Threading.Tasks.ValueTask`1", out valueTaskOpen);
         references.TryResolveType("System.Threading.Tasks.ValueTask", out valueTask);
         references.TryResolveType("Gsharp.Concurrency.Blocking", out blockingType);
+        references.TryResolveType("Gsharp.Concurrency.ScopeFrame", out scopeFrameType);
+        references.TryResolveType("Gsharp.Concurrency.Context", out contextType);
+        references.TryResolveType("Gsharp.Concurrency.GoroutineRuntime", out goroutineRuntimeType);
     }
 
     /// <summary>Gets a value indicating whether the runtime assembly is in the reference set.</summary>
     public bool IsAvailable => chanOpen != null && channelOps != null && cancellationToken != null;
+
+    /// <summary>Gets the runtime's <c>ScopeFrame</c> type symbol (ADR-0174 D6).</summary>
+    public TypeSymbol ScopeFrameType => TypeSymbol.FromClrType(Required(scopeFrameType));
+
+    /// <summary>Gets the runtime's <c>Context</c> type symbol (ADR-0174 D6/D7).</summary>
+    public TypeSymbol ContextType => TypeSymbol.FromClrType(Required(contextType));
+
+    /// <summary>Gets the CLR <c>ValueTask</c> type symbol.</summary>
+    public TypeSymbol ValueTaskType => TypeSymbol.FromClrType(Required(valueTask));
+
+    /// <summary>Binds <c>ScopeFrame.Enter(ambient)</c>; the ambient context is <c>null</c> (= <c>Context.None</c>) until the hidden context parameter lands.</summary>
+    /// <param name="syntax">The scope syntax.</param>
+    /// <param name="ambient">The enclosing scope's <c>ctx</c>, or <c>null</c> at an outermost scope (ambient <c>Context.None</c>).</param>
+    /// <returns>A call typed <c>ScopeFrame</c>.</returns>
+    public BoundExpression BindScopeEnter(SyntaxNode? syntax, BoundExpression? ambient)
+    {
+        var frame = Required(scopeFrameType);
+        var enter = frame.GetMethod("Enter", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ScopeFrame.Enter is missing from the channel runtime.");
+        scopeFrameClass ??= new ImportedClassSymbol(frame, declaration: null, references: references);
+        var function = new ImportedFunctionSymbol("Enter", scopeFrameClass, enter, declaration: null, returnTypeOverride: ScopeFrameType);
+        return new BoundImportedCallExpression(syntax, function, ImmutableArray.Create(ambient ?? new BoundDefaultExpression(null, ContextType)));
+    }
+
+    /// <summary>Binds <c>frame.Context</c>, the block's implicit <c>ctx</c> (ADR-0174 D6).</summary>
+    /// <param name="frame">The frame local.</param>
+    /// <returns>A property read typed <c>Context</c>.</returns>
+    public BoundExpression BindScopeContext(VariableSymbol frame)
+    {
+        var property = Required(scopeFrameType).GetProperty("Context", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("ScopeFrame.Context is missing from the channel runtime.");
+        return new BoundClrPropertyAccessExpression(null, new BoundVariableExpression(null, frame), property, ContextType);
+    }
+
+    /// <summary>Binds the blocking <c>frame.Exit(bodyException)</c>; the async pipeline turns it into an awaited <c>ExitAsync</c>.</summary>
+    /// <param name="frame">The frame local.</param>
+    /// <param name="bodyException">The local holding the body's exception, or <c>null</c>.</param>
+    /// <returns>A call typed <c>void</c>.</returns>
+    public BoundExpression BindScopeExit(VariableSymbol frame, VariableSymbol bodyException)
+    {
+        var exit = Required(scopeFrameType).GetMethod("Exit", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("ScopeFrame.Exit is missing from the channel runtime.");
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, frame),
+            exit,
+            TypeSymbol.Void,
+            ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, bodyException)));
+    }
+
+    /// <summary>Recognizes the blocking scope exit the binder emits.</summary>
+    /// <param name="call">An imported instance call.</param>
+    /// <returns><see langword="true"/> for <c>ScopeFrame.Exit</c>.</returns>
+    public static bool IsScopeExit(BoundImportedInstanceCallExpression call)
+        => call.Method.Name == "Exit" && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.ScopeFrame";
+
+    /// <summary>Turns a blocking scope exit into the awaited <c>ExitAsync</c> (inside a state machine).</summary>
+    /// <param name="exit">The blocking exit call.</param>
+    /// <returns>An await expression typed <c>void</c>.</returns>
+    public BoundExpression BindScopeExitAwait(BoundImportedInstanceCallExpression exit)
+    {
+        var exitAsync = Required(scopeFrameType).GetMethod("ExitAsync", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("ScopeFrame.ExitAsync is missing from the channel runtime.");
+        var call = new BoundImportedInstanceCallExpression(exit.Syntax, exit.Receiver, exitAsync, ValueTaskType, exit.Arguments);
+        return Await(exit.Syntax, call, TypeSymbol.Void);
+    }
+
+    /// <summary>
+    /// Shapes a <c>go</c> operand for the goroutine body, which returns a plain
+    /// <c>ValueTask</c> (ADR-0174 D5): a <c>ValueTask</c> passes through, a
+    /// <c>ValueTask[T]</c> is discarded through <c>GoroutineRuntime.Discard</c>, a
+    /// <c>Task</c> is wrapped, and anything else (a void call) is left for the
+    /// closure to run as a statement.
+    /// </summary>
+    /// <param name="operand">The bound go operand.</param>
+    /// <returns>The shaped operand.</returns>
+    public BoundExpression ShapeGoOperand(BoundExpression operand)
+    {
+        var type = operand.Type;
+        if (type == null || type == TypeSymbol.Error || type == TypeSymbol.Void)
+        {
+            return operand;
+        }
+
+        var clr = type.ClrType;
+        if (clr == null)
+        {
+            return operand;
+        }
+
+        var runtime = Required(goroutineRuntimeType);
+        goroutineRuntimeClass ??= new ImportedClassSymbol(runtime, declaration: null, references: references);
+        if (clr.FullName == "System.Threading.Tasks.ValueTask")
+        {
+            return operand;
+        }
+
+        if (clr.IsGenericType && clr.GetGenericTypeDefinition().FullName == "System.Threading.Tasks.ValueTask`1")
+        {
+            var discardOpen = runtime.GetMethod("Discard", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new InvalidOperationException("GoroutineRuntime.Discard is missing from the channel runtime.");
+            var elementType = type is ImportedTypeSymbol { TypeArguments: { IsDefaultOrEmpty: false } args } ? args[0] : TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+            var (closedElement, symbolic) = ProjectElement(elementType);
+            var closed = discardOpen.MakeGenericMethod(closedElement);
+            var function = new ImportedFunctionSymbol("Discard", goroutineRuntimeClass, closed, declaration: null, returnTypeOverride: ValueTaskType);
+            return new BoundImportedCallExpression(
+                operand.Syntax,
+                function,
+                ImmutableArray.Create(operand),
+                argumentRefKinds: default,
+                typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(elementType) : default);
+        }
+
+        if (Lowering.Async.AwaitableShape.Resolve(clr) != null && IsTask(clr))
+        {
+            var wrap = runtime.GetMethod("Wrap", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new InvalidOperationException("GoroutineRuntime.Wrap is missing from the channel runtime.");
+            var function = new ImportedFunctionSymbol("Wrap", goroutineRuntimeClass, wrap, declaration: null, returnTypeOverride: ValueTaskType);
+            return new BoundImportedCallExpression(operand.Syntax, function, ImmutableArray.Create(operand));
+        }
+
+        return operand;
+    }
 
     /// <summary>Binds <c>chan[T](capacity)</c> as a construction of the runtime class.</summary>
     /// <param name="syntax">The originating syntax.</param>
@@ -283,6 +414,19 @@ internal sealed class ChannelRuntimeBinder
         ChannelDirection.Out => "ChannelWriter`1",
         _ => "Channel`1",
     };
+
+    private static bool IsTask(Type clr)
+    {
+        for (var t = clr; t != null; t = t.BaseType)
+        {
+            if (t.FullName == "System.Threading.Tasks.Task")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static T Required<T>(T? value)
         where T : class

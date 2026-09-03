@@ -60,6 +60,30 @@ public class Adr0174SuspendFuncEmitTests
     }
 
     [Fact]
+    public void ExplicitAwait_OnASuspendingCall_RunsLikeTheImplicitOne()
+    {
+        var result = EmittedOracle.Evaluate("""
+            package P0174ExplicitAwait
+            suspend func twice(ch in chan[int32]) int32 {
+                let v = <-ch
+                return v * 2
+            }
+            suspend func run() int32 {
+                let ch = chan[int32](1)
+                ch <- 21
+                let a = await twice(ch)
+                ch <- 5
+                let b = twice(ch)
+                return a + b
+            }
+            run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(52, result.Value);
+    }
+
+    [Fact]
     public void BoundaryCaller_BlocksThroughTheBridge_AndWarns()
     {
         var result = EmittedOracle.Evaluate("""

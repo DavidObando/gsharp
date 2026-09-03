@@ -127,7 +127,13 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         }
 
         var inner = rewritten.Arguments[0];
-        if (ContainerSuspends && lockDepth == 0 && goDepth == 0 && inner.Type != null)
+        if (goDepth > 0)
+        {
+            // The goroutine consumes the ValueTask itself.
+            return runtime.ShapeGoOperand(inner);
+        }
+
+        if (ContainerSuspends && lockDepth == 0 && inner.Type != null)
         {
             return new BoundAwaitExpression(rewritten.Syntax, inner, rewritten.Type, ExpressionBinder.TryGetAwaiterTypeSymbol(inner.Type));
         }
@@ -183,10 +189,14 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
 
     private BoundExpression Complete(BoundExpression retyped, TypeSymbol logicalType, string calleeName)
     {
-        // A `go` operand runs on the goroutine, not in the container's state
-        // machine, so it is never awaited here: until the goroutine work item
-        // consumes the ValueTask itself (Phase 3-5) it blocks on its own thread.
-        if (ContainerSuspends && lockDepth == 0 && goDepth == 0)
+        // A `go` operand runs on the goroutine, which consumes the ValueTask
+        // itself (ADR-0174 D5); it is never awaited or bridged here.
+        if (goDepth > 0)
+        {
+            return runtime.ShapeGoOperand(retyped);
+        }
+
+        if (ContainerSuspends && lockDepth == 0)
         {
             return new BoundAwaitExpression(retyped.Syntax, retyped, logicalType, ExpressionBinder.TryGetAwaiterTypeSymbol(retyped.Type!));
         }

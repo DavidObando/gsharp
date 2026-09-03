@@ -782,7 +782,7 @@ internal static class CaptureBoxingRewriter
                     clausesChanged = true;
                 }
 
-                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, body));
+                rewrittenClauses.Add(clause.WithBody(body));
             }
 
             var finallyBlock = node.FinallyBlock == null ? null : this.RewriteStatement(node.FinallyBlock);

@@ -60,7 +60,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
     private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
     private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
-    private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
     private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
     private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots;
@@ -92,7 +91,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly HashSet<BoundExpression> spilledCompoundReceivers = new HashSet<BoundExpression>();
     private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
-    private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
     private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots;
     private readonly ParameterSymbol? structThisParameter;
     private readonly Lowering.Async.AsyncStateMachineFieldMap? asyncFieldMap;
@@ -136,6 +134,14 @@ internal sealed partial class MethodBodyEmitter
     private readonly List<SequencePoint> sequencePoints = new List<SequencePoint>();
     private int lastSequencePointIlOffset = -1;
 
+    // ADR-0174 P3-8: async stepping information for a MoveNext body — the
+    // yield/resume IL offsets of the hidden await markers keyed by state, and
+    // the outermost catch handler (the builder's SetException route).
+    private readonly SortedDictionary<int, int> awaitYieldOffsets = new SortedDictionary<int, int>();
+    private readonly SortedDictionary<int, int> awaitResumeOffsets = new SortedDictionary<int, int>();
+    private int tryDepth;
+    private int outermostCatchHandlerOffset = -1;
+
     // Tracks whether the current linear IL position is closed by ret, throw,
     // or an unconditional branch. A label or ordinary instruction reopens it.
     private bool currentPositionEndsInTerminator;
@@ -153,11 +159,9 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
         Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         Dictionary<BoundExpression, LiftedBinarySlots>? liftedBinarySlots = null,
         Dictionary<BoundBinaryExpression, int>? nullableCoalesceSpillSlots = null,
         ParameterSymbol? structThisParameter = null,
@@ -182,11 +186,9 @@ internal sealed partial class MethodBodyEmitter
         this.typePatternScratchSlots = typePatternScratchSlots;
         this.switchExpressionSlots = switchExpressionSlots;
         this.channelOpSlots = channelOpSlots;
-        this.scopeFrameSlots = scopeFrameSlots;
         this.selectStatementSlots = selectStatementSlots;
         this.receiverSpillSlots = receiverSpillSlots;
         this.indexAssignmentValueSlots = indexAssignmentValueSlots;
-        this.goEnclosingScopes = goEnclosingScopes;
         this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundExpression, LiftedBinarySlots>();
         this.nullableCoalesceSpillSlots = nullableCoalesceSpillSlots ?? new Dictionary<BoundBinaryExpression, int>();
         this.structThisParameter = structThisParameter;
@@ -215,6 +217,33 @@ internal sealed partial class MethodBodyEmitter
     }
 
     public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
+
+    /// <summary>
+    /// Gets the async stepping information gathered while emitting this body
+    /// (ADR-0174 P3-8), or <c>null</c> when the body contains no await marker
+    /// — i.e. it is not a state machine's <c>MoveNext</c>.
+    /// </summary>
+    public AsyncMethodSteppingInfo? AsyncStepping
+    {
+        get
+        {
+            if (this.awaitYieldOffsets.Count == 0)
+            {
+                return null;
+            }
+
+            var awaits = ImmutableArray.CreateBuilder<(int Yield, int Resume)>(this.awaitYieldOffsets.Count);
+            foreach (var (state, yieldOffset) in this.awaitYieldOffsets)
+            {
+                if (this.awaitResumeOffsets.TryGetValue(state, out var resumeOffset))
+                {
+                    awaits.Add((yieldOffset, resumeOffset));
+                }
+            }
+
+            return new AsyncMethodSteppingInfo(this.outermostCatchHandlerOffset, awaits.ToImmutable());
+        }
+    }
 
     /// <summary>Issue #306: emits a single value expression onto the IL stack. Used by the constructor emitter to evaluate base-constructor argument expressions.</summary>
     /// <param name="expression">The bound value expression to emit.</param>
@@ -434,7 +463,11 @@ internal sealed partial class MethodBodyEmitter
             case BoundYieldStatement:
                 EmitDiagnosticException.Throw(statement.Syntax, "Internal error: yield reached the emitter before iterator lowering.");
                 break;
-            case BoundAwaitSequencePoint:
+            case BoundAwaitSequencePoint awaitMarker:
+                // ADR-0174 P3-8: the marker's offset is the yield/resume point
+                // the Portable PDB async-stepping blob reports for this await.
+                var markers = awaitMarker.Kind == BoundNodeKind.AwaitYieldPoint ? this.awaitYieldOffsets : this.awaitResumeOffsets;
+                markers.TryAdd(awaitMarker.State, this.il.Offset);
                 this.il.OpCode(ILOpCode.Nop);
                 break;
             default:

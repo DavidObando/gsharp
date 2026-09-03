@@ -158,7 +158,7 @@ internal static class FinallyExitRewriter
                 var catchBody = new ExitFunneler(
                     plan,
                     ProtectedRegionBranchAnalysis.Create(clause.Body)).RewriteStatement(clause.Body);
-                catches.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, catchBody));
+                catches.Add(clause.WithBody(catchBody));
             }
 
             var exceptionType = TypeSymbol.FromClrType(typeof(Exception));

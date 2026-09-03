@@ -77,9 +77,24 @@ Console.WriteLine(a + b + c)
 6
 ```
 
-A free `go` outside `scope` is fire-and-forget and has a weaker exception
-story — prefer `scope` when the parent operation should observe child
-failures.
+`go { … }` spawns a block directly — the Go idiom `go func() { … }()`
+without the ceremony — capturing the enclosing locals, per iteration for a
+`for … in` variable:
+
+```gsharp
+scope {
+    for v in 1 ... 6 {
+        go {
+            results <- v
+        }
+    }
+}
+```
+
+A free `go` outside `scope` is fail-fast: an unhandled exception in it
+terminates the process (an unrecovered Go panic), unless the host handles
+`Gsharp.Concurrency.GoroutineRuntime.UnhandledGoroutineException`. Prefer
+`scope` when the parent operation should observe child failures.
 
 ## Channels
 

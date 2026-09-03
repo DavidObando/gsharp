@@ -100,6 +100,17 @@ internal sealed class SuspensionPointCollector : BoundTreeWalker
     }
 
     /// <inheritdoc/>
+    protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+    {
+        if (goDepth == 0 && lockDepth == 0 && ChannelRuntimeBinder.IsScopeExit(node))
+        {
+            facts.HasDirectPoint = true;
+        }
+
+        base.VisitImportedInstanceCallExpression(node);
+    }
+
+    /// <inheritdoc/>
     protected override void VisitCallExpression(BoundCallExpression node)
     {
         if (goDepth == 0)

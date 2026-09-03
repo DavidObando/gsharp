@@ -1515,7 +1515,7 @@ DeferStmt = "defer" Expression .
 The `go`, `chan[T]`, `<-` (send and receive), and `select` forms are part of the language and need no import (ADR-0174 D13 retired the ADR-0082 gate, GS0316). A send through an `in chan[T]` is `GS0549`; a receive through an `out chan[T]` is `GS0550`. Channel operations lower onto the `Gsharp.Runtime.Channels` runtime (`Gsharp.Concurrency.ChannelOps`), which the SDK references implicitly.
 
 ```ebnf
-GoStmt     = "go" Expression .
+GoStmt     = "go" ( Expression | Block ) .   (* ADR-0174 D14: `go { … }` spawns the block as a zero-parameter goroutine *)
 ScopeStmt  = "scope" Block .
 SelectStmt = "select" "{" SelectCase* "}" .
 SelectCase = "default" Block
@@ -1915,7 +1915,7 @@ ThrowStmt         ::= 'throw' Expression
 UsingStmt         ::= 'using' VariableDecl
 AwaitUsingStmt    ::= 'await' 'using' VariableDecl
 DeferStmt         ::= 'defer' Expression
-GoStmt            ::= 'go' Expression
+GoStmt            ::= 'go' (Expression | Block)                                   (* ADR-0174 D14 *)
 ScopeStmt         ::= 'scope' Block
 AwaitForRangeStmt ::= 'await' 'for' identifier 'in' Expression Block
 SelectStmt        ::= 'select' '{' SelectCase* '}'

@@ -670,7 +670,11 @@ internal static class DefiniteAssignmentAnalyzer
             }
 
             var catchExit = AnalyzeRegion(clause.Body, catchEntry, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
-            if (catchExit == null)
+
+            // ADR-0174 D6: a scope's synthesized handler only records the body
+            // exception for a finally that always rethrows it, so it never
+            // completes normally and contributes no fall-through state.
+            if (catchExit == null || clause.ExitsThroughFinally)
             {
                 continue;
             }

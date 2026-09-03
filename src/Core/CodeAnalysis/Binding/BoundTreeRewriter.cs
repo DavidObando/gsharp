@@ -109,7 +109,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundBlockStatement(null, builder.MoveToImmutable());
+        return new BoundBlockStatement(node.Syntax, builder.MoveToImmutable());
     }
 
     /// <summary>
@@ -125,7 +125,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundVariableDeclaration(null, node.Variable, initializer, node.ConstantValue);
+        return new BoundVariableDeclaration(node.Syntax, node.Variable, initializer, node.ConstantValue);
     }
 
     /// <summary>Rewrites a generic local-function declaration (issue #1886). The literal's body is intentionally not rewritten here — it forms a separate lexical scope, exactly like <see cref="RewriteFunctionLiteralExpression"/>, and is lowered independently at the point it is hosted for emission.</summary>
@@ -151,7 +151,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundIfStatement(null, condition, thenStatement, elseStatement);
+        return new BoundIfStatement(node.Syntax, condition, thenStatement, elseStatement);
     }
 
     /// <summary>
@@ -167,7 +167,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundForInfiniteStatement(null, body, node.BreakLabel, node.ContinueLabel);
+        return new BoundForInfiniteStatement(node.Syntax, body, node.BreakLabel, node.ContinueLabel);
     }
 
     /// <summary>
@@ -185,7 +185,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundForEllipsisStatement(null, node.Variable, lowerBound, upperBound, body, node.BreakLabel, node.ContinueLabel);
+        return new BoundForEllipsisStatement(node.Syntax, node.Variable, lowerBound, upperBound, body, node.BreakLabel, node.ContinueLabel);
     }
 
     /// <summary>
@@ -202,7 +202,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundForRangeStatement(null, node.KeyVariable, node.ValueVariable, collection, node.IterationKind, body, node.BreakLabel, node.ContinueLabel);
+        return new BoundForRangeStatement(node.Syntax, node.KeyVariable, node.ValueVariable, collection, node.IterationKind, body, node.BreakLabel, node.ContinueLabel);
     }
 
     /// <summary>
@@ -238,7 +238,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundConditionalGotoStatement(null, node.Label, condition, node.JumpIfTrue);
+        return new BoundConditionalGotoStatement(node.Syntax, node.Label, condition, node.JumpIfTrue);
     }
 
     /// <summary>
@@ -254,7 +254,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundReturnStatement(null, expression, node.IsRef);
+        return new BoundReturnStatement(node.Syntax, expression, node.IsRef);
     }
 
     /// <summary>
@@ -270,7 +270,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundExpressionStatement(null, expression);
+        return new BoundExpressionStatement(node.Syntax, expression);
     }
 
     /// <summary>
@@ -293,7 +293,7 @@ public abstract class BoundTreeRewriter
             }
             else
             {
-                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, body));
+                rewrittenClauses.Add(clause.WithBody(body));
                 clausesChanged = true;
             }
         }
@@ -305,7 +305,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundTryStatement(null, tryBlock, rewrittenClauses.ToImmutable(), finallyBlock);
+        return new BoundTryStatement(node.Syntax, tryBlock, rewrittenClauses.ToImmutable(), finallyBlock);
     }
 
     /// <summary>
@@ -321,7 +321,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundThrowStatement(null, expression, node.DiagnosticDescriptor);
+        return new BoundThrowStatement(node.Syntax, expression, node.DiagnosticDescriptor);
     }
 
     /// <summary>
@@ -531,7 +531,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAssignmentExpression(null, node.Variable, expression);
+        return new BoundAssignmentExpression(node.Syntax, node.Variable, expression);
     }
 
     /// <summary>
@@ -547,7 +547,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundUnaryExpression(null, node.Op, operand);
+        return new BoundUnaryExpression(node.Syntax, node.Op, operand);
     }
 
     /// <summary>
@@ -564,7 +564,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundBinaryExpression(null, left, node.Op, right, node.IsChecked);
+        return new BoundBinaryExpression(node.Syntax, left, node.Op, right, node.IsChecked);
     }
 
     /// <summary>
@@ -708,7 +708,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundConversionExpression(null, node.Type, expression, node.IsChecked);
+        return new BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked);
     }
 
     /// <summary>Rewrites a bound await expression (Phase 5.1).</summary>
@@ -722,7 +722,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAwaitExpression(null, expression, node.Type, node.AwaiterTypeSymbol);
+        return new BoundAwaitExpression(node.Syntax, expression, node.Type, node.AwaiterTypeSymbol);
     }
 
     /// <summary>Rewrites a bound switch expression.</summary>
@@ -748,7 +748,7 @@ public abstract class BoundTreeRewriter
                 }
             }
 
-            builder?.Add(new BoundSwitchExpressionArm(null, pattern, guard, result));
+            builder?.Add(new BoundSwitchExpressionArm(arm.Syntax, pattern, guard, result));
         }
 
         if (discriminant == node.Discriminant && builder == null)
@@ -756,7 +756,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundSwitchExpression(null, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.Type);
+        return new BoundSwitchExpression(node.Syntax, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.Type);
     }
 
     /// <summary>Rewrites a bound pattern switch statement.</summary>
@@ -781,7 +781,7 @@ public abstract class BoundTreeRewriter
                 }
             }
 
-            builder?.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
+            builder?.Add(new BoundPatternSwitchArm(arm.Syntax, pattern, guard, body));
         }
 
         if (discriminant == node.Discriminant && builder == null)
@@ -789,7 +789,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundPatternSwitchStatement(null, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.IsExhaustive);
+        return new BoundPatternSwitchStatement(node.Syntax, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.IsExhaustive);
     }
 
     /// <summary>Rewrites a bound pattern.</summary>
@@ -802,7 +802,7 @@ public abstract class BoundTreeRewriter
             case BoundNodeKind.ConstantPattern:
                 var constant = (BoundConstantPattern)node;
                 var value = RewriteExpression(constant.Value);
-                return value == constant.Value ? node : new BoundConstantPattern(null, node.Type, value);
+                return value == constant.Value ? node : new BoundConstantPattern(node.Syntax, node.Type, value);
             case BoundNodeKind.DiscardPattern:
                 return node;
             case BoundNodeKind.TypePattern:
@@ -822,7 +822,7 @@ public abstract class BoundTreeRewriter
             case BoundNodeKind.RelationalPattern:
                 var relational = (BoundRelationalPattern)node;
                 var relValue = RewriteExpression(relational.Value);
-                return relValue == relational.Value ? node : new BoundRelationalPattern(null, node.Type, relational.Op, relValue);
+                return relValue == relational.Value ? node : new BoundRelationalPattern(node.Syntax, node.Type, relational.Op, relValue);
             case BoundNodeKind.PropertyPattern:
                 var property = (BoundPropertyPattern)node;
                 ImmutableArray<BoundPropertyPatternField>.Builder? fieldsBuilder = null;
@@ -840,13 +840,13 @@ public abstract class BoundTreeRewriter
                     }
 
                     fieldsBuilder?.Add(field.ClrMember != null
-                        ? new BoundPropertyPatternField(null, field.ClrMember, field.Type, pattern)
+                        ? new BoundPropertyPatternField(field.Syntax, field.ClrMember, field.Type, pattern)
                         : field.Property != null
-                            ? new BoundPropertyPatternField(null, field.Property, field.DeclaringType, pattern)
-                            : new BoundPropertyPatternField(null, Invariant.Required(field.Field, "a property pattern field has one bound member"), field.DeclaringType, pattern));
+                            ? new BoundPropertyPatternField(field.Syntax, field.Property, field.DeclaringType, pattern)
+                            : new BoundPropertyPatternField(field.Syntax, Invariant.Required(field.Field, "a property pattern field has one bound member"), field.DeclaringType, pattern));
                 }
 
-                return fieldsBuilder == null ? node : new BoundPropertyPattern(null, node.Type, fieldsBuilder.MoveToImmutable());
+                return fieldsBuilder == null ? node : new BoundPropertyPattern(node.Syntax, node.Type, fieldsBuilder.MoveToImmutable());
             case BoundNodeKind.ListPattern:
                 var list = (BoundListPattern)node;
                 ImmutableArray<BoundPattern>.Builder? elementsBuilder = null;
@@ -865,13 +865,13 @@ public abstract class BoundTreeRewriter
                     elementsBuilder?.Add(element);
                 }
 
-                return elementsBuilder == null ? node : new BoundListPattern(null, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
+                return elementsBuilder == null ? node : new BoundListPattern(node.Syntax, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
             case BoundNodeKind.SlicePattern:
                 var slice = (BoundSlicePattern)node;
                 var newSliceInner = slice.Pattern == null ? null : RewritePattern(slice.Pattern);
                 return newSliceInner == slice.Pattern
                     ? node
-                    : new BoundSlicePattern(null, node.Type, slice.ElementType, slice.Variable, Invariant.Required(newSliceInner, "a rewritten slice pattern retains its nested pattern"));
+                    : new BoundSlicePattern(node.Syntax, node.Type, slice.ElementType, slice.Variable, Invariant.Required(newSliceInner, "a rewritten slice pattern retains its nested pattern"));
             case BoundNodeKind.BinaryPattern:
                 var binary = (BoundBinaryPattern)node;
                 var newLeft = RewritePattern(binary.Left);
@@ -888,7 +888,7 @@ public abstract class BoundTreeRewriter
             case BoundNodeKind.NotPattern:
                 var not = (BoundNotPattern)node;
                 var newInner = RewritePattern(not.Pattern);
-                return newInner == not.Pattern ? node : new BoundNotPattern(null, node.Type, newInner);
+                return newInner == not.Pattern ? node : new BoundNotPattern(node.Syntax, node.Type, newInner);
             default:
                 throw new Exception($"Unexpected pattern node: {node.Kind}");
         }
@@ -900,7 +900,8 @@ public abstract class BoundTreeRewriter
     protected virtual BoundStatement RewriteGoStatement(BoundGoStatement node)
     {
         var expression = RewriteExpression(node.Expression);
-        if (expression == node.Expression)
+        var sink = node.Sink == null ? null : RewriteExpression(node.Sink);
+        if (expression == node.Expression && sink == node.Sink)
         {
             return node;
         }
@@ -908,7 +909,7 @@ public abstract class BoundTreeRewriter
         // The go statement's syntax is its stable identity: the emitter finds
         // the closure synthesized for it by that syntax when a state-machine
         // rewrite has rebuilt the node (ADR-0174 D4 makes that the common case).
-        return new BoundGoStatement(node.Syntax, expression);
+        return new BoundGoStatement(node.Syntax, expression, sink);
     }
 
     /// <summary>Rewrites a bound select statement (Phase 5.6).</summary>
@@ -940,7 +941,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundSelectStatement(null, builder.MoveToImmutable());
+        return new BoundSelectStatement(node.Syntax, builder.MoveToImmutable());
     }
 
     /// <summary>Rewrites a bound scope statement (Phase 5.7).</summary>
@@ -954,7 +955,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundScopeStatement(null, body);
+        return new BoundScopeStatement(node.Syntax, body);
     }
 
     /// <summary>
@@ -995,7 +996,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAwaitForRangeStatement(null, node.ValueVariable, stream, body, node.BreakLabel, node.ContinueLabel);
+        return new BoundAwaitForRangeStatement(node.Syntax, node.ValueVariable, stream, body, node.BreakLabel, node.ContinueLabel);
     }
 
     /// <summary>Rewrites a bound yield statement (ADR-0040).</summary>
@@ -1009,7 +1010,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundYieldStatement(null, expression);
+        return new BoundYieldStatement(node.Syntax, expression);
     }
 
     /// <summary>
@@ -1025,7 +1026,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAddressOfExpression(null, operand);
+        return new BoundAddressOfExpression(node.Syntax, operand);
     }
 
     /// <summary>
@@ -1043,7 +1044,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, node.PointeeType);
+        return new BoundConditionalAddressExpression(node.Syntax, condition, whenTrue, whenFalse, node.PointeeType);
     }
 
     /// <summary>
@@ -1061,7 +1062,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundConditionalExpression(null, condition, whenTrue, whenFalse, node.Type);
+        return new BoundConditionalExpression(node.Syntax, condition, whenTrue, whenFalse, node.Type);
     }
 
     /// <summary>Issue #1018: rewrites a throw-expression's operand.</summary>
@@ -1075,7 +1076,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundThrowExpression(null, expression);
+        return new BoundThrowExpression(node.Syntax, expression);
     }
 
     /// <summary>
@@ -1091,7 +1092,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundDereferenceExpression(null, operand);
+        return new BoundDereferenceExpression(node.Syntax, operand);
     }
 
     /// <summary>
@@ -1147,7 +1148,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundSpillSequenceExpression(null, node.Locals, builder.MoveToImmutable(), value);
+        return new BoundSpillSequenceExpression(node.Syntax, node.Locals, builder.MoveToImmutable(), value);
     }
 
     /// <summary>
@@ -1303,7 +1304,7 @@ public abstract class BoundTreeRewriter
             builder?.Add(newEl);
         }
 
-        return builder == null ? node : new BoundArrayCreationExpression(null, node.ContainerType, builder.MoveToImmutable());
+        return builder == null ? node : new BoundArrayCreationExpression(node.Syntax, node.ContainerType, builder.MoveToImmutable());
     }
 
     /// <summary>
@@ -1375,7 +1376,7 @@ public abstract class BoundTreeRewriter
                 : new BoundMapEntry(newKey, newValue));
         }
 
-        return builder == null ? node : new BoundMapLiteralExpression(null, node.MapType, builder.MoveToImmutable());
+        return builder == null ? node : new BoundMapLiteralExpression(node.Syntax, node.MapType, builder.MoveToImmutable());
     }
 
     /// <summary>Rewrites an index expression.</summary>
@@ -1398,7 +1399,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundIndexExpression(null, target, indices.MoveToImmutable(), node.Type);
+        return new BoundIndexExpression(node.Syntax, target, indices.MoveToImmutable(), node.Type);
     }
 
     /// <summary>Rewrites an index assignment expression.</summary>
@@ -1426,10 +1427,10 @@ public abstract class BoundTreeRewriter
         var rewrittenIndices = indices.MoveToImmutable();
         if (targetExpr != null)
         {
-            return BoundIndexAssignmentExpression.WithExpressionTarget(null, targetExpr, rewrittenIndices, value, node.Type);
+            return BoundIndexAssignmentExpression.WithExpressionTarget(node.Syntax, targetExpr, rewrittenIndices, value, node.Type);
         }
 
-        return new BoundIndexAssignmentExpression(null, Invariant.Required(node.Target, "an index assignment without an expression target has a variable target"), rewrittenIndices, value, node.Type);
+        return new BoundIndexAssignmentExpression(node.Syntax, Invariant.Required(node.Target, "an index assignment without an expression target has a variable target"), rewrittenIndices, value, node.Type);
     }
 
     /// <summary>Rewrites a <c>len(x)</c> expression.</summary>
@@ -1438,7 +1439,7 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteLenExpression(BoundLenExpression node)
     {
         var operand = RewriteExpression(node.Operand);
-        return operand == node.Operand ? node : new BoundLenExpression(null, operand);
+        return operand == node.Operand ? node : new BoundLenExpression(node.Syntax, operand);
     }
 
     /// <summary>Rewrites a struct composite literal.</summary>
@@ -1470,7 +1471,7 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundStructLiteralExpression(null, node.StructType, builder.ToImmutable());
+        return builder == null ? node : new BoundStructLiteralExpression(node.Syntax, node.StructType, builder.ToImmutable());
     }
 
     /// <summary>Rewrites a block expression.</summary>
@@ -1504,7 +1505,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundBlockExpression(null, statementBuilder?.ToImmutable() ?? node.Statements, expression);
+        return new BoundBlockExpression(node.Syntax, statementBuilder?.ToImmutable() ?? node.Statements, expression);
     }
 
     /// <summary>Rewrites a class primary-constructor call.</summary>
@@ -1532,7 +1533,7 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundConstructorCallExpression(null, node.StructType, builder.ToImmutable(), node.SelectedConstructor);
+        return builder == null ? node : new BoundConstructorCallExpression(node.Syntax, node.StructType, builder.ToImmutable(), node.SelectedConstructor);
     }
 
     /// <summary>ADR-0065 §2: rewrites a constructor self-delegation expression.</summary>
@@ -1588,7 +1589,7 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundClrConstructorCallExpression(null, node.ClrType, node.Constructor, builder.ToImmutable(), node.Type);
+        return builder == null ? node : new BoundClrConstructorCallExpression(node.Syntax, node.ClrType, node.Constructor, builder.ToImmutable(), node.Type);
     }
 
     /// <summary>Rewrites a CLR static method call expression.</summary>
@@ -1616,7 +1617,7 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundClrStaticCallExpression(null, node.Method, node.Type, builder.ToImmutable(), node.ArgumentRefKinds);
+        return builder == null ? node : new BoundClrStaticCallExpression(node.Syntax, node.Method, node.Type, builder.ToImmutable(), node.ArgumentRefKinds);
     }
 
     /// <summary>Rewrites a CLR property/field access on a CLR receiver.</summary>
@@ -1700,7 +1701,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundEventSubscriptionExpression(null, receiver, node.StructType, node.Event, handler, node.IsAdd, node.EventType);
+        return new BoundEventSubscriptionExpression(node.Syntax, receiver, node.StructType, node.Event, handler, node.IsAdd, node.EventType);
     }
 
     /// <summary>Rewrites a CLR binary operator call (Stream C).</summary>
@@ -1719,8 +1720,8 @@ public abstract class BoundTreeRewriter
         // Function (nullable-lifted same-compilation struct operator) the
         // original node carried — exactly one is non-null.
         return node.Function != null
-            ? new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Function, node.FunctionOwnerType, node.Type)
-            : new BoundClrBinaryOperatorExpression(null, node.OperatorKind, left, right, node.Method, node.Type);
+            ? new BoundClrBinaryOperatorExpression(node.Syntax, node.OperatorKind, left, right, node.Function, node.FunctionOwnerType, node.Type)
+            : new BoundClrBinaryOperatorExpression(node.Syntax, node.OperatorKind, left, right, node.Method, node.Type);
     }
 
     /// <summary>Rewrites a CLR unary operator call (Stream C).</summary>
@@ -1734,7 +1735,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundClrUnaryOperatorExpression(null, node.OperatorKind, operand, node.Method, node.Type);
+        return new BoundClrUnaryOperatorExpression(node.Syntax, node.OperatorKind, operand, node.Method, node.Type);
     }
 
     /// <summary>Rewrites a CLR conversion call (Stream E).</summary>
@@ -2031,7 +2032,7 @@ public abstract class BoundTreeRewriter
                 return node;
             }
 
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, Invariant.Required(node.StructType, "an instance field assignment has a struct type"), node.Field, value, node.ResultType);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(node.Syntax, receiverExpr, Invariant.Required(node.StructType, "an instance field assignment has a struct type"), node.Field, value, node.ResultType);
         }
 
         if (value == node.Value)
@@ -2052,7 +2053,7 @@ public abstract class BoundTreeRewriter
                 node.InterfaceType,
                 value,
                 node.ResultType)
-            : new BoundFieldAssignmentExpression(null, node.Receiver, Invariant.Required(node.StructType, "a variable field assignment has a struct type"), node.Field, value, node.ResultType);
+            : new BoundFieldAssignmentExpression(node.Syntax, node.Receiver, Invariant.Required(node.StructType, "a variable field assignment has a struct type"), node.Field, value, node.ResultType);
     }
 
     /// <summary>Rewrites a property read (ADR-0051).</summary>
@@ -2115,7 +2116,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundNullConditionalAccessExpression(null, receiver, node.Capture, whenNotNull, node.Type, node.ResultSlot);
+        return new BoundNullConditionalAccessExpression(node.Syntax, receiver, node.Capture, whenNotNull, node.Type, node.ResultSlot);
     }
 
     /// <summary>Rewrites a tuple literal (Phase 4.5).</summary>
@@ -2140,7 +2141,7 @@ public abstract class BoundTreeRewriter
             builder?.Add(newEl);
         }
 
-        return builder == null ? node : new BoundTupleLiteralExpression(null, node.TupleType, builder.ToImmutable());
+        return builder == null ? node : new BoundTupleLiteralExpression(node.Syntax, node.TupleType, builder.ToImmutable());
     }
 
     /// <summary>Rewrites a tuple element access (Phase 4.5).</summary>
@@ -2149,7 +2150,7 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteTupleElementAccessExpression(BoundTupleElementAccessExpression node)
     {
         var receiver = RewriteExpression(node.Receiver);
-        return receiver == node.Receiver ? node : new BoundTupleElementAccessExpression(null, receiver, node.TupleType, node.Index);
+        return receiver == node.Receiver ? node : new BoundTupleElementAccessExpression(node.Syntax, receiver, node.TupleType, node.Index);
     }
 
     /// <summary>Rewrites a function literal (Phase 4.7). The body is intentionally not rewritten because it forms a separate lexical scope.</summary>
@@ -2242,7 +2243,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundIndirectCallExpression(null, target, node.FunctionType, builder?.ToImmutable() ?? node.Arguments, node.ArgumentRefKinds);
+        return new BoundIndirectCallExpression(node.Syntax, target, node.FunctionType, builder?.ToImmutable() ?? node.Arguments, node.ArgumentRefKinds);
     }
 
     /// <summary>

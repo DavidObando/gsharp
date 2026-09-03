@@ -386,14 +386,17 @@ public sealed class ControlFlowGraph
             var endLabel = NewLabel("tryEnd");
             var finallyBlock = tryStatement.FinallyBlock;
             var exceptionLabel = finallyBlock == null ? null : NewLabel("exceptionFinally");
-            var alternatives = new List<(BoundStatement Body, BoundLabel Label)>
+            var alternatives = new List<(BoundStatement Body, BoundLabel Label, bool Terminates)>
             {
-                (tryStatement.TryBlock, NewLabel("tryBody")),
+                (tryStatement.TryBlock, NewLabel("tryBody"), false),
             };
 
             foreach (var clause in tryStatement.CatchClauses)
             {
-                alternatives.Add((clause.Body, NewLabel("catch")));
+                // ADR-0174 D6: a scope's synthesized handler stores the body
+                // exception for a finally that always rethrows it, so the
+                // handler never completes normally.
+                alternatives.Add((clause.Body, NewLabel("catch"), clause.ExitsThroughFinally));
             }
 
             if (exceptionLabel != null)
@@ -408,14 +411,16 @@ public sealed class ControlFlowGraph
 
             builder.Add(new BoundGotoStatement(null, alternatives[0].Label));
 
-            foreach (var (body, label) in alternatives)
+            foreach (var (body, label, terminates) in alternatives)
             {
                 builder.Add(new BoundLabelStatement(null, label));
 
                 if (finallyBlock == null)
                 {
                     Add(body, outerRoute);
-                    builder.Add(new BoundGotoStatement(null, endLabel));
+                    builder.Add(terminates
+                        ? new BoundThrowStatement(null, NewChoice())
+                        : new BoundGotoStatement(null, endLabel));
                     continue;
                 }
 
@@ -439,7 +444,11 @@ public sealed class ControlFlowGraph
 
                 Add(body, RouteThroughFinally);
                 Add(CloneWithFreshLabels(finallyBlock), outerRoute);
-                Add(new BoundGotoStatement(null, endLabel), outerRoute);
+                Add(
+                    terminates
+                        ? new BoundThrowStatement(null, NewChoice())
+                        : new BoundGotoStatement(null, endLabel),
+                    outerRoute);
             }
 
             if (exceptionLabel != null && finallyBlock is not null)

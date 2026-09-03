@@ -350,12 +350,17 @@ internal sealed class ClosureEmitter
             // discards the spawned Task — breaking structured scope-join and
             // producing invalid IL when the async target captures arguments.
             // Compare by metadata name across the base-type chain instead.
-            var isAsync = IsTaskClrType(go.Expression.Type?.ClrType);
-            var returnType = isAsync ? TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)) : TypeSymbol.Void;
-            BoundStatement bodyStatement = isAsync
-                ? new BoundReturnStatement(null, go.Expression)
-                : new BoundExpressionStatement(null, go.Expression);
-            var body = new BoundBlockStatement(null, ImmutableArray.Create(bodyStatement));
+            // ADR-0174 D5: the goroutine body yields a plain ValueTask that the
+            // runtime's work item consumes exactly once. The binder shaped the
+            // operand (Discard<T> / Wrap) so it is either ValueTask-typed or void.
+            var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+            var returnType = valueTaskType;
+            var yieldsValueTask = go.Expression.Type?.ClrType?.FullName == "System.Threading.Tasks.ValueTask";
+            var body = yieldsValueTask
+                ? new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(null, go.Expression)))
+                : new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(
+                    new BoundExpressionStatement(null, go.Expression),
+                    new BoundReturnStatement(null, new BoundDefaultExpression(null, valueTaskType))));
 
             var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
             var info = this.SynthesizeDisplayClass(

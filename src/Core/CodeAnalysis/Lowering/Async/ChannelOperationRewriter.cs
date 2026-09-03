@@ -99,6 +99,19 @@ internal sealed class ChannelOperationRewriter : BoundTreeRewriter
     }
 
     /// <inheritdoc/>
+    protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+    {
+        var rewritten = base.RewriteImportedInstanceCallExpression(node);
+        if (lockDepth == 0 && rewritten is BoundImportedInstanceCallExpression call && ChannelRuntimeBinder.IsScopeExit(call))
+        {
+            // ADR-0174 D6: a scope's join suspends the state machine.
+            return runtime.BindScopeExitAwait(call);
+        }
+
+        return rewritten;
+    }
+
+    /// <inheritdoc/>
     protected override BoundExpression RewriteImportedCallExpression(BoundImportedCallExpression node)
     {
         var rewritten = (BoundImportedCallExpression)base.RewriteImportedCallExpression(node);

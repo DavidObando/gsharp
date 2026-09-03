@@ -155,5 +155,25 @@ if [[ "$APPLY_COUNT" -lt 3 ]]; then
     exit 1
 fi
 
+# ADR-0174 P3-9: an edit that makes a plain func suspend (a channel receive
+# appears in its body) changes the method's compiled shape, so the agent must
+# reject it explicitly as GSHR1002 rather than apply a broken delta or restart
+# on its own. The edit compiles (an unbounded channel receive) but is never
+# run: the rejected candidate leaves the old body in place.
+echo "==> Applying a suspension-flipping edit (expects GSHR1002, no restart)"
+replace_once "$SAMPLE/App/App.gs" "return 11" "return <-Chan.Unbounded[int32]()"
+wait_for "GSHR1002" "suspension-flip restart diagnostic"
+if ! grep -q "GSHR1002: method 'HotReloadApp.<Program>.LocalValue' changed suspension" "$LOG"; then
+    echo "FAIL: GSHR1002 did not name the function whose suspension changed"
+    grep "GSHR1002" "$LOG" || true
+    exit 1
+fi
+PID_COUNT_AFTER=$(grep -o 'pid=[0-9][0-9]*' "$LOG" | sort -u | wc -l | tr -d ' ')
+if [[ "$PID_COUNT_AFTER" != "1" ]]; then
+    echo "FAIL: the rejected suspension edit restarted the process (unique PIDs: $PID_COUNT_AFTER)"
+    cat "$LOG"
+    exit 1
+fi
+
 tail -200 "$LOG"
-echo "PASS: dotnet watch launched one modifiable process while G# applied local, transitive-project, and generated gsgen deltas without restart."
+echo "PASS: dotnet watch launched one modifiable process while G# applied local, transitive-project, and generated gsgen deltas without restart, and rejected a suspension-flipping edit as GSHR1002."
