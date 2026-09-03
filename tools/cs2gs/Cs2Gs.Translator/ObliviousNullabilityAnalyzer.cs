@@ -4154,6 +4154,25 @@ internal static class ObliviousNullabilityAnalyzer
 
         switch (condition)
         {
+            // Issue #3855 (the third seam behind PragmaSuppressions.cs): the
+            // guard is very often CONJOINED with the test it protects —
+            // `if (text != null && text.StartsWith("GSA")) { yield return
+            // text; }`. `A && B` being true implies BOTH conjuncts are true, so
+            // a null test in EITHER position proves the same thing the bare test
+            // does, and the whole conjunction can be walked.
+            //
+            // Restricted to the `whenTrueIsNull: false` direction on purpose.
+            // Every caller passing `false` asks about a POSITIVE position (an
+            // if-then, a `while`/`for` body, a ternary's true arm) where the
+            // condition really did evaluate true. The `true` direction is only
+            // ever asked from a NEGATED position — an `else` clause, or the code
+            // after an `if (...) return;` — where the fact available is
+            // `!(A && B)`, which proves nothing about either conjunct on its own.
+            case BinaryExpressionSyntax conjunction
+                when !whenTrueIsNull && conjunction.IsKind(SyntaxKind.LogicalAndExpression):
+                return IsNullTestOf(conjunction.Left, symbol, whenTrueIsNull)
+                    || IsNullTestOf(conjunction.Right, symbol, whenTrueIsNull);
+
             case BinaryExpressionSyntax binary
                 when binary.IsKind(whenTrueIsNull ? SyntaxKind.EqualsExpression : SyntaxKind.NotEqualsExpression):
                 return (IsSymbolIdentifier(binary.Left, symbol) && IsNullLiteral(binary.Right))
