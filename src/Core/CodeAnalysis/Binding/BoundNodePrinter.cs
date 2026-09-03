@@ -90,12 +90,6 @@ public static class BoundNodePrinter
             case BoundNodeKind.GoStatement:
                 WriteGoStatement((BoundGoStatement)node, writer);
                 break;
-            case BoundNodeKind.SelectStatement:
-                WriteSelectStatement((BoundSelectStatement)node, writer);
-                break;
-            case BoundNodeKind.ScopeStatement:
-                WriteScopeStatement((BoundScopeStatement)node, writer);
-                break;
             case BoundNodeKind.FixedStatement:
                 WriteFixedStatement((BoundFixedStatement)node, writer);
                 break;
@@ -910,63 +904,6 @@ public static class BoundNodePrinter
         writer.WritePunctuation(SyntaxKind.RightArrowToken);
         writer.WriteSpace();
         arm.Result.WriteTo(writer);
-    }
-
-    private static void WriteSelectStatement(BoundSelectStatement node, IndentedTextWriter writer)
-    {
-        writer.WriteKeyword(SyntaxKind.SelectKeyword);
-        writer.WriteSpace();
-        writer.WritePunctuation(SyntaxKind.OpenBraceToken);
-        writer.WriteLine();
-        writer.Indent++;
-        foreach (var arm in node.Cases)
-        {
-            switch (arm.CaseKind)
-            {
-                case SelectCaseKind.Default:
-                    writer.WriteKeyword(SyntaxKind.DefaultKeyword);
-                    break;
-                case SelectCaseKind.ReceiveDiscard:
-                    writer.WriteKeyword(SyntaxKind.CaseKeyword);
-                    writer.WriteSpace();
-                    writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-                    arm.Channel?.WriteTo(writer);
-                    break;
-                case SelectCaseKind.ReceiveBind:
-                    writer.WriteKeyword(SyntaxKind.CaseKeyword);
-                    writer.WriteSpace();
-                    writer.WriteIdentifier(arm.Variable?.Name ?? string.Empty);
-                    writer.WriteSpace();
-                    writer.WritePunctuation(SyntaxKind.ColonEqualsToken);
-                    writer.WriteSpace();
-                    writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-                    arm.Channel?.WriteTo(writer);
-                    break;
-                case SelectCaseKind.Send:
-                    writer.WriteKeyword(SyntaxKind.CaseKeyword);
-                    writer.WriteSpace();
-                    arm.Channel?.WriteTo(writer);
-                    writer.WriteSpace();
-                    writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-                    writer.WriteSpace();
-                    arm.Value?.WriteTo(writer);
-                    break;
-            }
-
-            writer.WriteSpace();
-            arm.Body.WriteTo(writer);
-        }
-
-        writer.Indent--;
-        writer.WritePunctuation(SyntaxKind.CloseBraceToken);
-        writer.WriteLine();
-    }
-
-    private static void WriteScopeStatement(BoundScopeStatement node, IndentedTextWriter writer)
-    {
-        writer.WriteKeyword(SyntaxKind.ScopeKeyword);
-        writer.WriteSpace();
-        node.Body.WriteTo(writer);
     }
 
     private static void WriteFixedStatement(BoundFixedStatement node, IndentedTextWriter writer)

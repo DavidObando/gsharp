@@ -247,16 +247,8 @@ public sealed class ControlFlowGraph
                     // skip that release epilogue (#2900).
                     Add(fixedStatement.Body, routeTransfer);
                     break;
-                case BoundScopeStatement scopeStatement:
-                    // Scope also executes its body once in normal control flow.
-                    // Its task join and failure rethrow remain emit-time behavior.
-                    Add(scopeStatement.Body, routeTransfer);
-                    break;
                 case BoundPatternSwitchStatement switchStatement:
                     AddPatternSwitch(switchStatement, routeTransfer);
-                    break;
-                case BoundSelectStatement selectStatement:
-                    AddSelect(selectStatement, routeTransfer);
                     break;
                 case BoundTryStatement tryStatement:
                     AddTry(tryStatement, routeTransfer);
@@ -335,47 +327,6 @@ public sealed class ControlFlowGraph
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
                 Add(defaultArm.Body, routeTransfer);
-            }
-
-            builder.Add(new BoundLabelStatement(null, endLabel));
-        }
-
-        void AddSelect(BoundSelectStatement selectStatement, Action<BoundStatement>? routeTransfer)
-        {
-            var dispatchLabel = NewLabel("selectDispatch");
-            var endLabel = NewLabel("selectEnd");
-            var cases = new List<(BoundSelectCase Case, BoundLabel Label)>();
-            BoundSelectCase? defaultCase = null;
-            BoundLabel? defaultLabel = null;
-
-            builder.Add(new BoundLabelStatement(null, dispatchLabel));
-            foreach (var @case in selectStatement.Cases)
-            {
-                if (@case.IsDefault)
-                {
-                    defaultCase = @case;
-                    defaultLabel = NewLabel("selectDefault");
-                    continue;
-                }
-
-                var caseLabel = NewLabel("selectCase");
-                cases.Add((@case, caseLabel));
-                builder.Add(new BoundConditionalGotoStatement(null, caseLabel, NewChoice()));
-            }
-
-            builder.Add(new BoundGotoStatement(null, defaultCase is null || defaultLabel is null ? dispatchLabel : defaultLabel));
-
-            foreach (var (@case, caseLabel) in cases)
-            {
-                builder.Add(new BoundLabelStatement(null, caseLabel));
-                Add(@case.Body, routeTransfer);
-                builder.Add(new BoundGotoStatement(null, endLabel));
-            }
-
-            if (defaultCase is not null && defaultLabel is not null)
-            {
-                builder.Add(new BoundLabelStatement(null, defaultLabel));
-                Add(defaultCase.Body, routeTransfer);
             }
 
             builder.Add(new BoundLabelStatement(null, endLabel));
@@ -497,20 +448,10 @@ public sealed class ControlFlowGraph
                     case BoundFixedStatement fixedStatement:
                         Collect(fixedStatement.Body);
                         break;
-                    case BoundScopeStatement scopeStatement:
-                        Collect(scopeStatement.Body);
-                        break;
                     case BoundPatternSwitchStatement switchStatement:
                         foreach (var arm in switchStatement.Arms)
                         {
                             Collect(arm.Body);
-                        }
-
-                        break;
-                    case BoundSelectStatement selectStatement:
-                        foreach (var @case in selectStatement.Cases)
-                        {
-                            Collect(@case.Body);
                         }
 
                         break;
@@ -721,8 +662,6 @@ public sealed class ControlFlowGraph
                         break;
                     case BoundNodeKind.TryStatement:
                     case BoundNodeKind.GoStatement:
-                    case BoundNodeKind.SelectStatement:
-                    case BoundNodeKind.ScopeStatement:
                     case BoundNodeKind.AwaitForRangeStatement:
                     case BoundNodeKind.YieldStatement:
                         // Treat exception-flow constructs as opaque statements; precise
@@ -839,8 +778,6 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.ExpressionStatement:
                         case BoundNodeKind.TryStatement:
                         case BoundNodeKind.GoStatement:
-                        case BoundNodeKind.SelectStatement:
-                        case BoundNodeKind.ScopeStatement:
                         case BoundNodeKind.AwaitForRangeStatement:
                         case BoundNodeKind.YieldStatement:
                             // Issue #798: `yield` (ADR-0040) participates in the

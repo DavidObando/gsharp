@@ -27,7 +27,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <para>
 /// The fix adds a <c>BoundPatternSwitchStatement</c> case to
 /// <c>CollectStatements</c> in BOTH passes (mirroring the existing
-/// <c>BoundSelectStatement</c>/<c>BoundTryStatement</c> handling) so every arm
+/// <c>BoundTryStatement</c> handling) so every arm
 /// body is recursed and every nested label/local-generating construct — at any
 /// depth — is planned. Because the recursion re-uses <c>CollectStatements</c>,
 /// it generalizes to nested switches, arms inside arms, <c>try</c>/<c>finally</c>,

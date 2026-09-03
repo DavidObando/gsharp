@@ -499,20 +499,6 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetCtorReference(funcValueTaskCtor));
     }
 
-    private void EmitScopeStatement(BoundScopeStatement node)
-    {
-        // ADR-0174 D5/D6: `scope` is lowered by the binder into a ScopeFrame
-        // try/catch/finally; a BoundScopeStatement no longer reaches the emitter.
-        throw new InvalidOperationException("scope statements are lowered in the binder (ADR-0174 D6); none should reach the emitter.");
-    }
-
-    private void EmitSelectStatement(BoundSelectStatement node)
-    {
-        // ADR-0174 D8: `select` is lowered by the binder onto SelectWaiter; a
-        // BoundSelectStatement no longer reaches the emitter.
-        throw new InvalidOperationException("select statements are lowered in the binder (ADR-0174 D8); none should reach the emitter.");
-    }
-
     private void EmitChannelReaderView(ChannelTypeSymbol chType, MethodInfo getReader)
     {
         if (chType.Direction == ChannelDirection.Both)

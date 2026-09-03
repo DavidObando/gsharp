@@ -11,18 +11,19 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #1615 — <c>scope { }</c> bodies are emitted as a try/finally region
-/// (the finally awaits/disposes spawned tasks) but the body itself was
-/// emitted with plain <c>EmitStatement</c> instead of <c>EmitProtectedRegion</c>,
-/// and the lowerer never counted <c>BoundScopeStatement</c> toward
-/// <c>tryNestingDepth</c>. A <c>return</c>/<c>break</c>/<c>goto</c> out of a
-/// scope therefore emitted a bare <c>ret</c>/<c>br</c> from inside a
-/// protected region — invalid per ECMA-335 (ReturnFromTry / BranchOutOfTry)
-/// and an <see cref="InvalidProgramException"/> at JIT time. The fix emits
-/// the scope body via <c>EmitProtectedRegion</c> (region-crossing gotos
-/// become <c>leave</c>) and makes the lowerer rewrite <c>return</c> inside a
-/// scope into a store-to-temp + goto-exit, exactly like <c>return</c> inside
-/// a real <c>try</c>.
+/// Issue #1615 — a <c>return</c>, <c>break</c> or <c>goto</c> out of a
+/// <c>scope { }</c> body emitted a bare <c>ret</c>/<c>br</c> from inside a
+/// protected region: invalid per ECMA-335 (ReturnFromTry / BranchOutOfTry) and
+/// an <see cref="InvalidProgramException"/> at JIT time. The scope had its own
+/// bespoke emitter, which used plain <c>EmitStatement</c> for the body and was
+/// invisible to the lowerer's try-nesting count.
+///
+/// ADR-0174 D6 removed that shape entirely: the binder now lowers
+/// <c>scope</c> into an ordinary try/catch/finally over a
+/// <c>Gsharp.Concurrency.ScopeFrame</c>, so region-crossing exits get the same
+/// <c>leave</c> and store-to-temp treatment as a hand-written <c>try</c>, by
+/// construction rather than by a parallel code path. These tests stay as the
+/// regression that says so.
 /// </summary>
 public class Issue1615ScopeProtectedRegionEmitTests
 {

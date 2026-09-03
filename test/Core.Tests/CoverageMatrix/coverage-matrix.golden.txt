@@ -359,8 +359,6 @@ PropertyPattern
 PropertyPatternField
 RelationalPattern
 ReturnStatement
-ScopeStatement
-SelectStatement
 SizeOfExpression
 SlicePattern
 SpillSequenceExpression

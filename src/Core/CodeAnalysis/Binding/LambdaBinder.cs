@@ -2767,19 +2767,6 @@ internal sealed class LambdaBinder
             return base.RewriteTryStatement(node);
         }
 
-        protected override BoundStatement RewriteSelectStatement(BoundSelectStatement node)
-        {
-            foreach (var arm in node.Cases)
-            {
-                if (arm.Variable != null)
-                {
-                    this.declared.Add(arm.Variable);
-                }
-            }
-
-            return base.RewriteSelectStatement(node);
-        }
-
         protected override BoundStatement RewriteForRangeStatement(BoundForRangeStatement node)
         {
             if (node.KeyVariable != null)

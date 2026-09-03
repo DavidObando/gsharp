@@ -224,19 +224,6 @@ internal sealed class MethodBodyPlanner
                 }
 
                 break;
-            case BoundScopeStatement sc:
-                WalkStmtsForConsts(sc.Body, result);
-                break;
-            case BoundSelectStatement sel:
-                foreach (var arm in sel.Cases)
-                {
-                    if (arm.Body != null)
-                    {
-                        WalkStmtsForConsts(arm.Body, result);
-                    }
-                }
-
-                break;
         }
     }
 
@@ -377,7 +364,6 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots,
@@ -405,8 +391,7 @@ internal sealed class MethodBodyPlanner
             patternSwitchSlots,
             typePatternScratchSlots,
             switchExpressionSlots,
-            channelOpSlots,
-            selectStatementSlots);
+            channelOpSlots);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
@@ -769,8 +754,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         foreach (var s in statements)
         {
@@ -781,8 +765,7 @@ internal sealed class MethodBodyPlanner
                 patternSwitchSlots,
                 typePatternScratchSlots,
                 switchExpressionSlots,
-                channelOpSlots,
-                selectStatementSlots);
+                channelOpSlots);
         }
     }
 
@@ -793,8 +776,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         // Issue #418 (P1-3): the legacy bespoke switch missed many expression
         // kinds (tuple/map literals, ?., CLR calls/indexers/properties,
@@ -809,8 +791,7 @@ internal sealed class MethodBodyPlanner
             patternSwitchSlots,
             typePatternScratchSlots,
             switchExpressionSlots,
-            channelOpSlots,
-            selectStatementSlots);
+            channelOpSlots);
     }
 
     private void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
@@ -1098,33 +1079,10 @@ internal sealed class MethodBodyPlanner
                         }
 
                         break;
-                    case BoundScopeStatement sc:
-                        if (sc.Body is BoundBlockStatement scBlock)
-                        {
-                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, il, pass);
-                        }
-
-                        break;
                     case BoundFixedStatement fx:
                         if (fx.Body is BoundBlockStatement fxBlock)
                         {
                             this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, il, pass);
-                        }
-
-                        break;
-                    case BoundSelectStatement sel:
-                        foreach (var arm in sel.Cases)
-                        {
-                            if (arm.Variable != null && !locals.ContainsKey(arm.Variable))
-                            {
-                                locals[arm.Variable] = localTypes.Count;
-                                localTypes.Add(arm.Variable.Type);
-                            }
-
-                            if (arm.Body is BoundBlockStatement armBlock)
-                            {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, il, pass);
-                            }
                         }
 
                         break;
@@ -1193,27 +1151,10 @@ internal sealed class MethodBodyPlanner
                         }
 
                         break;
-                    case BoundScopeStatement sc:
-                        if (sc.Body is BoundBlockStatement scBlock)
-                        {
-                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, il, pass);
-                        }
-
-                        break;
                     case BoundFixedStatement fx:
                         if (fx.Body is BoundBlockStatement fxBlock)
                         {
                             this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, il, pass);
-                        }
-
-                        break;
-                    case BoundSelectStatement sel:
-                        foreach (var arm in sel.Cases)
-                        {
-                            if (arm.Body is BoundBlockStatement armBlock)
-                            {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, il, pass);
-                            }
                         }
 
                         break;

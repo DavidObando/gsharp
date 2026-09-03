@@ -60,7 +60,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
     private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
     private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
-    private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
     private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots;
     private readonly HashSet<BoundStackAllocExpression> materializedStackAllocs = new HashSet<BoundStackAllocExpression>();
@@ -159,7 +158,6 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundExpression, LiftedBinarySlots>? liftedBinarySlots = null,
@@ -186,7 +184,6 @@ internal sealed partial class MethodBodyEmitter
         this.typePatternScratchSlots = typePatternScratchSlots;
         this.switchExpressionSlots = switchExpressionSlots;
         this.channelOpSlots = channelOpSlots;
-        this.selectStatementSlots = selectStatementSlots;
         this.receiverSpillSlots = receiverSpillSlots;
         this.indexAssignmentValueSlots = indexAssignmentValueSlots;
         this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundExpression, LiftedBinarySlots>();
@@ -451,14 +448,8 @@ internal sealed partial class MethodBodyEmitter
             case BoundGoStatement go:
                 this.EmitGoStatement(go);
                 break;
-            case BoundScopeStatement scope:
-                this.EmitScopeStatement(scope);
-                break;
             case BoundFixedStatement fixedStmt:
                 this.EmitFixedStatement(fixedStmt);
-                break;
-            case BoundSelectStatement select:
-                this.EmitSelectStatement(select);
                 break;
             case BoundYieldStatement:
                 EmitDiagnosticException.Throw(statement.Syntax, "Internal error: yield reached the emitter before iterator lowering.");
@@ -1239,9 +1230,6 @@ internal sealed partial class MethodBodyEmitter
                     this.CollectLabels(t.FinallyBlock, sink);
                 }
 
-                return;
-            case BoundScopeStatement sc:
-                this.CollectLabels(sc.Body, sink);
                 return;
             case BoundFixedStatement fx:
                 this.CollectLabels(fx.Body, sink);

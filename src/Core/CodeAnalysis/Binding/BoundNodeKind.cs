@@ -138,8 +138,6 @@ public enum BoundNodeKind
     BinaryPattern,
     NotPattern,
     GoStatement,
-    SelectStatement,
-    ScopeStatement,
     FixedStatement,
     AwaitForRangeStatement,
     YieldStatement,

@@ -112,12 +112,6 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.GoStatement:
                 VisitGoStatement((BoundGoStatement)node);
                 break;
-            case BoundNodeKind.SelectStatement:
-                VisitSelectStatement((BoundSelectStatement)node);
-                break;
-            case BoundNodeKind.ScopeStatement:
-                VisitScopeStatement((BoundScopeStatement)node);
-                break;
             case BoundNodeKind.FixedStatement:
                 VisitFixedStatement((BoundFixedStatement)node);
                 break;
@@ -493,29 +487,6 @@ public abstract class BoundTreeWalker
         {
             VisitExpression(node.Sink);
         }
-    }
-
-    protected virtual void VisitSelectStatement(BoundSelectStatement node)
-    {
-        foreach (var arm in node.Cases)
-        {
-            if (arm.Channel != null)
-            {
-                VisitExpression(arm.Channel);
-            }
-
-            if (arm.Value != null)
-            {
-                VisitExpression(arm.Value);
-            }
-
-            VisitStatement(arm.Body);
-        }
-    }
-
-    protected virtual void VisitScopeStatement(BoundScopeStatement node)
-    {
-        VisitStatement(node.Body);
     }
 
     protected virtual void VisitFixedStatement(BoundFixedStatement node)

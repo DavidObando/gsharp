@@ -4410,7 +4410,6 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots = new();
         private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots = new();
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots = new();
-        private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots = new();
         private readonly Dictionary<BoundExpression, int> receiverSpillSlots = new();
         private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = new();
         private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots = new();
@@ -4472,7 +4471,6 @@ internal sealed class ReflectionMetadataEmitter
                 this.typePatternScratchSlots,
                 this.switchExpressionSlots,
                 this.channelOpSlots,
-                this.selectStatementSlots,
                 this.receiverSpillSlots,
                 this.indexAssignmentValueSlots,
                 this.liftedBinarySlots,
@@ -4505,14 +4503,6 @@ internal sealed class ReflectionMetadataEmitter
                         return found;
                     case BoundFixedStatement fixedStatement:
                         return Find(fixedStatement.Body, true);
-                    case BoundSelectStatement selectStatement:
-                        var selectFound = false;
-                        foreach (var arm in selectStatement.Cases)
-                        {
-                            selectFound |= Find(arm.Body, insideFixed);
-                        }
-
-                        return selectFound;
                     case BoundPatternSwitchStatement switchStatement:
                         var switchFound = false;
                         foreach (var arm in switchStatement.Arms)
@@ -4576,7 +4566,6 @@ internal sealed class ReflectionMetadataEmitter
                 this.typePatternScratchSlots,
                 this.switchExpressionSlots,
                 this.channelOpSlots,
-                this.selectStatementSlots,
                 this.receiverSpillSlots,
                 this.indexAssignmentValueSlots,
                 liftedBinarySlots: this.liftedBinarySlots,

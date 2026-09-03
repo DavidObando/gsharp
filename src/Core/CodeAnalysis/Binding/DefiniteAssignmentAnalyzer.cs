@@ -578,21 +578,6 @@ internal static class DefiniteAssignmentAnalyzer
             case BoundTryStatement tryStmt:
                 ProcessTryStatement(tryStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
-            case BoundSelectStatement selectStmt:
-                ProcessSelectStatement(selectStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
-                break;
-            case BoundScopeStatement scopeStmt:
-            {
-                var exit = AnalyzeRegion(scopeStmt.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
-                if (exit != null)
-                {
-                    assigned.Clear();
-                    assigned.UnionWith(exit);
-                }
-
-                break;
-            }
-
             case BoundFixedStatement fixedStmt:
                 ProcessFixedStatement(fixedStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
@@ -705,61 +690,6 @@ internal static class DefiniteAssignmentAnalyzer
                 assigned.Clear();
                 assigned.UnionWith(finallyExit);
             }
-        }
-    }
-
-    /// <summary>
-    /// <c>select</c> always blocks until exactly one arm becomes ready and
-    /// runs its body (there is no "no arm matched" fallthrough, unlike a
-    /// pattern switch), so whatever is assigned on every arm that completes
-    /// normally is guaranteed to be assigned afterward.
-    /// </summary>
-    private static void ProcessSelectStatement(
-        BoundSelectStatement selectStmt,
-        HashSet<VariableSymbol> assigned,
-        ImmutableArray<ParameterSymbol> outParams,
-        FunctionSymbol function,
-        DiagnosticBag? diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
-        HashSet<VariableSymbol> tracked,
-        BoundLabel? methodExitLabel)
-    {
-        var flowContext = new ExpressionFlowContext(outParams, function, methodExitLabel);
-        HashSet<VariableSymbol>? meet = null;
-        var any = false;
-
-        foreach (var c in selectStmt.Cases)
-        {
-            if (c.Channel != null)
-            {
-                ProcessExpression(c.Channel, assigned, diagnostics, pointerAliases, tracked, flowContext);
-            }
-
-            if (c.Value != null)
-            {
-                ProcessExpression(c.Value, assigned, diagnostics, pointerAliases, tracked, flowContext);
-            }
-
-            var caseEntry = new HashSet<VariableSymbol>(assigned);
-            if (c.Variable != null)
-            {
-                caseEntry.Add(c.Variable);
-            }
-
-            var caseExit = AnalyzeRegion(c.Body, caseEntry, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
-            if (caseExit == null)
-            {
-                continue;
-            }
-
-            any = true;
-            meet = meet == null ? caseExit : Intersect(meet, caseExit);
-        }
-
-        if (any && meet is not null)
-        {
-            assigned.Clear();
-            assigned.UnionWith(meet);
         }
     }
 

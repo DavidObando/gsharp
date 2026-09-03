@@ -281,14 +281,8 @@ public static class SpillSequenceSpiller
                 case BoundGoStatement goStatement:
                     return RewriteGoStatement(goStatement, builder);
 
-                case BoundSelectStatement selectStatement:
-                    return RewriteSelectStatement(selectStatement, builder);
-
                 case BoundPatternSwitchStatement patternSwitchStatement:
                     return RewritePatternSwitchStatement(patternSwitchStatement, builder);
-
-                case BoundScopeStatement scopeStatement:
-                    return RewriteScopeStatement(scopeStatement, builder);
 
                 case BoundIfStatement ifStmt:
                     return RewriteIfStatement(ifStmt, builder);
@@ -328,24 +322,6 @@ public static class SpillSequenceSpiller
                         $"SpillSequenceSpiller: unhandled BoundStatement kind '{statement.Kind}'.");
                     return false; // unreachable
             }
-        }
-
-        private bool RewriteScopeStatement(
-            BoundScopeStatement scopeStatement,
-            ImmutableArray<BoundStatement>.Builder builder)
-        {
-            var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
-            if (!RewriteStatementToList(scopeStatement.Body, bodyBuilder))
-            {
-                builder.Add(scopeStatement);
-                return false;
-            }
-
-            var body = bodyBuilder.Count == 1
-                ? bodyBuilder[0]
-                : new BoundBlockStatement(null, bodyBuilder.ToImmutable());
-            builder.Add(new BoundScopeStatement(scopeStatement.Syntax, body));
-            return true;
         }
 
         private bool RewriteVariableDeclaration(BoundVariableDeclaration decl, ImmutableArray<BoundStatement>.Builder builder)
@@ -517,56 +493,6 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(guard);
             return new BoundBlockExpression(null, spilled.SideEffects, spilled.Value);
-        }
-
-        private bool RewriteSelectStatement(
-            BoundSelectStatement selectStatement,
-            ImmutableArray<BoundStatement>.Builder builder)
-        {
-            var spillHeader = selectStatement.Cases.Any(selectCase =>
-                (selectCase.Channel != null && HasAwait(selectCase.Channel))
-                || (selectCase.Value != null && HasAwait(selectCase.Value)));
-            var changed = spillHeader;
-            var cases = ImmutableArray.CreateBuilder<BoundSelectCase>(selectStatement.Cases.Length);
-
-            foreach (var selectCase in selectStatement.Cases)
-            {
-                var channel = selectCase.Channel;
-                if (spillHeader && channel != null)
-                {
-                    channel = SpillAndCaptureSelectOperand(channel, builder);
-                }
-
-                var value = selectCase.Value;
-                if (spillHeader && value != null)
-                {
-                    value = SpillAndCaptureSelectOperand(value, builder);
-                }
-
-                var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
-                var bodyChanged = RewriteStatementToList(selectCase.Body, bodyBuilder);
-                var body = bodyChanged
-                    ? bodyBuilder.Count == 1
-                        ? bodyBuilder[0]
-                        : new BoundBlockStatement(null, bodyBuilder.ToImmutable())
-                    : selectCase.Body;
-                changed |= bodyChanged;
-                cases.Add(new BoundSelectCase(
-                    selectCase.CaseKind,
-                    channel,
-                    value,
-                    selectCase.Variable,
-                    body));
-            }
-
-            if (!changed)
-            {
-                builder.Add(selectStatement);
-                return false;
-            }
-
-            builder.Add(new BoundSelectStatement(selectStatement.Syntax, cases.MoveToImmutable()));
-            return true;
         }
 
         private BoundExpression SpillAndCaptureSelectOperand(

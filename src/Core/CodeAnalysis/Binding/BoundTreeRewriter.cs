@@ -54,10 +54,6 @@ public abstract class BoundTreeRewriter
                 return RewritePatternSwitchStatement((BoundPatternSwitchStatement)node);
             case BoundNodeKind.GoStatement:
                 return RewriteGoStatement((BoundGoStatement)node);
-            case BoundNodeKind.SelectStatement:
-                return RewriteSelectStatement((BoundSelectStatement)node);
-            case BoundNodeKind.ScopeStatement:
-                return RewriteScopeStatement((BoundScopeStatement)node);
             case BoundNodeKind.FixedStatement:
                 return RewriteFixedStatement((BoundFixedStatement)node);
             case BoundNodeKind.AwaitForRangeStatement:
@@ -911,52 +907,6 @@ public abstract class BoundTreeRewriter
         // the closure synthesized for it by that syntax when a state-machine
         // rewrite has rebuilt the node (ADR-0174 D4 makes that the common case).
         return new BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType);
-    }
-
-    /// <summary>Rewrites a bound select statement (Phase 5.6).</summary>
-    /// <param name="node">The select statement to rewrite.</param>
-    /// <returns>The rewritten select statement.</returns>
-    protected virtual BoundStatement RewriteSelectStatement(BoundSelectStatement node)
-    {
-        ImmutableArray<BoundSelectCase>.Builder? builder = null;
-        for (var i = 0; i < node.Cases.Length; i++)
-        {
-            var arm = node.Cases[i];
-            var channel = arm.Channel == null ? null : RewriteExpression(arm.Channel);
-            var value = arm.Value == null ? null : RewriteExpression(arm.Value);
-            var body = RewriteStatement(arm.Body);
-            if (builder == null && (channel != arm.Channel || value != arm.Value || body != arm.Body))
-            {
-                builder = ImmutableArray.CreateBuilder<BoundSelectCase>(node.Cases.Length);
-                for (var j = 0; j < i; j++)
-                {
-                    builder.Add(node.Cases[j]);
-                }
-            }
-
-            builder?.Add(new BoundSelectCase(arm.CaseKind, channel, value, arm.Variable, body));
-        }
-
-        if (builder == null)
-        {
-            return node;
-        }
-
-        return new BoundSelectStatement(node.Syntax, builder.MoveToImmutable());
-    }
-
-    /// <summary>Rewrites a bound scope statement (Phase 5.7).</summary>
-    /// <param name="node">The scope statement to rewrite.</param>
-    /// <returns>The rewritten scope statement.</returns>
-    protected virtual BoundStatement RewriteScopeStatement(BoundScopeStatement node)
-    {
-        var body = RewriteStatement(node.Body);
-        if (body == node.Body)
-        {
-            return node;
-        }
-
-        return new BoundScopeStatement(node.Syntax, body);
     }
 
     /// <summary>
