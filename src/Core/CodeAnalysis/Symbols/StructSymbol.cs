@@ -1888,7 +1888,11 @@ public sealed class StructSymbol : TypeSymbol
         var substitutedFields = ImmutableArray.CreateBuilder<FieldSymbol>(definition.Fields.Length);
         foreach (var f in definition.Fields)
         {
-            substitutedFields.Add(new FieldSymbol(f.Name, SubstituteTypeForConstruction(f.Type, subst, mapClrType), f.Accessibility));
+            substitutedFields.Add(new FieldSymbol(
+                f.Name,
+                SubstituteTypeForConstruction(f.Type, subst, mapClrType),
+                f.Accessibility,
+                declaration: f.Declaration));
         }
 
         var substitutedPrimary = ImmutableArray<ParameterSymbol>.Empty;
@@ -2301,7 +2305,8 @@ public sealed class StructSymbol : TypeSymbol
                     f.IsReadOnly,
                     f.IsStatic,
                     f.IsConst,
-                    f.IsEventBackingField);
+                    f.IsEventBackingField,
+                    f.Declaration);
                 if (f.IsConst)
                 {
                     substituted.SetConstantValue(f.ConstantValue);

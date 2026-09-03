@@ -238,6 +238,37 @@ func Leak() int32 {
     }
 
     /// <summary>
+    /// Issue #3796: a source-declared field exposes its identifier location so
+    /// a migrated symbol-action analyzer can report against the field marker.
+    /// </summary>
+    [Fact]
+    public void FieldSymbolAction_ReportsAtDeclaringIdentifier()
+    {
+        GSharpAnalyzerVerifier<FieldLocationAnalyzer>.VerifyAnalyzer(
+            @"package App
+
+class Cache {
+    shared {
+        var [|entries|] int32
+    }
+}
+",
+            "TESTGSA0003");
+    }
+
+    [Fact]
+    public void PrimaryConstructorFieldSymbolAction_ReportsAtDeclaringIdentifier()
+    {
+        GSharpAnalyzerVerifier<FieldLocationAnalyzer>.VerifyAnalyzer(
+            @"package App
+
+class Cache([|entries|] int32) {
+}
+",
+            "TESTGSA0003");
+    }
+
+    /// <summary>
     /// The G# analogue of GSA0001: direct index reads of a member named
     /// <c>structFieldDefs</c> outside <c>ResolveFieldToken</c> /
     /// <c>ResolveInterfaceFieldToken</c> are flagged. Uses
@@ -318,6 +349,29 @@ func Leak() int32 {
         private static void Report(SyntaxNodeAnalysisContext context)
         {
             context.ReportDiagnostic(Diagnostic.Create(Rule, default(GSharp.Core.CodeAnalysis.Text.TextLocation)));
+        }
+    }
+
+    [GSharpDiagnosticAnalyzer]
+    public sealed class FieldLocationAnalyzer : GSharpDiagnosticAnalyzer
+    {
+        private static readonly DiagnosticDescriptor Rule = new(
+            "TESTGSA0003",
+            "Field location",
+            "Field has a source location.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        /// <inheritdoc/>
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+        /// <inheritdoc/>
+        public override void Initialize(AnalysisContext context)
+        {
+            context.RegisterSymbolAction(
+                ctx => ctx.ReportDiagnostic(Diagnostic.Create(Rule, ctx.Symbol.Location)),
+                GSharp.Core.CodeAnalysis.Symbols.SymbolKind.Field);
         }
     }
 }
