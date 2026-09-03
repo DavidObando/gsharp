@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
+
 namespace Gsharp.Concurrency;
 
 /// <summary>
@@ -18,16 +20,17 @@ public readonly struct ReceiveResult<T>
     /// <summary>Initializes a new instance of the <see cref="ReceiveResult{T}"/> struct.</summary>
     /// <param name="value">The delivered value, or the element type's zero value when <paramref name="ok"/> is false.</param>
     /// <param name="ok">Whether a value was delivered.</param>
-    public ReceiveResult(T value, bool ok)
+    public ReceiveResult([AllowNull] T value, bool ok)
     {
-        Value = value;
+        Value = value!;
         Ok = ok;
     }
 
     /// <summary>Gets the "closed and drained" result: the zero value with <see cref="Ok"/> false.</summary>
-    public static ReceiveResult<T> Closed => new(default!, false);
+    public static ReceiveResult<T> Closed => new(default, false);
 
     /// <summary>Gets the delivered value, or the element type's zero value when <see cref="Ok"/> is false.</summary>
+    [MaybeNull]
     public T Value { get; }
 
     /// <summary>Gets a value indicating whether a value was delivered (false means closed and drained).</summary>
@@ -36,7 +39,7 @@ public readonly struct ReceiveResult<T>
     /// <summary>Deconstructs into the Go-shaped <c>v, ok</c> pair.</summary>
     /// <param name="value">The delivered value.</param>
     /// <param name="ok">Whether a value was delivered.</param>
-    public void Deconstruct(out T value, out bool ok)
+    public void Deconstruct([MaybeNull] out T value, out bool ok)
     {
         value = Value;
         ok = Ok;

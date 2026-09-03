@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
+
 namespace Gsharp.Concurrency;
 
 /// <summary>
@@ -18,5 +20,5 @@ public interface ISelectable<T>
     /// <param name="value">The delivered value, or the zero value.</param>
     /// <param name="ok">Whether a value was delivered; false with a true return means closed and drained.</param>
     /// <returns>True when the receive completed (with a value or with closed), false when it would have to park.</returns>
-    bool TryReceive(out T value, out bool ok);
+    bool TryReceive([MaybeNull] out T value, out bool ok);
 }

@@ -7,15 +7,16 @@
 #pragma warning disable SA1615 // Element return value should be documented (mechanically lifted from ReflectionMetadataEmitter; original methods were private)
 #pragma warning disable SA1116 // The parameters should begin on the line after the declaration (preserves original formatting; reformat would break diff readability)
 
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
+using GSharp.Core.CodeAnalysis.Symbols;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
-using GSharp.Core.CodeAnalysis.Binding;
-using GSharp.Core.CodeAnalysis.Lowering.Iterators;
-using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -323,9 +324,9 @@ internal sealed class MethodBodyPlanner
     /// <param name="smSym">The state-machine struct.</param>
     /// <param name="owner">The declaring user type, when the kickoff is one of its methods.</param>
     /// <returns><see langword="true"/> when the kickoff lives on a user type with an emitted TypeDef.</returns>
-    public bool TryGetUserKickoffReceiverSymbol(StructSymbol smSym, out StructSymbol owner)
+    public bool TryGetUserKickoffReceiverSymbol(StructSymbol smSym, [NotNullWhen(true)] out StructSymbol? owner)
     {
-        owner = null!;
+        owner = null;
         FunctionSymbol? kickoff = null;
         foreach (var plan in this.StateMachines.AsyncStateMachinePlans)
         {

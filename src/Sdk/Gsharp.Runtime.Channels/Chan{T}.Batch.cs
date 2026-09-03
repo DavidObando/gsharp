@@ -162,7 +162,9 @@ public sealed partial class Chan<T>
                 return taken;
             }
 
-            buffer.Span[taken++] = one.Value;
+            // `one.Ok` was checked above, so the three-state encoding
+            // (ADR-0174 D3) guarantees a delivered value here.
+            buffer.Span[taken++] = one.Value!;
             if (taken < buffer.Length)
             {
                 taken += TryReceiveBatch(buffer.Span.Slice(taken));

@@ -86,7 +86,9 @@ public static partial class ChannelOps
     {
         if (pending.IsCompletedSuccessfully)
         {
-            return new ValueTask<T>(pending.Result.Value);
+            // A single-value receive yields the zero value on a closed
+            // channel by design (ADR-0174 D3); there is no null to guard.
+            return new ValueTask<T>(pending.Result.Value!);
         }
 
         return Awaited(pending);
@@ -94,7 +96,9 @@ public static partial class ChannelOps
         static async ValueTask<T> Awaited(ValueTask<ReceiveResult<T>> pending)
         {
             var result = await pending.ConfigureAwait(false);
-            return result.Value;
+
+            // As above: the zero value is the documented closed-channel result.
+            return result.Value!;
         }
     }
 
@@ -103,7 +107,9 @@ public static partial class ChannelOps
         if (pending.IsCompletedSuccessfully)
         {
             var result = pending.Result;
-            return new ValueTask<(T Value, bool Ok)>((result.Value, result.Ok));
+
+            // The tuple IS the three-state encoding (ADR-0174 D3).
+            return new ValueTask<(T Value, bool Ok)>((result.Value!, result.Ok));
         }
 
         return Awaited(pending);
@@ -111,7 +117,9 @@ public static partial class ChannelOps
         static async ValueTask<(T Value, bool Ok)> Awaited(ValueTask<ReceiveResult<T>> pending)
         {
             var result = await pending.ConfigureAwait(false);
-            return (result.Value, result.Ok);
+
+            // The tuple IS the three-state encoding (ADR-0174 D3).
+            return (result.Value!, result.Ok);
         }
     }
 }

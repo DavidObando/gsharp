@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
@@ -138,11 +139,11 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     /// <param name="ok">True when a value was delivered; false with a true return means closed and drained.</param>
     /// <returns>True when the receive completed; false when it would have to park.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryReceive(out T value, out bool ok)
+    public bool TryReceive([MaybeNull] out T value, out bool ok)
     {
         if (IsClosedAndDrained)
         {
-            value = default!;
+            value = default;
             ok = false;
             return true;
         }
@@ -190,7 +191,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
 
         var completions = default(Completions);
         OpReceiveNode<T>? node = null;
-        T value;
+        T? value;
         bool ok;
         bool done;
         lock (gate)
@@ -301,7 +302,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     public void Dispose() => TryClose();
 
     /// <inheritdoc/>
-    bool ISelectableCore<T>.TryReceiveLocked(out T value, out bool ok, ref Completions completions)
+    bool ISelectableCore<T>.TryReceiveLocked([MaybeNull] out T value, out bool ok, ref Completions completions)
         => TryReceiveLocked(out value, out ok, ref completions);
 
     /// <inheritdoc/>
@@ -457,7 +458,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     /// <returns>A new unbounded channel.</returns>
     internal static Chan<T> CreateUnbounded() => new(0, unbounded: true);
 
-    private bool TryReceiveLocked(out T value, out bool ok, ref Completions completions)
+    private bool TryReceiveLocked([MaybeNull] out T value, out bool ok, ref Completions completions)
     {
         if (count > 0)
         {
@@ -483,7 +484,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
             }
         }
 
-        value = default!;
+        value = default;
         ok = false;
         return closed;
     }
@@ -531,7 +532,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     private T DequeueBuffer()
     {
         var value = buffer![head];
-        buffer[head] = default!;
+        Array.Clear(buffer, head, 1);
         head = (head + 1) % buffer.Length;
         count--;
         return value;

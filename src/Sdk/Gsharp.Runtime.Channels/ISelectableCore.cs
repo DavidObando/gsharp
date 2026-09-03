@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
+
 namespace Gsharp.Concurrency;
 
 /// <summary>
@@ -24,7 +26,7 @@ internal interface ISelectableCore<T> : ISelectable<T>
     /// <param name="ok">Whether a value was delivered.</param>
     /// <param name="completions">Nodes claimed as a side effect, to publish after the locks are released.</param>
     /// <returns>True when the receive completed.</returns>
-    bool TryReceiveLocked(out T value, out bool ok, ref Completions completions);
+    bool TryReceiveLocked([MaybeNull] out T value, out bool ok, ref Completions completions);
 
     /// <summary>Registers a receive arm with <see cref="SelectGate"/> held (channels) or under a private lock (timers, which may claim synchronously).</summary>
     /// <param name="node">The arm's node.</param>

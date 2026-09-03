@@ -44,8 +44,11 @@ public sealed partial class Chan<T>
         /// <inheritdoc/>
         public override bool TryRead([MaybeNullWhen(false)] out T item)
         {
-            if (Owner.TryReceive(out item, out var ok) && ok)
+            if (Owner.TryReceive(out var value, out var ok) && ok)
             {
+                // `ok` is true, so the three-state encoding (ADR-0174 D3)
+                // guarantees a delivered value rather than the zero value.
+                item = value!;
                 return true;
             }
 
@@ -60,8 +63,10 @@ public sealed partial class Chan<T>
             if (pending.IsCompletedSuccessfully)
             {
                 var result = pending.Result;
+
+                // Guarded by `result.Ok`: the value was delivered (ADR-0174 D3).
                 return result.Ok
-                    ? new ValueTask<T>(result.Value)
+                    ? new ValueTask<T>(result.Value!)
                     : ValueTask.FromException<T>(new ChannelClosedException());
             }
 
@@ -80,7 +85,8 @@ public sealed partial class Chan<T>
                 throw new ChannelClosedException();
             }
 
-            return result.Value;
+            // Past the `!result.Ok` throw above, so a value was delivered.
+            return result.Value!;
         }
     }
 }

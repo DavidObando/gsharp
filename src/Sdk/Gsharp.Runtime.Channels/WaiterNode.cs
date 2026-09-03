@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
+
 namespace Gsharp.Concurrency;
 
 /// <summary>
@@ -49,7 +51,7 @@ internal abstract class WaiterNode<T> : WaiterNodeBase
     /// </summary>
     /// <param name="value">The value handed over.</param>
     /// <returns>True when the transfer committed from this node.</returns>
-    internal abstract bool TryCommitSend(out T value);
+    internal abstract bool TryCommitSend([MaybeNullWhen(false)] out T value);
 
     /// <summary>Called under the channel lock when the channel is closed while this node is parked.</summary>
     internal abstract void OnClosed();
@@ -103,11 +105,11 @@ internal sealed class WaiterQueue<T>
     /// <summary>Removes and returns the head node.</summary>
     /// <param name="node">The dequeued node.</param>
     /// <returns>True when a node was dequeued.</returns>
-    internal bool TryDequeue(out WaiterNode<T> node)
+    internal bool TryDequeue([NotNullWhen(true)] out WaiterNode<T>? node)
     {
         if (head is null)
         {
-            node = null!;
+            node = null;
             return false;
         }
 

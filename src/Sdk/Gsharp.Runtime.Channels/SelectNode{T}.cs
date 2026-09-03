@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 
 namespace Gsharp.Concurrency;
@@ -23,7 +24,7 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
     private readonly int arm;
     private readonly ISelectableCore<T> selectable;
     private readonly bool isSend;
-    private T sendValue;
+    private T? sendValue;
     private bool won;
 
     /// <summary>Initializes a new instance of the <see cref="SelectNode{T}"/> class.</summary>
@@ -63,16 +64,18 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
     }
 
     /// <inheritdoc/>
-    internal override bool TryCommitSend(out T value)
+    internal override bool TryCommitSend([MaybeNullWhen(false)] out T value)
     {
         if (!isSend || !waiter.TryClaim(generation, arm))
         {
-            value = default!;
+            value = default;
             return false;
         }
 
-        value = sendValue;
-        sendValue = default!;
+        // Only reached once the arm has claimed the waiter, and a send arm is
+        // constructed with its value, so the slot is populated here.
+        value = sendValue!;
+        sendValue = default;
         won = true;
         return true;
     }

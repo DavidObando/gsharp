@@ -2,11 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
-using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using System;
+using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -47,7 +48,7 @@ internal sealed partial class StatementBinder
     /// <param name="syntax">The candidate expression.</param>
     /// <param name="receive">The receive syntax when recognized.</param>
     /// <returns><see langword="true"/> for <c>&lt;-operand</c>.</returns>
-    private static bool IsChannelReceiveSyntax(ExpressionSyntax syntax, out UnaryExpressionSyntax receive)
+    private static bool IsChannelReceiveSyntax(ExpressionSyntax syntax, [NotNullWhen(true)] out UnaryExpressionSyntax? receive)
     {
         if (syntax is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.LeftArrowToken } unary)
         {
@@ -55,7 +56,7 @@ internal sealed partial class StatementBinder
             return true;
         }
 
-        receive = null!;
+        receive = null;
         return false;
     }
 

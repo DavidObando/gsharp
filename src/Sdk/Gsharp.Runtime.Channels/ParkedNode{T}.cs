@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using System.Threading.Tasks.Sources;
 
@@ -201,9 +202,9 @@ internal sealed class OpReceiveNode<T> : ParkedNode<T>, IValueTaskSource<Receive
     }
 
     /// <inheritdoc/>
-    internal override bool TryCommitSend(out T value)
+    internal override bool TryCommitSend([MaybeNullWhen(false)] out T value)
     {
-        value = default!;
+        value = default;
         return false;
     }
 
@@ -236,7 +237,7 @@ internal sealed class OpReceiveNode<T> : ParkedNode<T>, IValueTaskSource<Receive
 internal sealed class OpSendNode<T> : ParkedNode<T>, IValueTaskSource
 {
     private ManualResetValueTaskSourceCore<bool> core;
-    private T value = default!;
+    private T? value;
 
     /// <summary>Initializes a new instance of the <see cref="OpSendNode{T}"/> class.</summary>
     /// <param name="owner">The channel this node parks on.</param>
@@ -284,16 +285,18 @@ internal sealed class OpSendNode<T> : ParkedNode<T>, IValueTaskSource
     internal override bool TryCommitReceive(T value) => false;
 
     /// <inheritdoc/>
-    internal override bool TryCommitSend(out T value)
+    internal override bool TryCommitSend([MaybeNullWhen(false)] out T value)
     {
         if (!TryTransition(Committed))
         {
-            value = default!;
+            value = default;
             return false;
         }
 
-        value = this.value;
-        this.value = default!;
+        // Past TryTransition(Committed), so a sender parked here has a value:
+        // SetValue runs before the node is enqueued.
+        value = this.value!;
+        this.value = default;
         return true;
     }
 
@@ -304,7 +307,7 @@ internal sealed class OpSendNode<T> : ParkedNode<T>, IValueTaskSource
     internal void Reset()
     {
         core.Reset();
-        value = default!;
+        value = default;
         ResetCore();
     }
 
@@ -363,9 +366,9 @@ internal sealed class NotifyNode<T> : ParkedNode<T>, IValueTaskSource<bool>
     }
 
     /// <inheritdoc/>
-    internal override bool TryCommitSend(out T value)
+    internal override bool TryCommitSend([MaybeNullWhen(false)] out T value)
     {
-        value = default!;
+        value = default;
         if (TryTransition(Committed))
         {
             result = true;
