@@ -439,6 +439,13 @@ internal sealed class ImportedMemberRefFactory
         {
             StructSymbol { IsGenericDefinition: true } structSym => structSym,
             InterfaceSymbol { IsGenericDefinition: true } interfaceSym => interfaceSym,
+
+            // Issue #3838: a source-declared generic DELEGATE is reified as a
+            // real TypeDef (#3149), so its open definition needs the same
+            // TypeDef-row `ldtoken` as a struct or interface. Without this the
+            // binder fix alone compiles and then dies at run time with
+            // BadImageFormatException on the `Mapper<!0>` TypeSpec.
+            DelegateTypeSymbol { IsGenericDefinition: true } delegateSym => delegateSym,
             _ => null,
         };
 
@@ -460,6 +467,13 @@ internal sealed class ImportedMemberRefFactory
                 return true;
             case InterfaceSymbol interfaceSym when this.cache.InterfaceTypeDefs.TryGetValue(interfaceSym, out var interfaceHandle):
                 handle = interfaceHandle;
+                return true;
+
+            // Issue #3838: see TryGetOpenGenericDefinition.
+            case DelegateTypeSymbol delegateSym when this.cache.DelegateTypeDefs.TryGetValue(
+                delegateSym.Definition ?? delegateSym,
+                out var delegateHandle):
+                handle = delegateHandle;
                 return true;
             default:
                 handle = default;

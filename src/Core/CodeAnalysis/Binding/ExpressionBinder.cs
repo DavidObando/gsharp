@@ -690,6 +690,17 @@ internal sealed partial class ExpressionBinder
                 return inheritedClrMember;
             }
 
+            // Issue #3840: a bare identifier inside a DEFAULT INTERFACE METHOD
+            // body may name the enclosing interface's own instance property.
+            // The implicit-member pseudo-variables are only seeded for a
+            // StructSymbol receiver, so this is the interface analog — bare and
+            // `this.`-qualified access behave identically in a DIM exactly as
+            // they already do in a class body.
+            if (TryBindInterfaceInstancePropertyByBareName(syntax, out var interfaceMember))
+            {
+                return interfaceMember;
+            }
+
             if (binderCtx.InConstructorInitializer
                 && IsConstructorInitializerInstanceMethod(name))
             {
@@ -2617,6 +2628,76 @@ internal sealed partial class ExpressionBinder
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Issue #3840: resolves a bare (unqualified) identifier inside a DEFAULT
+    /// INTERFACE METHOD body to an instance property of the enclosing interface
+    /// (or any base interface), returning the effective <c>this</c> receiver and
+    /// the interface it is typed as. The implicit-member pseudo-variables seeded
+    /// in <see cref="Binder"/> only cover a <see cref="StructSymbol"/> receiver,
+    /// so inside a DIM the same spelling that works in a class body reported
+    /// GS0125 — even though <c>this.Name</c> binds and dispatches correctly.
+    /// Shared by the bare-name READ, WRITE and COMPOUND-WRITE fallbacks so all
+    /// three behave identically to their <c>this.</c>-qualified paths, mirroring
+    /// the inherited-CLR-member trio of issue #1584.
+    /// </summary>
+    /// <param name="name">The bare identifier text.</param>
+    /// <param name="receiver">The effective <c>this</c> receiver on success.</param>
+    /// <param name="interfaceType">The enclosing interface the receiver is typed as, on success.</param>
+    /// <returns><see langword="true"/> when the enclosing interface declares an instance property of that name.</returns>
+    private bool TryResolveInterfaceInstancePropertyByBareName(
+        string name,
+        [NotNullWhen(true)] out BoundExpression? receiver,
+        [NotNullWhen(true)] out InterfaceSymbol? interfaceType)
+    {
+        receiver = null;
+        interfaceType = null;
+
+        var effThis = GetEffectiveThisParameter();
+        if (effThis?.Type is not InterfaceSymbol thisInterface)
+        {
+            return false;
+        }
+
+        // ADR-0118 / issue #944: an indexer has the CLR name `Item` but is never
+        // reachable by bare name — only through `this[i]`.
+        if (!TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _)
+            || property.IsIndexer)
+        {
+            return false;
+        }
+
+        receiver = new BoundVariableExpression(null, effThis);
+        interfaceType = thisInterface;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3840: tries to bind a bare identifier inside a default interface
+    /// method body as a read of the enclosing interface's own instance property,
+    /// by routing it through the very same accessor step that binds
+    /// <c>this.Name</c> — so accessibility, generic substitution and the
+    /// <c>callvirt get_X</c> dispatch are resolved once, in one place.
+    /// </summary>
+    /// <param name="syntax">The bare name syntax.</param>
+    /// <param name="bound">The bound property read on success.</param>
+    /// <returns><see langword="true"/> when the name resolved to an interface property.</returns>
+    private bool TryBindInterfaceInstancePropertyByBareName(
+        NameExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? bound)
+    {
+        bound = null;
+        if (!TryResolveInterfaceInstancePropertyByBareName(
+                syntax.IdentifierToken.ValueText,
+                out var receiver,
+                out _))
+        {
+            return false;
+        }
+
+        bound = BindAccessorStep(receiver, classSymbol: null, rightPart: syntax);
+        return true;
     }
 
     private static TypeSymbol GetInheritedClrMemberType(

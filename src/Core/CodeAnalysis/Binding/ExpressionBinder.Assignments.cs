@@ -49,6 +49,20 @@ internal sealed partial class ExpressionBinder
                 return resolvedInheritedWrite;
             }
 
+            // Issue #3840: a bare write inside a DEFAULT INTERFACE METHOD body
+            // resolves to `this.Member = value` on the enclosing interface's
+            // own property — the write half of the bare-name READ fallback in
+            // BindNameExpression.
+            var interfaceWrite = TryBindInterfaceInstancePropertyWriteByBareName(
+                name,
+                syntax.IdentifierToken.Location,
+                syntax.Expression,
+                syntax.EqualsToken.Location);
+            if (interfaceWrite != null)
+            {
+                return interfaceWrite;
+            }
+
             // ADR-0156 Phase 2: a bare write to a top-level global declared by
             // a prior interactive submission stores to the static field on
             // that submission's <Program> container (newest submission first).
@@ -1291,6 +1305,26 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            // Issue #3840: a bare compound write (`Count += 1`) inside a
+            // DEFAULT INTERFACE METHOD body reads and stores the enclosing
+            // interface's own property through the implicit `this`, reusing
+            // the very same helper the `this.Count += 1` spelling uses.
+            if (TryResolveInterfaceInstancePropertyByBareName(name, out var ifaceReceiver, out var ifaceThis))
+            {
+                SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var ifaceBaseOperator);
+                var ifaceCompound = TryBindInterfaceCompoundAssignment(
+                    ifaceThis,
+                    ifaceReceiver,
+                    name,
+                    bareName,
+                    syntax,
+                    ifaceBaseOperator);
+                if (ifaceCompound != null)
+                {
+                    return ifaceCompound;
+                }
+            }
+
             // ADR-0156 Phase 2: a bare compound write (`counter += 1`) to a
             // top-level global declared by a prior interactive submission
             // reads and stores the static field on that submission's
@@ -1687,6 +1721,64 @@ internal sealed partial class ExpressionBinder
             property,
             converted,
             substitutedType,
+            effectiveInterface);
+    }
+
+    /// <summary>
+    /// Issue #3840: tries to bind a bare (unqualified) simple write
+    /// <c>Member = value</c> inside a DEFAULT INTERFACE METHOD body to an
+    /// instance property of the enclosing interface, producing exactly the
+    /// <see cref="BoundPropertyAssignmentExpression"/> the <c>this.Member =
+    /// value</c> qualified path produces. A resolved-but-unsettable property
+    /// reports "cannot assign" rather than GS0125, matching that path.
+    /// </summary>
+    /// <param name="name">The bare identifier text.</param>
+    /// <param name="nameLocation">The identifier location, for diagnostics.</param>
+    /// <param name="valueSyntax">The RHS value syntax.</param>
+    /// <param name="assignLocation">The location of the assignment operator, for diagnostics.</param>
+    /// <returns>The bound assignment (or an error expression), or <see langword="null"/> when the name is not an interface property.</returns>
+    private BoundExpression? TryBindInterfaceInstancePropertyWriteByBareName(
+        string name,
+        TextLocation nameLocation,
+        ExpressionSyntax valueSyntax,
+        TextLocation assignLocation)
+    {
+        if (!TryResolveInterfaceInstancePropertyByBareName(name, out var receiver, out var thisInterface)
+            || !TypeMemberModel.TryGetPropertyWithOwner(thisInterface, name, out var property, out var propertyOwner))
+        {
+            return null;
+        }
+
+        if (!property.HasSetter)
+        {
+            Diagnostics.ReportCannotAssign(assignLocation, name);
+            _ = BindExpression(valueSyntax);
+            return new BoundErrorExpression(null);
+        }
+
+        var effectiveInterface = Invariant.Required(
+            propertyOwner as InterfaceSymbol,
+            "an interface property has an effective interface owner");
+        if (!AccessibilityChecker.IsAccessible(property.SetterAccessibility, effectiveInterface, this.function))
+        {
+            Diagnostics.ReportMemberInaccessible(
+                nameLocation,
+                property.Name,
+                effectiveInterface.Name,
+                property.SetterAccessibility);
+        }
+
+        var propertyType = effectiveInterface.SubstituteMemberType(property.Type);
+        var value = BindAssignmentRhs(valueSyntax, propertyType);
+        var converted = conversions.BindConversion(valueSyntax.Location, value, propertyType);
+        EnforceInitOnlyAssignment(property, receiver, assignLocation);
+        return new BoundPropertyAssignmentExpression(
+            null,
+            receiver,
+            null,
+            property,
+            converted,
+            ReferenceEquals(propertyType, property.Type) ? null : propertyType,
             effectiveInterface);
     }
 

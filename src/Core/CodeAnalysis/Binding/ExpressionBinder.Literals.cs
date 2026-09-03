@@ -294,6 +294,14 @@ internal sealed partial class ExpressionBinder
     {
         StructSymbol { IsGenericDefinition: true } structSymbol => structSymbol.TypeParameters.Length,
         InterfaceSymbol { IsGenericDefinition: true } interfaceSymbol => interfaceSymbol.TypeParameters.Length,
+
+        // Issue #3838: a NAMED generic delegate declared in source is a real
+        // CLR type too (#3149 reifies it), so `typeof(Mapper[_])` has to reach
+        // it exactly as `typeof(Slot[_])` reaches a source class. Omitting the
+        // case made every source generic delegate unreachable through the only
+        // spelling that can select an arity, reported as GS0113 carrying the
+        // arity-mangled name the caller never wrote.
+        DelegateTypeSymbol { IsGenericDefinition: true } delegateSymbol => delegateSymbol.TypeParameters.Length,
         _ => -1,
     };
 
