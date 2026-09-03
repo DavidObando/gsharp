@@ -1428,6 +1428,25 @@ internal sealed partial class StatementBinder
         return false;
     }
 
+    // ADR-0174 D15 / GS0569: reports every read of one of this block's
+    // `async let` bindings that reached the bound tree. `await name` never
+    // does — BindAwaitExpression replaces it with a read of the cell — so
+    // anything left here is a use of a value that may not have arrived.
+    private void ReportAsyncLetReadsWithoutAwait(BoundStatement body, List<AsyncLetVariableSymbol> cells)
+    {
+        if (cells.Count == 0)
+        {
+            return;
+        }
+
+        var walker = new AsyncLetReadWalker(cells);
+        walker.Visit(body);
+        foreach (var (variable, location) in walker.Reads)
+        {
+            Diagnostics.ReportAsyncLetReadWithoutAwait(location, variable.Name);
+        }
+    }
+
     private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)
     {
         // ADR-0174 D5/D6: `scope { body }` lowers to
@@ -1469,6 +1488,8 @@ internal sealed partial class StatementBinder
         var context = bindLocalVariable(contextToken, isReadOnly: true, type: runtime.ContextType);
         binderCtx.ScopeFrames.Push(frame);
         binderCtx.ScopeContexts.Push(context);
+        var cells = new List<AsyncLetVariableSymbol>();
+        binderCtx.AsyncLetCells.Push(cells);
         BoundStatement body;
         try
         {
@@ -1476,8 +1497,28 @@ internal sealed partial class StatementBinder
         }
         finally
         {
+            binderCtx.AsyncLetCells.Pop();
             binderCtx.ScopeContexts.Pop();
             binderCtx.ScopeFrames.Pop();
+        }
+
+        // GS0569, the catch-all: `BindVariableReference` rejects a bare name,
+        // but a receiver position (`a.ToString()`) resolves the symbol through
+        // a different path. A read that survived into the bound tree is one
+        // that was never spelled `await`.
+        ReportAsyncLetReadsWithoutAwait(body, cells);
+
+        // ADR-0174 D15: a binding nobody read still started work. The block
+        // cancels and joins it at exit — the failure is not dropped — and says
+        // so, because starting work only to cancel it is rarely intended.
+        foreach (var cell in cells)
+        {
+            if (!cell.WasAwaited)
+            {
+                Diagnostics.ReportAsyncLetNeverAwaited(
+                    Invariant.Required(cell.DeclaringSyntax, "an async-let binding is declared by an identifier").Location,
+                    cell.Name);
+            }
         }
 
         scope = scope.Pop();
@@ -1487,9 +1528,14 @@ internal sealed partial class StatementBinder
             syntax,
             ImmutableArray.Create<BoundStatement>(
                 new BoundExpressionStatement(syntax, new BoundAssignmentExpression(syntax, bodyException, new BoundVariableExpression(syntax, caught)))));
-        var finallyBody = new BoundBlockStatement(
-            syntax,
-            ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(syntax, runtime.BindScopeExit(frame, bodyException))));
+        var cleanup = ImmutableArray.CreateBuilder<BoundStatement>();
+        foreach (var cell in cells)
+        {
+            cleanup.Add(new BoundExpressionStatement(syntax, runtime.BindAsyncLetCancelIfUnread(cell.Cell)));
+        }
+
+        cleanup.Add(new BoundExpressionStatement(syntax, runtime.BindScopeExit(frame, bodyException)));
+        var finallyBody = new BoundBlockStatement(syntax, cleanup.ToImmutable());
         var tryStatement = new BoundTryStatement(
             syntax,
             new BoundBlockStatement(syntax, ImmutableArray.Create(body)),
@@ -1831,5 +1877,29 @@ internal sealed partial class StatementBinder
         }
 
         return new BoundYieldStatement(syntax, expression);
+    }
+
+    private sealed class AsyncLetReadWalker : BoundTreeWalker
+    {
+        private readonly List<AsyncLetVariableSymbol> cells;
+
+        public AsyncLetReadWalker(List<AsyncLetVariableSymbol> cells)
+        {
+            this.cells = cells;
+        }
+
+        public List<(AsyncLetVariableSymbol Variable, TextLocation Location)> Reads { get; } = new();
+
+        public override void VisitExpression(BoundExpression? node)
+        {
+            if (node is BoundVariableExpression { Variable: AsyncLetVariableSymbol binding } read
+                && cells.Contains(binding)
+                && (read.Syntax?.Location ?? binding.DeclaringSyntax?.Location) is { } location)
+            {
+                Reads.Add((binding, location));
+            }
+
+            base.VisitExpression(node);
+        }
     }
 }

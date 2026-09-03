@@ -27,6 +27,7 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     private readonly ChannelRuntimeBinder runtime;
     private readonly DiagnosticBag diagnostics;
     private int goDepth;
+    private int resultGoDepth;
     private int lockDepth;
     private BoundExpression? lexicalContext;
 
@@ -104,12 +105,43 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     protected override BoundStatement RewriteGoStatement(BoundGoStatement node)
     {
         goDepth++;
+        var savedContext = lexicalContext;
+        if (node.ResultCell is { } spawning)
+        {
+            resultGoDepth++;
+
+            // ADR-0174 D15: the child runs under its cell's context, not the
+            // spawning block's. The cell's is linked to the scope's, so the
+            // scope still collapses the child; cancelling one unread binding
+            // at scope exit leaves its siblings alone.
+            lexicalContext = runtime.BindAsyncLetContext(spawning);
+        }
+
         try
         {
-            return base.RewriteGoStatement(node);
+            var rewritten = (BoundGoStatement)base.RewriteGoStatement(node);
+            if (rewritten.ResultCell is not { } cell)
+            {
+                return rewritten;
+            }
+
+            // ADR-0174 D15: the child deposits its value into the cell. The
+            // wrap happens here, not in the binder, because an inferred callee
+            // is typed `R` when the binder sees the call and `ValueTask[R]`
+            // once the fixed point has coloured it — a bind-time overload
+            // choice would be wrong for half the programs.
+            var resultType = rewritten.ResultType ?? TypeSymbol.Error;
+            var body = runtime.BindAsyncLetRun(cell, rewritten.Expression, resultType);
+            return new BoundGoStatement(rewritten.Syntax, body, rewritten.Sink, rewritten.ResultCell, resultType);
         }
         finally
         {
+            if (node.ResultCell != null)
+            {
+                resultGoDepth--;
+            }
+
+            lexicalContext = savedContext;
             goDepth--;
         }
     }
@@ -221,8 +253,9 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         var inner = rewritten.Arguments[0];
         if (goDepth > 0)
         {
-            // The goroutine consumes the ValueTask itself.
-            return runtime.ShapeGoOperand(inner);
+            // The goroutine consumes the ValueTask itself. An `async let` keeps
+            // the result, so it must not be discarded on the way (ADR-0174 D15).
+            return resultGoDepth > 0 ? inner : runtime.ShapeGoOperand(inner);
         }
 
         if (ContainerSuspends && lockDepth == 0 && inner.Type != null)
@@ -337,10 +370,12 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     private BoundExpression Complete(BoundExpression retyped, TypeSymbol logicalType, string calleeName)
     {
         // A `go` operand runs on the goroutine, which consumes the ValueTask
-        // itself (ADR-0174 D5); it is never awaited or bridged here.
+        // itself (ADR-0174 D5); it is never awaited or bridged here. An
+        // `async let` keeps the result, so it must not be discarded on the way
+        // (ADR-0174 D15).
         if (goDepth > 0)
         {
-            return runtime.ShapeGoOperand(retyped);
+            return resultGoDepth > 0 ? retyped : runtime.ShapeGoOperand(retyped);
         }
 
         if (ContainerSuspends && lockDepth == 0)

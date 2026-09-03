@@ -297,6 +297,23 @@ public sealed partial class DiagnosticBag
     public void ReportSelectWithNoCases(TextLocation location)
     => Report(location, DiagnosticDescriptors.SelectWithNoCases);
 
+    /// <summary>Reports GS0551: an <c>async let</c> with no enclosing <c>scope</c> to own it (ADR-0174 D15).</summary>
+    /// <param name="location">The <c>async</c> keyword's location.</param>
+    public void ReportAsyncLetOutsideScope(TextLocation location)
+        => Report(location, DiagnosticDescriptors.AsyncLetOutsideScope);
+
+    /// <summary>Reports GS0559: an <c>async let</c> binding that is never awaited (ADR-0174 D15).</summary>
+    /// <param name="location">The binding's location.</param>
+    /// <param name="name">The binding's name.</param>
+    public void ReportAsyncLetNeverAwaited(TextLocation location, string name)
+        => Report(location, DiagnosticDescriptors.AsyncLetNeverAwaited, name);
+
+    /// <summary>Reports GS0569: an <c>async let</c> binding read without <c>await</c> (ADR-0174 D15).</summary>
+    /// <param name="location">The read's location.</param>
+    /// <param name="name">The binding's name.</param>
+    public void ReportAsyncLetReadWithoutAwait(TextLocation location, string name)
+        => Report(location, DiagnosticDescriptors.AsyncLetReadWithoutAwait, name);
+
     /// <summary>Reports GS0556: a select arm's <c>when</c> guard is not a <c>bool</c> (ADR-0174 D8).</summary>
     /// <param name="location">The guard's location.</param>
     /// <param name="type">The guard's type.</param>

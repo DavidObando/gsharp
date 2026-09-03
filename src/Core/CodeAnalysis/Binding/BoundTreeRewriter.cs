@@ -901,7 +901,8 @@ public abstract class BoundTreeRewriter
     {
         var expression = RewriteExpression(node.Expression);
         var sink = node.Sink == null ? null : RewriteExpression(node.Sink);
-        if (expression == node.Expression && sink == node.Sink)
+        var resultCell = node.ResultCell == null ? null : RewriteExpression(node.ResultCell);
+        if (expression == node.Expression && sink == node.Sink && resultCell == node.ResultCell)
         {
             return node;
         }
@@ -909,7 +910,7 @@ public abstract class BoundTreeRewriter
         // The go statement's syntax is its stable identity: the emitter finds
         // the closure synthesized for it by that syntax when a state-machine
         // rewrite has rebuilt the node (ADR-0174 D4 makes that the common case).
-        return new BoundGoStatement(node.Syntax, expression, sink);
+        return new BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType);
     }
 
     /// <summary>Rewrites a bound select statement (Phase 5.6).</summary>

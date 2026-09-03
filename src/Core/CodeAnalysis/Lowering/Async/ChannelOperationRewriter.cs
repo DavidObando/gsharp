@@ -116,6 +116,13 @@ internal sealed class ChannelOperationRewriter : BoundTreeRewriter
                 // machine on every arm at once, rather than a thread.
                 return runtime.BindSelectWaitAwait(call);
             }
+
+            if (ChannelRuntimeBinder.IsAsyncLetCancelIfUnread(call))
+            {
+                // ADR-0174 D15: joining an unread `async let` child suspends
+                // the state machine, exactly as the scope's own join does.
+                return runtime.BindAsyncLetCancelIfUnreadAwait(call);
+            }
         }
 
         return rewritten;

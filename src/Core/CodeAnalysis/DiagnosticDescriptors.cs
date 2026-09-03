@@ -436,6 +436,12 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor ReceiveFromSendOnlyChannel = new("GS0550", DiagnosticSeverity.Error, "Cannot receive from the send-only channel type '{0}'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).");
     internal static readonly DiagnosticDescriptor ChannelBindingTargetCount = new("GS0554", DiagnosticSeverity.Error, "'{0}' binds exactly {1}, not {2}: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).");
     internal static readonly DiagnosticDescriptor SuspendingCallBlocks = new("GS0558", DiagnosticSeverity.Warning, "'{0}' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.");
+    internal static readonly DiagnosticDescriptor AsyncLetOutsideScope = new("GS0551", DiagnosticSeverity.Error, "'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15).");
+
+    internal static readonly DiagnosticDescriptor AsyncLetNeverAwaited = new("GS0559", DiagnosticSeverity.Warning, "'{0}' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15).");
+
+    internal static readonly DiagnosticDescriptor AsyncLetReadWithoutAwait = new("GS0569", DiagnosticSeverity.Error, "'{0}' is an 'async let' binding; read it with 'await {0}' so the suspension is visible (ADR-0174 D15).");
+
     internal static readonly DiagnosticDescriptor SelectArmGuardIsNotBoolean = new("GS0556", DiagnosticSeverity.Error, "A select arm's 'when' guard must be a 'bool'; '{0}' is not (ADR-0174 D8).");
     internal static readonly DiagnosticDescriptor SelectCancelledArmNeedsContext = new("GS0557", DiagnosticSeverity.Error, "'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8).");
     internal static readonly DiagnosticDescriptor SelectChannelSentAndReceived = new("GS0564", DiagnosticSeverity.Warning, "'{0}' is both sent to and received from by this select, so it can complete by talking to itself (ADR-0174 D8).");

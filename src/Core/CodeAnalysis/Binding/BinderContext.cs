@@ -151,6 +151,14 @@ internal sealed class BinderContext
     public Stack<VariableSymbol> ScopeFrames { get; } = new();
 
     /// <summary>
+    /// Gets the <c>async let</c> bindings declared directly in each enclosing
+    /// <c>scope</c> block (ADR-0174 D15), innermost on top. The block's cleanup
+    /// cancels and joins every one that was never awaited, and GS0559 names
+    /// them.
+    /// </summary>
+    public Stack<List<AsyncLetVariableSymbol>> AsyncLetCells { get; } = new();
+
+    /// <summary>
     /// Gets the implicit <c>ctx</c> local of each enclosing <c>scope</c> block
     /// (ADR-0174 D7), innermost on top. A channel operation binds against the
     /// innermost one, so cancelling the block unblocks operations parked inside

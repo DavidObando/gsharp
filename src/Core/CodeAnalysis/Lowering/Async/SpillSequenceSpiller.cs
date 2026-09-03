@@ -597,7 +597,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(goStatement.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundGoStatement(goStatement.Syntax, spilled.Value, goStatement.Sink));
+            builder.Add(new BoundGoStatement(goStatement.Syntax, spilled.Value, goStatement.Sink, goStatement.ResultCell, goStatement.ResultType));
             return true;
         }
 

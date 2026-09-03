@@ -97,6 +97,16 @@ public sealed class ScopeFrame : IGoroutineSink
         }
     }
 
+    /// <summary>
+    /// Folds a child's failure into this scope without touching the pending
+    /// count. An <c>async let</c> cell retires its own registration when the
+    /// child completes, because the failure belongs to whoever reads the
+    /// binding; when nobody does, the cell hands it back here at scope exit
+    /// (ADR-0174 D15).
+    /// </summary>
+    /// <param name="exception">The child's exception, unwrapped.</param>
+    public void RecordChildFailure(Exception exception) => RecordFailure(exception);
+
     /// <summary>The blocking form of <see cref="ExitAsync"/>, for the synthesized root that may block (ADR-0174 D4).</summary>
     /// <param name="bodyException">The exception the block body threw, or <see langword="null"/>.</param>
     public void Exit(Exception? bodyException = null) => ExitAsync(bodyException).AsTask().GetAwaiter().GetResult();

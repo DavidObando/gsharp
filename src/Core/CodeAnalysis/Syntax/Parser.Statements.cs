@@ -173,6 +173,10 @@ public partial class Parser
                 }
 
                 return ParseBlockStatement();
+            case SyntaxKind.AsyncKeyword when Peek(1).Kind == SyntaxKind.LetKeyword:
+                // ADR-0174 D15: `async let name = expr` starts `expr` as a child
+                // of the enclosing scope and binds `name` to its eventual result.
+                return ParseAsyncLetStatement();
             case SyntaxKind.ConstKeyword:
             case SyntaxKind.LetKeyword:
             case SyntaxKind.VarKeyword:
@@ -677,6 +681,22 @@ public partial class Parser
     private StatementSyntax ParseVariableDeclaration()
     {
         return ParseVariableDeclaration(accessibilityModifier: null);
+    }
+
+    // ADR-0174 D15: `async let name = expr`. The declaration is an ordinary
+    // `let` carrying the `async` modifier, so every existing shape — a type
+    // clause, an annotation, the span and child-order rules — keeps working;
+    // the binder is what turns it into a spawn.
+    private StatementSyntax ParseAsyncLetStatement()
+    {
+        var asyncKeyword = MatchToken(SyntaxKind.AsyncKeyword);
+        var declaration = ParseVariableDeclaration();
+        if (declaration is VariableDeclarationSyntax variable)
+        {
+            variable.AsyncModifier = asyncKeyword;
+        }
+
+        return declaration;
     }
 
     private StatementSyntax ParseVariableDeclaration(SyntaxToken? accessibilityModifier)

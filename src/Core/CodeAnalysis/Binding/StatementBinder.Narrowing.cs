@@ -1285,7 +1285,102 @@ internal sealed partial class StatementBinder
             scope.GetCurrentDeclaringPackageName());
     }
 
+    // ADR-0174 D15: `async let name = expr` starts `expr` as a child of the
+    // enclosing scope and binds `name` to its eventual result:
+    //   let <cell> = AsyncLetCell[R].Start(<frame>)
+    //   go <expr>            // sink and result cell are <cell>
+    // The binding names `R`, not a handle, so a spawn cannot outlive the scope
+    // that owns it. Every read is `await name`, which reads the cell.
+    private BoundStatement BindAsyncLetDeclaration(VariableDeclarationSyntax syntax)
+    {
+        var asyncKeyword = syntax.AsyncModifier ?? syntax.Identifier;
+        if (syntax.Initializer == null)
+        {
+            Diagnostics.ReportAsyncLetOutsideScope(asyncKeyword.Location);
+            return BindErrorStatement();
+        }
+
+        if (binderCtx.ScopeFrames.Count == 0)
+        {
+            // GS0551: without an owner this is the unstructured Task that D15
+            // exists to avoid. Recover as an ordinary `let` so the body's other
+            // diagnostics still surface.
+            Diagnostics.ReportAsyncLetOutsideScope(asyncKeyword.Location);
+            return BindOrdinaryVariableDeclaration(syntax);
+        }
+
+        if (!binderCtx.ChannelRuntime.IsAvailable)
+        {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(asyncKeyword.Location, "Gsharp.Concurrency.AsyncLetCell");
+            return BindErrorStatement();
+        }
+
+        // The initializer is bound the way a `go` operand is: the child, not the
+        // spawning goroutine, consumes a suspending call's completion.
+        var expression = bindExpression(syntax.Initializer, canBeVoid: false);
+        if (expression is BoundErrorExpression)
+        {
+            return new BoundExpressionStatement(syntax, expression);
+        }
+
+        var resultType = expression.Type ?? TypeSymbol.Error;
+        if (expression is BoundAwaitExpression awaited)
+        {
+            expression = awaited.Expression;
+        }
+        else if (expression is BoundImportedCallExpression { Function.Name: "Wait" } bridge
+            && bridge.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking"
+            && bridge.Arguments.Length == 1)
+        {
+            expression = bridge.Arguments[0];
+        }
+
+        if (expression is not BoundCallExpression and
+            not BoundIndirectCallExpression and
+            not BoundUserInstanceCallExpression and
+            not BoundImportedCallExpression and
+            not BoundImportedInstanceCallExpression)
+        {
+            Diagnostics.ReportGoOperandIsNotACall(syntax.Initializer.Location);
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        var runtime = binderCtx.ChannelRuntime;
+        var frame = binderCtx.ScopeFrames.Peek();
+        var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var cell = new LocalVariableSymbol($"<asynclet$cell${id}>", isReadOnly: true, runtime.AsyncLetCellType(resultType));
+        scope.TryDeclareVariable(cell);
+
+        var binding = new AsyncLetVariableSymbol(syntax.Identifier.Text, resultType, cell, syntax.Identifier);
+        if (!scope.TryDeclareVariable(binding))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
+        }
+
+        binderCtx.AsyncLetCells.Peek().Add(binding);
+        return new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(syntax, cell, runtime.BindAsyncLetStart(syntax, frame, resultType)),
+                new BoundGoStatement(
+                    syntax,
+                    expression,
+                    new BoundVariableExpression(null, cell),
+                    new BoundVariableExpression(null, cell),
+                    resultType)));
+    }
+
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
+    {
+        if (syntax.IsAsyncLet)
+        {
+            return BindAsyncLetDeclaration(syntax);
+        }
+
+        return BindOrdinaryVariableDeclaration(syntax);
+    }
+
+    private BoundStatement BindOrdinaryVariableDeclaration(VariableDeclarationSyntax syntax)
     {
         // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
         // ref-aliasing local. The local's IL slot stores a managed pointer (`T&`) into the

@@ -787,6 +787,24 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindAwaitExpression(AwaitExpressionSyntax syntax)
     {
+        // ADR-0174 D15: `await name` on an `async let` binding reads the cell
+        // the child deposits into. It is intercepted before the operand binds,
+        // because binding the bare name is exactly what GS0569 forbids — and
+        // before the async check, because a plain caller is coloured suspending
+        // by this very read, the same way a suspending call colours it.
+        if (syntax.Expression is NameExpressionSyntax name
+            && scope.TryLookupSymbol(name.IdentifierToken.ValueText) is AsyncLetVariableSymbol binding)
+        {
+            binding.WasAwaited = true;
+            if (!EnsureChannelRuntime(syntax.AwaitKeyword.Location))
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            var read = binderCtx.ChannelRuntime.BindAsyncLetAwait(binding.Cell, binding.Type);
+            return CompleteSuspendingCall(read, binding.Type, syntax.AwaitKeyword.Location, binding.Name);
+        }
+
         var operand = BindExpression(syntax.Expression);
 
         if (function == null || (!function.IsAsyncOrSuspending && !isAsyncIteratorReturnType(function.Type)))
