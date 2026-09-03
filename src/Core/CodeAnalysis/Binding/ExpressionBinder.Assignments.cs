@@ -53,12 +53,12 @@ internal sealed partial class ExpressionBinder
             // resolves to `this.Member = value` on the enclosing interface's
             // own property — the write half of the bare-name READ fallback in
             // BindNameExpression.
-            if (TryBindInterfaceInstancePropertyWriteByBareName(
-                    name,
-                    syntax.IdentifierToken.Location,
-                    syntax.Expression,
-                    syntax.EqualsToken.Location,
-                    out var interfaceWrite))
+            var interfaceWrite = TryBindInterfaceInstancePropertyWriteByBareName(
+                name,
+                syntax.IdentifierToken.Location,
+                syntax.Expression,
+                syntax.EqualsToken.Location);
+            if (interfaceWrite != null)
             {
                 return interfaceWrite;
             }
@@ -1736,28 +1736,24 @@ internal sealed partial class ExpressionBinder
     /// <param name="nameLocation">The identifier location, for diagnostics.</param>
     /// <param name="valueSyntax">The RHS value syntax.</param>
     /// <param name="assignLocation">The location of the assignment operator, for diagnostics.</param>
-    /// <param name="bound">The bound assignment (or an error expression) on success.</param>
-    /// <returns><see langword="true"/> when the enclosing interface declares a property of that name.</returns>
-    private bool TryBindInterfaceInstancePropertyWriteByBareName(
+    /// <returns>The bound assignment (or an error expression), or <see langword="null"/> when the name is not an interface property.</returns>
+    private BoundExpression? TryBindInterfaceInstancePropertyWriteByBareName(
         string name,
         TextLocation nameLocation,
         ExpressionSyntax valueSyntax,
-        TextLocation assignLocation,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? bound)
+        TextLocation assignLocation)
     {
-        bound = null;
         if (!TryResolveInterfaceInstancePropertyByBareName(name, out var receiver, out var thisInterface)
             || !TypeMemberModel.TryGetPropertyWithOwner(thisInterface, name, out var property, out var propertyOwner))
         {
-            return false;
+            return null;
         }
 
         if (!property.HasSetter)
         {
             Diagnostics.ReportCannotAssign(assignLocation, name);
             _ = BindExpression(valueSyntax);
-            bound = new BoundErrorExpression(null);
-            return true;
+            return new BoundErrorExpression(null);
         }
 
         var effectiveInterface = Invariant.Required(
@@ -1776,7 +1772,7 @@ internal sealed partial class ExpressionBinder
         var value = BindAssignmentRhs(valueSyntax, propertyType);
         var converted = conversions.BindConversion(valueSyntax.Location, value, propertyType);
         EnforceInitOnlyAssignment(property, receiver, assignLocation);
-        bound = new BoundPropertyAssignmentExpression(
+        return new BoundPropertyAssignmentExpression(
             null,
             receiver,
             null,
@@ -1784,7 +1780,6 @@ internal sealed partial class ExpressionBinder
             converted,
             ReferenceEquals(propertyType, property.Type) ? null : propertyType,
             effectiveInterface);
-        return true;
     }
 
     /// <summary>
