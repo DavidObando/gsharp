@@ -128,6 +128,21 @@ public sealed partial class Chan<T>
         return SendBatchSlowAsync(items, sent, cancellationToken);
     }
 
+    /// <summary>
+    /// Unwraps a receive-only handle back to the channel behind it, or
+    /// <see langword="null"/> for a foreign <see cref="ChannelReader{T}"/>.
+    /// This is what lets a batch operation on an <c>in chan[T]</c> take the
+    /// one-lock fast path (ADR-0174 D10).
+    /// </summary>
+    /// <param name="reader">The handle.</param>
+    /// <returns>The owning channel, or <see langword="null"/>.</returns>
+    internal static Chan<T>? TryGetOwner(ChannelReader<T>? reader) => (reader as ChanReader)?.Owner;
+
+    /// <summary>Unwraps a send-only handle back to the channel behind it, or <see langword="null"/> for a foreign one.</summary>
+    /// <param name="writer">The handle.</param>
+    /// <returns>The owning channel, or <see langword="null"/>.</returns>
+    internal static Chan<T>? TryGetOwner(ChannelWriter<T>? writer) => (writer as ChanWriter)?.Owner;
+
     private async ValueTask<int> ReceiveBatchSlowAsync(Memory<T> buffer, int atLeast, int taken, CancellationToken cancellationToken)
     {
         while (taken < atLeast)

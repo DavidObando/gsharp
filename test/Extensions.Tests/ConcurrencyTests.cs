@@ -138,6 +138,56 @@ public class ConcurrencyTests
         Assert.False(timer.TryReceive(out _, out _));
     }
 
+    [Fact]
+    public void Chunks_HandsOverWholeBatches_AndEndsWithTheChannel()
+    {
+        var source = new Chan<int>(16);
+        for (var i = 1; i <= 5; i++)
+        {
+            source.TrySend(i);
+        }
+
+        source.Close();
+
+        var batched = ChunksOf(source, 2);
+        var seen = new List<int>();
+        var batches = 0;
+        while (true)
+        {
+            var (batch, ok) = ChannelOps.Receive2(batched, CancellationToken.None);
+            if (!ok)
+            {
+                break;
+            }
+
+            batches++;
+            seen.AddRange(batch.ToArray());
+        }
+
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, seen);
+        Assert.Equal(3, batches);
+    }
+
+    [Fact]
+    public void Chunks_DoesNotWaitToFillABatch()
+    {
+        // atLeast = 1 is Go's `range` shape; a full-fill barrier here would
+        // stall a pipeline whose producer is slower than the chunk size.
+        var source = new Chan<int>(16);
+        source.TrySend(7);
+
+        var batched = ChunksOf(source, 1024);
+        var (batch, ok) = ChannelOps.Receive2(batched, CancellationToken.None);
+        Assert.True(ok);
+        Assert.Equal(new[] { 7 }, batch.ToArray());
+    }
+
+    private static System.Threading.Channels.ChannelReader<ReadOnlyMemory<int>> ChunksOf(Chan<int> source, int size)
+    {
+        var chunks = Helpers.GetMethod("chunks")!.MakeGenericMethod(typeof(int));
+        return (System.Threading.Channels.ChannelReader<ReadOnlyMemory<int>>)chunks.Invoke(null, new object[] { source, size })!;
+    }
+
     private static System.Threading.Channels.ChannelReader<int> Merge(params Chan<int>[] inputs)
     {
         var merge = Helpers.GetMethod("merge")!.MakeGenericMethod(typeof(int));

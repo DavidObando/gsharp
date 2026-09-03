@@ -95,3 +95,26 @@ func forwardInto[T](input in chan[T], merged out chan[T]) {
         merged <- value
     }
 }
+
+/// Reads a channel in batches — G#'s data-processing shape (ADR-0174 D10).
+///
+/// The returned channel hands over whole buffers instead of single elements,
+/// so one lock acquisition and one park are amortized across a batch. Nothing
+/// runs concurrently: a chunk is produced when the loop asks for it, on the
+/// loop's own goroutine, so there is no extra child for a `scope` to join.
+///
+/// Each batch owns its array — "share *buffers* by communicating" only holds
+/// if the receiver may keep what it was handed — so a stage is free to store
+/// or forward the batch it received.
+///
+/// ```gs
+/// for batch in chunks(input, 1024) {
+///     process(batch)
+/// }
+/// ```
+/// @param source The channel to read.
+/// @param size The maximum number of elements per batch.
+/// @returns A receive-only channel of batches.
+public func chunks[T](source chan[T], size int32) in chan[ReadOnlyMemory[T]] {
+    return Chunks.Of[T](source, size)
+}
