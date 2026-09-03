@@ -69,9 +69,27 @@ jobs:
       - name: Build compiler
         if: github.event_name != 'pull_request'
         run: dotnet build src/Compiler/Compiler.csproj --configuration Release --no-restore -graph
+      # ADR-0174 D11. The concurrency rows are measured here rather than
+      # downloaded from the nightly, so the dashboard's numbers and its
+      # conformance numbers come from the same machine and the same commit.
+      # Best-effort: a failure here must not stop the site from deploying, and
+      # a missing results file means the dashboard shows no concurrency rows
+      # rather than stale ones.
+      - name: Setup Go
+        if: github.event_name != 'pull_request'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bench/concurrency/go/go.mod
+      - name: Measure concurrency benchmark
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          dotnet build src/Sdk/Gsharp.Extensions --configuration Release
+          python3 build/run-concurrency-bench.py --launches 5 --go             --json "$RUNNER_TEMP/concurrency.json"
       - name: Generate quality dashboard data
         if: github.event_name != 'pull_request'
-        run: python3 build/generate-quality-dashboard.py
+        run: |
+          python3 build/generate-quality-dashboard.py             --concurrency-json "$RUNNER_TEMP/concurrency.json"
       - name: Setup Node
         uses: actions/setup-node@v5
         with:

@@ -224,6 +224,51 @@ def git(*arguments: str) -> str:
     return run(["git", *arguments]).strip()
 
 
+def concurrency_metrics(results: Path | None) -> dict | None:
+    """The ADR-0174 D11 concurrency rows, paired with their recorded ceilings.
+
+    Reports what a run measured plus what the baseline expects, so a reader can
+    see both the number and whether it is inside its budget. A scenario whose
+    ceiling is still null has never been measured on a nightly; it is reported
+    as such rather than silently omitted, because "no budget yet" is itself the
+    status the ADR tracks.
+    """
+    if results is None or not results.exists():
+        return None
+
+    measured = json.loads(results.read_text())
+    baseline_path = ROOT / "bench/concurrency/baseline.json"
+    baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {"scenarios": {}}
+    registry_path = ROOT / "bench/concurrency/scenarios.json"
+    registry = json.loads(registry_path.read_text())["scenarios"] if registry_path.exists() else []
+
+    rows = []
+    for scenario in registry:
+        name = scenario["name"]
+        gsharp = measured.get("gsharp", {}).get(scenario["gsharp"])
+        recorded = baseline.get("scenarios", {}).get(name, {})
+        go_row = scenario.get("go")
+        go = measured.get("go", {}).get(go_row) if go_row else None
+        rows.append(
+            {
+                "name": name,
+                "what": scenario.get("what"),
+                "medianNs": gsharp["median_ns"] if gsharp else None,
+                "ci95Ns": gsharp["ci95_ns"] if gsharp else None,
+                "ceilingNs": recorded.get("ceiling_ns"),
+                "goMedianNs": go["median_ns"] if go else None,
+                "ratioVsGo": round(gsharp["median_ns"] / go["median_ns"], 2) if gsharp and go else None,
+                "targetVsGo": recorded.get("target_vs_go"),
+                "targetStatus": recorded.get("target_status", "provisional"),
+            }
+        )
+
+    return {
+        "hardwareClass": measured.get("hardwareClass"),
+        "scenarios": rows,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate conformance and benchmark data for the public quality dashboard."
@@ -238,10 +283,19 @@ def main() -> int:
         type=Path,
         default=ROOT / "artifacts/quality-dashboard",
     )
+    parser.add_argument(
+        "--concurrency-json",
+        type=Path,
+        help=(
+            "Results from build/run-concurrency-bench.py --json (ADR-0174 D11). "
+            "Omitted when the nightly did not run one; the dashboard then shows "
+            "no concurrency numbers rather than stale ones."
+        ),
+    )
     args = parser.parse_args()
 
     data = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "commit": git("rev-parse", "HEAD"),
         "commitDate": git("show", "-s", "--format=%cI", "HEAD"),
@@ -254,6 +308,12 @@ def main() -> int:
         "conformance": conformance_metrics(),
         "benchmarks": benchmark(args.work_directory.resolve()),
     }
+
+    # ADR-0174 D11. Absent rather than empty when no run was supplied: a
+    # dashboard that shows a stale number is worse than one that shows none.
+    concurrency = concurrency_metrics(args.concurrency_json)
+    if concurrency is not None:
+        data["benchmarks"]["concurrency"] = concurrency
 
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)

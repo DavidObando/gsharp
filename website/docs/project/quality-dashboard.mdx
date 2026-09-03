@@ -56,6 +56,56 @@ These are trend signals, not laboratory claims. GitHub-hosted runner load and
 process startup vary. Compare snapshots from the same OS/architecture and
 investigate sustained movement, not a single run.
 
+## Concurrency
+
+{data.benchmarks.concurrency ? (
+  <>
+    <p>
+      Paired G# and Go measurements for the channel and goroutine scenarios of{' '}
+      <a href="https://github.com/DavidObando/gsharp/blob/main/docs/adr/0174-goroutines-and-channels-wave-2.md">ADR-0174</a>{' '}
+      (decision D11), measured on <code>{data.benchmarks.concurrency.hardwareClass}</code>.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>G# ns/op</th>
+          <th>Ceiling</th>
+          <th>Go ns/op</th>
+          <th>Ratio</th>
+          <th>Target</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.benchmarks.concurrency.scenarios.map((row) => (
+          <tr key={row.name}>
+            <td><code>{row.name}</code></td>
+            <td>{row.medianNs ?? '—'}</td>
+            <td>{row.ceilingNs ?? 'not yet measured'}</td>
+            <td>{row.goMedianNs ?? '—'}</td>
+            <td>{row.ratioVsGo ? `${row.ratioVsGo}×` : '—'}</td>
+            <td>{row.targetVsGo ? `${row.targetVsGo}× (${row.targetStatus})` : row.targetStatus}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+    <p>
+      A ceiling of <em>not yet measured</em> means no nightly has recorded a
+      budget for that scenario, so nothing gates on it. A target stays{' '}
+      <em>provisional</em> until the ratio has met it on three separate nights
+      on the same hardware class. The G#-versus-Go ratio moves with the Go
+      toolchain and the machine and is reported, never gated; only the
+      within-runtime check can fail a run.
+    </p>
+  </>
+) : (
+  <p>
+    No concurrency measurements in this snapshot. The paired benchmark runs
+    nightly; a snapshot generated without it shows nothing here rather than a
+    stale number.
+  </p>
+)}
+
 ## Policy and method
 
 - [Compatibility and stability policy](https://github.com/DavidObando/gsharp/blob/main/docs/compatibility-and-stability.md)
