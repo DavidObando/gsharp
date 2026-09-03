@@ -75,6 +75,49 @@ func Widen(dirs []DirectoryInfo) []FileSystemInfo {
     }
 
     [Fact]
+    public void CovariantUpcast_StoringAWrongElement_ThrowsArrayTypeMismatchException()
+    {
+        // Issue #3858: the covariant upcast is UNSOUND BY DESIGN, exactly as in
+        // C# — the widened static type admits a store the runtime array rejects,
+        // and the CLR throws ArrayTypeMismatchException. That hazard is why the
+        // conversion stays explicit-only (#2516); this is the executing witness
+        // that `cast[[]Base](derived)` preserves the CLR's element check rather
+        // than quietly producing a `Base[]` that would accept anything.
+        var result = EmittedOracle.Evaluate(@"
+import System
+import System.IO
+let dirs = []DirectoryInfo{ DirectoryInfo(""alpha"") }
+let widened = cast[[]FileSystemInfo](dirs)
+var caught = ""none""
+try {
+    widened[0] = FileInfo(""beta"")
+} catch (e ArrayTypeMismatchException) {
+    caught = ""ArrayTypeMismatchException""
+}
+caught
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ArrayTypeMismatchException", result.Value);
+    }
+
+    [Fact]
+    public void ValueElementUpcast_IsStillRejected()
+    {
+        // Anti-vacuity: C# array covariance is REFERENCE-element-only. `int[]`
+        // does NOT convert to `object[]` in C# — implicitly or explicitly — and
+        // the CLR has no such array relationship (the elements are 4-byte
+        // integers, not references), so `[]int32 -> []object` must stay an
+        // error rather than becoming a cast that corrupts memory.
+        var result = EmittedOracle.Evaluate(@"
+func Widen(values []int32) []object {
+    return cast[[]object](values)
+}
+0
+");
+        Assert.NotEmpty(result.Diagnostics);
+    }
+
+    [Fact]
     public void UnrelatedElementTypes_AreStillRejected()
     {
         // The new arm requires an IMPLICIT element conversion, so it widens the
