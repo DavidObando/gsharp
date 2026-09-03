@@ -3,9 +3,14 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
+using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -125,6 +130,80 @@ public class Issue3501ResidualSyntheticRetargetTests
         Assert.DoesNotContain("true &&", printed, StringComparison.Ordinal);
         Assert.Contains(".Length > 0", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void ParamsArrayIsNullPattern_FoldsAway()
+    {
+        // The `is null` spelling of the same guard — the shape
+        // test/Shared/EmittedFixture.cs uses, which is LINKED into both
+        // Core.Tests and Compiler.Tests, so the surviving `== nil` reported
+        // GS0523 in both migrated apps. Only the `== null` binary spelling was
+        // folded before; the constant-null PATTERN fell through.
+        string printed = Translate("""
+            using System;
+
+            public class C
+            {
+                public static int Count(params string[] paths)
+                {
+                    if (paths is null)
+                    {
+                        throw new ArgumentNullException(nameof(paths));
+                    }
+
+                    return paths.Length;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("== nil", printed, StringComparison.Ordinal);
+        AssertBindsWithoutNilCompareWarning(printed);
+    }
+
+    [Fact]
+    public void ParamsArrayIsNotNullPattern_FoldsAway()
+    {
+        // `args is not null` is the negated spelling of the same dead guard.
+        string printed = Translate("""
+            public class C
+            {
+                public static int Count(params string[] paths)
+                {
+                    return paths is not null ? paths.Length : 0;
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("!= nil", printed, StringComparison.Ordinal);
+        AssertBindsWithoutNilCompareWarning(printed);
+    }
+
+    [Fact]
+    public void NonParamsArrayIsNullPattern_KeepsTheGuard()
+    {
+        // Anti-vacuity guard for the two tests above: an ORDINARY (non-params)
+        // nullable array parameter keeps its `is null` guard — the fold is
+        // keyed on `params`, not on "array compared to null".
+        string printed = Translate("""
+            using System;
+
+            public class C
+            {
+                public static int Count(string[]? paths)
+                {
+                    if (paths is null)
+                    {
+                        throw new ArgumentNullException(nameof(paths));
+                    }
+
+                    return paths.Length;
+                }
+            }
+            """);
+
+        Assert.Contains("== nil", printed, StringComparison.Ordinal);
+        AssertBindsWithoutNilCompareWarning(printed);
     }
 
     [Fact]
@@ -548,6 +627,30 @@ public class Issue3501ResidualSyntheticRetargetTests
         // print completes instead of throwing on a null member.
         string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Contains("DualMapFixture", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Binds the translated G# and asserts it reports no GS0523 ("comparison
+    /// of non-nullable … with 'nil' is always …"). GS0523 is a WARNING, so
+    /// <see cref="TranslationTestValidation.AssertBinds(string[])"/> alone does
+    /// not see it — but the migrated tree builds with TreatWarningsAsErrors, so
+    /// in the self-migration gate it is a hard failure.
+    /// </summary>
+    private static void AssertBindsWithoutNilCompareWarning(string printed)
+    {
+        TranslationTestValidation.AssertBinds(printed);
+
+        var trees = ImmutableArray.Create(SyntaxTree.Parse(SourceText.From(printed)));
+        BoundGlobalScope scope = Binder.BindGlobalScope(previous: null, trees, references: null);
+        var nilCompareWarnings = scope.Diagnostics
+            .Concat(Binder.BindProgram(scope).Diagnostics)
+            .Where(diagnostic => diagnostic.Id == "GS0523")
+            .ToArray();
+        Assert.True(
+            nilCompareWarnings.Length == 0,
+            "Translated G# must not report GS0523. Reported:\n"
+                + string.Join("\n", nilCompareWarnings.Select(warning => warning.ToString()))
+                + "\n\nPrinted:\n" + printed);
     }
 
     private static string Translate(string source)

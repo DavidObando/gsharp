@@ -19,7 +19,8 @@ public class OverloadResolutionPropertyTests
     /// <summary>
     /// Resolving the same candidate set and arguments repeatedly is deterministic.
     /// </summary>
-    /// <param name="scenario">The generated overload-resolution input.</param>
+    /// <param name="candidates">The generated candidate method set.</param>
+    /// <param name="argTypes">The generated argument types.</param>
     /// <returns><see langword="true"/> when both attempts produce the same result.</returns>
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Resolution_is_deterministic(MethodInfo[] candidates, Type[] argTypes)
@@ -35,7 +36,8 @@ public class OverloadResolutionPropertyTests
     /// <summary>
     /// Resolution results maintain their public shape invariants.
     /// </summary>
-    /// <param name="scenario">The generated overload-resolution input.</param>
+    /// <param name="candidates">The generated candidate method set.</param>
+    /// <param name="argTypes">The generated argument types.</param>
     /// <returns><see langword="true"/> when the outcome and payload agree.</returns>
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Outcome_payloads_match_outcome(MethodInfo[] candidates, Type[] argTypes)
@@ -57,7 +59,8 @@ public class OverloadResolutionPropertyTests
     /// <summary>
     /// Every reported best or ambiguous method came from the original candidate set.
     /// </summary>
-    /// <param name="scenario">The generated overload-resolution input.</param>
+    /// <param name="candidates">The generated candidate method set.</param>
+    /// <param name="argTypes">The generated argument types.</param>
     /// <returns><see langword="true"/> when all returned methods were supplied as candidates.</returns>
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Resolution_only_returns_input_candidates(MethodInfo[] candidates, Type[] argTypes)
@@ -77,7 +80,8 @@ public class OverloadResolutionPropertyTests
     /// <summary>
     /// An applicable identity conversion wins over widening, boxing, and reference conversions.
     /// </summary>
-    /// <param name="scenario">The generated exact-match scenario.</param>
+    /// <param name="argumentType">The generated argument type whose exact one-parameter method must win.</param>
+    /// <param name="distractors">The generated non-exact candidates competing with it.</param>
     /// <returns><see langword="true"/> when the exact candidate resolves.</returns>
     [Property(MaxTest = 200, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Exact_match_is_preferred(Type argumentType, MethodInfo[] distractors)
@@ -96,7 +100,9 @@ public class OverloadResolutionPropertyTests
     /// <summary>
     /// Numeric better-conversion ordering is antisymmetric and drives overload choice.
     /// </summary>
-    /// <param name="scenario">The generated numeric-betterness scenario.</param>
+    /// <param name="source">The generated source type of the single argument.</param>
+    /// <param name="firstIndex">Index selecting the first numeric candidate.</param>
+    /// <param name="secondIndex">Index selecting the second numeric candidate.</param>
     /// <returns><see langword="true"/> when the expected numeric target resolves.</returns>
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Numeric_betterness_is_antisymmetric_and_selects_expected_candidate(

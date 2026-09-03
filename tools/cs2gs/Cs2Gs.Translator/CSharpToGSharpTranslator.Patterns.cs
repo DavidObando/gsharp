@@ -1108,6 +1108,17 @@ public sealed partial class CSharpToGSharpTranslator
         {
             switch (pattern)
             {
+                case ConstantPatternSyntax paramsNull
+                    when paramsNull.Expression.IsKind(SyntaxKind.NullLiteralExpression)
+                        && this.IsParamsArrayOperand(receiverSyntax):
+                    // ADR-0159 / issue #3501: `args is null` where `args` is a
+                    // C# `params` array. A G# variadic parameter always
+                    // materializes an array, so the compare is statically
+                    // decided and gsc reports GS0523 — fold it the same way the
+                    // `args == null` spelling is folded (see
+                    // TryFoldParamsArrayNullCheck).
+                    return LiteralExpression.Bool(false);
+
                 case ConstantPatternSyntax constant
                     when constant.Expression.IsKind(SyntaxKind.NullLiteralExpression):
                     // `x is null` → `x == nil`.
@@ -1208,7 +1219,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return LiteralExpression.Bool(true);
 
                 case UnaryPatternSyntax unary when unary.IsKind(SyntaxKind.NotPattern):
-                    return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType, isNestedPatternMember);
+                    return this.TranslateNotPatternTest(receiver, unary.Pattern, receiverType, receiverSyntax, isNestedPatternMember);
 
                 case BinaryPatternSyntax binaryPattern
                     when binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword)
@@ -1365,10 +1376,23 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private GExpression TranslateNotPatternTest(
-            GExpression receiver, PatternSyntax inner, ITypeSymbol receiverType = null, bool isNestedPatternMember = false)
+            GExpression receiver,
+            PatternSyntax inner,
+            ITypeSymbol receiverType = null,
+            ExpressionSyntax receiverSyntax = null,
+            bool isNestedPatternMember = false)
         {
             switch (inner)
             {
+                case ConstantPatternSyntax paramsNull
+                    when paramsNull.Expression.IsKind(SyntaxKind.NullLiteralExpression)
+                        && this.IsParamsArrayOperand(receiverSyntax):
+                    // ADR-0159 / issue #3501: `args is not null` on a C#
+                    // `params` array — always true for a G# variadic, which
+                    // materializes an array; the `!= nil` spelling would be
+                    // GS0523 (see TryFoldParamsArrayNullCheck).
+                    return LiteralExpression.Bool(true);
+
                 case ConstantPatternSyntax constant
                     when constant.Expression.IsKind(SyntaxKind.NullLiteralExpression):
                     // `x is not null` → `x != nil`.
@@ -1427,7 +1451,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return new UnaryExpression(
                         "!",
                         new ParenthesizedExpression(
-                            this.TranslatePatternTest(receiver, inner, receiverType, isNestedPatternMember: isNestedPatternMember)));
+                            this.TranslatePatternTest(receiver, inner, receiverType, receiverSyntax, isNestedPatternMember)));
             }
         }
 
