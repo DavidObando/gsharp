@@ -2237,6 +2237,31 @@ implementation had to refine it.
     warning that a deferred call suspends) is not emitted; the shield it
     announces is applied unconditionally, so the warning is informational and
     is deferred with GS0560 and GS0563.
+27. **D8 as implemented (Phase 4-4).** `select` is lowered by the *binder* onto
+    `SelectWaiter` — operands once, left to right; one waiter carrying every
+    arm; `Wait()`, which the async lowering turns into an awaited `WaitAsync()`
+    inside a state machine exactly as it does a scope's join; `NeedsReprobe`
+    driving a retry loop for foreign arms; `TakeValue[T]` into the arm's
+    binding; `Return()` in a `finally`. The fast path lives in the runtime:
+    `WaitAsync` already probes every arm under the gates from a random start,
+    so the compiler emits no probe loop of its own, and a `default` arm calls
+    the new `TryNow()`, which probes once in the same random order and commits
+    without registering. `Task.WhenAny`, the per-arm `AsTask()`, the re-probe
+    of the winner, and the receive-before-send source order are gone, with
+    them the bias the old shape had.
+
+    Two details worth recording. Without a `default` arm the wait returns only
+    once an arm has transferred, so the last arm is emitted as the
+    unconditional `else` — which is what keeps "a select whose every arm
+    returns is a select that returns" exact (issue #2890). And a select now
+    carries its own `finally` (returning the waiter), so a `return` out of a
+    select inside `fixed` shows two regions rather than one: the waiter release
+    nested inside the single shared unpin epilogue (issue #2900).
+
+    The bespoke emitter and its slot planning are dead and now throw if
+    reached; deleting `BoundSelectStatement` and `BoundScopeStatement`
+    outright, with the coverage-matrix regeneration that entails, is batched
+    into the Phase 4 cleanup.
 
 ## Addendum A — The ten patterns, three ways
 

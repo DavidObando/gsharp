@@ -71,10 +71,20 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     /// <summary>Gets the number of registered arms. Diagnostic.</summary>
     internal int ArmCount => arms.Count;
 
-    /// <summary>Rents a waiter for a select with the given ambient cancellation.</summary>
-    /// <param name="arms">The number of arms the select has (a capacity hint).</param>
-    /// <param name="cancellationToken">The ambient context's token.</param>
-    /// <returns>A pending waiter.</returns>
+    /// <summary>
+    /// Rents a waiter for <paramref name="arms"/> arms, cancelled by
+    /// <paramref name="context"/> (ADR-0174 D7/D8). This is the overload the
+    /// compiler emits: a <c>select</c> inside a cancelled scope unwinds.
+    /// </summary>
+    /// <param name="arms">The number of arms.</param>
+    /// <param name="context">The ambient context, or <see langword="null"/> for none.</param>
+    /// <returns>A waiter; call <see cref="Return()"/> when the select completes.</returns>
+    public static SelectWaiter Rent(int arms, Context? context) => Rent(arms, context?.Token ?? default);
+
+    /// <summary>Rents a waiter for <paramref name="arms"/> arms under a token.</summary>
+    /// <param name="arms">The number of arms.</param>
+    /// <param name="cancellationToken">The ambient cancellation.</param>
+    /// <returns>A waiter; call <see cref="Return()"/> when the select completes.</returns>
     public static SelectWaiter Rent(int arms, CancellationToken cancellationToken)
     {
         var waiter = cache;
@@ -230,6 +240,91 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     /// when a send arm's channel closes, or a winning task arm's fault.
     /// </summary>
     /// <returns>The winning arm.</returns>
+    /// <summary>
+    /// ADR-0174 D8, the <c>default</c> arm: probes every arm once, in uniform
+    /// random order, and commits to the first that is ready — without
+    /// registering, parking, or observing cancellation. Returns the winning arm,
+    /// or <c>-1</c> when none is ready, in which case the caller takes its
+    /// <c>default</c> arm.
+    /// </summary>
+    /// <returns>The winning arm index, or <c>-1</c>.</returns>
+    public int TryNow()
+    {
+        var generation = Generation;
+        var completions = default(Completions);
+        var won = false;
+
+        CollectGates();
+        var taken = 0;
+        try
+        {
+            for (; taken < gates.Count; taken++)
+            {
+                Monitor.Enter(gates[taken].Gate);
+            }
+
+            var count = arms.Count;
+            var start = count > 0 ? SelectRandom.Next(count) : 0;
+            for (var k = 0; k < count && !won; k++)
+            {
+                var descriptor = arms[(start + k) % count];
+                if (descriptor.RequiresGate && descriptor.TryProbe(this, ref completions))
+                {
+                    Claim(generation, descriptor.Arm);
+                    won = true;
+                }
+            }
+        }
+        finally
+        {
+            for (var i = taken - 1; i >= 0; i--)
+            {
+                Monitor.Exit(gates[i].Gate);
+            }
+        }
+
+        completions.Publish();
+
+        // Arms that lock privately or hold no lock at all — a foreign channel, a
+        // timer, a task — are probed outside the gates, in the same rotation.
+        if (!won)
+        {
+            var count = arms.Count;
+            var start = count > 0 ? SelectRandom.Next(count) : 0;
+            for (var k = 0; k < count && !won; k++)
+            {
+                var descriptor = arms[(start + k) % count];
+                if (!descriptor.RequiresGate && descriptor.TryProbe(this, ref completions))
+                {
+                    Claim(generation, descriptor.Arm);
+                    won = true;
+                }
+            }
+
+            completions.Publish();
+        }
+
+        if (fault is not null)
+        {
+            var captured = fault;
+            fault = null;
+            throw captured;
+        }
+
+        return won ? winnerArm : -1;
+    }
+
+    /// <summary>
+    /// The blocking form of <see cref="WaitAsync"/>, for the synthesized root
+    /// that may block (ADR-0174 D4). The compiler emits this and the async
+    /// lowering rewrites it into an awaited <see cref="WaitAsync"/> inside a
+    /// state machine, exactly as it does for a scope's join.
+    /// </summary>
+    /// <returns>The winning arm index.</returns>
+    public int Wait() => WaitAsync().AsTask().GetAwaiter().GetResult();
+
+    /// <summary>Registers every arm and suspends until one wins.</summary>
+    /// <returns>The winning arm index.</returns>
     public ValueTask<int> WaitAsync()
     {
         var generation = Generation;
@@ -324,7 +419,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         return taken is null ? default! : (T)taken;
     }
 
-    /// <summary>Deregisters every losing arm, tears down callbacks, and pools the waiter. Call exactly once per <see cref="Rent"/>.</summary>
+    /// <summary>Deregisters every losing arm, tears down callbacks, and pools the waiter. Call exactly once per <see cref="Rent(int, Context)"/>.</summary>
     public void Return()
     {
         foreach (var descriptor in arms)

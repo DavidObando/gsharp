@@ -885,7 +885,7 @@ public partial class Parser
         if (Current.Kind == SyntaxKind.LeftArrowToken)
         {
             NextToken(); // consume `<-`
-            var channel = ParseExpression();
+            var channel = ParseArmOperand();
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -907,7 +907,7 @@ public partial class Parser
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
             MatchToken(SyntaxKind.EqualsToken);
             MatchToken(SyntaxKind.LeftArrowToken);
-            var channel = ParseExpression();
+            var channel = ParseArmOperand();
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -932,7 +932,7 @@ public partial class Parser
                 colonEquals.Location,
                 $"case let {identifier.Text} = <-ch");
             MatchToken(SyntaxKind.LeftArrowToken);
-            var channel = ParseExpression();
+            var channel = ParseArmOperand();
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -947,7 +947,7 @@ public partial class Parser
         // case ch <- v { ... } — send.
         var sendChannel = ParseExpression();
         MatchToken(SyntaxKind.LeftArrowToken);
-        var sendValue = ParseExpression();
+        var sendValue = ParseArmOperand();
         var sendBody = ParseBlockStatement();
         return new SelectCaseSyntax(
             syntaxTree,
@@ -957,6 +957,27 @@ public partial class Parser
             sendChannel,
             sendValue,
             sendBody);
+    }
+
+    /// <summary>
+    /// Parses the operand that sits immediately before a select arm's body
+    /// brace. Issue #1023's defect in another position: a call- or
+    /// indexer-tailed operand (<c>case ch &lt;- Pair(41) { … }</c>) would
+    /// otherwise read the arm's <c>{</c> as its own object initializer and
+    /// swallow the body.
+    /// </summary>
+    /// <returns>The parsed operand.</returns>
+    private ExpressionSyntax ParseArmOperand()
+    {
+        suppressTrailingObjectInitializer++;
+        try
+        {
+            return ParseExpression();
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer--;
+        }
     }
 
     private StatementSyntax ParseExpressionStatement()

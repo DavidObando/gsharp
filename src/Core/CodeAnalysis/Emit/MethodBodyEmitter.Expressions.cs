@@ -351,6 +351,17 @@ internal sealed partial class MethodBodyEmitter
                         break;
                     }
 
+                    // The receiver may be an ordinary imported type while the
+                    // METHOD's type argument is a same-compilation symbol — a
+                    // `SelectWaiter.TakeValue[Pair]`, say (ADR-0174 D8). The
+                    // emitted token already returns `Pair`, so widening it as if
+                    // the reflected `object` return had travelled would unbox a
+                    // value that was never boxed.
+                    if (this.outer.userTokens.TryGetSymbolicSubstitutedImportedCallReturn(instCall.Method, instCall.TypeArgumentSymbols, out _))
+                    {
+                        break;
+                    }
+
                     this.EmitErasedObjectReturnWidening(
                         TypeSymbol.FromClrType(instCall.Method.ReturnType),
                         instCall.Type);

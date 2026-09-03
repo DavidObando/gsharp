@@ -952,15 +952,248 @@ internal sealed partial class StatementBinder
             binderCtx.LoopStack.Pop();
         }
 
-        var selectResult = new BoundSelectStatement(syntax, bound.ToImmutable());
+        var lowered = LowerSelectStatement(syntax, bound.ToImmutable());
         if (binderCtx.UsedBreakLabels.Contains(selectBreakLabel))
         {
             return new BoundBlockStatement(
                 syntax,
-                ImmutableArray.Create<BoundStatement>(selectResult, new BoundLabelStatement(null, selectBreakLabel)));
+                ImmutableArray.Create<BoundStatement>(lowered, new BoundLabelStatement(null, selectBreakLabel)));
         }
 
-        return selectResult;
+        return lowered;
+    }
+
+    /// <summary>
+    /// ADR-0174 D8: lowers <c>select</c> onto the runtime's <c>SelectWaiter</c>.
+    /// The operands are evaluated once, then every arm is registered on one
+    /// waiter, which probes them in uniform-random order and — only if none is
+    /// ready — parks on all of them at once. That replaces the old
+    /// probe-in-source-order, <c>Task.WhenAny</c>, re-probe-the-winner shape,
+    /// which was both unfair and unable to transfer a value atomically.
+    /// </summary>
+    /// <remarks>
+    /// The emitted shape is:
+    /// <code>
+    /// let ch_i = &lt;operand&gt;                 // once, left to right
+    /// var winner = -1; var again = true
+    /// loop:
+    ///   let w = SelectWaiter.Rent(n, ctx)
+    ///   try {
+    ///     w.AddReceive[T](ch_i, i) / w.AddSend[T](ch_i, v_i, i)
+    ///     winner = w.Wait()                 // or w.TryNow() when a default arm exists
+    ///     again = w.NeedsReprobe            // a foreign arm lost its value to a thief
+    ///     if !again { v_i = w.TakeValue[T]() }
+    ///   } finally { w.Return() }
+    ///   if again goto loop
+    /// if winner == i { body_i } … else { default body }
+    /// </code>
+    /// <c>Wait</c> is the blocking form; inside a state machine the async
+    /// lowering turns it into an awaited <c>WaitAsync</c>, exactly as it does
+    /// for a scope's join, so a parked select holds no thread.
+    /// </remarks>
+    /// <param name="syntax">The select syntax.</param>
+    /// <param name="cases">The bound arms.</param>
+    /// <returns>The lowered statement.</returns>
+    private BoundStatement LowerSelectStatement(SelectStatementSyntax syntax, ImmutableArray<BoundSelectCase> cases)
+    {
+        if (!EnsureChannelRuntimeForSelect(syntax))
+        {
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        var runtime = binderCtx.ChannelRuntime;
+        var shapes = new (TypeSymbol Element, ChannelDirection Direction)[cases.Length];
+        for (var i = 0; i < cases.Length; i++)
+        {
+            if (cases[i].IsDefault)
+            {
+                continue;
+            }
+
+            if (cases[i].Channel is not { } channel
+                || !ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var element, out var direction, out _))
+            {
+                // A recovery arm: the diagnostic is already reported, and emit
+                // never runs for a program that has one.
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            shapes[i] = (element, direction);
+        }
+
+        var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        // The operands are evaluated once, left to right, before any arm is
+        // attempted — re-evaluating a channel expression per probe would be
+        // observable (D8 step 1).
+        var channelLocals = new VariableSymbol?[cases.Length];
+        var valueLocals = new VariableSymbol?[cases.Length];
+        var armCount = 0;
+        for (var i = 0; i < cases.Length; i++)
+        {
+            if (cases[i].IsDefault)
+            {
+                continue;
+            }
+
+            armCount++;
+            var channel = Invariant.Required(cases[i].Channel, "a non-default select arm binds a channel");
+            var channelLocal = new LocalVariableSymbol($"<select$ch${id}${i}>", isReadOnly: true, channel.Type!);
+            scope.TryDeclareVariable(channelLocal);
+            channelLocals[i] = channelLocal;
+            statements.Add(new BoundVariableDeclaration(null, channelLocal, channel));
+
+            if (cases[i].CaseKind == SelectCaseKind.Send)
+            {
+                var value = Invariant.Required(cases[i].Value, "a send select arm binds a value");
+                var valueLocal = new LocalVariableSymbol($"<select$value${id}${i}>", isReadOnly: true, value.Type!);
+                scope.TryDeclareVariable(valueLocal);
+                valueLocals[i] = valueLocal;
+                statements.Add(new BoundVariableDeclaration(null, valueLocal, value));
+            }
+        }
+
+        var winner = new LocalVariableSymbol($"<select$winner${id}>", isReadOnly: false, TypeSymbol.Int32);
+        scope.TryDeclareVariable(winner);
+        statements.Add(new BoundVariableDeclaration(null, winner, new BoundLiteralExpression(null, -1, TypeSymbol.Int32)));
+
+        var again = new LocalVariableSymbol($"<select$again${id}>", isReadOnly: false, TypeSymbol.Bool);
+        scope.TryDeclareVariable(again);
+        statements.Add(new BoundVariableDeclaration(null, again, new BoundLiteralExpression(null, true, TypeSymbol.Bool)));
+
+        // A bound receive arm's variable is declared out here and assigned from
+        // the waiter, so the arm body — which runs after the waiter is returned
+        // — still sees it.
+        for (var i = 0; i < cases.Length; i++)
+        {
+            if (cases[i].Variable is { } bindVariable)
+            {
+                statements.Add(new BoundVariableDeclaration(null, bindVariable, new BoundDefaultExpression(null, bindVariable.Type)));
+            }
+        }
+
+        var hasDefault = cases.Any(static c => c.IsDefault);
+        var waiter = new LocalVariableSymbol($"<select$waiter${id}>", isReadOnly: true, runtime.SelectWaiterType);
+        scope.TryDeclareVariable(waiter);
+
+        var attempt = ImmutableArray.CreateBuilder<BoundStatement>();
+        for (var i = 0; i < cases.Length; i++)
+        {
+            if (channelLocals[i] is not { } channelLocal)
+            {
+                continue;
+            }
+
+            var value = valueLocals[i] is { } valueLocal ? new BoundVariableExpression(null, valueLocal) : null;
+            attempt.Add(new BoundExpressionStatement(
+                null,
+                runtime.BindSelectAdd(waiter, new BoundVariableExpression(null, channelLocal), value, shapes[i].Element, shapes[i].Direction, i)));
+        }
+
+        attempt.Add(new BoundExpressionStatement(
+            null,
+            new BoundAssignmentExpression(
+                null,
+                winner,
+                hasDefault ? runtime.BindSelectTryNow(waiter) : runtime.BindSelectWait(waiter))));
+        attempt.Add(new BoundExpressionStatement(
+            null,
+            new BoundAssignmentExpression(null, again, runtime.BindSelectNeedsReprobe(waiter))));
+
+        var takes = ImmutableArray.CreateBuilder<BoundStatement>();
+        for (var i = 0; i < cases.Length; i++)
+        {
+            if (cases[i].Variable is not { } bindVariable)
+            {
+                continue;
+            }
+
+            takes.Add(new BoundIfStatement(
+                null,
+                ArmIs(winner, i),
+                new BoundExpressionStatement(
+                    null,
+                    new BoundAssignmentExpression(null, bindVariable, runtime.BindSelectTakeValue(waiter, shapes[i].Element))),
+                elseStatement: null));
+        }
+
+        if (takes.Count > 0)
+        {
+            attempt.Add(new BoundIfStatement(
+                null,
+                new BoundUnaryExpression(
+                    null,
+                    Invariant.Required(BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool), "'!' is defined for bool"),
+                    new BoundVariableExpression(null, again)),
+                new BoundBlockStatement(null, takes.ToImmutable()),
+                elseStatement: null));
+        }
+
+        var loopLabel = new BoundLabel($"selectProbe{id}");
+        statements.Add(new BoundLabelStatement(null, loopLabel));
+        statements.Add(new BoundVariableDeclaration(null, waiter, runtime.BindSelectRent(syntax, armCount, binderCtx.AmbientContext())));
+        statements.Add(new BoundTryStatement(
+            null,
+            new BoundBlockStatement(null, attempt.ToImmutable()),
+            ImmutableArray<BoundCatchClause>.Empty,
+            new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, runtime.BindSelectReturn(waiter))))));
+        statements.Add(new BoundConditionalGotoStatement(null, loopLabel, new BoundVariableExpression(null, again), jumpIfTrue: true));
+
+        // Dispatch, outside the waiter's lifetime: `winner` is the arm that
+        // transferred, or -1 when a `default` arm exists and nothing was ready.
+        BoundStatement? dispatch = null;
+        var needsElse = !hasDefault;
+        for (var i = cases.Length - 1; i >= 0; i--)
+        {
+            if (cases[i].IsDefault)
+            {
+                dispatch = cases[i].Body;
+                continue;
+            }
+
+            if (needsElse)
+            {
+                // Without a `default` arm the wait only returns once an arm has
+                // transferred, so the last arm is unconditional. Saying so keeps
+                // definite-return analysis exact: a select whose every arm
+                // returns is a select that returns (issue #2890).
+                dispatch = cases[i].Body;
+                needsElse = false;
+                continue;
+            }
+
+            dispatch = new BoundIfStatement(null, ArmIs(winner, i), cases[i].Body, dispatch);
+        }
+
+        if (dispatch != null)
+        {
+            statements.Add(dispatch);
+        }
+
+        return new BoundBlockStatement(syntax, statements.ToImmutable());
+
+        BoundExpression ArmIs(VariableSymbol winnerLocal, int arm)
+            => new BoundBinaryExpression(
+                null,
+                new BoundVariableExpression(null, winnerLocal),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    "'==' is defined for int32"),
+                new BoundLiteralExpression(null, arm, TypeSymbol.Int32));
+    }
+
+    private bool EnsureChannelRuntimeForSelect(SelectStatementSyntax syntax)
+    {
+        if (binderCtx.ChannelRuntime.IsAvailable)
+        {
+            return true;
+        }
+
+        Diagnostics.ReportTargetFrameworkMemberUnavailable(syntax.SelectKeyword.Location, "Gsharp.Concurrency.SelectWaiter");
+        return false;
     }
 
     private BoundStatement BindScopeStatement(ScopeStatementSyntax syntax)

@@ -118,7 +118,7 @@ public class SelectWaiterStressTests
                 Chan<int>? armB = b;
                 while (armA is not null || armB is not null)
                 {
-                    var w = SelectWaiter.Rent(2, default);
+                    var w = SelectWaiter.Rent(2, CancellationToken.None);
                     w.AddReceive<int>(armA, 0);
                     w.AddReceive<int>(armB, 1);
                     var arm = await w.WaitAsync();
@@ -169,7 +169,7 @@ public class SelectWaiterStressTests
             Chan<int>? y = second;
             while (open > 0)
             {
-                var w = SelectWaiter.Rent(2, default);
+                var w = SelectWaiter.Rent(2, CancellationToken.None);
                 w.AddReceive<int>(x, 0);
                 w.AddReceive<int>(y, 1);
                 var arm = await w.WaitAsync();
@@ -200,7 +200,7 @@ public class SelectWaiterStressTests
         var b = new Chan<int>();
         for (var i = 0; i < 10_000; i++)
         {
-            var w = SelectWaiter.Rent(2, default);
+            var w = SelectWaiter.Rent(2, CancellationToken.None);
             w.AddReceive<int>(a, 0);
             w.AddReceive<int>(b, 1);
             var wait = w.WaitAsync().AsTask();
@@ -277,7 +277,7 @@ public class SelectWaiterStressTests
         {
             var ch = new Chan<int>(1);
             using var after = Timers.After(TimeSpan.FromMilliseconds(1));
-            var w = SelectWaiter.Rent(2, default);
+            var w = SelectWaiter.Rent(2, CancellationToken.None);
             w.AddReceive<int>(ch, 0);
             w.AddReceive<DateTime>(after, 1);
             var wait = w.WaitAsync().AsTask();
@@ -293,7 +293,7 @@ public class SelectWaiterStressTests
             // Immediately reuse the pooled waiter on a ready channel; the
             // timer's callback for the previous select may fire right now.
             other.TrySend(-i);
-            var w2 = SelectWaiter.Rent(1, default);
+            var w2 = SelectWaiter.Rent(1, CancellationToken.None);
             w2.AddReceive<int>(other, 0);
             Assert.Equal(0, await w2.WaitAsync().AsTask().WaitAsync(Timeout));
             Assert.True(w2.Ok);
@@ -310,7 +310,7 @@ public class SelectWaiterStressTests
         var mismatches = 0;
         for (var i = 0; i < 5_000; i++)
         {
-            var w = SelectWaiter.Rent(2, default);
+            var w = SelectWaiter.Rent(2, CancellationToken.None);
             w.AddSend<int>(ch, i, 0);
             w.AddReceive<int>(alt, 1);
             var wait = w.WaitAsync().AsTask();

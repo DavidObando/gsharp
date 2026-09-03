@@ -39,7 +39,7 @@ public class SelectWaiterTests
         var a = new Chan<int>(1);
         var b = new Chan<int>(1);
         b.TrySend(42);
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>(a, 0);
         w.AddReceive<int>(b, 1);
         var wait = w.WaitAsync();
@@ -58,7 +58,7 @@ public class SelectWaiterTests
     {
         var a = new Chan<string>();
         var b = new Chan<string>();
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<string>(a, 0);
         w.AddReceive<string>(b, 1);
         var wait = w.WaitAsync().AsTask();
@@ -81,7 +81,7 @@ public class SelectWaiterTests
         var a = new Chan<int>();
         var b = new Chan<int>();
         var c = new Chan<int>();
-        var w = SelectWaiter.Rent(3, default);
+        var w = SelectWaiter.Rent(3, CancellationToken.None);
         w.AddReceive<int>(a, 0);
         w.AddReceive<int>(b, 1);
         w.AddSend<int>(c, 5, 2);
@@ -99,7 +99,7 @@ public class SelectWaiterTests
     public async Task TryClaim_StaleGeneration_IsRejected()
     {
         var ch = new Chan<int>();
-        var w = SelectWaiter.Rent(1, default);
+        var w = SelectWaiter.Rent(1, CancellationToken.None);
         w.AddReceive<int>(ch, 0);
         var wait = w.WaitAsync().AsTask();
         var stale = w.Generation;
@@ -107,7 +107,7 @@ public class SelectWaiterTests
         Assert.Equal(0, await wait.WaitAsync(Timeout));
         w.Return();
 
-        var reused = SelectWaiter.Rent(1, default);
+        var reused = SelectWaiter.Rent(1, CancellationToken.None);
         Assert.Same(w, reused);
         Assert.Equal(stale + 1, reused.Generation);
         Assert.False(reused.TryClaim(stale, 7));
@@ -121,7 +121,7 @@ public class SelectWaiterTests
     {
         var ch = new Chan<int>();
         var never = new Chan<int>();
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddSend<int>(ch, 77, 0);
         w.AddReceive<int>(never, 1);
         var wait = w.WaitAsync().AsTask();
@@ -138,7 +138,7 @@ public class SelectWaiterTests
     {
         var ch = new Chan<int>();
         var never = new Chan<int>();
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>(ch, 0);
         w.AddReceive<int>(never, 1);
         var wait = w.WaitAsync().AsTask();
@@ -149,7 +149,7 @@ public class SelectWaiterTests
         w.Return();
 
         // Already closed at probe time: same outcome, synchronously.
-        var w2 = SelectWaiter.Rent(1, default);
+        var w2 = SelectWaiter.Rent(1, CancellationToken.None);
         w2.AddReceive<int>(ch, 0);
         var wait2 = w2.WaitAsync();
         Assert.True(wait2.IsCompletedSuccessfully);
@@ -162,7 +162,7 @@ public class SelectWaiterTests
     {
         var ch = new Chan<int>();
         var never = new Chan<int>();
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddSend<int>(ch, 1, 0);
         w.AddReceive<int>(never, 1);
         var wait = w.WaitAsync().AsTask();
@@ -170,7 +170,7 @@ public class SelectWaiterTests
         await Assert.ThrowsAsync<ChannelClosedException>(() => wait.WaitAsync(Timeout));
         w.Return();
 
-        var w2 = SelectWaiter.Rent(1, default);
+        var w2 = SelectWaiter.Rent(1, CancellationToken.None);
         w2.AddSend<int>(ch, 1, 0);
         await Assert.ThrowsAsync<ChannelClosedException>(async () => await w2.WaitAsync());
         w2.Return();
@@ -233,7 +233,7 @@ public class SelectWaiterTests
     {
         var never = new Chan<int>();
         var tcs = new TaskCompletionSource<string>();
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>(never, 0);
         w.AddTask(tcs.Task, 1);
         var wait = w.WaitAsync().AsTask();
@@ -243,7 +243,7 @@ public class SelectWaiterTests
         w.Return();
 
         var faulted = new TaskCompletionSource<string>();
-        var w2 = SelectWaiter.Rent(2, default);
+        var w2 = SelectWaiter.Rent(2, CancellationToken.None);
         w2.AddReceive<int>(never, 0);
         w2.AddTask(faulted.Task, 1);
         var wait2 = w2.WaitAsync().AsTask();
@@ -253,7 +253,7 @@ public class SelectWaiterTests
         w2.Return();
 
         // Completed before registration: synchronous.
-        var w3 = SelectWaiter.Rent(1, default);
+        var w3 = SelectWaiter.Rent(1, CancellationToken.None);
         w3.AddTask(Task.FromResult(5), 0);
         Assert.Equal(0, await w3.WaitAsync());
         Assert.Equal(5, w3.TakeValue<int>());
@@ -265,7 +265,7 @@ public class SelectWaiterTests
     {
         var foreign = Channel.CreateBounded<int>(1);
         var never = new Chan<int>();
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>(foreign, 0);
         w.AddReceive<int>(never, 1);
         var wait = w.WaitAsync().AsTask();
@@ -281,7 +281,7 @@ public class SelectWaiterTests
 
         // Closed foreign channel: the arm fires closed (no re-probe needed).
         foreign.Writer.Complete();
-        var w2 = SelectWaiter.Rent(1, default);
+        var w2 = SelectWaiter.Rent(1, CancellationToken.None);
         w2.AddReceive<int>(foreign, 0);
         Assert.Equal(0, await w2.WaitAsync());
         Assert.False(w2.Ok);
@@ -294,7 +294,7 @@ public class SelectWaiterTests
     {
         var ch = new Chan<int>(1);
         ch.TrySend(1);
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>((Channel<int>?)null, 0);
         w.AddSend<int>((ChannelWriter<int>?)null, 5, 1);
         w.AddReceive<int>(ch, 2);
@@ -311,7 +311,7 @@ public class SelectWaiterTests
         var third = new Chan<string>();
         Assert.True(first.Id < second.Id && second.Id < third.Id);
 
-        var w = SelectWaiter.Rent(4, default);
+        var w = SelectWaiter.Rent(4, CancellationToken.None);
         w.AddReceive<string>(third, 0);
         w.AddReceive<int>(second, 1);
         w.AddReceive<int>(first, 2);
@@ -326,7 +326,7 @@ public class SelectWaiterTests
     {
         // The same channel in two arms locks once and both register.
         var ch = new Chan<int>(1);
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>(ch, 0);
         w.AddSend<int>(ch, 1, 1);
         Assert.Equal(1, await w.WaitAsync());

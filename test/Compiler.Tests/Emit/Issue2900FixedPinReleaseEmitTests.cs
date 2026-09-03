@@ -642,7 +642,20 @@ public class Issue2900FixedPinReleaseEmitTests
             "select_return",
             ignoredErrorScope: @"<Program>\.FromSelect$");
         Assert.Equal($"9{Environment.NewLine}", program.Run());
-        AssertEscapingLeave(program.ReadMethod("FromSelect"), expectedFinallyCount: 1);
+
+        // Two regions since ADR-0174 D8: the select's own `finally`, which
+        // returns its waiter, nested inside the one shared `fixed` epilogue.
+        // A regression that duplicated the unpin per exit path would show three.
+        // Only the epilogue carries the escaping `return`, so only it is checked
+        // for the body-exit-plus-fallthrough pair.
+        var fromSelect = program.ReadMethod("FromSelect");
+        var selectFinallys = fromSelect.Regions
+            .Where(region => region.Kind == ExceptionRegionKind.Finally)
+            .OrderByDescending(region => region.TryLength)
+            .ToArray();
+        Assert.Equal(2, selectFinallys.Length);
+        AssertEscapingLeaveInRegion(fromSelect, selectFinallys[0]);
+        AssertCleanupHandlers(fromSelect);
     }
 
     [Fact]
@@ -842,15 +855,20 @@ public class Issue2900FixedPinReleaseEmitTests
         Assert.Equal(expectedFinallyCount, regions.Length);
         foreach (var region in regions)
         {
-            Assert.True(
-                method.Instructions.Count(instruction =>
-                    IsLeave(instruction.OpCode)
-                    && IsInside(instruction.Offset, region)
-                    && instruction.BranchTarget >= region.HandlerOffset + region.HandlerLength) >= 2,
-                $"Expected body exit plus normal fallthrough leave in {method.Name}.");
+            AssertEscapingLeaveInRegion(method, region);
         }
 
         AssertCleanupHandlers(method);
+    }
+
+    private static void AssertEscapingLeaveInRegion(MethodIl method, ExceptionRegion region)
+    {
+        Assert.True(
+            method.Instructions.Count(instruction =>
+                IsLeave(instruction.OpCode)
+                && IsInside(instruction.Offset, region)
+                && instruction.BranchTarget >= region.HandlerOffset + region.HandlerLength) >= 2,
+            $"Expected body exit plus normal fallthrough leave in {method.Name}.");
     }
 
     private static void AssertCleanupHandlers(MethodIl method)

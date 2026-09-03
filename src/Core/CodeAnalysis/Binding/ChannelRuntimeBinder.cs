@@ -57,11 +57,13 @@ internal sealed class ChannelRuntimeBinder
     private readonly Type? valueTask;
     private readonly Type? blockingType;
     private readonly Type? scopeFrameType;
+    private readonly Type? selectWaiterType;
     private readonly Type? contextType;
     private readonly Type? goroutineRuntimeType;
     private ImportedClassSymbol? channelOpsClass;
     private ImportedClassSymbol? blockingClass;
     private ImportedClassSymbol? scopeFrameClass;
+    private ImportedClassSymbol? selectWaiterClass;
     private ImportedClassSymbol? goroutineRuntimeClass;
 
     /// <summary>Initializes a new instance of the <see cref="ChannelRuntimeBinder"/> class.</summary>
@@ -76,6 +78,7 @@ internal sealed class ChannelRuntimeBinder
         references.TryResolveType("System.Threading.Tasks.ValueTask", out valueTask);
         references.TryResolveType("Gsharp.Concurrency.Blocking", out blockingType);
         references.TryResolveType("Gsharp.Concurrency.ScopeFrame", out scopeFrameType);
+        references.TryResolveType("Gsharp.Concurrency.SelectWaiter", out selectWaiterType);
         references.TryResolveType("Gsharp.Concurrency.Context", out contextType);
         references.TryResolveType("Gsharp.Concurrency.GoroutineRuntime", out goroutineRuntimeType);
     }
@@ -85,6 +88,9 @@ internal sealed class ChannelRuntimeBinder
 
     /// <summary>Gets the runtime's <c>ScopeFrame</c> type symbol (ADR-0174 D6).</summary>
     public TypeSymbol ScopeFrameType => TypeSymbol.FromClrType(Required(scopeFrameType));
+
+    /// <summary>Gets the runtime's <c>SelectWaiter</c> type symbol (ADR-0174 D8).</summary>
+    public TypeSymbol SelectWaiterType => TypeSymbol.FromClrType(Required(selectWaiterType));
 
     /// <summary>Gets the runtime's <c>Context</c> type symbol (ADR-0174 D6/D7).</summary>
     public TypeSymbol ContextType => TypeSymbol.FromClrType(Required(contextType));
@@ -150,6 +156,112 @@ internal sealed class ChannelRuntimeBinder
             ImmutableArray<BoundExpression>.Empty);
     }
 
+    /// <summary>Binds <c>SelectWaiter.Rent(arms, context)</c> (ADR-0174 D8).</summary>
+    /// <param name="syntax">The select syntax.</param>
+    /// <param name="arms">The number of non-default arms.</param>
+    /// <param name="context">The ambient context, or <see langword="null"/>.</param>
+    /// <returns>A call typed <c>SelectWaiter</c>.</returns>
+    public BoundExpression BindSelectRent(SyntaxNode? syntax, int arms, BoundExpression? context)
+    {
+        var waiter = Required(selectWaiterType);
+        var rent = waiter.GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(m => m.Name == "Rent" && m.GetParameters()[^1].ParameterType.FullName == "Gsharp.Concurrency.Context");
+        selectWaiterClass ??= new ImportedClassSymbol(waiter, declaration: null, references: references);
+        var function = new ImportedFunctionSymbol("Rent", selectWaiterClass, rent, declaration: null, returnTypeOverride: SelectWaiterType);
+        return new BoundImportedCallExpression(
+            syntax,
+            function,
+            ImmutableArray.Create(
+                new BoundLiteralExpression(null, arms, TypeSymbol.Int32),
+                context ?? BindContextNone()));
+    }
+
+    /// <summary>Binds <c>waiter.AddReceive[T](channel, arm)</c> or <c>AddSend[T](channel, value, arm)</c> (ADR-0174 D8).</summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <param name="channel">The channel operand, already evaluated into a local.</param>
+    /// <param name="value">The value for a send arm, or <see langword="null"/> for a receive arm.</param>
+    /// <param name="elementType">The arm's element type.</param>
+    /// <param name="direction">The channel's direction, which selects the carrier overload.</param>
+    /// <param name="arm">The arm index.</param>
+    /// <returns>A call typed <c>void</c>.</returns>
+    public BoundExpression BindSelectAdd(VariableSymbol waiter, BoundExpression channel, BoundExpression? value, TypeSymbol elementType, ChannelDirection direction, int arm)
+    {
+        var name = value == null ? "AddReceive" : "AddSend";
+        var carrier = CarrierFor(direction);
+        var open = Required(selectWaiterType).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(m =>
+                m.Name == name
+                && m.IsGenericMethodDefinition
+                && m.GetParameters()[0].ParameterType is { IsGenericType: true } first
+                && first.GetGenericTypeDefinition().Name == carrier);
+
+        // A same-compilation element (a user struct, say) has no reference-context
+        // CLR type, so the method closes over System.Object here and travels
+        // symbolically; without that the emitted call would be `AddReceive<object>`
+        // against a `Channel<Pair>` argument (issue #2965).
+        var (closedElement, symbolic) = ProjectElement(elementType);
+        var closed = open.MakeGenericMethod(closedElement);
+        var arguments = value == null
+            ? ImmutableArray.Create(channel, new BoundLiteralExpression(null, arm, TypeSymbol.Int32))
+            : ImmutableArray.Create(channel, value, new BoundLiteralExpression(null, arm, TypeSymbol.Int32));
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, waiter),
+            closed,
+            TypeSymbol.Void,
+            arguments,
+            typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(elementType) : default);
+    }
+
+    /// <summary>Binds the blocking <c>waiter.Wait()</c>; the async pipeline turns it into an awaited <c>WaitAsync</c>.</summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <returns>A call typed <c>int32</c>.</returns>
+    public BoundExpression BindSelectWait(VariableSymbol waiter) => BindSelectCall(waiter, "Wait", TypeSymbol.Int32);
+
+    /// <summary>Binds <c>waiter.TryNow()</c>, the non-blocking probe a <c>default</c> arm needs.</summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <returns>A call typed <c>int32</c>.</returns>
+    public BoundExpression BindSelectTryNow(VariableSymbol waiter) => BindSelectCall(waiter, "TryNow", TypeSymbol.Int32);
+
+    /// <summary>Binds <c>waiter.Return()</c>.</summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <returns>A call typed <c>void</c>.</returns>
+    public BoundExpression BindSelectReturn(VariableSymbol waiter) => BindSelectCall(waiter, "Return", TypeSymbol.Void);
+
+    /// <summary>Binds <c>waiter.NeedsReprobe</c>.</summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <returns>A property read typed <c>bool</c>.</returns>
+    public BoundExpression BindSelectNeedsReprobe(VariableSymbol waiter)
+    {
+        var property = Required(selectWaiterType).GetProperty("NeedsReprobe", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("SelectWaiter.NeedsReprobe is missing from the channel runtime.");
+        return new BoundClrPropertyAccessExpression(null, new BoundVariableExpression(null, waiter), property, TypeSymbol.Bool);
+    }
+
+    /// <summary>Binds <c>waiter.TakeValue[T]()</c>, the value the winning receive arm transferred.</summary>
+    /// <param name="waiter">The waiter local.</param>
+    /// <param name="elementType">The arm's element type.</param>
+    /// <returns>A call typed as the element.</returns>
+    public BoundExpression BindSelectTakeValue(VariableSymbol waiter, TypeSymbol elementType)
+    {
+        var open = Required(selectWaiterType).GetMethod("TakeValue", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("SelectWaiter.TakeValue is missing from the channel runtime.");
+        var (closedElement, symbolic) = ProjectElement(elementType);
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, waiter),
+            open.MakeGenericMethod(closedElement),
+            elementType,
+            ImmutableArray<BoundExpression>.Empty,
+            typeArgumentSymbols: symbolic ? ImmutableArray.Create<TypeSymbol?>(elementType) : default);
+    }
+
+    /// <summary>Recognizes the blocking select wait the binder emits (ADR-0174 D8).</summary>
+    /// <param name="call">An imported instance call.</param>
+    /// <returns><see langword="true"/> for <c>SelectWaiter.Wait</c>.</returns>
+    public static bool IsSelectWait(BoundImportedInstanceCallExpression call)
+        => call.Method.Name == "Wait" && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.SelectWaiter";
+
     /// <summary>Binds <c>frame.Context</c>, the block's implicit <c>ctx</c> (ADR-0174 D6).</summary>
     /// <param name="frame">The frame local.</param>
     /// <returns>A property read typed <c>Context</c>.</returns>
@@ -191,6 +303,22 @@ internal sealed class ChannelRuntimeBinder
             ?? throw new InvalidOperationException("ScopeFrame.ExitAsync is missing from the channel runtime.");
         var call = new BoundImportedInstanceCallExpression(exit.Syntax, exit.Receiver, exitAsync, ValueTaskType, exit.Arguments);
         return Await(exit.Syntax, call, TypeSymbol.Void);
+    }
+
+    /// <summary>
+    /// ADR-0174 D8: the suspending form of a select's wait — an awaited
+    /// <c>SelectWaiter.WaitAsync</c> typed <c>int32</c>. Produced by the async
+    /// lowering for a select inside a state-machine body, so a parked select
+    /// holds no thread.
+    /// </summary>
+    /// <param name="wait">The blocking <c>Wait()</c> call the binder emitted.</param>
+    /// <returns>An await expression typed <c>int32</c>.</returns>
+    public BoundExpression BindSelectWaitAwait(BoundImportedInstanceCallExpression wait)
+    {
+        var waitAsync = Required(selectWaiterType).GetMethod("WaitAsync", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("SelectWaiter.WaitAsync is missing from the channel runtime.");
+        var call = new BoundImportedInstanceCallExpression(wait.Syntax, wait.Receiver, waitAsync, ValueTaskOf(TypeSymbol.Int32), wait.Arguments);
+        return Await(wait.Syntax, call, TypeSymbol.Int32);
     }
 
     /// <summary>
@@ -615,6 +743,18 @@ internal sealed class ChannelRuntimeBinder
 
     private BoundExpression DefaultToken()
         => new BoundDefaultExpression(null, TypeSymbol.FromClrType(Required(cancellationToken)));
+
+    private BoundExpression BindSelectCall(VariableSymbol waiter, string name, TypeSymbol returnType)
+    {
+        var method = Required(selectWaiterType).GetMethod(name, BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)
+            ?? throw new InvalidOperationException($"SelectWaiter.{name} is missing from the channel runtime.");
+        return new BoundImportedInstanceCallExpression(
+            null,
+            new BoundVariableExpression(null, waiter),
+            method,
+            returnType,
+            ImmutableArray<BoundExpression>.Empty);
+    }
 
     private (Type Closed, bool Symbolic) ProjectElement(TypeSymbol elementType)
     {

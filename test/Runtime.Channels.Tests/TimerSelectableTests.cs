@@ -19,7 +19,7 @@ public class TimerSelectableTests
     {
         var never = new Chan<int>();
         using var after = Timers.After(TimeSpan.FromMilliseconds(30));
-        var w = SelectWaiter.Rent(2, default);
+        var w = SelectWaiter.Rent(2, CancellationToken.None);
         w.AddReceive<int>(never, 0);
         w.AddReceive<DateTime>(after, 1);
         Assert.Equal(1, await w.WaitAsync().AsTask().WaitAsync(Timeout));
@@ -30,7 +30,7 @@ public class TimerSelectableTests
 
         // Drained: never fires again.
         Assert.False(after.TryReceive(out _, out _));
-        var w2 = SelectWaiter.Rent(2, default);
+        var w2 = SelectWaiter.Rent(2, CancellationToken.None);
         w2.AddReceive<int>(never, 0);
         w2.AddReceive<DateTime>(after, 1);
         var second = w2.WaitAsync().AsTask();
@@ -60,7 +60,7 @@ public class TimerSelectableTests
         using var tick = Timers.Tick(TimeSpan.FromMilliseconds(20));
         for (var i = 0; i < 3; i++)
         {
-            var w = SelectWaiter.Rent(2, default);
+            var w = SelectWaiter.Rent(2, CancellationToken.None);
             w.AddReceive<int>(never, 0);
             w.AddReceive<DateTime>(tick, 1);
             Assert.Equal(1, await w.WaitAsync().AsTask().WaitAsync(Timeout));

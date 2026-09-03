@@ -102,10 +102,20 @@ internal sealed class ChannelOperationRewriter : BoundTreeRewriter
     protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
     {
         var rewritten = base.RewriteImportedInstanceCallExpression(node);
-        if (lockDepth == 0 && rewritten is BoundImportedInstanceCallExpression call && ChannelRuntimeBinder.IsScopeExit(call))
+        if (lockDepth == 0 && rewritten is BoundImportedInstanceCallExpression call)
         {
-            // ADR-0174 D6: a scope's join suspends the state machine.
-            return runtime.BindScopeExitAwait(call);
+            if (ChannelRuntimeBinder.IsScopeExit(call))
+            {
+                // ADR-0174 D6: a scope's join suspends the state machine.
+                return runtime.BindScopeExitAwait(call);
+            }
+
+            if (ChannelRuntimeBinder.IsSelectWait(call))
+            {
+                // ADR-0174 D8: a select with no ready arm parks the state
+                // machine on every arm at once, rather than a thread.
+                return runtime.BindSelectWaitAwait(call);
+            }
         }
 
         return rewritten;
