@@ -514,6 +514,58 @@ public sealed class TriageBuilder
     }
 
     /// <summary>
+    /// Issue #3869: builds a triage artifact for a mirrored test project whose
+    /// <c>dotnet test</c> exited 0 without actually running its tests (or ran
+    /// materially fewer than the C# original declares). <c>dotnet test</c> exits
+    /// 0 when it discovers nothing, so a migrated assembly that fails to
+    /// type-load — and therefore enumerates no test classes at all — used to
+    /// score a full <c>test-parity PASS</c>. The diagnostic id is
+    /// <c>NO-TESTS-RAN</c>.
+    /// </summary>
+    /// <param name="reason">The machine-generated reason the run is not green.</param>
+    /// <param name="output">The captured <c>dotnet test</c> output.</param>
+    /// <param name="gsFile">The emitted G# library file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityNoTestsRan(string reason, string output, string gsFile = null)
+    {
+        string message = string.IsNullOrWhiteSpace(reason) ? "no tests ran" : reason.Trim();
+        if (!string.IsNullOrWhiteSpace(output))
+        {
+            message += "\n" + output.Trim();
+        }
+
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = "NO-TESTS-RAN",
+            Message = message,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "LibraryTestDiscovery",
+            Snippet = Truncate(message),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            message);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
     /// Issue #2867: builds a triage artifact for a mirrored test project that
     /// BUILT and RAN but whose tests failed. Reporting this as
     /// <c>LIBRARY-BUILD-FAILED</c> points investigation at the

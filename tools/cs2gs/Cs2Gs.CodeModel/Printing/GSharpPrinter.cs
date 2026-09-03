@@ -1859,6 +1859,16 @@ public static class GSharpPrinter
             sb.Append("partial ");
         }
 
+        if (declaration.IsRefLike)
+        {
+            // ADR-0058 / issue #367: `ref` immediately precedes `struct`
+            // (`ref struct Window { ... }`). gsc stamps such a type with
+            // `System.Runtime.CompilerServices.IsByRefLikeAttribute`; without
+            // it the emitted type is an ordinary struct and the CLR refuses to
+            // load it once it holds a by-ref-like instance field (#3869).
+            sb.Append("ref ");
+        }
+
         sb.Append(RenderKindKeyword(declaration.Kind));
         sb.Append(' ');
         sb.Append(declaration.Name);
