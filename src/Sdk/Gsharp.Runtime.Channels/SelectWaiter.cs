@@ -286,14 +286,31 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         completions.Publish();
 
         // Arms that lock privately or hold no lock at all — a foreign channel, a
-        // timer, a task — are probed outside the gates, in the same rotation.
+        // timer, a task — are probed outside the gates, in the same rotation. A
+        // `cancelled` arm joins that rotation as one more ready-or-not arm: an
+        // already-cancelled context is ready, exactly as Go's `ctx.Done()` is a
+        // ready channel, so `default` does not win over it (ADR-0174 D8).
         if (!won)
         {
-            var count = arms.Count;
+            var hasCancelled = cancelledArm >= 0;
+            var count = arms.Count + (hasCancelled ? 1 : 0);
             var start = count > 0 ? SelectRandom.Next(count) : 0;
             for (var k = 0; k < count && !won; k++)
             {
-                var descriptor = arms[(start + k) % count];
+                var slot = (start + k) % count;
+                if (hasCancelled && slot == arms.Count)
+                {
+                    if (token.IsCancellationRequested)
+                    {
+                        Claim(generation, cancelledArm);
+                        Deposit(null, ok: true, needsReprobe: false);
+                        won = true;
+                    }
+
+                    continue;
+                }
+
+                var descriptor = arms[slot];
                 if (!descriptor.RequiresGate && descriptor.TryProbe(this, ref completions))
                 {
                     Claim(generation, descriptor.Arm);

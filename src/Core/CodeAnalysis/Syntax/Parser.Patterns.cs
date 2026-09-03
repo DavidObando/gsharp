@@ -881,11 +881,79 @@ public partial class Parser
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
 
+        // case cancelled { ... } — the ambient context's cancellation
+        // (ADR-0174 D8). `cancelled` is contextual: an arm over a channel of
+        // that name still parses as a channel arm.
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "cancelled"
+            && (Peek(1).Kind == SyntaxKind.OpenBraceToken
+                || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "when")))
+        {
+            NextToken(); // consume `cancelled`
+            var (cancelledWhen, cancelledGuard) = ParseOptionalWhenGuard(bodyFollows: true);
+            var cancelledBody = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.Cancelled,
+                identifier: null,
+                channel: null,
+                value: null,
+                cancelledWhen,
+                cancelledGuard,
+                cancelledBody);
+        }
+
+        // case await task { ... } — a Task arm whose result is discarded.
+        if (Current.Kind == SyntaxKind.AwaitKeyword)
+        {
+            NextToken(); // consume `await`
+            var task = ParseArmOperand();
+            var (awaitWhen, awaitGuard) = ParseOptionalWhenGuard(bodyFollows: true);
+            var awaitBody = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.AwaitDiscard,
+                identifier: null,
+                task,
+                value: null,
+                awaitWhen,
+                awaitGuard,
+                awaitBody);
+        }
+
+        // case let v = await task { ... } — a Task[T] arm.
+        if (Current.Kind == SyntaxKind.LetKeyword
+            && Peek(1).Kind == SyntaxKind.IdentifierToken
+            && Peek(2).Kind == SyntaxKind.EqualsToken
+            && Peek(3).Kind == SyntaxKind.AwaitKeyword)
+        {
+            NextToken(); // consume `let`
+            var awaitIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            MatchToken(SyntaxKind.EqualsToken);
+            MatchToken(SyntaxKind.AwaitKeyword);
+            var task = ParseArmOperand();
+            var (awaitWhen, awaitGuard) = ParseOptionalWhenGuard(bodyFollows: true);
+            var awaitBody = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.AwaitBind,
+                awaitIdentifier,
+                task,
+                value: null,
+                awaitWhen,
+                awaitGuard,
+                awaitBody);
+        }
+
         // case <-ch { ... } — receive, discard.
         if (Current.Kind == SyntaxKind.LeftArrowToken)
         {
             NextToken(); // consume `<-`
             var channel = ParseArmOperand();
+            var (discardWhen, discardGuard) = ParseOptionalWhenGuard(bodyFollows: true);
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -894,6 +962,8 @@ public partial class Parser
                 identifier: null,
                 channel,
                 value: null,
+                discardWhen,
+                discardGuard,
                 body);
         }
 
@@ -908,6 +978,7 @@ public partial class Parser
             MatchToken(SyntaxKind.EqualsToken);
             MatchToken(SyntaxKind.LeftArrowToken);
             var channel = ParseArmOperand();
+            var (bindWhen, bindGuard) = ParseOptionalWhenGuard(bodyFollows: true);
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -916,6 +987,8 @@ public partial class Parser
                 identifier,
                 channel,
                 value: null,
+                bindWhen,
+                bindGuard,
                 body);
         }
 
@@ -948,6 +1021,7 @@ public partial class Parser
         var sendChannel = ParseExpression();
         MatchToken(SyntaxKind.LeftArrowToken);
         var sendValue = ParseArmOperand();
+        var (sendWhen, sendGuard) = ParseOptionalWhenGuard(bodyFollows: true);
         var sendBody = ParseBlockStatement();
         return new SelectCaseSyntax(
             syntaxTree,
@@ -956,6 +1030,8 @@ public partial class Parser
             identifier: null,
             sendChannel,
             sendValue,
+            sendWhen,
+            sendGuard,
             sendBody);
     }
 

@@ -297,6 +297,23 @@ public sealed partial class DiagnosticBag
     public void ReportSelectWithNoCases(TextLocation location)
     => Report(location, DiagnosticDescriptors.SelectWithNoCases);
 
+    /// <summary>Reports GS0556: a select arm's <c>when</c> guard is not a <c>bool</c> (ADR-0174 D8).</summary>
+    /// <param name="location">The guard's location.</param>
+    /// <param name="type">The guard's type.</param>
+    public void ReportSelectArmGuardIsNotBoolean(TextLocation location, TypeSymbol? type)
+        => Report(location, DiagnosticDescriptors.SelectArmGuardIsNotBoolean, type?.ToString() ?? "?");
+
+    /// <summary>Reports GS0557: <c>case cancelled</c> with no ambient context to observe (ADR-0174 D8).</summary>
+    /// <param name="location">The arm's location.</param>
+    public void ReportSelectCancelledArmNeedsContext(TextLocation location)
+        => Report(location, DiagnosticDescriptors.SelectCancelledArmNeedsContext);
+
+    /// <summary>Reports GS0564: one channel is both sent to and received from by the same select (ADR-0174 D8).</summary>
+    /// <param name="location">The second arm's location.</param>
+    /// <param name="channel">The channel's name.</param>
+    public void ReportSelectChannelSentAndReceived(TextLocation location, string channel)
+        => Report(location, DiagnosticDescriptors.SelectChannelSentAndReceived, channel);
+
     /// <summary>
     /// Reports a <c>select</c> with more than one <c>default</c> arm (Phase 5.6 / ADR-0022).
     /// </summary>
