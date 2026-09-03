@@ -214,7 +214,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
         completions.Publish();
         return done
             ? new ValueTask<ReceiveResult<T>>(new ReceiveResult<T>(value, ok))
-            : new ValueTask<ReceiveResult<T>>(node!, node!.Version);
+            : new ValueTask<ReceiveResult<T>>(node!, node!.Version); // `done` false only where a node was parked above.
     }
 
     /// <summary>
@@ -253,7 +253,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
         {
             SendOutcome.Sent => ValueTask.CompletedTask,
             SendOutcome.Closed => ValueTask.FromException(new ChannelClosedException("send on closed channel")),
-            _ => new ValueTask(node!, node!.Version),
+            _ => new ValueTask(node!, node!.Version), // The default arm is Parked, which enqueued a node.
         };
     }
 
@@ -345,6 +345,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
                 return;
             }
 
+            // Past the `is null` guard above: a queued node knows its queue.
             node.Queue!.Remove(node);
             faulted = node.TryCancel(new OperationCanceledException(token));
         }
@@ -555,6 +556,7 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
 
     private void GrowBuffer()
     {
+        // Only reached for a buffered channel; a rendezvous has no buffer to grow.
         var grown = new T[buffer!.Length * 2];
         for (var i = 0; i < count; i++)
         {

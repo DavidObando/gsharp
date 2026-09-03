@@ -22,6 +22,8 @@ public readonly struct ReceiveResult<T>
     /// <param name="ok">Whether a value was delivered.</param>
     public ReceiveResult([AllowNull] T value, bool ok)
     {
+        // The parameter is [AllowNull] and Value is [MaybeNull]: both carry the
+        // zero value when `ok` is false. The `!` only bridges the two attributes.
         Value = value!;
         Ok = ok;
     }

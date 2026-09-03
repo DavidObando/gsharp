@@ -38,7 +38,7 @@ public sealed class AfterTimer : ISelectable<DateTime>, ISelectableCore<DateTime
     internal AfterTimer(TimeSpan due)
     {
         Order = SelectOrder.Next();
-        timer = new Timer(static state => ((AfterTimer)state!).OnFire(), this, due, Timeout.InfiniteTimeSpan);
+        timer = new Timer(static state => ((AfterTimer)state!).OnFire(), this, due, Timeout.InfiniteTimeSpan); // state is `this`.
     }
 
     /// <summary>Gets a value indicating whether the delay has elapsed (a snapshot).</summary>
@@ -184,7 +184,7 @@ public sealed class TickTimer : ISelectable<DateTime>, ISelectableCore<DateTime>
         }
 
         Order = SelectOrder.Next();
-        timer = new Timer(static state => ((TickTimer)state!).OnTick(), this, period, period);
+        timer = new Timer(static state => ((TickTimer)state!).OnTick(), this, period, period); // state is `this`.
     }
 
     /// <inheritdoc/>

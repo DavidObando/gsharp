@@ -90,7 +90,7 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor
     /// <inheritdoc/>
     internal override void Register(SelectWaiter waiter, long generation)
     {
-        node = new SelectNode<T>(waiter, generation, Arm, selectable, isSend: false, default!);
+        node = new SelectNode<T>(waiter, generation, Arm, selectable, isSend: false, default);
         selectable.RegisterReceiveLocked(node);
     }
 
@@ -420,6 +420,7 @@ internal class TaskArm : ArmDescriptor
         task.ContinueWith(
             (completed, state) =>
             {
+                // The state is the tuple this method passed to ContinueWith.
                 var (self, w) = ((TaskArm, SelectWaiter))state!;
                 if (!w.TryClaim(generation, arm))
                 {

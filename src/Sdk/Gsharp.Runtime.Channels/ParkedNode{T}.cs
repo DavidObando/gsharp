@@ -100,6 +100,7 @@ internal abstract class ParkedNode<T> : WaiterNode<T>
         registration = token.UnsafeRegister(
             static (state, token) =>
             {
+                // The state is `this`, handed to UnsafeRegister just below.
                 var node = (ParkedNode<T>)state!;
                 node.owner.CancelParkedNode(node, token);
             },

@@ -70,7 +70,7 @@ public sealed class Context : IDisposable
     public Context WithTimeout(TimeSpan timeout)
     {
         var child = WithCancel();
-        child.source!.CancelAfter(timeout);
+        child.source!.CancelAfter(timeout); // WithCancel always builds a source; only Context.None lacks one.
         return child;
     }
 

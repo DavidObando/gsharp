@@ -34,7 +34,7 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
     /// <param name="selectable">The selectable the node registers in.</param>
     /// <param name="isSend">Whether this is a send arm.</param>
     /// <param name="sendValue">The value a send arm offers.</param>
-    internal SelectNode(SelectWaiter waiter, long generation, int arm, ISelectableCore<T> selectable, bool isSend, T sendValue)
+    internal SelectNode(SelectWaiter waiter, long generation, int arm, ISelectableCore<T> selectable, bool isSend, [AllowNull] T sendValue)
     {
         this.waiter = waiter;
         this.generation = generation;
