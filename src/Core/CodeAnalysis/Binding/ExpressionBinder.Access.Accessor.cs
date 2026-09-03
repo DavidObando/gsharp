@@ -462,6 +462,32 @@ internal sealed partial class ExpressionBinder
                     return BindAccessorStep(inheritedClrHead, null, rightPart);
                 }
             }
+            else if (TryResolveInterfaceInstancePropertyByBareName(name, out _, out _)
+                && !(TryResolveColorColorType(
+                        name,
+                        leftName,
+                        out var dimColorClass,
+                        out var dimColorStruct,
+                        out var dimColorInterface,
+                        out var dimColorEnum)
+                    && RightPartLooksLikeStaticMember(
+                        dimColorClass,
+                        dimColorStruct,
+                        dimColorInterface,
+                        dimColorEnum,
+                        rightPart)))
+            {
+                // Issue #3840: an unqualified accessor chain inside a DEFAULT
+                // INTERFACE METHOD body whose head names the enclosing
+                // interface's own property (`Count.ToString()`) binds as
+                // `this.Count.ToString()`. Mirrors the inherited-CLR arm above,
+                // including #687's type/value collision rule (a same-named type
+                // wins on the static-member shape, by falling through to the
+                // source-type arms below).
+                return TryBindInterfaceInstancePropertyByBareName(leftName, out var dimHead)
+                    ? BindAccessorStep(dimHead, null, rightPart)
+                    : new BoundErrorExpression(null);
+            }
             else if (TryBindSubmissionStaticMember(leftName, out var submissionHead)
                 && submissionHead is not BoundErrorExpression)
             {
