@@ -7,6 +7,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Syntax;
 using Gsharp.Concurrency;
 using Xunit;
 
@@ -180,6 +184,45 @@ public class ConcurrencyTests
         var (batch, ok) = ChannelOps.Receive2(batched, CancellationToken.None);
         Assert.True(ok);
         Assert.Equal(new[] { 7 }, batch.ToArray());
+    }
+
+    [Fact]
+    public void Chunks_OnARendezvousChannel_ReportsGS0562()
+    {
+        // The shape D10 exists to encourage, given the one channel that cannot
+        // benefit from it.
+        var diagnostics = CompileAgainstExtensions("""
+            package P
+            import System
+
+            let slow = chan[int32](0)
+            let fast = chan[int32](64)
+
+            scope {
+                for a in chunks(slow, 64) {
+                    Console.WriteLine(a.Length.ToString())
+                }
+
+                for b in chunks(fast, 64) {
+                    Console.WriteLine(b.Length.ToString())
+                }
+            }
+            """);
+
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "GS0562");
+        Assert.Contains("'slow'", diagnostic.Message);
+    }
+
+    private static ImmutableArray<Diagnostic> CompileAgainstExtensions(string source)
+    {
+        var references = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithReferences(new[]
+        {
+            Assembly.Load("Gsharp.Extensions").Location,
+            typeof(Chan<int>).Assembly.Location,
+        });
+        var compilation = new Compilation(references, SyntaxTree.Parse(source));
+        var program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(compilation.GlobalScope, references);
+        return compilation.GlobalScope.Diagnostics.AddRange(program.Diagnostics);
     }
 
     private static System.Threading.Channels.ChannelReader<ReadOnlyMemory<int>> ChunksOf(Chan<int> source, int size)

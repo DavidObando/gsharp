@@ -244,6 +244,49 @@ A failing `async let` does not cancel its siblings. Catching one child's
 failure leaves the others running, which is the difference between `async let`
 and a `go` inside the same block.
 
+### Batching, and `chunks`
+
+A channel operation moves one element and pays for one lock acquisition and,
+when it has to wait, one park. A data pipeline moving millions of elements
+should not pay that per element.
+
+```gs
+for batch in chunks(input, 1024) {
+    process(batch)
+}
+```
+
+`chunks(ch, n)` hands over whole buffers: `batch` is a `ReadOnlyMemory[T]` of
+up to `n` elements, and the loop is ordinary channel iteration — no extra
+goroutine, nothing more for the block to join. A batch arrives as soon as
+anything is available rather than waiting to fill, so a producer slower than
+the chunk size does not stall the consumer. Each batch owns its array, so a
+stage may keep or forward what it was handed.
+
+Underneath it, and available directly, are four operations on a channel
+handle:
+
+- `TryReceiveBatch(buffer)` and `TrySendBatch(items)` take a `Span[T]`. They
+  never wait, so a borrowed stack view is safe.
+- `ReceiveBatch(buffer, atLeast)` and `SendBatch(items)` take a `Memory[T]`.
+  They can park, and a destination that survives a park cannot be a `Span`.
+
+`atLeast = 1` is Go's `range` shape, take what is there. `atLeast =
+buffer.Length` is a full-fill barrier. Both are legitimate, which is why there
+is no default.
+
+A batch that is cut short returns the count it moved rather than throwing: a
+closed channel returns what it transferred and reports closed on the next
+call, and cancellation mid-batch returns the count so far. A bare throw would
+hide that count and a retry would duplicate elements.
+
+Batching a rendezvous channel is pointless — capacity 0 means one value in
+flight by definition, so a batch is that many sequential handovers — and
+`GS0562` says so.
+
+The slogan is **share buffers by communicating**. Not spans: a borrowed stack
+view is exactly the thing that cannot cross a suspension.
+
 ### Cancellation
 
 The block's `ctx` is not only for your own checks: every channel operation

@@ -436,6 +436,8 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor ReceiveFromSendOnlyChannel = new("GS0550", DiagnosticSeverity.Error, "Cannot receive from the send-only channel type '{0}'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).");
     internal static readonly DiagnosticDescriptor ChannelBindingTargetCount = new("GS0554", DiagnosticSeverity.Error, "'{0}' binds exactly {1}, not {2}: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).");
     internal static readonly DiagnosticDescriptor SuspendingCallBlocks = new("GS0558", DiagnosticSeverity.Warning, "'{0}' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.");
+    internal static readonly DiagnosticDescriptor BatchOnRendezvousChannel = new("GS0562", DiagnosticSeverity.Warning, "'{0}' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay (ADR-0174 D10).");
+
     internal static readonly DiagnosticDescriptor AsyncLetOutsideScope = new("GS0551", DiagnosticSeverity.Error, "'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15).");
 
     internal static readonly DiagnosticDescriptor AsyncLetNeverAwaited = new("GS0559", DiagnosticSeverity.Warning, "'{0}' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15).");

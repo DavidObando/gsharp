@@ -297,6 +297,12 @@ public sealed partial class DiagnosticBag
     public void ReportSelectWithNoCases(TextLocation location)
     => Report(location, DiagnosticDescriptors.SelectWithNoCases);
 
+    /// <summary>Reports GS0562: a batch operation on a rendezvous channel (ADR-0174 D10).</summary>
+    /// <param name="location">The call's location.</param>
+    /// <param name="channel">The channel's name.</param>
+    public void ReportBatchOnRendezvousChannel(TextLocation location, string channel)
+        => Report(location, DiagnosticDescriptors.BatchOnRendezvousChannel, channel);
+
     /// <summary>Reports GS0551: an <c>async let</c> with no enclosing <c>scope</c> to own it (ADR-0174 D15).</summary>
     /// <param name="location">The <c>async</c> keyword's location.</param>
     public void ReportAsyncLetOutsideScope(TextLocation location)

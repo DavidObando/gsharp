@@ -119,6 +119,43 @@ public static class ChannelBatchExtensions
             : SendBatchForeignAsync(writer, items, token);
     }
 
+    /// <summary>Takes as many available elements as fit, without parking, from a whole channel.</summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="channel">The channel.</param>
+    /// <param name="buffer">The destination.</param>
+    /// <returns>The number of elements written.</returns>
+    public static int TryReceiveBatch<T>(this Channel<T> channel, Span<T> buffer)
+        => (channel ?? throw new ArgumentNullException(nameof(channel))).Reader.TryReceiveBatch(buffer);
+
+    /// <summary>Sends as many elements as room allows, without parking, to a whole channel.</summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="channel">The channel.</param>
+    /// <param name="items">The elements to send.</param>
+    /// <returns>The number of elements accepted.</returns>
+    public static int TrySendBatch<T>(this Channel<T> channel, ReadOnlySpan<T> items)
+        => (channel ?? throw new ArgumentNullException(nameof(channel))).Writer.TrySendBatch(items);
+
+    /// <summary>Receives at least <paramref name="atLeast"/> elements from a whole channel.</summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="channel">The channel.</param>
+    /// <param name="buffer">The destination.</param>
+    /// <param name="atLeast">The minimum count to wait for.</param>
+    /// <param name="context">The ambient cancellation context.</param>
+    /// <returns>The count transferred.</returns>
+    [Suspending]
+    public static ValueTask<int> ReceiveBatch<T>(this Channel<T> channel, Memory<T> buffer, int atLeast, Context? context = null)
+        => (channel ?? throw new ArgumentNullException(nameof(channel))).Reader.ReceiveBatch(buffer, atLeast, context);
+
+    /// <summary>Sends every element to a whole channel.</summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="channel">The channel.</param>
+    /// <param name="items">The elements to send.</param>
+    /// <param name="context">The ambient cancellation context.</param>
+    /// <returns>The count transferred.</returns>
+    [Suspending]
+    public static ValueTask<int> SendBatch<T>(this Channel<T> channel, ReadOnlyMemory<T> items, Context? context = null)
+        => (channel ?? throw new ArgumentNullException(nameof(channel))).Writer.SendBatch(items, context);
+
     private static async ValueTask<int> ReceiveBatchForeignAsync<T>(ChannelReader<T> reader, Memory<T> buffer, int atLeast, CancellationToken token)
     {
         if (buffer.IsEmpty)

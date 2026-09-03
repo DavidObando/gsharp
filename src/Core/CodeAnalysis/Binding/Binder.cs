@@ -2380,6 +2380,11 @@ public sealed class Binder
         // bodies were bound against, or a references-less compilation would
         // bind channel operations yet never colour the functions around them.
         Suspension.SuspensionInference.Run(functionBodies, globalScope.EntryPoint, parentScope.References, diagnostics);
+
+        // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
+        // pointless. Reported here, over the bound bodies, because the question
+        // is about the receiver's declaration rather than the call.
+        RendezvousBatchAnalyzer.Run(functionBodies, diagnostics);
         if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
         {
             // The synthesized top-level block IS the entry point's body; a user

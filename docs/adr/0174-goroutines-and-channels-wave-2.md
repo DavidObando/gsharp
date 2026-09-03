@@ -2387,6 +2387,47 @@ implementation had to refine it.
       walk reports at the declaration, so the precise-span case is the one that
       matters and the walk is the backstop.
 
+32. **D10 as implemented (Phase 5-1).** The batch surface is a set of extension
+    methods on `ChannelReader[T]` / `ChannelWriter[T]` — which is exactly what
+    the ADR's `func (ch in chan[T]) …` receiver spelling means — plus a
+    `Channel[T]` overload of each, because extension lookup on a plain
+    `chan[T]` receiver does not apply the directional view conversion first.
+    Without those overloads `ch.ReceiveBatch(…)` on a `chan[T]` is
+    member-not-found, which is not a distinction worth teaching.
+
+    Writing them surfaced a real gap in D4: an imported `[Suspending]`
+    *extension* method was never completed at the call site. A suspending
+    static or instance import is; an extension bound through
+    `TryBindImportedExtensionCall` was not, so the caller was neither coloured
+    suspending nor given the implicit await, the call kept its `ValueTask[R]`
+    type, and even a spelled-out `await` was rejected because the container had
+    nothing to await in. The batch surface was therefore usable only inside a
+    function that already suspended for another reason. Fixed at the one
+    binding site.
+
+    `chunks` reaches `ChunkReader[T]` through a static `Chunks.Of[T]` rather
+    than the constructor, for the same reason `merge` takes `...chan[T]`
+    (errata 28): a `chan[T]` argument whose element is open is not applicable
+    to a `ChannelReader[T]` — or a `Channel[T]` — parameter. Constructor
+    applicability is a third path that neither the variadic nor the inference
+    fix from P4-5 covered.
+
+    `ChunkReader[T]` reads with `atLeast: 1`. A full-fill barrier here would
+    stall any pipeline whose producer is slower than the chunk size, which is
+    the common case a chunked loop exists to serve; `ReceiveBatch`'s explicit
+    `atLeast` remains the way to ask for one. Each chunk owns a fresh array:
+    the slogan is "share *buffers* by communicating", and communicated means
+    the receiver may keep it. A pooled overload stays gate G7's measured
+    follow-up.
+
+    GS0562 is reported by a walk over the bound bodies rather than at the call
+    site, because the question is about the receiver's *declaration* — was it
+    constructed with a capacity — and a batch call reaches the binder through
+    several paths. The walk finds locals initialised by a `Chan[T]` constructed
+    with a literal zero and reports every batch operation on them, including
+    `chunks(ch, n)`: that is the shape D10 exists to encourage, so it is the
+    likeliest way to reach the degenerate case.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives
