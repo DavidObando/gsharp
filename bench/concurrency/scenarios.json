@@ -1,14 +1,20 @@
 {
   "$comment": [
     "ADR-0174 D11: the scenario registry the concurrency benchmark runs.",
-    "Each row pairs a G# scenario with the Go program's counterpart, so the",
-    "runner can report both a within-runtime regression check (the gate) and a",
-    "G#-vs-Go ratio (informational, because it moves with the Go toolchain and",
-    "the machine).",
     "",
-    "`gsharp` is the scenario name Bench.gs prints; `go` is the row name",
-    "main.go prints. A null `go` row means the scenario has no Go counterpart",
-    "yet and only the within-runtime check applies."
+    "Each row pairs a G# scenario with the Go program's counterpart, so the",
+    "runner can report both a within-runtime regression check and a G#-vs-Go",
+    "ratio (informational, because it moves with the Go toolchain and the",
+    "machine).",
+    "",
+    "A null `go` row means the scenario has NO Go counterpart, and several are",
+    "deliberately null (issue #3902 S1). A pairing is only honest when both",
+    "sides do the same work per counted operation: `rendezvous` counts one",
+    "hand-off where Go's pingpong counts two, `select-ready` performs four",
+    "channel operations where Go's select row performs one, and `chunks()`",
+    "copies elements where Go passes a slice header. Those rows are now G#-only,",
+    "and `pingpong`, `select-stream`, `chunk64-arrays` and `chunk1k-arrays` are",
+    "the rows shaped to match Go."
   ],
   "schemaVersion": 1,
   "scenarios": [
@@ -21,26 +27,38 @@
     {
       "name": "rendezvous",
       "gsharp": "rendezvous",
+      "go": null,
+      "what": "Capacity 0, so the number is the hand-off rather than the buffer. ONE hand-off per operation; `pingpong` is the Go-paired counterpart."
+    },
+    {
+      "name": "pingpong",
+      "gsharp": "pingpong",
       "go": "go-pingpong",
-      "what": "Capacity 0, so the number is the hand-off rather than the buffer."
+      "what": "A round trip over two rendezvous channels: TWO hand-offs per counted operation, shaped exactly like Go's."
     },
     {
       "name": "closed-recv",
       "gsharp": "closed-recv",
       "go": "go-closed",
-      "what": "A receive from a closed, drained channel — the exception-based defect D2 removes."
+      "what": "A receive from a closed, drained channel \u2014 the exception-based defect D2 removes."
     },
     {
       "name": "spawn",
       "gsharp": "spawn",
       "go": "go-spawn",
-      "what": "Spawn cost: `go` is a thread-pool work item, not a Task."
+      "what": "Spawn cost: `go` is a thread-pool work item, not a Task. Times the spawn and the join only, as Go's WaitGroup row does."
     },
     {
       "name": "select-ready",
       "gsharp": "select-ready",
+      "go": null,
+      "what": "A select whose arms are ready: no registration, no park. Four channel operations per counted iteration, so G#-only; `select-stream` is the Go-paired row."
+    },
+    {
+      "name": "select-stream",
+      "gsharp": "select-stream",
       "go": "go-select2",
-      "what": "A select whose arms are ready: no registration, no park."
+      "what": "One select receive per operation against a producer filling one buffered arm \u2014 a mix of ready and parked selects, as Go's row is."
     },
     {
       "name": "select-park",
@@ -51,14 +69,26 @@
     {
       "name": "chunk64",
       "gsharp": "chunk64",
-      "go": "go-chunk64",
-      "what": "D10 batching at 64 elements per chunk."
+      "go": null,
+      "what": "D10 batching at 64 elements per chunk. G#-only: `chunks()` copies elements where Go passes a slice header."
     },
     {
       "name": "chunk1k",
       "gsharp": "chunk1k",
-      "go": "go-chunk1k",
+      "go": null,
       "what": "D10 batching at 1024 elements per chunk. The curve between this and chunk64 is the point, not either number."
+    },
+    {
+      "name": "chunk64-arrays",
+      "gsharp": "chunk64-arrays",
+      "go": "go-chunk64",
+      "what": "Whole arrays over a `chan[[]int32]` at 64 elements: the transport Go's `chan []int` actually is."
+    },
+    {
+      "name": "chunk1k-arrays",
+      "gsharp": "chunk1k-arrays",
+      "go": "go-chunk1k",
+      "what": "Whole arrays over a `chan[[]int32]` at 1024 elements."
     }
   ]
 }

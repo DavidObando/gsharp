@@ -20,6 +20,10 @@
     "'aot' object is the NativeAOT mode, which is what compares like-for-like",
     "with Go's ahead-of-time binary. They regress for different reasons, so",
     "neither ceiling is allowed to stand in for the other.",
+    "Two rows carry no ceiling: select-park and spawn. Both depend on thread-pool",
+    "wake-up and are not reproducible run to run on this machine, which is the",
+    "same effect issue #3901 traced to CPU idle states. See unbudgeted_reason.",
+    "",
     "",
     "target_vs_go is the ADR's aspiration; target_status stays 'provisional'",
     "until the ratio has met it on three separate runs on the same hardware",
@@ -35,13 +39,13 @@
   "launches": 7,
   "scenarios": {
     "buf64": {
-      "median_ns": 129.79,
+      "median_ns": 130.02,
       "ci95_ns": [
-        128.83,
-        131.27
+        126.79,
+        134.33
       ],
-      "ceiling_ns": 149.26,
-      "go_median_ns": 93.7,
+      "ceiling_ns": 149.52,
+      "go_median_ns": 69.2,
       "target_vs_go": null,
       "target_status": "provisional",
       "history": [
@@ -51,15 +55,22 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 130.02,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 152.26,
+        "median_ns": 150.53,
         "ci95_ns": [
-          152.23,
-          155.06
+          148.91,
+          152.43
         ],
-        "ceiling_ns": 175.1,
+        "ceiling_ns": 173.11,
         "history": [
           {
             "median_ns": 152.26,
@@ -67,6 +78,13 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 150.53,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
@@ -74,12 +92,12 @@
       "runs": 3
     },
     "rendezvous": {
-      "median_ns": 122.9,
+      "median_ns": 123.82,
       "ci95_ns": [
-        122.3,
-        123.53
+        122.89,
+        125.72
       ],
-      "ceiling_ns": 141.34,
+      "ceiling_ns": 142.39,
       "go_median_ns": 643.6,
       "target_vs_go": null,
       "target_status": "provisional",
@@ -90,15 +108,22 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 123.82,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 146.71,
+        "median_ns": 142.92,
         "ci95_ns": [
-          146.65,
-          147.24
+          142.05,
+          146.27
         ],
-        "ceiling_ns": 168.72,
+        "ceiling_ns": 164.36,
         "history": [
           {
             "median_ns": 146.71,
@@ -106,6 +131,52 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 142.92,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
+    },
+    "pingpong": {
+      "median_ns": 245.26,
+      "ci95_ns": [
+        245.2,
+        253.39
+      ],
+      "ceiling_ns": 282.05,
+      "go_median_ns": 457.8,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": [
+        {
+          "median_ns": 245.26,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+        }
+      ],
+      "aot": {
+        "median_ns": 295.98,
+        "ci95_ns": [
+          292.98,
+          300.42
+        ],
+        "ceiling_ns": 340.38,
+        "history": [
+          {
+            "median_ns": 295.98,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
@@ -113,13 +184,13 @@
       "runs": 3
     },
     "closed-recv": {
-      "median_ns": 10.69,
+      "median_ns": 10.33,
       "ci95_ns": [
-        10.39,
-        10.73
+        10.25,
+        10.5
       ],
-      "ceiling_ns": 12.29,
-      "go_median_ns": 16.1,
+      "ceiling_ns": 11.88,
+      "go_median_ns": 15.8,
       "target_vs_go": null,
       "target_status": "provisional",
       "history": [
@@ -129,15 +200,22 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 10.33,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 10.58,
+        "median_ns": 10.34,
         "ci95_ns": [
-          10.57,
-          10.63
+          10.34,
+          10.73
         ],
-        "ceiling_ns": 12.17,
+        "ceiling_ns": 11.89,
         "history": [
           {
             "median_ns": 10.58,
@@ -145,6 +223,13 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 10.34,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
@@ -152,51 +237,46 @@
       "runs": 3
     },
     "spawn": {
-      "median_ns": 514.33,
-      "ci95_ns": [
-        495.95,
-        525.74
-      ],
-      "ceiling_ns": 591.48,
-      "go_median_ns": 268.5,
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": 254.4,
       "target_vs_go": null,
       "target_status": "provisional",
       "history": [
         {
-          "median_ns": 514.33,
+          "median_ns": 417.2,
           "samples": 21,
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
-          "reason": null
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 485.5,
-        "ci95_ns": [
-          481.49,
-          486.83
-        ],
-        "ceiling_ns": 558.32,
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
         "history": [
           {
-            "median_ns": 485.5,
+            "median_ns": 327.41,
             "samples": 21,
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
-            "reason": null
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
       },
-      "runs": 3
+      "runs": 3,
+      "unbudgeted_reason": "No ceiling recorded: 16% between runs. Both rows depend on thread-pool wake-up, which issue #3901 traced to CPU idle states \u2014 select-park measured 284.5 / 200.7 / 281.7 across three runs, with the middle run's own launches spanning 195-298. A ceiling from a bimodal row either sits above both modes and gates nothing, or fails whenever the fast mode is missed."
     },
     "select-ready": {
-      "median_ns": 153.08,
+      "median_ns": 153.01,
       "ci95_ns": [
-        152.86,
-        153.94
+        152.19,
+        154.48
       ],
-      "ceiling_ns": 176.04,
+      "ceiling_ns": 175.96,
       "go_median_ns": 85.7,
       "target_vs_go": null,
       "target_status": "provisional",
@@ -207,15 +287,22 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 153.01,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 165.61,
+        "median_ns": 162.73,
         "ci95_ns": [
-          165.46,
-          165.69
+          161.84,
+          165.74
         ],
-        "ceiling_ns": 190.45,
+        "ceiling_ns": 187.14,
         "history": [
           {
             "median_ns": 165.61,
@@ -223,6 +310,52 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 162.73,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
+    },
+    "select-stream": {
+      "median_ns": 290.13,
+      "ci95_ns": [
+        286.85,
+        293.29
+      ],
+      "ceiling_ns": 333.65,
+      "go_median_ns": 80.0,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": [
+        {
+          "median_ns": 290.13,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+        }
+      ],
+      "aot": {
+        "median_ns": 273.06,
+        "ci95_ns": [
+          272.4,
+          284.07
+        ],
+        "ceiling_ns": 314.02,
+        "history": [
+          {
+            "median_ns": 273.06,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
@@ -230,12 +363,9 @@
       "runs": 3
     },
     "select-park": {
-      "median_ns": 293.29,
-      "ci95_ns": [
-        293.09,
-        299.44
-      ],
-      "ceiling_ns": 337.28,
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
@@ -246,15 +376,19 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 281.68,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 298.28,
-        "ci95_ns": [
-          293.58,
-          298.42
-        ],
-        "ceiling_ns": 343.02,
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
         "history": [
           {
             "median_ns": 298.28,
@@ -262,19 +396,27 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 278.5,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
       },
-      "runs": 3
+      "runs": 3,
+      "unbudgeted_reason": "No ceiling recorded: bimodal within a single run. Both rows depend on thread-pool wake-up, which issue #3901 traced to CPU idle states \u2014 select-park measured 284.5 / 200.7 / 281.7 across three runs, with the middle run's own launches spanning 195-298. A ceiling from a bimodal row either sits above both modes and gates nothing, or fails whenever the fast mode is missed."
     },
     "chunk64": {
-      "median_ns": 8.13,
+      "median_ns": 7.86,
       "ci95_ns": [
-        8.1,
-        8.14
+        7.67,
+        7.98
       ],
-      "ceiling_ns": 9.35,
+      "ceiling_ns": 9.04,
       "go_median_ns": 8.6,
       "target_vs_go": null,
       "target_status": "provisional",
@@ -285,15 +427,22 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 7.86,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 8.6,
+        "median_ns": 8.35,
         "ci95_ns": [
-          8.54,
-          8.69
+          8.26,
+          8.75
         ],
-        "ceiling_ns": 9.89,
+        "ceiling_ns": 9.6,
         "history": [
           {
             "median_ns": 8.6,
@@ -301,6 +450,13 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 8.35,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
@@ -308,12 +464,12 @@
       "runs": 3
     },
     "chunk1k": {
-      "median_ns": 3.3,
+      "median_ns": 3.2,
       "ci95_ns": [
-        3.22,
-        3.31
+        3.1,
+        3.23
       ],
-      "ceiling_ns": 3.79,
+      "ceiling_ns": 3.68,
       "go_median_ns": 1.5,
       "target_vs_go": null,
       "target_status": "provisional",
@@ -324,15 +480,22 @@
           "runs": 3,
           "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
           "reason": null
+        },
+        {
+          "median_ns": 3.2,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
         }
       ],
       "aot": {
-        "median_ns": 3.64,
+        "median_ns": 3.52,
         "ci95_ns": [
-          3.59,
-          3.67
+          3.49,
+          3.65
         ],
-        "ceiling_ns": 4.19,
+        "ceiling_ns": 4.05,
         "history": [
           {
             "median_ns": 3.64,
@@ -340,6 +503,91 @@
             "runs": 3,
             "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
             "reason": null
+          },
+          {
+            "median_ns": 3.52,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
+    },
+    "chunk64-arrays": {
+      "median_ns": 5.56,
+      "ci95_ns": [
+        5.28,
+        5.67
+      ],
+      "ceiling_ns": 6.39,
+      "go_median_ns": 7.0,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": [
+        {
+          "median_ns": 5.56,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+        }
+      ],
+      "aot": {
+        "median_ns": 5.64,
+        "ci95_ns": [
+          5.62,
+          5.85
+        ],
+        "ceiling_ns": 6.49,
+        "history": [
+          {
+            "median_ns": 5.64,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
+    },
+    "chunk1k-arrays": {
+      "median_ns": 2.95,
+      "ci95_ns": [
+        2.82,
+        2.95
+      ],
+      "ceiling_ns": 3.39,
+      "go_median_ns": 1.1,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": [
+        {
+          "median_ns": 2.95,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
+        }
+      ],
+      "aot": {
+        "median_ns": 2.86,
+        "ci95_ns": [
+          2.84,
+          3.01
+        ],
+        "ceiling_ns": 3.29,
+        "history": [
+          {
+            "median_ns": 2.86,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": "S1 a-d reshaped four scenarios; previous medians measured different work"
           }
         ],
         "runs": 3
