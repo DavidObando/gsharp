@@ -1035,8 +1035,8 @@ internal sealed partial class MethodBodyEmitter
 
     // `not P` matches when P does not. Emit P with a local "P-did-not-match"
     // label; if P falls through (matched) jump to the outer fail label. The
-    // binder forbids variable bindings under `not`, so the sub-pattern stores
-    // nothing that could be read on the matched (i.e. failing) path.
+    // A direct `is not T name` designation may store on P's matched path; that
+    // is exactly the outer pattern's false path, where the binder exposes it.
     private void EmitNotPattern(BoundNotPattern np, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
     {
         var notMatched = this.il.DefineLabel();

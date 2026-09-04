@@ -122,7 +122,7 @@ public sealed class Issue3409PatternVariableEmitTests
             }
 
             func ElseBranch(value object) string {
-                if !(value is int32 n) {
+                if value is not int32 n {
                     return "no"
                 } else {
                     return "n=" + n.ToString()

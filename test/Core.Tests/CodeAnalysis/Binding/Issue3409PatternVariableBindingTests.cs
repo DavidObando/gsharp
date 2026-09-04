@@ -186,6 +186,58 @@ public sealed class Issue3409PatternVariableBindingTests
         Assert.All(reads, read => Assert.Same(pattern.Variable, read.Variable));
     }
 
+    [Fact]
+    public void NativeNotGuard_DeclaresPatternVariableOnTheFalseEdge()
+    {
+        var program = BindProgram(Shapes + """
+            func Use(value object) int32 {
+                if value is not string text {
+                    return 0
+                }
+                return text.Length
+            }
+            """);
+
+        Assert.Empty(program.Diagnostics);
+        var notPattern = Assert.IsType<BoundNotPattern>(FindIsExpressions(program).Single().Pattern);
+        var typePattern = Assert.IsType<BoundTypePattern>(notPattern.Pattern);
+        var read = Assert.Single(FindReads(program, "text"));
+
+        Assert.Same(typePattern.Variable, read.Variable);
+    }
+
+    [Fact]
+    public void NativeNotBinding_IsUnavailableInTheTrueBranch()
+    {
+        var diagnostic = Assert.Single(Bind(Shapes + """
+            func Use(value object) int32 {
+                if value is not string text {
+                    return text.Length
+                }
+                return 0
+            }
+            """));
+
+        Assert.Equal("GS0532", diagnostic.Id);
+        Assert.Equal("text", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void NativeNotBinding_StillRejectsNestedDesignations()
+    {
+        var diagnostic = Assert.Single(Bind(Shapes + """
+            func Use(value object) int32 {
+                if value is not Dog { Name: string name } dog {
+                    return 0
+                }
+                return dog.Name.Length
+            }
+            """));
+
+        Assert.Equal("GS0390", diagnostic.Id);
+        Assert.Equal("name", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
     [Theory]
     [InlineData("if value is string s { }\n    return s.Length", "s")]
     [InlineData("if value is string s || s.Length > 0 { return 1 }\n    return 0", "s")]

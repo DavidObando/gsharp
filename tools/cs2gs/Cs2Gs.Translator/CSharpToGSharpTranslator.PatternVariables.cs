@@ -39,12 +39,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             var binders = new List<ILocalSymbol>();
 
-            // C# allows designations under a top-level `not` (`x is not T t`)
-            // and assigns them when the whole test is FALSE; G# rejects bindings
-            // under `not` (GS0390) but scopes them identically through `!`, so
-            // the shape lowers to `!(x is T t)`.
-            PatternSyntax pattern = StripTopLevelNegation(isPattern.Pattern, out bool negated);
-            GPattern native = this.BuildNativePattern(pattern, binders);
+            GPattern native = this.BuildNativePattern(isPattern.Pattern, binders);
             foreach (ILocalSymbol binder in binders)
             {
                 this.state.PatternBindings[binder] =
@@ -52,10 +47,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.NativePatternVariables.Add(binder);
             }
 
-            GExpression test = new PatternTestExpression(receiver, native);
-            return negated
-                ? new UnaryExpression("!", new ParenthesizedExpression(test))
-                : test;
+            return new PatternTestExpression(receiver, native);
         }
 
         /// <summary>
@@ -544,9 +536,8 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
 
                 case UnaryPatternSyntax unary when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
-                    // A designation under `not` is only assignable when the whole
-                    // test is negated at the top (`x is not T t`), which
-                    // TryTranslateNativePatternVariables lowers to `!(x is T t)`.
+                    // ADR-0166: G# directly supports a designation under the
+                    // top-level `not` of an is-expression.
                     return topLevel
                         ? IsNativelyExpressiblePattern(unary.Pattern, topLevel: true)
                         : !PatternIntroducesBinding(unary.Pattern) && IsNativelyExpressiblePattern(unary.Pattern, topLevel: false);

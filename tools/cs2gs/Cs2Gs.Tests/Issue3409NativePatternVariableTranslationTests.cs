@@ -96,7 +96,7 @@ public class Issue3409NativePatternVariableTranslationTests
     }
 
     [Fact]
-    public void NegatedGuard_LowersToBangIsAndLeaksTheVariable()
+    public void NegatedGuard_UsesNativeNotPatternAndLeaksTheVariable()
     {
         string printed = Translate("""
             namespace Demo
@@ -126,7 +126,7 @@ public class Issue3409NativePatternVariableTranslationTests
             }
             """);
 
-        Assert.Contains("if !(value is string text) {", printed, StringComparison.Ordinal);
+        Assert.Contains("if value is not string text {", printed, StringComparison.Ordinal);
         Assert.Contains("if !(value is string text) || text.Length == 0 {", printed, StringComparison.Ordinal);
         Assert.Contains("return text.Length", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("as string", printed, StringComparison.Ordinal);
