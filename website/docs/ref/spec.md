@@ -1535,10 +1535,30 @@ G# uses CLR-style exceptions. A `try` statement must have at least one catch or 
 
 ```ebnf
 TryStmt       = "try" Block CatchClause* FinallyClause? .
-CatchClause   = "catch" "(" identifier TypeClause? ")" Block .
+CatchClause   = "catch" CatchHeader? CatchFilter? Block .
+CatchHeader   = "(" ( identifier TypeClause | Type ) ")" .
+CatchFilter   = "when" Expression .
 FinallyClause = "finally" Block .
 ThrowStmt     = "throw" Expression .
 ```
+
+A catch clause has four forms, matching C#: `catch (name T)` binds the exception
+to `name`; `catch (T)` names the type it handles and binds nothing; a bare
+`catch` is `catch (Exception)` without a binder; and any of these may carry a
+`when` filter. `when` is contextual here, exactly as in a `switch` arm guard.
+
+A filter expression must be `bool`. It is emitted as a **CLR exception filter
+region**, so its semantics are the runtime's: it is evaluated during the *first
+pass*, before any intervening `finally` unwinds the stack; when it evaluates to
+`false`, or throws (in which case the thrown exception is discarded), the clause
+declines and matching continues with the next clause, and if no clause accepts,
+the exception propagates with its original throw site intact.
+
+Because a filter runs on the throwing thread with no suspension point available,
+`await` inside one is rejected (`GS0572`), as is `rethrow` (`GS0570` — a filter
+is not a handler). A clause that an earlier **unfiltered** clause already covers
+can never run and is rejected (`GS0573`); an earlier *filtered* clause may
+decline, so it does not shadow a later clause.
 
 #### Throw expressions
 
@@ -1919,7 +1939,9 @@ ListPatternElement ::= Pattern | SlicePattern
 SlicePattern      ::= '..' (identifier | Pattern)?           (* slice ("rest") subpattern, : bare '..' discards the middle slice; '..name' captures it into a '[]T' binding; '..pattern' matches it against a nested pattern *)
 
 TryStmt           ::= 'try' Block CatchClause* FinallyClause?
-CatchClause       ::= 'catch' '(' identifier TypeClause? ')' Block
+CatchClause       ::= 'catch' CatchHeader? CatchFilter? Block
+CatchHeader       ::= '(' ( identifier TypeClause | Type ) ')'   (* binder-and-type, or type only *)
+CatchFilter       ::= 'when' Expression                          (* bool; emitted as a CLR filter region *)
 FinallyClause     ::= 'finally' Block
 ThrowStmt         ::= 'throw' Expression
 UsingStmt         ::= 'using' VariableDecl

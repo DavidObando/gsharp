@@ -1261,7 +1261,7 @@ public sealed class Issue3466NestedHomonymAliasTests
     }
 
     [Fact]
-    public void BareCatch_MapsSystemExceptionAtCatchLocation()
+    public void BareCatch_NeedsNoExceptionAliasAtAll()
     {
         string printed = Translate("""
             namespace Demo
@@ -1287,11 +1287,13 @@ public sealed class Issue3466NestedHomonymAliasTests
             }
             """);
 
-        Assert.Contains(
-            "import SystemException_2 = System.Exception",
-            printed,
-            StringComparison.Ordinal);
-        Assert.Contains("catch (__caught SystemException_2)", printed, StringComparison.Ordinal);
+        // ADR-0177: a bare `catch` stays bare, so the translator names no
+        // exception type here and a nested homonym has nothing to collide with.
+        // The alias this test used to require existed only to spell the
+        // synthesized `catch (__caught System.Exception)` binder.
+        Assert.Contains("} catch {", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__caught", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("SystemException_2", printed, StringComparison.Ordinal);
     }
 
     [Fact]

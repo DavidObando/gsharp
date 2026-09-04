@@ -293,15 +293,6 @@ internal sealed class DocumentTranslationState
     // instance) so re-registered copies of the same SCC cannot double-emit.
     public HashSet<IMethodSymbol> EmittedRecursiveGroupMembers { get; } =
         new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-
-    // The exception variable bound by the innermost enclosing `catch` clause,
-    // used to translate a C# re-throw (`throw;`) — which has no bare G# form —
-    // to `throw <caughtVar>` (ADR-0115 §B).
-    public string CurrentCatchVariable { get; set; }
-
-    // Synthetic catch binders active while nested catch bodies translate.
-    public HashSet<string> ActiveSyntheticCatchBinders { get; } =
-        new HashSet<string>(StringComparer.Ordinal);
 }
 
 internal sealed class LiftedRecursiveLocalFunction

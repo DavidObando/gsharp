@@ -204,47 +204,42 @@ public class BodyTranslationTests
         Assert.Contains("rethrow", body);
     }
 
-    /// <summary>G# has no native <c>catch ... when (filter)</c>; a filtered catch
-    /// must lower to a rethrow-if-false prologue so the filter is not silently
-    /// dropped (issue #1724): the caught exception must still propagate when the
-    /// filter is false.</summary>
+    /// <summary>ADR-0177 gave G# a native <c>catch ... when</c>, so a C# filter
+    /// maps straight across as one clause instead of being lowered into the
+    /// handler body with a rethrow-if-false prologue (the #1724 workaround).
+    /// That is not cosmetic: the lowering ran the filter <em>after</em> the
+    /// stack had already unwound into the handler, while a native filter runs
+    /// in the CLR's first pass.</summary>
     [Fact]
-    public void CatchWhen_LowersToRethrowIfFilterFalse()
+    public void CatchWhen_TranslatesToNativeWhenFilter()
     {
         string body = GetMethodBody(@"
             try { n = 1; }
             catch (Exception ex) when (ex.Message.Length > 0) { n = 2; }");
 
-        Assert.Contains("} catch (ex Exception) {", body);
-        int catchIndex = body.IndexOf("} catch (ex Exception) {", StringComparison.Ordinal);
-        int ifIndex = body.IndexOf("if !(ex.Message.Length > 0) {", StringComparison.Ordinal);
-        int rethrowIndex = body.IndexOf("rethrow", StringComparison.Ordinal);
-        int assignIndex = body.IndexOf("n = 2", StringComparison.Ordinal);
-
-        Assert.True(ifIndex > catchIndex, "filter check must be inside the catch body.");
-        Assert.True(rethrowIndex > ifIndex, "rethrow must be inside the filter's if-branch.");
-        Assert.True(assignIndex > rethrowIndex, "original catch body must run after the filter check.");
+        Assert.Contains("} catch (ex Exception) when ex.Message.Length > 0 {", body);
+        Assert.DoesNotContain("rethrow", body);
+        Assert.DoesNotContain("__caught", body);
     }
 
-    /// <summary>The filter's rethrow-lowering must not swallow the exception at
-    /// runtime: when the filter is false, the translated G# actually propagates
-    /// the exception out of the whole <c>try</c> instead of continuing to the
-    /// original catch body (issue #1724).</summary>
+    /// <summary>A false filter needs no lowering at all now: the CLR simply
+    /// never selects the clause, so the exception keeps propagating with its
+    /// original throw site intact and the handler body is not entered
+    /// (issue #1724, resolved natively by ADR-0177).</summary>
     [Fact]
-    public void CatchWhen_FilterFalse_PropagatesInsteadOfRunningBody()
+    public void CatchWhen_FilterFalse_NeedsNoRethrowLowering()
     {
         string body = GetMethodBody(@"
             try { n = 1; }
             catch (Exception ex) when (false) { n = 999; }");
 
-        Assert.Contains("if !false {", body);
-        Assert.Contains("rethrow", body);
-        Assert.DoesNotContain("999", body.Substring(0, body.IndexOf("if !false", StringComparison.Ordinal)));
+        Assert.Contains("when false {", body);
+        Assert.DoesNotContain("if !false", body);
+        Assert.DoesNotContain("rethrow", body);
     }
 
-    /// <summary>A filter that only reads the caught exception variable (no other
-    /// state) still translates: the binder is in scope for the filter expression
-    /// (issue #1724).</summary>
+    /// <summary>The catch binder is in scope inside the filter expression, so a
+    /// filter that reads it translates verbatim (issue #1724).</summary>
     [Fact]
     public void CatchWhen_FilterReferencesExceptionVariable()
     {
@@ -253,19 +248,18 @@ public class BodyTranslationTests
             catch (InvalidOperationException ex) when (ex.Message == ""retry"") { n = 2; }",
             extraLocals: "");
 
-        Assert.Contains("if !(ex.Message == \"retry\") {", body);
-        Assert.Contains("rethrow", body);
+        Assert.Contains("catch (ex InvalidOperationException) when ex.Message == \"retry\" {", body);
+        Assert.DoesNotContain("rethrow", body);
     }
 
-    /// <summary>A filtered catch whose later sibling could still receive the
-    /// same exception (here, a plain <c>Exception</c> catch-all after a filtered
-    /// <c>InvalidOperationException</c>) is no longer reported unsupported
-    /// (issue #2235, follow-up to #1724): it merges with its later sibling(s)
-    /// into ONE catch that dispatches on type-then-filter in source order, so
-    /// a false filter falls through to the sibling instead of escaping the
-    /// whole <c>try</c>.</summary>
+    /// <summary>The shape #2235 had to merge into one hand-written dispatcher —
+    /// a filtered clause whose later sibling could still receive the same
+    /// exception — now emits two ordinary clauses. C#'s "false filter falls
+    /// through to the next sibling" is the CLR's rule, so there is nothing left
+    /// to reproduce, and no synthetic <c>__caught</c> binder is invented
+    /// (issue #3897 family 1).</summary>
     [Fact]
-    public void FilteredCatch_WithOverlappingLaterSibling_MergesIntoSingleDispatchingCatch()
+    public void FilteredCatch_WithOverlappingLaterSibling_EmitsClauseForClause()
     {
         (string body, TranslationContext context) = GetMethodBodyAndContext(@"
             try { n = 1; }
@@ -274,29 +268,18 @@ public class BodyTranslationTests
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
 
-        // A single merged catch, typed at the common supertype `Exception`,
-        // bound to a compiler-generated name that can never collide with a
-        // source catch-variable name (so the per-clause rebind below always
-        // fires, even for a clause whose original name is also "ex").
-        Assert.Contains("} catch (__caught Exception) {", body);
-        Assert.DoesNotContain("catch (ex", body);
-        Assert.DoesNotContain("catch (ex2", body);
-
-        // Dispatches on type then filter, in source order, with both bodies present.
-        Assert.Contains("__caught is InvalidOperationException", body);
-        Assert.Contains("let ex = __caught", body);
-        Assert.Contains("ex.Message.Length > 0", body);
-        Assert.Contains("__caught is Exception", body);
-        Assert.Contains("let ex2 = __caught", body);
+        Assert.Contains("catch (ex InvalidOperationException) when ex.Message.Length > 0 {", body);
+        Assert.Contains("catch (ex2 Exception) {", body);
+        Assert.DoesNotContain("__caught", body);
+        Assert.DoesNotContain(" is InvalidOperationException", body);
         Assert.Contains("n = 2", body);
         Assert.Contains("n = 3", body);
     }
 
-    /// <summary>Same divergent shape as above, framed around the actual runtime
-    /// behavior it protects: with the filter false, C# falls through to the
-    /// <c>Exception</c> sibling and runs its body — the sibling catch is never
-    /// dead code, so the merged dispatch must still reach it instead of
-    /// rethrowing past it (issue #2235).</summary>
+    /// <summary>Same shape, framed around the runtime behavior it protects: the
+    /// sibling clause must stay reachable when the filter is false. Keeping both
+    /// clauses is exactly what makes it reachable — the earlier lowering's
+    /// escaping rethrow was what turned it into dead code (issue #2235).</summary>
     [Fact]
     public void FilteredCatch_WithOverlappingLaterSibling_SiblingRemainsReachableNotDeadCode()
     {
@@ -307,17 +290,17 @@ public class BodyTranslationTests
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
 
-        // The sibling's body is preserved and reachable in the merged dispatch
-        // (not made dead code by an escaping rethrow).
+        Assert.Contains("catch (ex2 Exception) {", body);
         Assert.Contains("n = 3", body);
-        Assert.Contains("let ex2 = __caught", body);
+        Assert.DoesNotContain("rethrow", body);
     }
 
-    /// <summary>A filtered catch that is the LAST clause in the try is a SAFE
-    /// shape: there is no later sibling to diverge from, so rethrow-lowering
-    /// still applies and no diagnostic is recorded (issue #1724).</summary>
+    /// <summary>A filtered catch that is the LAST clause translates the same way
+    /// as any other — the old lowering's "is this shape safe?" question no
+    /// longer exists, so there is one code path and no diagnostic
+    /// (issues #1724, #2235).</summary>
     [Fact]
-    public void FilteredCatch_Last_StillRethrowLowers_NoDiagnostic()
+    public void FilteredCatch_Last_EmitsNativeFilter_NoDiagnostic()
     {
         (string body, TranslationContext context) = GetMethodBodyAndContext(@"
             try { n = 1; }
@@ -325,17 +308,15 @@ public class BodyTranslationTests
             catch (InvalidOperationException ex) when (ex.Message.Length > 0) { n = 2; }");
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("if !(ex.Message.Length > 0) {", body);
-        Assert.Contains("rethrow", body);
+        Assert.Contains("catch (ex InvalidOperationException) when ex.Message.Length > 0 {", body);
+        Assert.DoesNotContain("rethrow", body);
     }
 
-    /// <summary>A filtered catch followed only by sibling catches of provably
-    /// disjoint exception types (unrelated classes, neither a super/subtype of
-    /// the other) is a SAFE shape: no runtime exception object can match both,
-    /// so the false-filter case can never actually need to fall through to that
-    /// sibling, and rethrow-lowering remains correct with no diagnostic.</summary>
+    /// <summary>Sibling types being provably disjoint used to be the precondition
+    /// that made rethrow-lowering safe; it is now irrelevant, and the clause
+    /// translates identically either way (issue #1724).</summary>
     [Fact]
-    public void FilteredCatch_WithDisjointLaterSibling_StillRethrowLowers_NoDiagnostic()
+    public void FilteredCatch_WithDisjointLaterSibling_EmitsNativeFilter_NoDiagnostic()
     {
         (string body, TranslationContext context) = GetMethodBodyAndContext(@"
             try { n = 1; }
@@ -343,8 +324,9 @@ public class BodyTranslationTests
             catch (FormatException ex2) { n = 3; }");
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("if !(ex.Message.Length > 0) {", body);
-        Assert.Contains("rethrow", body);
+        Assert.Contains("catch (ex InvalidOperationException) when ex.Message.Length > 0 {", body);
+        Assert.Contains("catch (ex2 FormatException) {", body);
+        Assert.DoesNotContain("rethrow", body);
     }
 
     /// <summary>A pre-declared C# <c>out</c> argument maps to the legacy

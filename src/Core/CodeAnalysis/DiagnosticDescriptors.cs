@@ -458,6 +458,13 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RethrowOutsideCatchHandler = new("GS0570", DiagnosticSeverity.Error, "'rethrow' can only appear inside a 'catch' handler — there is no exception being handled here. Use 'throw <expr>' to raise a new exception (ADR-0176).");
     internal static readonly DiagnosticDescriptor RethrowInsideNestedFinally = new("GS0571", DiagnosticSeverity.Error, "'rethrow' cannot appear in a 'finally' clause nested inside the enclosing 'catch' handler — the CLR has left the handler by then. Move the 'rethrow' into the 'catch' body, or 'throw' a captured exception instead (ADR-0176).");
 
+    // ADR-0177 / issue #3897: a `when` filter is emitted as a CLR filter region,
+    // which runs in the exception system's first pass. The CLR forbids
+    // suspending there (C# spells the same rule CS7094), and a filter is not a
+    // handler, so unreachable-clause analysis follows C#'s CS0160.
+    internal static readonly DiagnosticDescriptor AwaitInsideCatchFilter = new("GS0572", DiagnosticSeverity.Error, "Cannot 'await' inside a 'catch' filter: the filter runs in the CLR's first exception pass, which cannot suspend. Move the awaited work into the 'catch' body (ADR-0177).");
+    internal static readonly DiagnosticDescriptor UnreachableCatchClause = new("GS0573", DiagnosticSeverity.Error, "This 'catch' clause is unreachable: an earlier clause catches '{0}', which already covers '{1}'. Reorder the clauses so the more specific one comes first, or give this one a 'when' filter (ADR-0177).");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

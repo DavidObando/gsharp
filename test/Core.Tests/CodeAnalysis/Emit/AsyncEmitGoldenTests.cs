@@ -84,7 +84,7 @@ async func run() int32 {
         s = s + 2
         await Task.Delay(1)
         s = s + 4
-    } catch(ex) {
+    } catch (ex Exception) {
         s = -1
     }
     return s
@@ -112,11 +112,11 @@ async func run() int32 {
         try {
             await Task.Delay(1)
             s = s + 10
-        } catch(inner) {
+        } catch (inner Exception) {
             s = -2
         }
         s = s + 1
-    } catch(ex) {
+    } catch (ex Exception) {
         s = -1
     }
     return s
@@ -172,7 +172,7 @@ async func safe() int32 {
     try {
         await Task.Delay(1)
         result = 42
-    } catch(ex) {
+    } catch (ex Exception) {
         result = -1
     }
     return result

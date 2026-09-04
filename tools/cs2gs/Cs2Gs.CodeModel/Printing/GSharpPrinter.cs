@@ -1597,12 +1597,21 @@ public static class GSharpPrinter
                 var binder = string.IsNullOrEmpty(catchClause.VariableName)
                     ? RenderType(catchClause.ExceptionType)
                     : $"{catchClause.VariableName} {RenderType(catchClause.ExceptionType)}";
-                sb.Append($" catch ({binder}) {RenderBlock(catchClause.Body, indent)}");
+                sb.Append($" catch ({binder})");
             }
             else
             {
-                sb.Append($" catch {RenderBlock(catchClause.Body, indent)}");
+                sb.Append(" catch");
             }
+
+            // ADR-0177: `when` is contextual, and the filter sits in body-header
+            // position, so it renders as a bare expression ahead of the block.
+            if (catchClause.Filter != null)
+            {
+                sb.Append($" when {RenderExpression(catchClause.Filter, indent)}");
+            }
+
+            sb.Append($" {RenderBlock(catchClause.Body, indent)}");
         }
 
         if (tryStatement.FinallyBlock != null)

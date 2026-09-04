@@ -1,6 +1,6 @@
 # ADR-0177: `catch` clause parity with C# — type-only clauses and `when` filters
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-04
 - **Related**: issue #3897 (family 1), issue #3501 (synthetic-identifier inventory), ADR-0176 (`rethrow`), ADR-0115 (cs2gs), issues #1724 / #2235 (filtered-catch fall-through), ECMA-335 I.12.4.2.5 (exception handling), C# §13.11.
 
@@ -180,6 +180,20 @@ C# `catch (T)` maps to G# `catch (T)`, and bare C# `catch` to bare G# `catch`,
 so the translated text stops inventing names the author never wrote. This
 retires family 1 of #3897 outright and removes 187 of the corpus's synthetic
 tokens.
+
+One residue survives, and it is not a filter-expressiveness gap in G#. A G#
+`when` filter is a single *expression*, but translating a C# filter can require
+hoisted *statements* — a scrutinee spill, or storage for a pattern designation
+the handler body then reads, as in `when (ex.InnerException is AggregateException agg)`.
+Those statements have nowhere to go: not before the `try` (the catch binder is
+out of scope there), and not inside a filter expression. Such a clause therefore
+keeps the pre-ADR-0177 shape — prologue, then `if !(filter) { rethrow }`, then
+the handler body — which is faithful *except* when a later sibling could receive
+the same exception, since a real filter would have declined to it. `TranslateTry`
+retains a much-reduced `HasOverlappingLaterSibling` for exactly that case and
+reports it unsupported rather than silently emitting different control flow
+(#1724, #2235). Every filter that is already a pure expression — the common
+case, including `out var` inline in the filter — takes the native path.
 
 ## Consequences
 

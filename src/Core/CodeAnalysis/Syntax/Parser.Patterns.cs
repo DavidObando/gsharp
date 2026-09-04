@@ -680,15 +680,50 @@ public partial class Parser
         return new TryStatementSyntax(syntaxTree, tryKeyword, tryBlock, catchClauses.ToImmutable(), finallyClause);
     }
 
+    // ADR-0177: catch clauses have C# parity. Four shapes are legal:
+    //
+    //   catch (e Type)   typed and bound
+    //   catch (Type)     typed, unbound
+    //   catch            catch-all, unbound (System.Exception)
+    //   ... when <expr>  any of the above with a first-pass filter
+    //
+    // The parenthesized forms are told apart by lookahead: an identifier
+    // followed by something that can start a type clause is a binder, and
+    // anything else in the parentheses is a type. That retires the pre-ADR-0177
+    // untyped `catch (name)` form, which made `catch (IOException)` bind a
+    // variable named `IOException` and silently catch everything. A single
+    // identifier now resolves as a type, so the old spelling fails loudly with
+    // an undefined-type error instead of changing meaning in silence.
     private CatchClauseSyntax ParseCatchClause()
     {
         var catchKeyword = MatchToken(SyntaxKind.CatchKeyword);
-        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-        var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        var typeClause = ParseOptionalTypeClause();
-        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        SyntaxToken? openParen = null;
+        SyntaxToken? identifier = null;
+        TypeClauseSyntax? typeClause = null;
+        SyntaxToken? closeParen = null;
+
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+
+            if (Current.Kind == SyntaxKind.IdentifierToken && CanStartTypeClause(Peek(1)))
+            {
+                identifier = MatchToken(SyntaxKind.IdentifierToken);
+            }
+
+            typeClause = ParseTypeClause();
+            closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        }
+
+        // The guard is parsed in body-header mode so that the `{` opening the
+        // handler terminates the filter expression rather than being taken for
+        // an object-creation brace — the same rule switch arms use (issue #991).
+        var (whenKeyword, filter) = ParseOptionalWhenGuard(bodyFollows: true);
+
         var body = ParseBlockStatement();
-        return new CatchClauseSyntax(syntaxTree, catchKeyword, openParen, identifier, typeClause, closeParen, body);
+        return new CatchClauseSyntax(
+            syntaxTree, catchKeyword, openParen, identifier, typeClause, closeParen, whenKeyword, filter, body);
     }
 
     private StatementSyntax ParseThrowStatement()
