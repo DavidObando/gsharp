@@ -418,6 +418,13 @@ internal sealed class ReflectionMetadataEmitter
     // PR-E-11: widened to internal so the promoted MethodBodyEmitter can read it.
     internal StateMachineEmitter stateMachines;
 
+    // Issue #3883: the MethodDef row of the synthesized `<Main>$` entry-point
+    // stub that blocks on an AUTHORED async `Main`. Held separately from
+    // cache.FunctionHandles because the authored `Main` keeps its own
+    // (Task-returning) row there — the stub is a second, distinct MethodDef
+    // that nothing but the PE header's EntryPoint token references.
+    private MethodDefinitionHandle entryPointStubHandle;
+
     // Issue #2118: per-lambda-function ordered ORIGINAL enclosing type
     // parameters used as the MethodSpec type arguments when the lambda is
     // referenced (`ldftn <lambda><...enclosing args...>`) at its delegate
@@ -502,6 +509,46 @@ internal sealed class ReflectionMetadataEmitter
         smStruct.SetTypeParameters(smTPs);
         this.remaps.RegisterClassRemap(smStruct, remap);
     }
+
+    // Issue #3883: whether the entry point is an AUTHORED `async func Main`
+    // whose async builder exposes a Task. Such a Main must keep its
+    // Task/Task<T> return type in metadata — it is an ordinary, callable,
+    // awaitable member, possibly from another assembly — so the CLR
+    // entry-point signature rewrite (issue #1904) cannot be applied to its
+    // own MethodDef row. A separate `<Main>$` stub row is emitted instead,
+    // exactly as csc does. The TLS-synthesized entry point (Declaration is
+    // null) is excluded: it has no authored declaration to preserve, so
+    // rewriting it in place remains correct.
+    private bool EntryPointNeedsSeparateStub
+    {
+        get
+        {
+            var entryPoint = this.emitCtx.Program.EntryPoint;
+            if (entryPoint is not { Declaration: not null, IsAsync: true })
+            {
+                return false;
+            }
+
+            foreach (var plan in this.stateMachines.AsyncStateMachinePlans)
+            {
+                if (plan.KickoffMethod == entryPoint)
+                {
+                    return plan.StateMachine.BuilderInfo.TaskProperty != null;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    // Issue #3883: whether <paramref name="c"/> is the class that declares the
+    // authored async `Main`, and therefore owns the synthesized `<Main>$`
+    // entry-point stub's MethodDef row.
+    private bool ClassOwnsEntryPointStub(StructSymbol c)
+        => this.EntryPointNeedsSeparateStub
+            && this.emitCtx.Program.EntryPoint is { } entryPoint
+            && !c.StaticMethods.IsDefaultOrEmpty
+            && c.StaticMethods.Contains(entryPoint);
 
     // Issue #1467 / #1537: reifies every user-declared type nested inside a
     // generic type over an ordinal-aligned clone of the flattened enclosing +
@@ -1101,7 +1148,7 @@ internal sealed class ReflectionMetadataEmitter
             this.emitCtx,
             this.cache,
             this.wellKnown,
-            this.functions.EmitFunction,
+            (fn, fnBody, fnIsEntryPoint) => this.functions.EmitFunction(fn, fnBody, fnIsEntryPoint),
             this.signatures.EncodeTypeSymbol,
             this.customAttrEncoder.NextParameterHandle,
             this.memberRefs.GetTypeReference,
@@ -2101,6 +2148,16 @@ internal sealed class ReflectionMetadataEmitter
                     aggregateMethodHandles[m] = handle;
                     this.cache.MethodHandles[m] = handle;
                 }
+
+                // Issue #3883: one extra row on THIS class for the synthesized
+                // `<Main>$` stub that blocks on its authored async `Main`. It
+                // must live on the same type: the stub body is a second async
+                // kickoff, and the state-machine struct it initializes is a
+                // private nested type of this class.
+                if (this.ClassOwnsEntryPointStub(c))
+                {
+                    this.entryPointStubHandle = MetadataTokens.MethodDefinitionHandle(methodRow++);
+                }
             }
 
             // Issue #263: plan accessor method rows for static properties on classes.
@@ -2152,6 +2209,18 @@ internal sealed class ReflectionMetadataEmitter
         // a package-level <Program> row/emission — the per-package entry-point
         // reservation/emission below is skipped for it, and the emitted
         // TypeDef-owned MethodDef row is reused directly as the PE entry point.
+        //
+        // Issue #3883: when that class-scoped `Main` is ASYNC its own row can
+        // no longer double as the PE entry point — reusing it forces the CLR
+        // entry-point signature (void/int32) onto the user's declaration and
+        // erases `Task<T>` from metadata, so cross-assembly consumers see a
+        // synchronous method (`await Program.Main(args)` fails with GS0159 on
+        // ConfigureAwait). csc keeps the authored `Main` Task-shaped and
+        // synthesizes a SEPARATE `<Main>$` stub that blocks on it. The stub's
+        // row is reserved by PlanClassMethods on the SAME class (it reads the
+        // state machine's private fields, so a <Program>-hosted stub would
+        // fail CLR field-access checks); `entryPointIsClassOwned` stays true
+        // so no package-level row is reserved as well.
         var entryPointIsClassOwned = this.emitCtx.Program.EntryPoint is not null
             && aggregateMethodHandles.ContainsKey(this.emitCtx.Program.EntryPoint);
 
@@ -2907,7 +2976,10 @@ internal sealed class ReflectionMetadataEmitter
 
         foreach (var kvp in this.emitCtx.Program.Functions)
         {
-            if (kvp.Key == this.emitCtx.Program.EntryPoint)
+            // Issue #3883: an AUTHORED async `Main` is NOT skipped here — it
+            // needs its own ordinary (Task-returning) row alongside the
+            // separate `<Main>$` entry-point stub reserved further below.
+            if (kvp.Key == this.emitCtx.Program.EntryPoint && !this.EntryPointNeedsSeparateStub)
             {
                 continue;
             }
@@ -3081,7 +3153,22 @@ internal sealed class ReflectionMetadataEmitter
 
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)
             {
-                this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint] = MetadataTokens.MethodDefinitionHandle(nextRow++);
+                var entryRow = MetadataTokens.MethodDefinitionHandle(nextRow++);
+
+                // Issue #3883: for an authored async `Main` this row is the
+                // synthesized `<Main>$` stub, NOT the authored function — the
+                // authored function already has its own row (above, or on its
+                // owning class's TypeDef), and cache.FunctionHandles must keep
+                // pointing at THAT row so ordinary calls to `Main()` bind to
+                // the Task-returning member.
+                if (this.EntryPointNeedsSeparateStub)
+                {
+                    this.entryPointStubHandle = entryRow;
+                }
+                else
+                {
+                    this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint] = entryRow;
+                }
             }
         }
 
@@ -3116,9 +3203,11 @@ internal sealed class ReflectionMetadataEmitter
         MethodDefinitionHandle entryHandle = default;
         if (this.emitCtx.Program.EntryPoint is not null)
         {
-            entryHandle = entryPointIsClassOwned
-                ? aggregateMethodHandles[this.emitCtx.Program.EntryPoint]
-                : this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint];
+            entryHandle = this.EntryPointNeedsSeparateStub
+                ? this.entryPointStubHandle
+                : entryPointIsClassOwned
+                    ? aggregateMethodHandles[this.emitCtx.Program.EntryPoint]
+                    : this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint];
         }
 
         // Pre-register SM class ctor handles so iterator kickoff bodies
@@ -3554,9 +3643,36 @@ internal sealed class ReflectionMetadataEmitter
                         // isEntryPoint through so EmitFunction applies the same
                         // async-Main sync-wrapper lowering (GetAwaiter().GetResult())
                         // used for package-scope entry points.
-                        var emittedHandle = this.functions.EmitFunction(m, staticBody, isEntryPoint: m == this.emitCtx.Program.EntryPoint);
+                        // Issue #3883: an authored async `Main` is emitted here
+                        // as an ORDINARY static method (Task-returning); the
+                        // CLR entry-point shape lives on the separate
+                        // `<Main>$` stub emitted right after this loop.
+                        var emittedHandle = this.functions.EmitFunction(
+                            m,
+                            staticBody,
+                            isEntryPoint: m == this.emitCtx.Program.EntryPoint && !this.EntryPointNeedsSeparateStub);
                         this.cache.MethodHandles[m] = emittedHandle;
                     }
+                }
+
+                // Issue #3883: the synthesized `<Main>$` entry-point stub for
+                // this class's authored async `Main` — a second kickoff body
+                // over the same state machine, encoded with the CLR
+                // entry-point signature and driven to completion
+                // synchronously. Its row was reserved by PlanClassMethods
+                // immediately after the static-method rows.
+                //
+                // ClassOwnsEntryPointStub is only true when Program.EntryPoint
+                // is non-null (it is one of this class's StaticMethods), so
+                // the two `!`s below are guarded by the preceding conjunct.
+                if (this.ClassOwnsEntryPointStub(c)
+                    && this.emitCtx.Program.Functions.TryGetValue(this.emitCtx.Program.EntryPoint!, out var stubBody))
+                {
+                    this.functions.EmitFunction(
+                        this.emitCtx.Program.EntryPoint!,
+                        stubBody,
+                        isEntryPoint: true,
+                        isSynthesizedEntryPointStub: true);
                 }
             }
 
@@ -3821,7 +3937,11 @@ internal sealed class ReflectionMetadataEmitter
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)
             {
                 var entryBody = this.emitCtx.Program.Functions[this.emitCtx.Program.EntryPoint];
-                this.functions.EmitFunction(this.emitCtx.Program.EntryPoint, entryBody, isEntryPoint: true);
+                this.functions.EmitFunction(
+                    this.emitCtx.Program.EntryPoint,
+                    entryBody,
+                    isEntryPoint: true,
+                    isSynthesizedEntryPointStub: this.EntryPointNeedsSeparateStub);
             }
         }
 

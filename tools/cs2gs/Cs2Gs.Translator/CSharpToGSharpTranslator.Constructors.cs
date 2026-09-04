@@ -994,7 +994,14 @@ public sealed partial class CSharpToGSharpTranslator
                     $"params collection of type '{parameterType}' has no gsc construction form.");
             }
 
-            GTypeReference type = this.typeMapper.Map(parameterType, this.context, symbol.Locations.FirstOrDefault());
+            // Issue #3841: routed through MapParameterType (not Map) so a
+            // delegate parameter keeps its nominal name when the arrow form
+            // would collide with a sibling overload's erased signature.
+            GTypeReference type = this.typeMapper.MapParameterType(
+                symbol,
+                parameterType,
+                this.context,
+                symbol.Locations.FirstOrDefault());
 
             // Issue #1072: a non-nullable reference/array parameter that is
             // null-checked or null-assigned in the method body is really nullable;

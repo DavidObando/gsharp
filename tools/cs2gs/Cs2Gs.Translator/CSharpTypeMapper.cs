@@ -486,6 +486,56 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
+    /// Issue #3841: maps a METHOD/CONSTRUCTOR PARAMETER's type, keeping a
+    /// delegate parameter's nominal name (<c>Predicate[T]</c>) instead of the
+    /// arrow form (<c>(T) -&gt; bool</c>) when — and only when — the arrow form
+    /// would give two members of the same overload set identical G# signatures.
+    /// <para>
+    /// Issue #2835 established that CLR delegates are nominally typed and
+    /// scoped identity preservation to SOURCE-declared delegates. That leaves
+    /// imported delegates erased, so a legal C# overload set such as
+    /// <c>Add(Predicate&lt;T&gt;)</c> / <c>Add(Func&lt;T, bool&gt;)</c> is
+    /// translated into two members with the same signature and gsc correctly
+    /// rejects the result with <c>GS0264</c>. gsc itself declares and
+    /// dispatches that overload set fine — the duplicate is manufactured here.
+    /// </para>
+    /// <para>
+    /// Preserving every imported delegate's nominal name would rewrite
+    /// <c>Func</c>/<c>Action</c> across the whole corpus for no benefit, so the
+    /// rule is scoped to the colliding members: a parameter keeps its nominal
+    /// delegate name only when some sibling overload's parameters erase to the
+    /// same arrow shape at every position.
+    /// </para>
+    /// </summary>
+    /// <param name="parameter">The parameter symbol being translated.</param>
+    /// <param name="parameterType">
+    /// The type to map. Normally <c>parameter.Type</c>; for a variadic
+    /// (<c>params T[]</c>) parameter the caller passes the ELEMENT type
+    /// instead, in which case no collision rule applies.
+    /// </param>
+    /// <param name="context">The translation context that accumulates diagnostics.</param>
+    /// <param name="location">The originating C# source location for diagnostics.</param>
+    /// <returns>The canonical G# type reference for the parameter.</returns>
+    public GTypeReference MapParameterType(
+        IParameterSymbol parameter,
+        ITypeSymbol parameterType,
+        TranslationContext context,
+        Location location)
+    {
+        if (parameter != null
+            && SymbolEqualityComparer.Default.Equals(parameter.Type, parameterType)
+            && parameterType is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null }
+            && OverloadSetErasesToDuplicate(parameter))
+        {
+            // MapEventType is the existing identity-preserving entry point
+            // (an event's handler type is ABI-sensitive for the same reason).
+            return this.MapEventType(parameterType, context, location);
+        }
+
+        return this.Map(parameterType, context, location);
+    }
+
+    /// <summary>
     /// Issue #2282: maps a C# anonymous type (<c>new { A = 1, B = "x" }</c>) to
     /// a synthesized G# <c>data class</c> whose primary-constructor parameters
     /// carry the SAME member names, instead of the earlier positional-tuple
@@ -2557,6 +2607,111 @@ public sealed class CSharpTypeMapper
     {
         INamedTypeSymbol definition = named.OriginalDefinition ?? named;
         return definition.Locations.Any(l => l.IsInSource);
+    }
+
+    /// <summary>
+    /// Issue #3841: whether <paramref name="parameter"/>'s owning member has a
+    /// sibling in the same overload set whose parameters erase to the SAME G#
+    /// arrow shape at every position — i.e. whether printing the arrow form
+    /// here would manufacture a duplicate signature (GS0264 / duplicate
+    /// <c>init</c>).
+    /// </summary>
+    /// <param name="parameter">The parameter symbol being translated.</param>
+    /// <returns><see langword="true"/> when the overload set collides after erasure.</returns>
+    private static bool OverloadSetErasesToDuplicate(IParameterSymbol parameter)
+    {
+        if (parameter.ContainingSymbol is not IMethodSymbol method
+            || method.ContainingType is not INamedTypeSymbol containingType)
+        {
+            return false;
+        }
+
+        foreach (ISymbol candidate in containingType.GetMembers(method.Name))
+        {
+            if (candidate is not IMethodSymbol sibling
+                || SymbolEqualityComparer.Default.Equals(sibling, method)
+                || sibling.MethodKind != method.MethodKind
+                || sibling.Arity != method.Arity
+                || sibling.Parameters.Length != method.Parameters.Length)
+            {
+                continue;
+            }
+
+            if (ParametersEraseAlike(method, sibling))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3841: whether two same-name, same-arity members' parameter lists
+    /// print identically in G# once delegate types are erased to arrow form.
+    /// </summary>
+    /// <param name="left">The first member.</param>
+    /// <param name="right">The second member.</param>
+    /// <returns><see langword="true"/> when the two erase to one signature.</returns>
+    private static bool ParametersEraseAlike(IMethodSymbol left, IMethodSymbol right)
+    {
+        for (var i = 0; i < left.Parameters.Length; i++)
+        {
+            IParameterSymbol a = left.Parameters[i];
+            IParameterSymbol b = right.Parameters[i];
+            if (a.RefKind != b.RefKind
+                || a.IsParams != b.IsParams
+                || !TypesEraseAlike(a.Type, b.Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3841: whether two C# types render as the SAME G# type once
+    /// delegate types are erased to their arrow form. Identical types trivially
+    /// qualify; two distinct delegate types qualify when their invoke
+    /// signatures agree position by position (this is exactly what
+    /// <see cref="MapDelegate"/> prints), which is how <c>Predicate&lt;T&gt;</c>
+    /// and <c>Func&lt;T, bool&gt;</c> collide.
+    /// </summary>
+    /// <param name="left">The first type.</param>
+    /// <param name="right">The second type.</param>
+    /// <returns><see langword="true"/> when both erase to one G# spelling.</returns>
+    private static bool TypesEraseAlike(ITypeSymbol left, ITypeSymbol right)
+    {
+        if (SymbolEqualityComparer.Default.Equals(left, right))
+        {
+            return true;
+        }
+
+        if (left is not INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } leftDelegate
+            || right is not INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } rightDelegate)
+        {
+            return false;
+        }
+
+        IMethodSymbol leftInvoke = leftDelegate.DelegateInvokeMethod;
+        IMethodSymbol rightInvoke = rightDelegate.DelegateInvokeMethod;
+        if (leftInvoke.Parameters.Length != rightInvoke.Parameters.Length
+            || !TypesEraseAlike(leftInvoke.ReturnType, rightInvoke.ReturnType))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < leftInvoke.Parameters.Length; i++)
+        {
+            if (leftInvoke.Parameters[i].RefKind != rightInvoke.Parameters[i].RefKind
+                || !TypesEraseAlike(leftInvoke.Parameters[i].Type, rightInvoke.Parameters[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private ArrowTypeReference MapDelegate(IMethodSymbol invoke, TranslationContext context, Location location)
