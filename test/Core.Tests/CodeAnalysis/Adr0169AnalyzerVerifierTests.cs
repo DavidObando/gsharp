@@ -269,6 +269,89 @@ class Cache([|entries|] int32) {
     }
 
     /// <summary>
+    /// Issue #3794: a marked source may declare several compilation units,
+    /// separated by <see cref="GSharpAnalyzerVerifier.UnitSeparator"/>, and
+    /// they compile TOGETHER — which is the only rendering of a multi-namespace
+    /// analyzer-test snippet that keeps a package-scoped rule judging the
+    /// declarations the C# original meant. Collapsed into one unit, the
+    /// <c>App.Emit</c> field below would sit in <c>App.Symbols</c> and this
+    /// analyzer would report nothing at all.
+    /// </summary>
+    [Fact]
+    public void MultipleUnits_ArePackageScopedIndependently()
+    {
+        GSharpAnalyzerVerifier<EmitPackageFieldAnalyzer>.VerifyAnalyzer(
+            @"package App.Symbols
+
+class SymbolCache {
+    shared {
+        var entries int32
+    }
+}
+" + GSharpAnalyzerVerifier.UnitSeparator + @"
+package App.Emit
+
+class EmitCache {
+    shared {
+        var [|entries|] int32
+    }
+}
+",
+            "TESTGSA0004");
+    }
+
+    /// <summary>
+    /// The companion falsifier: the SAME two units with the marker moved to the
+    /// unit the rule does not police must fail. Without this, a rule that fired
+    /// everywhere — or nowhere — could still satisfy the test above.
+    /// </summary>
+    [Fact]
+    public void MultipleUnits_AMarkerInTheWrongUnit_IsRejected()
+    {
+        var exception = Assert.Throws<GSharpAnalyzerVerificationException>(() =>
+            GSharpAnalyzerVerifier<EmitPackageFieldAnalyzer>.VerifyAnalyzer(
+                @"package App.Symbols
+
+class SymbolCache {
+    shared {
+        var [|entries|] int32
+    }
+}
+" + GSharpAnalyzerVerifier.UnitSeparator + @"
+package App.Emit
+
+class EmitCache {
+    shared {
+        var entries int32
+    }
+}
+",
+                "TESTGSA0004"));
+
+        Assert.Contains("compilation unit", exception.Message, System.StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A source with no separator stays exactly one unit, so every
+    /// hand-written G# analyzer test is unaffected: the package-scoped rule
+    /// sees one package and reports once.
+    /// </summary>
+    [Fact]
+    public void SingleUnit_IsUnaffectedBySeparatorSupport()
+    {
+        GSharpAnalyzerVerifier<EmitPackageFieldAnalyzer>.VerifyAnalyzer(
+            @"package App.Emit
+
+class EmitCache {
+    shared {
+        var [|entries|] int32
+    }
+}
+",
+            "TESTGSA0004");
+    }
+
+    /// <summary>
     /// The G# analogue of GSA0001: direct index reads of a member named
     /// <c>structFieldDefs</c> outside <c>ResolveFieldToken</c> /
     /// <c>ResolveInterfaceFieldToken</c> are flagged. Uses
@@ -349,6 +432,41 @@ class Cache([|entries|] int32) {
         private static void Report(SyntaxNodeAnalysisContext context)
         {
             context.ReportDiagnostic(Diagnostic.Create(Rule, default(GSharp.Core.CodeAnalysis.Text.TextLocation)));
+        }
+    }
+
+    /// <summary>
+    /// A package-scoped analogue of GSA0003/GSA0004: reports every field
+    /// declared in package <c>App.Emit</c>, and only there. Issue #3794's
+    /// discrimination witness — its answer changes when a declaration's package
+    /// changes, which is exactly what collapsing several units into one did.
+    /// </summary>
+    [GSharpDiagnosticAnalyzer]
+    public sealed class EmitPackageFieldAnalyzer : GSharpDiagnosticAnalyzer
+    {
+        private static readonly DiagnosticDescriptor Rule = new(
+            "TESTGSA0004",
+            "Field in the Emit package",
+            "Field is declared in the Emit package.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        /// <inheritdoc/>
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+        /// <inheritdoc/>
+        public override void Initialize(AnalysisContext context)
+        {
+            context.RegisterSymbolAction(
+                ctx =>
+                {
+                    if (ctx.Symbol.ContainingNamespace == "App.Emit")
+                    {
+                        ctx.ReportDiagnostic(Diagnostic.Create(Rule, ctx.Symbol.Location));
+                    }
+                },
+                GSharp.Core.CodeAnalysis.Symbols.SymbolKind.Field);
         }
     }
 

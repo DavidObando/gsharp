@@ -103,6 +103,28 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             || a is TupleTypeSymbol { HasNames: true });
 
     /// <summary>
+    /// Gets the type arguments this instantiation was constructed with,
+    /// preferring the SYMBOLIC <see cref="TypeArguments"/> over the CLR ones
+    /// (ADR-0169, issue #3794).
+    ///
+    /// <para>
+    /// The base implementation reads <c>ClrType.GenericTypeArguments</c>, and
+    /// for a generic constructed over a same-compilation user type the CLR
+    /// form is type-ERASED — <c>Dictionary[StructSymbol, MemberReferenceHandle]</c>
+    /// is backed by <c>Dictionary&lt;object, object&gt;</c>. A migrated
+    /// analyzer walking a member's type structure (GSA0004's key/value
+    /// inspection is exactly this) therefore saw <c>System.Object</c> for
+    /// every argument and matched nothing at all — the silent under-reporting
+    /// failure mode #3795 warned about. The symbolic arguments are the ones
+    /// the source actually wrote, so they are what Roslyn's
+    /// <c>INamedTypeSymbol.TypeArguments</c> corresponds to; the erased CLR
+    /// list stays the fallback for a plain imported type that carries none.
+    /// </para>
+    /// </summary>
+    public override ImmutableArray<TypeSymbol> ConstructedTypeArguments =>
+        TypeArguments.IsDefaultOrEmpty ? base.ConstructedTypeArguments : TypeArguments;
+
+    /// <summary>
     /// Gets or creates the imported type symbol for the given CLR type.
     /// </summary>
     /// <param name="type">The CLR type.</param>

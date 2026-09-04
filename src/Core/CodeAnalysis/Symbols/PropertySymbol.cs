@@ -141,9 +141,23 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized properties.</summary>
     public PropertyDeclarationSyntax? Declaration { get; private set; }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the declaring syntax — the property's IDENTIFIER, matching what
+    /// #3847 already does for a field and what Roslyn's
+    /// <c>IPropertySymbol.Locations[0]</c> points at (ADR-0169, issue #3794).
+    ///
+    /// <para>
+    /// A migrated symbol-action analyzer reports at <c>Symbol.Location</c>, and
+    /// the whole declaration spans the accessors and the initializer, so the
+    /// reported span swallowed the marked name and the verifier rejected it as
+    /// not contained in the marker. The name is the construct the diagnostic is
+    /// about; the accessors are not.
+    /// </para>
+    /// </summary>
     public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
-        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+        Declaration is { } declaration
+            ? ImmutableArray.Create<SyntaxNode>(declaration.Identifier)
+            : ImmutableArray<SyntaxNode>.Empty;
 
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
     public FieldSymbol? BackingField { get; set; }

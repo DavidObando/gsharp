@@ -278,13 +278,35 @@ shapes differ (its index node is narrower than C#'s element access). Containment
 in *both* directions keeps the assertion falsifiable — a marker narrower than
 the diagnostic, or on a neighbouring construct, still fails.
 
-**Known limitation: one package per unit.** A G# compilation unit declares a
-single `package`, so a C# snippet spanning several namespaces collapses into the
-first one and namespace-scoped rules (GSA0003, GSA0004) then judge the wrong
-declarations. Fixing it needs a multi-unit verifier (the harness takes one
-source string). Until then the collapse is reported as
-`CS2GS-ANALYZER-SNIPPET`, because a negative test that passes because its
-subject changed namespace is passing for the wrong reason.
+**One package per unit — several units per snippet (issue #3794).** A G#
+compilation unit declares a single `package`, so a C# snippet spanning several
+namespaces has no one-unit rendering: collapsing it into the first package moved
+every declaration, and the namespace-scoped rules then judged the wrong ones —
+GSA0004 found *nothing* in a snippet whose C# original reports four times, and
+GSA0003 reported a false positive on a cache the C# exempts only because of its
+namespace. `SnippetTranslator` therefore emits **one unit per declared package,
+in declaration order**, joined by the `// ---8<--- cs2gs:next-compilation-unit
+---` line, and `GSharpAnalyzerVerifier` splits on that line and compiles the
+units **together** in one compilation. The harness signature is unchanged — it
+still takes one source string, which is what a translated Roslyn harness has in
+hand.
+
+Markers and diagnostics are then compared **per unit**: a diagnostic belongs to
+the unit whose file name it carries, ordering is (unit, span start), and a
+diagnostic reported in the wrong unit fails with that named cause. A source
+containing no separator is one unit, so every hand-written G# analyzer test is
+untouched.
+
+**The one lexical rename (issue #3797).** C#'s predefined type keywords become
+G#'s width-bearing primitive names (ADR-0115 §B.12), which is the only rename
+translation applies *inside* expression text — so the marker
+`[|typeof(int) != type|]` could not be placed on the printed
+`typeof(int32) != type` and was dropped. Placement now retries against the
+marker re-spelled from its own `PredefinedTypeSyntax` nodes (never by text
+substitution, so an identifier that merely contains the letters is untouched),
+with the ordinal measured in the equally re-spelled source so a repeated marker
+still lands on the right occurrence. A marker that still cannot be placed stays
+loud.
 
 ## Project and consumer transform
 
@@ -388,6 +410,54 @@ Order: GSA0001 → GSA0003 → GSA0004 → GSA0002 → GSA0005; harness and pari
   (`Adr0169Gsa0005ParityTests`), which is what stops a rule that quietly stops
   firing from passing again: its negatives share one parameterised path with
   positives that demand a diagnostic.
+
+  **The last four (2026-09-04, issues #3794 / #3797).** Re-measured on the
+  whole-repository gate, `test/InternalAnalyzers.Tests` was **3 failing / 15
+  passing of 18**, not four: #3796 had already been cleared by #3847's field
+  source locations. The three that remained were two causes — and clearing
+  them exposed three more, every one of them a FRAMEWORK gap rather than a
+  translation one, in the same family as #3795:
+
+  1. **Package collapse (#3794, ×2).** Fixed by emitting one compilation unit
+     per declared package and teaching the verifier to compile them together
+     (see §Test-harness above).
+  2. **Marker rename (#3797, ×1).** Fixed by retrying placement against the
+     predefined-type re-spelling.
+  3. **`ImportedTypeSymbol.ConstructedTypeArguments` was CLR-derived**, and a
+     generic over a same-compilation user type is type-erased to
+     `Dictionary<object, object>` — so GSA0004 saw `System.Object` for every
+     cache key and matched nothing. It now prefers the symbolic arguments.
+  4. **`TupleTypeSymbol` did not implement `IsTupleType`/`TupleElements`**, so
+     a tuple key looked like a type with no components.
+  5. **`IArrayTypeSymbol` mapped to `ArrayTypeSymbol`** — G#'s fixed-length
+     `[N]T`, a shape cs2gs never emits. C# `T[]` translates to the slice `[]T`,
+     so the map now names `SliceTypeSymbol`.
+  6. **`PropertySymbol.Location` spanned the whole declaration**, swallowing
+     the marker; it now points at the identifier, as #3847 already did for
+     fields.
+
+  Note what (3)–(5) have in common: each made a structural walk return `false`
+  early, and each therefore presented as *silence*. That is why the regression
+  tests (`Issue3794AnalyzerSnippetPackageSplitTests`) put the positive and
+  negative snippets of GSA0003 **and** GSA0004 on one parameterised path that
+  translates the real analyzer, compiles it with the real G# compiler, loads it,
+  and runs it through the real verifier: a rule that stops reporting fails the
+  positives instead of passing the negatives.
+
+  Whole-repository gate on the same tree: `test/InternalAnalyzers.Tests`
+  test-parity **3 failing / 15 passing → 1 failing / 17 passing of 18**
+  (translate, compile and ILVerify stay PASS on both sides).
+
+  **The one that remains is #3920**, and clearing #3797 is what exposed it: with
+  the third marker finally placed, `ReflectionTypeComparisonAnalyzerTests.
+  ReportsTypeofReferenceComparisonsInCompilerMetadataNamespaces` gets past the
+  marker/id count check and GSA0002 then reports **nothing**. `OperationKindMap`
+  maps each Roslyn operation kind to ONE G# bound-node kind, but a `==` over
+  IMPORTED operands binds to `BoundClrBinaryOperatorExpression` and a call to an
+  imported method to `BoundImportedCallExpression` — so the registrations the
+  translation emits (`BinaryExpression`, `CallExpression`) are dispatched zero
+  times for exactly the reflection-`Type` code the rule exists to police. The map
+  has to become one-to-many, and the handler shape has to accept both nodes.
 - **M6 Parity + self-migration** — `AnalyzerParityStage`; extend the
   Issue3347-style self-migration ratchet to translate
   `InternalAnalyzers.csproj` live. Exit criterion: all five translated

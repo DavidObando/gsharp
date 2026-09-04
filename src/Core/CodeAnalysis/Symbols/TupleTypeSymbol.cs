@@ -53,6 +53,42 @@ public sealed class TupleTypeSymbol : TypeSymbol
     /// <summary>Gets the arity of the tuple.</summary>
     public int Arity => ElementTypes.Length;
 
+    /// <inheritdoc/>
+    public override bool IsTupleType => true;
+
+    /// <summary>
+    /// Gets the positional tuple elements as field symbols — the Roslyn
+    /// <c>INamedTypeSymbol.TupleElements</c> analogue (ADR-0169, issue #3794).
+    ///
+    /// <para>
+    /// Without this override the base returned EMPTY, so a migrated analyzer
+    /// that walks a tuple's elements (GSA0004's cache-key inspection is
+    /// exactly that) saw a tuple with no components and silently concluded
+    /// the key mentioned nothing — reporting nothing at all. Elements are
+    /// named after their declared name where ADR-0172 gives one, and
+    /// <c>Item1..ItemN</c> otherwise, which is what Roslyn does.
+    /// </para>
+    /// </summary>
+    public override ImmutableArray<FieldSymbol> TupleElements
+    {
+        get
+        {
+            var builder = ImmutableArray.CreateBuilder<FieldSymbol>(ElementTypes.Length);
+            for (var i = 0; i < ElementTypes.Length; i++)
+            {
+                string? declared = ElementNames.IsDefaultOrEmpty ? null : ElementNames[i];
+                string elementName = string.IsNullOrEmpty(declared) ? $"Item{i + 1}" : declared;
+                builder.Add(new FieldSymbol(
+                    elementName,
+                    ElementTypes[i],
+                    Accessibility.Public,
+                    isReadOnly: true));
+            }
+
+            return builder.MoveToImmutable();
+        }
+    }
+
     /// <summary>Returns the cached <see cref="TupleTypeSymbol"/> for the given element types.</summary>
     /// <param name="elementTypes">The element types in order.</param>
     /// <returns>The (cached) tuple type symbol.</returns>
