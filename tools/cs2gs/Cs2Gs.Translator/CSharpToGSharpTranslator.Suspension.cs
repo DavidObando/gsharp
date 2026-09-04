@@ -46,6 +46,26 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #3907: the runtime-usage probe below is a heuristic for
+            // C# authored AGAINST the concurrency runtime. Inside the runtime
+            // assembly itself it carries no signal at all — every method there
+            // names a Gsharp.Concurrency type — so it fired on
+            // Gsharp.Runtime.Channels' own private helpers
+            // (`Chan<T>.ReceiveBatchSlowAsync`, `ChannelOps.ForeignReceiveSlowAsync`,
+            // `ScopeFrame.JoinAsync`, …). Those are ordinary async methods whose
+            // ValueTask is RETURNED un-awaited by their fast-path callers, and a
+            // `suspend func` cannot express that: ADR-0174 D4 makes every call to
+            // one an implicit await, so `return SlowAsync(…)` from a
+            // `ValueTask[int32]`-returning caller stopped type-checking. The
+            // attribute stays authoritative there (checked above) — #3882 marks
+            // exactly the four ChannelBatchExtensions methods that really are the
+            // suspend ABI — which is why this narrowing is a tightening, not a
+            // removal.
+            if (IsConcurrencyRuntimeNamespace(symbol.ContainingType?.ContainingNamespace))
+            {
+                return false;
+            }
+
             SemanticModel model = this.context.SemanticModel.SyntaxTree == node.SyntaxTree
                 ? this.context.SemanticModel
                 : this.context.Compilation.GetSemanticModel(node.SyntaxTree);

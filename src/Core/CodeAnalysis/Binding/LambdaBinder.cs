@@ -315,6 +315,26 @@ internal sealed class LambdaBinder
         var isAsync = syntax.IsAsync
             || (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(syntax.Body));
 
+        // Issue #1918 / #3907: an `async func` may spell its return-type clause
+        // as the explicit `Task` / `Task[T]` / `ValueTask` / `ValueTask[T]`
+        // wrapper instead of the bare awaited result. DeclarationBinder has
+        // normalized that form for named functions since #1918
+        // (NormalizeAsyncDeclaredReturnType); a function LITERAL took the
+        // clause literally, so `async func (p ValueTask[T]) ValueTask[T] { …
+        // return t }` rejected its own body (GS0155 `T` -> `ValueTask[T]`) and
+        // then handed callers a doubly-wrapped `Task[ValueTask[T]]`. Unwrap
+        // here so FunctionSymbol.Type holds the awaited result for a lambda
+        // exactly as it does for a named function, and remember which wrapper
+        // was asked for so the observable type below rebuilds the same one.
+        var asyncReturnsValueTask = false;
+        if (syntax.IsAsync
+            && !isAsyncIteratorReturnType(returnType)
+            && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(returnType, out var awaitedReturnType, out var declaredValueTask))
+        {
+            returnType = awaitedReturnType;
+            asyncReturnsValueTask = declaredValueTask;
+        }
+
         if (isAsync && isAsyncIteratorReturnType(returnType))
         {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType);
@@ -338,7 +358,7 @@ internal sealed class LambdaBinder
         var observableReturnType = returnType;
         if (isAsync && !isAsyncIteratorReturnType(returnType))
         {
-            observableReturnType = WrapAsTask(returnType);
+            observableReturnType = WrapAsTask(returnType, asyncReturnsValueTask);
         }
 
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), BuildVariadicFlagsIfAny(parameterSymbols), observableReturnType);
@@ -347,6 +367,7 @@ internal sealed class LambdaBinder
             parameterSymbols.ToImmutable(),
             returnType);
         synthetic.IsAsync = isAsync;
+        synthetic.AsyncReturnsValueTask = asyncReturnsValueTask;
 
         // Issue #3501 A2: give a named-binding caller the chance to declare
         // the literal's own name into the (still-current) enclosing scope
