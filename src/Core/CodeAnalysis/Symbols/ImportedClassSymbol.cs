@@ -301,9 +301,10 @@ public sealed class ImportedClassSymbol : Symbol
             // match, so it beat `Exchange[T](ref T, T) where T : class` and the
             // call's type silently became `object` (GS0156 at the use site, or
             // worse, no diagnostic at all where the result is discarded).
-            // The dedicated sentinel matches only a by-ref parameter whose
-            // element type is a generic parameter; the type argument is then
-            // recovered from `symbolicArgVector` below.
+            // The dedicated sentinel keeps the argument neutral during
+            // betterness ranking; `ExcludeNonGenericByRefCandidates` below
+            // drops the overloads it cannot legally reach, and the type
+            // argument is recovered from `symbolicArgVector`.
             if (arguments[i] is BoundAddressOfExpression { Operand.Type: { } refPointee }
                 && IsSameCompilationUserReferencePointee(refPointee))
             {
