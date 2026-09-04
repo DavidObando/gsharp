@@ -167,6 +167,78 @@ namespace Demo
         TranslationTestValidation.AssertBinds(declarations, printed);
     }
 
+    [Fact]
+    public void AWholeArrayNullRow_PromotesTheFirstParameter()
+    {
+        // Issue #3880: `[InlineData(null)]` binds the lone `null` as the params
+        // ARRAY, not as one element, and #3726 read that as naming no position.
+        // gsc does not agree: its GS0274 check reads the emitted
+        // `@InlineData(nil)` positionally and rejects a non-nullable parameter
+        // 0 — so the file cs2gs emitted contradicted itself, which is exactly
+        // the inconsistency #3726 set out to remove. Three sites in cs2gs's own
+        // test suite failed to compile after migration on this.
+        string printed = Translate(
+            @"
+namespace Demo
+{
+    public class ProgramTests
+    {
+        [Theory]
+        [InlineData(null)]
+        [InlineData("""")]
+        public void Check(string name)
+        {
+            System.Console.WriteLine(Normalize(name));
+        }
+
+        private static string Normalize(string name)
+        {
+            return name == null ? string.Empty : name.Trim();
+        }
+    }
+}",
+            out string declarations);
+
+        Assert.Contains("Check(name string?)", printed);
+        Assert.Contains("@InlineData(nil)", printed);
+
+        // The #3704 guard: the row really does pass nil, so bridging the read
+        // with `!!` would turn a passing test into a runtime throw. `Normalize`
+        // is an oblivious sibling (this project has nullable disabled) that
+        // null-checks its own argument, exactly like the three cs2gs test
+        // methods this promotion unblocks.
+        Assert.Contains("Normalize(name)", printed);
+        Assert.DoesNotContain("Normalize(name!!)", printed);
+        TranslationTestValidation.AssertBinds(declarations, printed);
+    }
+
+    [Fact]
+    public void AWholeArrayNullRow_ClaimsNothingBeyondTheFirstParameter()
+    {
+        // The claim is deliberately as narrow as gsc's own: a whole-array null
+        // is positional evidence for parameter 0 only. Widening every parameter
+        // would promote columns no row ever supplies null for.
+        string printed = Translate(
+            @"
+namespace Demo
+{
+    public class ProgramTests
+    {
+        [Theory]
+        [InlineData(null)]
+        public void Check(string first, string second)
+        {
+            System.Console.WriteLine(first);
+            System.Console.WriteLine(second);
+        }
+    }
+}",
+            out string declarations);
+
+        Assert.Contains("Check(first string?, second string)", printed);
+        TranslationTestValidation.AssertBinds(declarations, printed);
+    }
+
     // Returns the printed consumer file, and hands back the printed attribute
     // declarations too so callers can bind the pair.
     private static string Translate(string source, out string printedDeclarations)
