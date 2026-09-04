@@ -3450,6 +3450,17 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #3907: a tuple is always `ValueTuple<...>`, a struct — but
+        // TupleTypeSymbol.BuildClrType returns null as soon as ONE element is a
+        // same-compilation type, so the ClrType test below could not see it.
+        // `cast[(A, B)](o)` therefore bound for BCL element types and failed for
+        // the user's own, which is the same "symbols carry no ClrType" hole the
+        // two cases above exist to close.
+        if (type is TupleTypeSymbol)
+        {
+            return true;
+        }
+
         return type?.ClrType != null && type.ClrType.IsValueType;
     }
 

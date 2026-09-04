@@ -23,6 +23,17 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// (<c>(A int32, B string)</c>) boxed fine, an <em>unnamed</em> tuple with a
 /// nullable element failed identically, and the lambda position was incidental.
 /// The trigger is a null <c>ClrType</c> on the tuple, not its element names.
+///
+/// <para>
+/// Issue #3907 is the UNBOXING direction of the same hole:
+/// <c>cast[(A, B)](o)</c> was rejected as soon as one element was a
+/// same-compilation type, because the value-type test in
+/// <c>Conversion.IsValueTypeLikeFrom</c> also ended at a null
+/// <c>ClrType</c>. Witness of discrimination:
+/// <c>cast[(StringBuilder, string)]</c> — every element BCL-backed, so the
+/// tuple reifies — bound and ran before the fix, and the user's own class as an
+/// element is the only difference.
+/// </para>
 /// </remarks>
 public class Issue3748SymbolicTupleBoxingTests
 {
@@ -99,5 +110,77 @@ Describe(t)
 ");
         Assert.Empty(result.Diagnostics);
         Assert.Equal("(4, q)", result.Value);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #3907: the unboxing direction. `ArmDescriptor.cs` casts a
+    // `ContinueWith` state object back to `((TaskArm, SelectWaiter))state!`.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SymbolicTuple_UnboxesFromObject()
+    {
+        var result = EmittedOracle.Evaluate(@"
+class A { var x int32 }
+class B { var y int32 }
+
+let a = A()
+a.x = 41
+let b = B()
+b.y = 1
+let boxed object = (a, b)
+let t = cast[(A, B)](boxed)
+t.Item1.x + t.Item2.y
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SymbolicTuple_UnboxesFromObject_AndDeconstructs()
+    {
+        // The shape the migrated channels runtime actually uses: the cast feeds
+        // a deconstruction, so a failure here reads as "variable doesn't exist"
+        // for every name the pattern binds.
+        var result = EmittedOracle.Evaluate(@"
+class A { var x int32 }
+class B { var y int32 }
+
+let a = A()
+a.x = 40
+let b = B()
+b.y = 2
+let boxed object = (a, b)
+let (p, q) = cast[(A, B)](boxed)
+p.x + q.y
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void SymbolicTuple_UnboxingWrongShape_StillThrowsAtRuntime()
+    {
+        // Widening the conversion classification must not turn a bad cast into
+        // a silent default: `cast[T]` keeps C# `(T)x` semantics.
+        var result = EmittedOracle.Evaluate(@"
+import System
+
+class A { var x int32 }
+class B { var y int32 }
+
+let boxed object = ""not a tuple""
+var caught = false
+try {
+    let t = cast[(A, B)](boxed)
+    let _ = t.Item1
+} catch (e InvalidCastException) {
+    caught = true
+}
+
+caught
+");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
     }
 }
