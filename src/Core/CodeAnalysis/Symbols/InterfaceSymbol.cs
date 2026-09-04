@@ -44,6 +44,12 @@ public sealed class InterfaceSymbol : TypeSymbol
     // (e.g. <c>IBox[int32].Get()</c>) succeeds.
     private bool membersResolved;
 
+    // Issue #3905: the managed thread currently substituting this instance's
+    // member tables, or 0 when none is. Guards <see cref="TryResolveMembers"/>
+    // against re-entering itself on the same thread through a
+    // mutually-referential generic type.
+    private int resolvingThreadId;
+
     /// <summary>Initializes a new instance of the <see cref="InterfaceSymbol"/> class.</summary>
     /// <param name="name">The interface type name.</param>
     /// <param name="accessibility">The interface's CLR accessibility.</param>
@@ -552,8 +558,29 @@ public sealed class InterfaceSymbol : TypeSymbol
             return definition;
         }
 
-        var key = BuildArgsKey(typeArguments);
-        return ConstructedCache.GetOrAdd((definition, key), _ => CreateConstructed(definition, typeArguments, mapClrType));
+        var cacheKey = (definition, BuildArgsKey(typeArguments));
+        if (ConstructedCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        // Issue #3905: publish the (member-less) instance BEFORE resolving its
+        // members. Member substitution can construct other generic types whose
+        // own members mention this very construction — mutually-referential
+        // generic types such as `interface ICore[T] { func Register(node
+        // Node[T]) }` paired with `class Node[T] { var Core ICore[T] }`, or two
+        // interfaces that name each other. Resolving inside the
+        // `ConcurrentDictionary.GetOrAdd` factory meant the entry for this key
+        // was still unpublished when the recursive request arrived (GetOrAdd
+        // gives no re-entrancy protection and does not promise the factory runs
+        // once), so gsc recursed until the stack overflowed and the process
+        // died with no diagnostics at all. Publishing first makes the recursive
+        // request a cache hit that returns this instance, and the members it
+        // still needs resolve lazily on first access via EnsureMembersResolved.
+        var instance = CreateConstructed(definition, typeArguments, mapClrType);
+        var published = ConstructedCache.GetOrAdd(cacheKey, instance);
+        published.EnsureMembersResolved();
+        return published;
     }
 
     /// <summary>
@@ -645,7 +672,12 @@ public sealed class InterfaceSymbol : TypeSymbol
         // declaration's base-type clause references `IBox[int32]` before
         // `BindInterfaceMembers` runs on `IBox`). Lazy resolution keeps the
         // construction cheap and self-heals once the definition is complete.
-        instance.TryResolveMembers();
+        //
+        // Issue #3905: the resolution is driven by Construct AFTER the instance
+        // has been published to the constructed-instance cache, so a
+        // mutually-referential generic type that asks for this same
+        // construction while its members are being substituted gets this
+        // instance back instead of recursing into a second factory invocation.
         return instance;
     }
 
@@ -760,6 +792,22 @@ public sealed class InterfaceSymbol : TypeSymbol
             return;
         }
 
+        // Issue #3905: substituting this instance's members can, through a
+        // mutually-referential generic type, come back round and read one of
+        // this instance's member tables. That read must not restart the
+        // substitution that is already in flight on this thread — it would
+        // recurse until the stack overflowed. Returning early leaves the
+        // re-entrant reader with the (still empty) tables, which is the same
+        // "members aren't populated yet; try again later" state the method
+        // already produces for a definition whose body has not been bound; the
+        // outer call completes the tables and the next read observes them. The
+        // guard is per-thread so a genuinely concurrent resolution on another
+        // thread still proceeds, exactly as it did before.
+        if (resolvingThreadId == System.Environment.CurrentManagedThreadId)
+        {
+            return;
+        }
+
         var defMethods = Definition.Methods;
         var defStatic = Definition.StaticMethods;
         var defPriv = Definition.PrivateMethods;
@@ -775,50 +823,58 @@ public sealed class InterfaceSymbol : TypeSymbol
             return;
         }
 
-        var subst = GetTypeSubstitution();
-
-        if (!defMethods.IsDefaultOrEmpty)
+        resolvingThreadId = System.Environment.CurrentManagedThreadId;
+        try
         {
-            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defMethods.Length);
-            foreach (var m in defMethods)
+            var subst = GetTypeSubstitution();
+
+            if (!defMethods.IsDefaultOrEmpty)
             {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: false, mapClrType));
+                var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defMethods.Length);
+                foreach (var m in defMethods)
+                {
+                    builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: false, mapClrType));
+                }
+
+                Methods = builder.MoveToImmutable();
             }
 
-            Methods = builder.MoveToImmutable();
+            if (!defStatic.IsDefaultOrEmpty)
+            {
+                var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStatic.Length);
+                foreach (var m in defStatic)
+                {
+                    builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: false, mapClrType));
+                }
+
+                StaticMethods = builder.MoveToImmutable();
+            }
+
+            if (!defPriv.IsDefaultOrEmpty)
+            {
+                var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defPriv.Length);
+                foreach (var m in defPriv)
+                {
+                    builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: true, mapClrType));
+                }
+
+                PrivateMethods = builder.MoveToImmutable();
+            }
+
+            if (!defStaticPriv.IsDefaultOrEmpty)
+            {
+                var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStaticPriv.Length);
+                foreach (var m in defStaticPriv)
+                {
+                    builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: true, mapClrType));
+                }
+
+                StaticPrivateMethods = builder.MoveToImmutable();
+            }
         }
-
-        if (!defStatic.IsDefaultOrEmpty)
+        finally
         {
-            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStatic.Length);
-            foreach (var m in defStatic)
-            {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: false, mapClrType));
-            }
-
-            StaticMethods = builder.MoveToImmutable();
-        }
-
-        if (!defPriv.IsDefaultOrEmpty)
-        {
-            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defPriv.Length);
-            foreach (var m in defPriv)
-            {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: false, isPrivate: true, mapClrType));
-            }
-
-            PrivateMethods = builder.MoveToImmutable();
-        }
-
-        if (!defStaticPriv.IsDefaultOrEmpty)
-        {
-            var builder = ImmutableArray.CreateBuilder<FunctionSymbol>(defStaticPriv.Length);
-            foreach (var m in defStaticPriv)
-            {
-                builder.Add(SubstituteMethod(m, subst, this, isStatic: true, isPrivate: true, mapClrType));
-            }
-
-            StaticPrivateMethods = builder.MoveToImmutable();
+            resolvingThreadId = 0;
         }
 
         membersResolved = true;
