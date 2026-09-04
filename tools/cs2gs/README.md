@@ -143,6 +143,42 @@ See `build/run-cs2gs-selfmig-{migrate,validate,gate}.sh` and
 `.github/workflows/cs2gs-selfmig-nightly.yml`; `build/run-cs2gs-selfmig.sh`
 remains the equivalent single-job reference path for local proofs.
 
+### The PR-time translation guard (issue #3836)
+
+CI **compiles** the repository's C# sources. The gate **translates** them and
+then compiles the result. Those are different questions, so a fully CI-green
+PR can take the gate down purely by existing — and the damage lands hours
+later, attributed to whatever else merged nearby. It happened three times in
+five days: #3831 (a `Cs2Gs.Translator` file, 7 banked apps), #3896 (three
+errors in new `src/Core` files, 16 apps), #3905 (a gsc stack overflow on
+`Gsharp.Runtime.Channels`, 11 apps blinded).
+
+`build/run-cs2gs-selfmig-pr-guard.sh` (workflow
+`.github/workflows/cs2gs-pr-guard.yml`) migrates and compiles just the **hot
+core** — the projects whose migration failures cascade widest:
+
+```
+src/Analyzers/InternalAnalyzers  src/Core
+tools/cs2gs/Cs2Gs.CodeModel      tools/cs2gs/Cs2Gs.Translator
+```
+
+That is `Cs2Gs.Translator`'s reference closure, so it covers #3831 and #3896
+but **not** #3905: `src/Sdk/Gsharp.Runtime.Channels` is outside the closure and
+is red on `main` today (#3907), and a guard that is red from day one gets
+disabled. Adding it back is one line, and worth doing the moment #3907 closes.
+
+Everything else is `--exclude`d. That is safe here — and only here — because
+the set is **closed under `ProjectReference`**, so no kept app references an
+excluded one; the script verifies that closure before it builds anything and
+refuses to run otherwise. Widening the set means adding whole reference
+closures, never a single project. `SELFMIG_PR_GUARD_APPS` overrides the list
+(e.g. to add `tools/cs2gs/Cs2Gs.Tests` once #3836's known failures clear).
+
+**It is not the gate.** Four apps, no readability ceilings, no corpus-wide
+test parity. The script prints that disclaimer on every run, pass or fail,
+because a partial check mistaken for a full one is how #3831/#3896/#3905
+reached `main` in the first place.
+
 ### `report` — regenerate a report from an existing run
 
 ```sh
