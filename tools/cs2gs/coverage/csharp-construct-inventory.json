@@ -357,7 +357,7 @@
     "rule": "ADR-0115 \u00A7B.27",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/CatchFilterClause.cs",
-    "notes": "Translated to a native G# `when` filter (ADR-0177), which the emitter lowers to a real CLR filter region — first-pass timing and fall-through to a later sibling are the runtime's, so the #1724/#2235 overlapping-sibling gap is closed. Pattern designations introduced by the filter are visible in the handler and need no spill or in-handler fallback."
+    "notes": "Translated to a native G# \u0060when\u0060 filter (ADR-0177), which the emitter lowers to a real CLR filter region \u2014 first-pass timing and fall-through to a later sibling are the runtime\u0027s, so the #1724/#2235 overlapping-sibling gap is closed. Pattern designations introduced by the filter are visible in the handler and need no spill or in-handler fallback."
   },
   {
     "kind": "CharacterLiteralExpression",
