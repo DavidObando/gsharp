@@ -2666,25 +2666,49 @@ public sealed class CSharpTypeMapper
         INamedTypeSymbol type,
         HashSet<INamedTypeSymbol> critical)
     {
-        List<IMethodSymbol> methods = type.GetMembers().OfType<IMethodSymbol>().ToList();
-        for (var i = 0; i < methods.Count; i++)
+        // Only same-name members can be an overload set, so the quadratic
+        // comparison below runs per NAME rather than per type — a type with
+        // hundreds of distinctly-named members costs nothing here.
+        var byName = new Dictionary<string, List<IMethodSymbol>>(StringComparer.Ordinal);
+        foreach (ISymbol member in type.GetMembers())
         {
-            for (var j = i + 1; j < methods.Count; j++)
+            if (member is IMethodSymbol method && method.Parameters.Length > 0)
             {
-                IMethodSymbol left = methods[i];
-                IMethodSymbol right = methods[j];
-                if (!string.Equals(left.Name, right.Name, StringComparison.Ordinal)
-                    || left.MethodKind != right.MethodKind
-                    || left.Arity != right.Arity
-                    || left.Parameters.Length != right.Parameters.Length
-                    || !ParametersEraseAlike(left, right))
+                if (!byName.TryGetValue(method.Name, out List<IMethodSymbol> bucket))
                 {
-                    continue;
+                    bucket = new List<IMethodSymbol>();
+                    byName[method.Name] = bucket;
                 }
 
-                for (var k = 0; k < left.Parameters.Length; k++)
+                bucket.Add(method);
+            }
+        }
+
+        foreach (List<IMethodSymbol> overloads in byName.Values)
+        {
+            if (overloads.Count < 2)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < overloads.Count; i++)
+            {
+                for (var j = i + 1; j < overloads.Count; j++)
                 {
-                    AddIfDistinctDelegates(left.Parameters[k].Type, right.Parameters[k].Type, critical);
+                    IMethodSymbol left = overloads[i];
+                    IMethodSymbol right = overloads[j];
+                    if (left.MethodKind != right.MethodKind
+                        || left.Arity != right.Arity
+                        || left.Parameters.Length != right.Parameters.Length
+                        || !ParametersEraseAlike(left, right))
+                    {
+                        continue;
+                    }
+
+                    for (var k = 0; k < left.Parameters.Length; k++)
+                    {
+                        AddIfDistinctDelegates(left.Parameters[k].Type, right.Parameters[k].Type, critical);
+                    }
                 }
             }
         }
