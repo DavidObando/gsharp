@@ -60,8 +60,12 @@ jobs:
 
       # Release on both sides is normative, not a preference: tiered JIT
       # depresses cold Debug numbers by 2-3x and a Debug comparison is invalid.
-      - name: Build (Release)
-        run: dotnet build src/Compiler src/Sdk/Gsharp.Extensions -c Release
+      # Two steps because `dotnet build` takes one project (MSB1008).
+      - name: Build gsc (Release)
+        run: dotnet build src/Compiler -c Release
+
+      - name: Build Gsharp.Extensions (Release)
+        run: dotnet build src/Sdk/Gsharp.Extensions -c Release
 
       - name: Verify the harness
         run: python3 build/verify-concurrency-bench.py --smoke

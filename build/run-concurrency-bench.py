@@ -55,6 +55,12 @@ def run_gsharp(launches: int, scenario: str | None, gsc: Path, extensions: Path,
         stdout=subprocess.DEVNULL,
     )
 
+    # gsc copies the channel runtime beside an emitted program, but not
+    # Gsharp.Extensions: the `chunks` scenarios call into it, so without this
+    # the program starts, prints its header, and dies on the first chunked
+    # round with a FileNotFoundException.
+    shutil.copy2(extensions, out / extensions.name)
+
     samples: dict[str, list[float]] = {}
     env = dict(os.environ)
     if scenario:
@@ -63,12 +69,19 @@ def run_gsharp(launches: int, scenario: str | None, gsc: Path, extensions: Path,
     for _ in range(launches):
         result = subprocess.run(
             ["dotnet", "exec", str(assembly)],
-            check=True,
             capture_output=True,
             text=True,
             cwd=out,
             env=env,
         )
+        if result.returncode != 0:
+            # A benchmark that cannot run is a failure worth reading, not a
+            # stack trace from subprocess about an exit code.
+            raise SystemExit(
+                f"benchmark run failed (exit {result.returncode}):\n"
+                f"{result.stdout}\n{result.stderr}"
+            )
+
         for line in result.stdout.splitlines():
             match = ROW.match(line.strip())
             if match:

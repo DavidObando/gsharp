@@ -164,11 +164,17 @@ func selectPark() TimeSpan {
 
 // D10: one lock acquisition and one park amortized across a batch. The two
 // sizes exist because the curve is the point, not either number.
+//
+// BOTH sides batch, which is what makes this comparable to Go's `chunked`
+// rows: those send whole `[]int` chunks through the channel, so a run moves
+// N/size channel operations rather than N. A producer that sent one element at
+// a time would measure the producer, not the chunked transport, and would
+// report a ratio tens of times worse than the thing it claims to compare.
 func chunked(size int32, count int32) TimeSpan {
     let ch = chan[int32](1024)
     let sw = Stopwatch.StartNew()
     scope {
-        go produce(ch, count)
+        go produceBatched(ch, count, size)
         var seen = 0
         for batch in chunks(ch, size) {
             seen = seen + batch.Length
@@ -178,6 +184,31 @@ func chunked(size int32, count int32) TimeSpan {
     sw.Stop()
     return sw.Elapsed
 }
+
+// One buffer, reused: the point of the row is the transport, not the
+// allocator. `size` is at most `maxChunk` for both scenarios.
+func produceBatched(ch chan[int32], count int32, size int32) {
+    var chunk = [1024]int32{}
+    var sent = 0
+    while sent < count {
+        var i = 0
+        while i < size && sent + i < count {
+            chunk[i] = sent + i
+            i = i + 1
+        }
+
+        var offset = 0
+        while offset < i {
+            let slice = ReadOnlyMemory[int32](chunk, offset, i - offset)
+            offset = offset + ch.SendBatch(slice)
+        }
+
+        sent = sent + i
+    }
+
+    ch.Close()
+}
+
 
 func run(name string) {
     if name == "buf64" {
