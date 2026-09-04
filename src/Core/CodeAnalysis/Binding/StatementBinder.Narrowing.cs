@@ -508,7 +508,8 @@ internal sealed partial class StatementBinder
             return false;
         }
 
-        if (!AssignmentTypePreservesNarrowing(assign.AssignedValueType, u))
+        if (!AssignmentTypePreservesNarrowing(assign.AssignedValueType, u)
+            && !NestedAssignmentPreservesNarrowing(assign.Expression, u))
         {
             return false;
         }
@@ -516,6 +517,61 @@ internal sealed partial class StatementBinder
         variable = assign.Variable;
         underlying = u;
         return true;
+    }
+
+    /// <summary>
+    /// Issue #3907: whether <paramref name="value"/> — the right-hand side of
+    /// an assignment — is itself an assignment whose own value proves the outer
+    /// target non-nil.
+    /// </summary>
+    /// <remarks>
+    /// <para>A nested assignment's STATIC type is its own target's DECLARED
+    /// type, so <c>order = (buffer = [8]int32)</c> types as <c>buffer</c>'s
+    /// <c>[]?int32</c> even though the value it propagates is the definitely
+    /// non-nil array literal. The outer assignment therefore failed
+    /// <see cref="AssignmentTypePreservesNarrowing"/> and <c>order</c> stayed
+    /// nullable, while the identical <c>order = [8]int32</c> narrowed — an
+    /// asymmetry with no justification, since the two assign the same value.
+    /// C# reaches the same conclusion: its flow analysis tracks the assigned
+    /// value's null-state, not the nested target's annotation.</para>
+    /// <para>Sound because the value of an assignment expression IS the value
+    /// assigned — not a re-read of the target — so <c>x = (y = v)</c> gives
+    /// <c>x</c> exactly the value <c>v</c> and must narrow on exactly the
+    /// evidence <c>x = v</c> narrows on. That is why this applies the SAME
+    /// <see cref="AssignmentTypePreservesNarrowing"/> test to the inner
+    /// operand rather than a weaker or stronger one: the rule is a
+    /// look-through, not a new narrowing source.</para>
+    /// </remarks>
+    /// <param name="value">The outer assignment's right-hand side.</param>
+    /// <param name="narrowedType">The outer target's underlying non-nullable type.</param>
+    /// <returns><see langword="true"/> when the nested assignment narrows the outer target.</returns>
+    private bool NestedAssignmentPreservesNarrowing(BoundExpression? value, TypeSymbol narrowedType)
+    {
+        while (value is BoundConversionExpression conversion)
+        {
+            value = conversion.Expression;
+        }
+
+        BoundExpression? inner = value switch
+        {
+            BoundAssignmentExpression nestedLocal => nestedLocal.Expression,
+            BoundFieldAssignmentExpression nestedField => nestedField.Value,
+            _ => null,
+        };
+
+        if (inner == null)
+        {
+            return false;
+        }
+
+        var innerValue = inner;
+        while (innerValue is BoundConversionExpression innerConversion)
+        {
+            innerValue = innerConversion.Expression;
+        }
+
+        return AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType)
+            || NestedAssignmentPreservesNarrowing(innerValue, narrowedType);
     }
 
     private bool AssignmentPreservesNarrowing(BoundAssignmentExpression assignment, TypeSymbol narrowedType)
