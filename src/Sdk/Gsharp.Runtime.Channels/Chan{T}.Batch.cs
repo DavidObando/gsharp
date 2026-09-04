@@ -202,7 +202,17 @@ public sealed partial class Chan<T>
         var taken = 0;
         while (taken < buffer.Length && count > 0)
         {
-            buffer[taken++] = DequeueBuffer();
+            taken += DrainBufferInto(buffer[taken..]);
+
+            // Issue #3902 S3: only consult the sender queue when there is one.
+            // The old loop called RefillFromSenderLocked once per element, and
+            // on a buffered channel with no parked sender — the common case —
+            // every one of those calls was a queue probe that found nothing.
+            if (senders.Count == 0)
+            {
+                break;
+            }
+
             RefillFromSenderLocked(ref completions);
         }
 
