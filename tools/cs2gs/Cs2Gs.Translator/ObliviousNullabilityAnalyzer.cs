@@ -357,14 +357,36 @@ internal static class ObliviousNullabilityAnalyzer
 
             TypedConstant row = attribute.ConstructorArguments[0];
 
+            if (row.Kind != TypedConstantKind.Array)
+            {
+                continue;
+            }
+
+            // Issue #3880: `[InlineData(null)]` is a WHOLE-ARRAY null — C#
+            // binds the lone `null` as the params array itself rather than as
+            // one element — and #3726 read that as naming no position and
+            // therefore as no evidence. That left cs2gs and gsc contradicting
+            // each other over the same source: gsc's GS0274 check reads the
+            // EMITTED `@InlineData(nil)` positionally and flags parameter 0,
+            // which is also what xunit does at run time for the single-column
+            // theories this spelling is used on. Match gsc exactly — position
+            // 0 only, so a longer parameter list gains no unsupported claim.
+            if (row.IsNull)
+            {
+                if (parameter.Ordinal == 0)
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
             // A data ROW never supplies more values than the method has
             // parameters; a params attribute that means something else — e.g.
             // `[MemberNotNull("Field")]`, whose strings name members rather
             // than line up with parameters — is filtered out by that shape
             // check plus the "the value must be a literal null" test below.
-            if (row.Kind != TypedConstantKind.Array
-                || row.IsNull
-                || row.Values.Length > method.Parameters.Length
+            if (row.Values.Length > method.Parameters.Length
                 || parameter.Ordinal >= row.Values.Length)
             {
                 continue;

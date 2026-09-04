@@ -1117,6 +1117,28 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
+            // A named argument may also address the trailing variadic parameter
+            // itself, exactly as C# permits for `params`: the name must be the
+            // variadic parameter's, it must sit in that parameter's own slot,
+            // and it must be the last argument (naming the variadic parameter
+            // and then continuing to supply elements positionally is not a
+            // spelling C# accepts either). Because the argument is already in
+            // its own slot no reordering is needed; the value that follows is
+            // either the whole carrier or a single expanded element, which
+            // PackOrPassThroughVariadicArguments then decides on by type.
+            var namesTrailingVariadic =
+                sourceIndex == fixedParameterCount &&
+                sourceIndex == argumentNames.Length - 1 &&
+                string.Equals(
+                    parameterNameAt(sourceIndex),
+                    name,
+                    StringComparison.Ordinal);
+
+            if (namesTrailingVariadic)
+            {
+                continue;
+            }
+
             if (sourceIndex >= fixedParameterCount ||
                 !string.Equals(
                     parameterNameAt(sourceIndex),

@@ -4496,7 +4496,28 @@ public sealed class Binder
         // cs2gs fully-qualifies type references (including generic-math
         // constraints), so this is the common shape for translated code.
         var lastSegment = segmentTexts[totalSegments - 1];
-        var sourceType = LookupType(lastSegment, targetArity > 0 ? targetArity : -1);
+
+        // Issue #3880: the simple-name fallback below refuses to guess when two
+        // or more separately-imported packages declare the same simple name
+        // (#2455's ambiguity rule) — but here the reference is not ambiguous at
+        // all: its qualifier names the package outright. Publish that qualifier
+        // as the explicit package hint #2455 already honours for qualified
+        // CONSTRUCTION (`Pkg.Type{…}`), so `typeof(ImportedVisible.defer_)`
+        // resolves even when a second imported package also declares `defer_`.
+        // The hint is restored unconditionally: it is scoped to this one
+        // lookup, exactly as at the construction site.
+        var qualifierPackageHint = string.Join(".", segmentTexts, 0, totalSegments - 1);
+        var previousQualifierHint = scope.SetQualifiedConstructionPackageHint(qualifierPackageHint);
+        TypeSymbol? sourceType;
+        try
+        {
+            sourceType = LookupType(lastSegment, targetArity > 0 ? targetArity : -1);
+        }
+        finally
+        {
+            scope.SetQualifiedConstructionPackageHint(previousQualifierHint);
+        }
+
         if (sourceType != null && !ReferenceEquals(sourceType, TypeSymbol.Error))
         {
             if (targetArity == 0)
