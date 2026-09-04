@@ -6,13 +6,21 @@ name: concurrency-bench
 # them, and only that harness may write the numbers they rest on. Two gates,
 # deliberately unequal:
 #
-#   within-runtime — G# against its own last recorded median, from
-#                    bench/concurrency/baseline.json. Stable enough to fail the
-#                    run: a scenario fails only when its median is above the
-#                    recorded ceiling AND the confidence intervals are disjoint
-#                    AND the hardware class matches.
-#   G# versus Go   — informational. It moves with the Go toolchain and the
-#                    machine, so it is reported and never gates.
+# CI REPORTS; IT DOES NOT GATE. Three full runs on this workstation agree to
+# 0.5-3.3% per scenario. The same three runs dispatched to GitHub's shared
+# runners disagreed by 58-205%, and seeding a baseline from one of them would
+# have marked seven of eight scenarios REGRESSED on the other two — passing all
+# three of the old gate's conditions. The cause is not variance the harness can
+# average away: a hosted runner is a shared VM of unspecified SKU, and the
+# hardware key could not even tell two SKUs apart until it learned to record the
+# CPU model.
+#
+# So the recorded medians in bench/concurrency/baseline.json are a NAMED
+# machine's numbers, and this workflow exists to report drift against them, not
+# to fail on it. A gate belongs on hardware whose identity is known.
+#
+# Each invocation runs the benchmark THREE times and aggregates, so the reported
+# interval covers between-run movement rather than only within-run launches.
 #
 # The G# side is measured twice: pinned-tier JIT (what a deployed program does)
 # and NativeAOT (what compares like-for-like with Go's ahead-of-time binary).
@@ -20,8 +28,7 @@ name: concurrency-bench
 # the runner's docstring and issues #3901/#3902 for why the tier is pinned.
 #
 # Nightly by default. A PR can opt in with the `bench:concurrency` label when it
-# touches the runtime or the lowering; that run reports and does not gate,
-# because a shared CI runner is too noisy to fail a PR on.
+# touches the runtime or the lowering.
 
 on:
   schedule:
@@ -90,21 +97,49 @@ jobs:
       - name: Verify the harness
         run: python3 build/verify-concurrency-bench.py --smoke
 
-      - name: Run
+      # Three full runs, then one aggregation. A single run reports the spread
+      # of its own launches, which on a shared runner is the smaller half of the
+      # variance by an order of magnitude.
+      - name: Run (3 passes)
+        run: |
+          for pass in 1 2 3; do
+            echo "::group::pass $pass"
+            python3 build/run-concurrency-bench.py \
+              --launches "${{ github.event.inputs.launches || '7' }}" \
+              --go \
+              --aot \
+              --json "$RUNNER_TEMP/concurrency-$pass.json"
+            echo "::endgroup::"
+          done
+
+      - name: Aggregate and report
         run: |
           python3 build/run-concurrency-bench.py \
-            --launches "${{ github.event.inputs.launches || '7' }}" \
-            --go \
-            --aot \
+            --from-json "$RUNNER_TEMP/concurrency-1.json" \
+            --from-json "$RUNNER_TEMP/concurrency-2.json" \
+            --from-json "$RUNNER_TEMP/concurrency-3.json" \
             --json "$RUNNER_TEMP/concurrency.json" \
-            --check-baseline bench/concurrency/baseline.json
-        # A PR run reports; only the nightly gates.
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
+            | tee "$RUNNER_TEMP/summary.txt"
+          {
+            echo '## Concurrency benchmark (3 runs aggregated, reporting only)'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/summary.txt"
+            echo '```'
+            echo
+            echo 'Recorded medians in `baseline.json` are a named workstation'\''s numbers.'
+            echo 'A hosted runner is a shared VM of unspecified SKU, so treat absolute'
+            echo 'figures here as indicative and compare ratios rather than nanoseconds.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: concurrency-bench
-          path: ${{ runner.temp }}/concurrency.json
+          path: |
+            ${{ runner.temp }}/concurrency.json
+            ${{ runner.temp }}/concurrency-1.json
+            ${{ runner.temp }}/concurrency-2.json
+            ${{ runner.temp }}/concurrency-3.json
           if-no-files-found: warn

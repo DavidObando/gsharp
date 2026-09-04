@@ -95,7 +95,17 @@ spike:
    workstation and loses most rows on the 4-vCPU CI runner — which is exactly
    why reporting one alone misleads. Each carries its own ceiling in
    `baseline.json`; compare a row only against runs of the same hardware class.
-6. **Separate the two gates.** Within-runtime regression (G# against its own
+6. **Gate on a machine whose identity you know; report everywhere else.**
+   The recorded medians are one named workstation's numbers, aggregated from
+   three full runs that agreed to 0.5-3.3% per scenario. The same three runs on
+   GitHub's hosted runners disagreed by **58-205%**, and a baseline seeded from
+   one of them would have marked seven of eight scenarios regressed on the other
+   two — clearing all three of the gate's conditions, which is exactly the
+   false-failure mode that gets a gate switched off. A hosted runner is a shared
+   VM of unspecified SKU, and until recently the hardware key could not tell two
+   SKUs apart. The nightly therefore runs three passes, aggregates them, and
+   reports; it does not fail.
+7. **Separate the two gates.** Within-runtime regression (G# against its own
    last recorded number) is stable and can gate a PR. The G#-vs-Go ratio
    depends on the Go toolchain and the machine and must stay informational.
    The runner enforces this: a scenario fails only when its median is above the

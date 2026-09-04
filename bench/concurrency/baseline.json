@@ -1,12 +1,19 @@
 {
   "$comment": [
-    "ADR-0174 D11: the recorded medians the concurrency benchmark gates on.",
+    "ADR-0174 D11: the recorded concurrency medians.",
     "",
-    "Every median is null until a nightly run measures it. The runner refuses",
-    "to check against a null, and --update-baseline may only tighten a ceiling",
-    "unless --allow-regression names a reason, the same ratchet discipline the",
-    "self-migration corpus uses. Do not hand-write a number here: a budget that",
-    "was not measured is worse than no budget, because it looks like evidence.",
+    "These are ONE NAMED MACHINE's numbers \u2014 see hardwareClass \u2014 aggregated from",
+    "three full runs that agreed to 0.5-3.3% per scenario. They are written only",
+    "by `run-concurrency-bench.py --update-baseline`, and --update-baseline may",
+    "only tighten a ceiling unless --allow-regression names a reason. Do not",
+    "hand-write a number here.",
+    "",
+    "CI DOES NOT GATE ON THESE. A hosted runner is a shared VM of unspecified",
+    "SKU: the same three runs dispatched there disagreed by 58-205%, and seeding",
+    "a baseline from one of them would have marked seven of eight scenarios",
+    "regressed on the other two. The nightly runs three passes and reports; a",
+    "gate belongs on hardware whose identity is known, which is what the",
+    "hardwareClass key now records down to the CPU model.",
     "",
     "Each scenario carries two budgets. The top-level numbers are the pinned-tier",
     "JIT mode -- what a deployed G# program does at steady state. The nested",
@@ -15,11 +22,11 @@
     "neither ceiling is allowed to stand in for the other.",
     "",
     "target_vs_go is the ADR's aspiration; target_status stays 'provisional'",
-    "until the ratio has met it on three separate nights on the same hardware",
+    "until the ratio has met it on three separate runs on the same hardware",
     "class."
   ],
   "schemaVersion": 2,
-  "hardwareClass": null,
+  "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
   "toolchain": {
     "dotnet": null,
     "go": null
@@ -28,124 +35,316 @@
   "launches": 7,
   "scenarios": {
     "buf64": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 129.79,
+      "ci95_ns": [
+        128.83,
+        131.27
+      ],
+      "ceiling_ns": 149.26,
+      "go_median_ns": 93.7,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 129.79,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 152.26,
+        "ci95_ns": [
+          152.23,
+          155.06
+        ],
+        "ceiling_ns": 175.1,
+        "history": [
+          {
+            "median_ns": 152.26,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "rendezvous": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 122.9,
+      "ci95_ns": [
+        122.3,
+        123.53
+      ],
+      "ceiling_ns": 141.34,
+      "go_median_ns": 643.6,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 122.9,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 146.71,
+        "ci95_ns": [
+          146.65,
+          147.24
+        ],
+        "ceiling_ns": 168.72,
+        "history": [
+          {
+            "median_ns": 146.71,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "closed-recv": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 10.69,
+      "ci95_ns": [
+        10.39,
+        10.73
+      ],
+      "ceiling_ns": 12.29,
+      "go_median_ns": 16.1,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 10.69,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 10.58,
+        "ci95_ns": [
+          10.57,
+          10.63
+        ],
+        "ceiling_ns": 12.17,
+        "history": [
+          {
+            "median_ns": 10.58,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "spawn": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 514.33,
+      "ci95_ns": [
+        495.95,
+        525.74
+      ],
+      "ceiling_ns": 591.48,
+      "go_median_ns": 268.5,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 514.33,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 485.5,
+        "ci95_ns": [
+          481.49,
+          486.83
+        ],
+        "ceiling_ns": 558.32,
+        "history": [
+          {
+            "median_ns": 485.5,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "select-ready": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 153.08,
+      "ci95_ns": [
+        152.86,
+        153.94
+      ],
+      "ceiling_ns": 176.04,
+      "go_median_ns": 85.7,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 153.08,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 165.61,
+        "ci95_ns": [
+          165.46,
+          165.69
+        ],
+        "ceiling_ns": 190.45,
+        "history": [
+          {
+            "median_ns": 165.61,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "select-park": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
+      "median_ns": 293.29,
+      "ci95_ns": [
+        293.09,
+        299.44
+      ],
+      "ceiling_ns": 337.28,
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 293.29,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 298.28,
+        "ci95_ns": [
+          293.58,
+          298.42
+        ],
+        "ceiling_ns": 343.02,
+        "history": [
+          {
+            "median_ns": 298.28,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "chunk64": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 8.13,
+      "ci95_ns": [
+        8.1,
+        8.14
+      ],
+      "ceiling_ns": 9.35,
+      "go_median_ns": 8.6,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 8.13,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 8.6,
+        "ci95_ns": [
+          8.54,
+          8.69
+        ],
+        "ceiling_ns": 9.89,
+        "history": [
+          {
+            "median_ns": 8.6,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     },
     "chunk1k": {
-      "median_ns": null,
-      "ci95_ns": null,
-      "ceiling_ns": null,
-      "go_median_ns": null,
+      "median_ns": 3.3,
+      "ci95_ns": [
+        3.22,
+        3.31
+      ],
+      "ceiling_ns": 3.79,
+      "go_median_ns": 1.5,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": [],
+      "history": [
+        {
+          "median_ns": 3.3,
+          "samples": 21,
+          "runs": 3,
+          "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+          "reason": null
+        }
+      ],
       "aot": {
-        "median_ns": null,
-        "ci95_ns": null,
-        "ceiling_ns": null,
-        "history": []
-      }
+        "median_ns": 3.64,
+        "ci95_ns": [
+          3.59,
+          3.67
+        ],
+        "ceiling_ns": 4.19,
+        "history": [
+          {
+            "median_ns": 3.64,
+            "samples": 21,
+            "runs": 3,
+            "hardwareClass": "linux-x86_64-20-13th-gen-intel-r-core-tm-i7-13800h",
+            "reason": null
+          }
+        ],
+        "runs": 3
+      },
+      "runs": 3
     }
   }
 }

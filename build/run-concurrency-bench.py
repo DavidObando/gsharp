@@ -70,7 +70,25 @@ def load_scenarios() -> list[dict]:
 
 
 def hardware_class() -> str:
-    return f"{platform.system().lower()}-{platform.machine().lower()}-{os.cpu_count()}"
+    """A key that actually identifies the machine.
+
+    It used to be os-arch-corecount, which every 4-vCPU Linux runner satisfies
+    regardless of the silicon underneath — so the "same hardware class" test
+    that exists to stop cross-machine comparison could not detect a different
+    SKU. Since the recorded medians are now one specific machine's numbers, the
+    key has to name that machine.
+    """
+    model = ""
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        for line in cpuinfo.read_text().splitlines():
+            if line.startswith("model name"):
+                model = line.split(":", 1)[1].strip()
+                break
+
+    model = model or platform.processor() or "unknown-cpu"
+    model = re.sub(r"[^A-Za-z0-9]+", "-", model).strip("-").lower()
+    return f"{platform.system().lower()}-{platform.machine().lower()}-{os.cpu_count()}-{model}"
 
 
 def compile_bench(gsc: Path, extensions: Path, out: Path) -> Path:
@@ -203,6 +221,54 @@ def summarize(samples: dict[str, list[float]]) -> dict[str, dict]:
     }
 
 
+def aggregate(results: list[dict]) -> dict[str, dict]:
+    """Combine several whole runs into one result per scenario.
+
+    A single run reports the median of its launches and a bootstrap interval
+    over them, which measures variation WITHIN one process-launch sequence. It
+    says nothing about how much the machine moved between runs, and on a shared
+    CI runner that between-run term is far the larger of the two. Aggregating
+    several runs makes the reported interval cover both.
+    """
+    names: list[str] = []
+    for result in results:
+        for name in result:
+            if name not in names:
+                names.append(name)
+
+    combined: dict[str, dict] = {}
+    for name in names:
+        medians = [r[name]["median_ns"] for r in results if name in r]
+        if not medians:
+            continue
+
+        combined[name] = {
+            "median_ns": round(statistics.median(medians), 2),
+            "ci95_ns": [round(min(medians), 2), round(max(medians), 2)] if len(medians) > 1 else None,
+            "samples": sum(r[name].get("samples", 0) for r in results if name in r),
+            "runs": len(medians),
+        }
+
+    return combined
+
+
+def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str | None]:
+    """Read run JSONs written by an earlier --json invocation."""
+    gsharp, gsharp_aot, go = [], [], []
+    recorded_class = None
+    for path in paths:
+        payload = json.loads(Path(path).read_text())
+        recorded_class = payload.get("hardwareClass") or recorded_class
+        if payload.get("gsharp"):
+            gsharp.append(payload["gsharp"])
+        if payload.get("gsharp_aot"):
+            gsharp_aot.append(payload["gsharp_aot"])
+        if payload.get("go"):
+            go.append(payload["go"])
+
+    return gsharp, gsharp_aot, go, recorded_class
+
+
 def check_one(entry: dict, result: dict | None, label: str, gated: bool) -> bool:
     """Check one scenario in one mode. Returns True when it regressed."""
     if result is None:
@@ -269,10 +335,12 @@ def record(entry: dict, result: dict, label: str, allow_regression: str | None) 
     entry["median_ns"] = result["median_ns"]
     entry["ci95_ns"] = result["ci95_ns"]
     entry["ceiling_ns"] = ceiling
+    entry["runs"] = result.get("runs", 1)
     entry.setdefault("history", []).append(
         {
             "median_ns": result["median_ns"],
             "samples": result["samples"],
+            "runs": result.get("runs", 1),
             "hardwareClass": hardware_class(),
             "reason": allow_regression,
         }
@@ -337,6 +405,14 @@ def main() -> int:
     parser.add_argument("--gsc", default=str(REPO / "out" / "bin" / "Release" / "Compiler" / "gsc"), help="path to gsc")
     parser.add_argument("--extensions", default=str(REPO / "out" / "bin" / "Release" / "Gsharp.Extensions" / "Gsharp.Extensions.dll"))
     parser.add_argument("--json", metavar="PATH", help="write the measured results as JSON")
+    parser.add_argument(
+        "--from-json",
+        metavar="PATH",
+        action="append",
+        default=[],
+        help="aggregate previously written run JSONs instead of measuring; repeatable. "
+             "Several whole runs is what a reported number should rest on — a single run's "
+             "interval covers only its own launches.")
     args = parser.parse_args()
 
     scenarios = load_scenarios()
@@ -349,17 +425,26 @@ def main() -> int:
     out = REPO / "out" / "bench-concurrency"
     out.mkdir(parents=True, exist_ok=True)
 
-    assembly = compile_bench(Path(args.gsc), Path(args.extensions), out)
-    measured = summarize(measure(["dotnet", "exec", str(assembly)], args.launches, args.scenario, out, PINNED_TIER_ENV))
+    recorded_class: str | None = None
+    if args.from_json:
+        gsharp_runs, aot_runs, go_runs, recorded_class = load_runs(args.from_json)
+        measured = aggregate(gsharp_runs)
+        measured_aot = aggregate(aot_runs)
+        go_measured = aggregate(go_runs)
+        provenance = f"{len(gsharp_runs)} run(s) aggregated"
+    else:
+        assembly = compile_bench(Path(args.gsc), Path(args.extensions), out)
+        measured = summarize(measure(["dotnet", "exec", str(assembly)], args.launches, args.scenario, out, PINNED_TIER_ENV))
 
-    measured_aot: dict[str, dict] = {}
-    if args.aot:
-        binary = publish_aot(assembly, out)
-        measured_aot = summarize(measure([str(binary)], args.launches, args.scenario, out, {}))
+        measured_aot = {}
+        if args.aot:
+            binary = publish_aot(assembly, out)
+            measured_aot = summarize(measure([str(binary)], args.launches, args.scenario, out, {}))
 
-    go_measured = summarize(run_go(args.launches)) if args.go else {}
+        go_measured = summarize(run_go(args.launches)) if args.go else {}
+        provenance = f"launches: {args.launches}"
 
-    print(f"hardware class: {hardware_class()}   launches: {args.launches}   jit tier pinned")
+    print(f"hardware class: {recorded_class or hardware_class()}   {provenance}   jit tier pinned")
     header = f"  {'scenario':<14} {'jit ns/op':>12}"
     if measured_aot:
         header += f" {'aot ns/op':>12}"
