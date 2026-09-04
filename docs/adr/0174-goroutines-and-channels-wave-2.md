@@ -2446,11 +2446,14 @@ implementation had to refine it.
     on every new JIT compilation, and a bench process that keeps first-calling
     methods can exit before counting begins — so the scenario's own loop is
     promoted by on-stack replacement while every method it calls stays at
-    Tier0. Measured on `linux-x86_64-20`: a default launch performs exactly
+    Tier0. Measured on `linux-x86_64-20` for an ISOLATED single scenario
+    (`GSHARP_BENCH_SCENARIO=select-ready`): a default launch performs exactly
     **one** Tier1 compilation in the whole process, that OSR; with
     `DOTNET_TC_CallCountingDelayMs=0` it performs 132, and every row moves
     1.5–3× (`closed-recv` 61 → 25 ns, `select-ready` 594 → 175, `chunk1k`
-    45 → 18). This is what produced the 3.4× session-to-session swing recorded
+    45 → 18). The whole-suite figures are 71 and 534 — the conclusion is the
+    same, but these two numbers are not suite counts and should not be quoted
+    as such. This is what produced the 3.4× session-to-session swing recorded
     in issue #3901, and it means the D11 rows quoted before this change
     described an unpromoted process rather than G# at steady state.
 
@@ -2511,7 +2514,7 @@ implementation had to refine it.
     | G3 | rendezvous target | **Re-set.** The provisional ceiling was ≤2.0× and the row now measures **0.85× Go on a 4-vCPU runner** and ~0.57× on a 20-core workstation, from ~3.2× before. The target must be re-derived from nightlies rather than merely marked "met" — and read with the pairing correction below. |
     | G5 | select boxing / node allocation | **Resolved.** The threshold was >160 B/op; a ready select now allocates **0 B** in steady state (issue #3902 S4). The arm descriptors became the pooled waiter's per-slot cache and the winning value stays in its producer's typed field. |
     | G6 | `RunContinuationsAsynchronously` | **Resolved: adopt, with a bounded budget.** Inline completion takes rendezvous from ~1000 → ~175 ns and select-park from ~1100 → ~300. Bounded by depth (16) and `TryEnsureSufficientExecutionStack`; the gate's 10 000-deep chain test exists and passes. **The correctness half is suppression, not the budget** — see below. |
-    | G7 | `chunks` fresh vs pooled arrays | **Still fires.** The threshold was >2.0× Go. After issue #3902 S3 the rows measure 2.68× (`chunk64`) and 4.93× (`chunk1k`) on the workstation, 3.91×/9.28× on CI. The research in #3902 showed the fresh array is *not* the dominant cost — the wasted probe arrays and the element-wise ring copy were, and both are fixed — so a pooled overload is still indicated but is no longer the obvious next lever. |
+    | G7 | `chunks` fresh vs pooled arrays | **Still fires, and by less than it looked.** The threshold was >2.0× Go. On the un-warmed harness the rows read 2.68× (`chunk64`) and 4.93× (`chunk1k`); once both sides are warmed and duration-matched (errata 35) they read ~1.05× and ~2.0–3.0×, because Go improved more than G# did on those rows. `chunk64` now clears the gate; `chunk1k` does not. The research in #3902 showed the fresh array is *not* the dominant cost — the wasted probe arrays and the element-wise ring copy were, and both are fixed — so a pooled overload remains indicated for `chunk1k` alone. |
     | G4, G8, G9, G10, G11 | `Chan.Unbounded` usage, `await` at an `async let` use, `for batch of N`, defer grace, inference fallback | Unchanged; none is a performance gate and none blocked acceptance. |
 
     **G6's hazard was real, and the prototype that proposed it did not handle
@@ -2540,6 +2543,13 @@ implementation had to refine it.
     and `spawn` (which times a send and a receive Go does not) carry the same
     caveat; correcting the scenarios is tracked in issue #3902.
 
+    **Every ratio in this table predates errata 35's harness corrections.** They
+    were taken with three of the eight scenario bodies running at Tier0 and with
+    a Go side measured over runs too short to be fair. The dispositions survive
+    — G5 and G6 are resolved by allocation counts and by a mechanism, not by a
+    ratio — but the *numbers* should be re-read from a nightly, not quoted from
+    here.
+
     **What acceptance does not settle: the budgets.** Every median in
     `bench/concurrency/baseline.json` is still `null`, and stays that way until
     three nightlies have run on one hardware class. Accepting this ADR settles
@@ -2547,6 +2557,68 @@ implementation had to refine it.
     the numbers the ratchet will gate on. A budget written from anything other
     than a nightly would be exactly the "looks like evidence" failure the
     baseline's own comment warns about.
+
+35. **Pinning the tier was necessary and not sufficient; the harness no longer
+    depends on OSR (Phase 5-2, revised again).** Errata 33 and 34 leave the
+    impression that the JIT tier is controlled. It was controlled for *callees*.
+    Three of the eight scenario bodies — `closed-recv`, `spawn` and `chunked` —
+    still finished every run at `Instrumented Tier0`, pinned or not:
+
+    | | Tier1 compiles in the process | scenario bodies optimised |
+    | --- | ---: | --- |
+    | default | 71 | 4 of 8 |
+    | `TC_CallCountingDelayMs=0` | 534 | **the same 4** |
+
+    The pin is worth 7.5× more Tier1 compilations and changes nothing about
+    *which bodies* get optimised, which is obvious in hindsight: a scenario body
+    is entered once and then loops, so call counting can never promote it and
+    only on-stack replacement can. OSR does not fire for every G#-emitted body,
+    and why is still undetermined (issue #3902 H2 — it needs a Checked JIT).
+
+    The harness therefore stops depending on OSR. It runs 120 cheap warm-up
+    rounds, which promote every body by the ordinary call-counted path. **120,
+    not 40**: promotion is two-stage for a body entered once per call — roughly
+    30 calls to earn an instrumented rejit, then 30 more on that version to earn
+    Tier1. Bodies that park reach both far sooner because every resume is
+    another entry, which is exactly why the parking scenarios were never the
+    problem. All eight now report `Tier1 with Synthesized PGO`.
+
+    **What it was costing.** `closed-recv` measured 21 ns and measures 10.6 once
+    its body is genuinely optimised — the row D2 exists to fix was reporting a
+    Tier0 loop, and its published ratio was inflated by measurement rather than
+    by the runtime. This generalises past the benchmark: **any hot loop inside a
+    suspending function that does not park runs Tier0 for the life of the
+    process.** Loops that park are promoted by call counting after enough
+    resumes, which is why this surfaced here first rather than in a profile.
+
+    **Go was being measured cold and short, and it flattered G#.** Go is
+    ahead-of-time compiled, so having no warm-up effect is the obvious
+    assumption — but it is a claim, and it does not hold: over nine launches per
+    configuration, `go-closed`'s median improves 24.3 → 17.1 ns with three
+    warm-up rounds while its *minimum* does not move (15.6 → 15.6). Warm-up
+    removes a cold tail rather than shifting the floor. `go-closed` was also the
+    shortest scenario, 20 000 iterations finishing in under a millisecond. Both
+    sides now carry per-scenario counts sized so every row measures for roughly
+    a quarter second, and Go's own numbers improve with them (closed 29 → 16 ns,
+    `chunk1k` 2.9 → 1.1).
+
+    **Three ratios moved against G# as a result** — `select-ready` 1.6× → 1.8×,
+    `spawn` 1.6× → 1.9×, `chunk1k` 1.6× → 2.0–3.0×. Those rows were flattered by
+    a Go side measured over runs too short to be fair. D11's discipline says a
+    budget that proves unreachable is revised with its measurement recorded; the
+    same rule applies to a ratio that proves to have been generous.
+
+    **The reproducibility is the larger result**, and it is what issue #3901 was
+    opened about. Launch-to-launch spread, two rounds of five launches:
+    `rendezvous` 15% → 0.6%, `closed-recv` 5% → 0.8%, `chunk64` 33% → 3%,
+    `select-park` 11% → 1.4%. Independently: with the JIT genuinely warm, the
+    JIT and NativeAOT modes converge (`closed-recv` 10.56 vs 11.02,
+    `select-park` 300 vs 299), which is what two compilation modes should do if
+    the warm-up is doing what it claims.
+
+    Still unexplained: G#'s `spawn` is consistently ~20% slower under the warmed
+    harness. It is the same row that regressed inexplicably under the S2 work
+    and then recovered on its own. Recorded rather than rationalised.
 
 ## Addendum A — The ten patterns, three ways
 
