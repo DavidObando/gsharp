@@ -44,6 +44,8 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     private ManualResetValueTaskSourceCore<int> core;
     private long word = StateIdle;
     private int winnerArm = -1;
+    private int armCount;
+    private object? valueOwner;
     private object? value;
     private bool ok;
     private bool needsReprobe;
@@ -69,7 +71,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     internal long Generation => Volatile.Read(ref word) >> StateBits;
 
     /// <summary>Gets the number of registered arms. Diagnostic.</summary>
-    internal int ArmCount => arms.Count;
+    internal int ArmCount => armCount;
 
     /// <summary>
     /// Rents a waiter for <paramref name="arms"/> arms, cancelled by
@@ -102,7 +104,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     {
         if (channel is not null)
         {
-            arms.Add(new CoreReceiveArm<T>(channel, arm));
+            PlaceReceive(channel, arm);
         }
     }
 
@@ -115,12 +117,12 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         switch (channel)
         {
             case Chan<T> chan:
-                arms.Add(new CoreReceiveArm<T>(chan, arm));
+                PlaceReceive(chan, arm);
                 break;
             case null:
                 break;
             default:
-                arms.Add(new ForeignReceiveArm<T>(channel.Reader, arm));
+                Place(new ForeignReceiveArm<T>(channel.Reader, arm));
                 break;
         }
     }
@@ -134,12 +136,12 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         switch (reader)
         {
             case Chan<T>.ChanReader owned:
-                arms.Add(new CoreReceiveArm<T>(owned.Owner, arm));
+                PlaceReceive(owned.Owner, arm);
                 break;
             case null:
                 break;
             default:
-                arms.Add(new ForeignReceiveArm<T>(reader, arm));
+                Place(new ForeignReceiveArm<T>(reader, arm));
                 break;
         }
     }
@@ -153,7 +155,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         switch (selectable)
         {
             case ISelectableCore<T> core:
-                arms.Add(new CoreReceiveArm<T>(core, arm));
+                PlaceReceive(core, arm);
                 break;
             case null:
                 break;
@@ -171,7 +173,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     {
         if (channel is not null)
         {
-            arms.Add(new CoreSendArm<T>(channel, value, arm));
+            PlaceSend(channel, value, arm);
         }
     }
 
@@ -185,12 +187,12 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         switch (channel)
         {
             case Chan<T> chan:
-                arms.Add(new CoreSendArm<T>(chan, value, arm));
+                PlaceSend(chan, value, arm);
                 break;
             case null:
                 break;
             default:
-                arms.Add(new ForeignSendArm<T>(channel.Writer, value, arm));
+                Place(new ForeignSendArm<T>(channel.Writer, value, arm));
                 break;
         }
     }
@@ -205,12 +207,12 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         switch (writer)
         {
             case Chan<T>.ChanWriter owned:
-                arms.Add(new CoreSendArm<T>(owned.Owner, value, arm));
+                PlaceSend(owned.Owner, value, arm);
                 break;
             case null:
                 break;
             default:
-                arms.Add(new ForeignSendArm<T>(writer, value, arm));
+                Place(new ForeignSendArm<T>(writer, value, arm));
                 break;
         }
     }
@@ -218,13 +220,13 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     /// <summary>Adds a <c>case await task</c> arm.</summary>
     /// <param name="task">The task.</param>
     /// <param name="arm">The arm index.</param>
-    public void AddTask(Task task, int arm) => arms.Add(new TaskArm(task, arm));
+    public void AddTask(Task task, int arm) => Place(new TaskArm(task, arm));
 
     /// <summary>Adds a <c>case let v = await task</c> arm.</summary>
     /// <typeparam name="T">The task result type.</typeparam>
     /// <param name="task">The task.</param>
     /// <param name="arm">The arm index.</param>
-    public void AddTask<T>(Task<T> task, int arm) => arms.Add(new TaskArm<T>(task, arm));
+    public void AddTask<T>(Task<T> task, int arm) => Place(new TaskArm<T>(task, arm));
 
     /// <summary>
     /// Adds a <c>case cancelled</c> arm. With it, cancellation of the ambient
@@ -263,7 +265,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
                 Monitor.Enter(gates[taken].Gate);
             }
 
-            var count = arms.Count;
+            var count = armCount;
             var start = count > 0 ? SelectRandom.Next(count) : 0;
             for (var k = 0; k < count && !won; k++)
             {
@@ -293,12 +295,12 @@ public sealed class SelectWaiter : IValueTaskSource<int>
         if (!won)
         {
             var hasCancelled = cancelledArm >= 0;
-            var count = arms.Count + (hasCancelled ? 1 : 0);
+            var count = armCount + (hasCancelled ? 1 : 0);
             var start = count > 0 ? SelectRandom.Next(count) : 0;
             for (var k = 0; k < count && !won; k++)
             {
                 var slot = (start + k) % count;
-                if (hasCancelled && slot == arms.Count)
+                if (hasCancelled && slot == armCount)
                 {
                     if (token.IsCancellationRequested)
                     {
@@ -359,7 +361,7 @@ public sealed class SelectWaiter : IValueTaskSource<int>
             }
 
             // Phase 2: re-probe the gated arms under the locks, from a random start.
-            var count = arms.Count;
+            var count = armCount;
             var start = count > 0 ? SelectRandom.Next(count) : 0;
             for (var k = 0; k < count && !wonSynchronously; k++)
             {
@@ -382,8 +384,9 @@ public sealed class SelectWaiter : IValueTaskSource<int>
             // so no arm can become ready-and-unobserved mid-registration.
             if (!wonSynchronously)
             {
-                foreach (var descriptor in arms)
+                for (var index = 0; index < armCount; index++)
                 {
+                    var descriptor = arms[index];
                     if (descriptor.RequiresGate)
                     {
                         descriptor.Register(this, generation);
@@ -407,8 +410,9 @@ public sealed class SelectWaiter : IValueTaskSource<int>
 
         // Phase 4: arms that lock privately or have no lock (timers, foreign
         // channels, tasks) — they may claim synchronously during registration.
-        foreach (var descriptor in arms)
+        for (var index = 0; index < armCount; index++)
         {
+            var descriptor = arms[index];
             if (!descriptor.RequiresGate)
             {
                 descriptor.Register(this, generation);
@@ -431,6 +435,17 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     /// <returns>The value, or the zero value when <see cref="Ok"/> is false.</returns>
     public T TakeValue<T>()
     {
+        // Issue #3902 S4: the winner keeps the value in its own typed field, so
+        // the common path is a cast. The object? slot survives for the arms
+        // that genuinely have nothing typed to hand over — a re-probe signal
+        // carries no value at all.
+        var owner = valueOwner;
+        valueOwner = null;
+        if (owner is IArmValue<T> typed)
+        {
+            return typed.TakeArmValue();
+        }
+
         var taken = value;
         value = null;
         return taken is null ? default! : (T)taken;
@@ -439,9 +454,14 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     /// <summary>Deregisters every losing arm, tears down callbacks, and pools the waiter. Call exactly once per <see cref="Rent(int, Context)"/>.</summary>
     public void Return()
     {
-        foreach (var descriptor in arms)
+        // Issue #3902 S4: the descriptors are NOT discarded — they are the
+        // per-slot cache the next select reuses. Their targets are released so
+        // a thread-cached waiter cannot pin the channels of a select that has
+        // finished.
+        for (var i = 0; i < armCount; i++)
         {
-            descriptor.Deregister();
+            arms[i].Deregister();
+            arms[i].Release();
         }
 
         if (hasTokenRegistration)
@@ -450,9 +470,10 @@ public sealed class SelectWaiter : IValueTaskSource<int>
             canPool &= tokenRegistration.Unregister();
         }
 
-        arms.Clear();
+        armCount = 0;
         gates.Clear();
         winnerArm = -1;
+        valueOwner = null;
         value = null;
         ok = false;
         needsReprobe = false;
@@ -509,8 +530,23 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     internal void Deposit(object? deposited, bool ok, bool needsReprobe)
     {
         value = deposited;
+        valueOwner = null;
         this.ok = ok;
         this.needsReprobe = needsReprobe;
+    }
+
+    /// <summary>
+    /// Deposits an outcome whose value stays in <paramref name="owner"/>'s typed
+    /// field (issue #3902 S4), so a value-typed element never boxes.
+    /// </summary>
+    /// <param name="owner">The arm or node holding the value.</param>
+    /// <param name="ok">Whether a value was delivered.</param>
+    internal void DepositFrom(object owner, bool ok)
+    {
+        valueOwner = owner;
+        value = null;
+        this.ok = ok;
+        needsReprobe = false;
     }
 
     /// <summary>Deposits a fault the winning arm surfaces from <see cref="WaitAsync"/>.</summary>
@@ -535,8 +571,9 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     internal IReadOnlyList<(long Order, object Gate)> CollectGates()
     {
         gates.Clear();
-        foreach (var descriptor in arms)
+        for (var index = 0; index < armCount; index++)
         {
+            var descriptor = arms[index];
             if (descriptor.Gate is not { } gate)
             {
                 continue;
@@ -560,6 +597,84 @@ public sealed class SelectWaiter : IValueTaskSource<int>
 
         gates.Sort(static (a, b) => a.Order.CompareTo(b.Order));
         return gates;
+    }
+
+    /// <summary>
+    /// Places a receive arm in the next slot, reusing the descriptor already
+    /// cached there when it is the same shape (issue #3902 S4).
+    /// </summary>
+    /// <remarks>
+    /// The waiter is thread-cached and shared by every select on the thread, so
+    /// slot 0 may be a <c>CoreReceiveArm&lt;int&gt;</c> in one select and a
+    /// send arm over another element type in the next. The type test is what
+    /// makes reuse safe: a hot loop over the same select allocates nothing after
+    /// its first pass, and a thread that alternates shapes pays one allocation
+    /// per change rather than one per arm per select.
+    /// </remarks>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="selectable">The selectable to receive from.</param>
+    /// <param name="arm">The arm index.</param>
+    private void PlaceReceive<T>(ISelectableCore<T> selectable, int arm)
+    {
+        if (armCount < arms.Count)
+        {
+            if (arms[armCount] is CoreReceiveArm<T> reusable)
+            {
+                reusable.Retarget(selectable, arm);
+            }
+            else
+            {
+                arms[armCount] = new CoreReceiveArm<T>(selectable, arm);
+            }
+        }
+        else
+        {
+            arms.Add(new CoreReceiveArm<T>(selectable, arm));
+        }
+
+        armCount++;
+    }
+
+    /// <summary>Places a send arm; see <see cref="PlaceReceive{T}"/> for the reuse rule.</summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="selectable">The selectable to send to.</param>
+    /// <param name="value">The value to send.</param>
+    /// <param name="arm">The arm index.</param>
+    private void PlaceSend<T>(ISendSelectableCore<T> selectable, T value, int arm)
+    {
+        if (armCount < arms.Count)
+        {
+            if (arms[armCount] is CoreSendArm<T> reusable)
+            {
+                reusable.Retarget(selectable, value, arm);
+            }
+            else
+            {
+                arms[armCount] = new CoreSendArm<T>(selectable, value, arm);
+            }
+        }
+        else
+        {
+            arms.Add(new CoreSendArm<T>(selectable, value, arm));
+        }
+
+        armCount++;
+    }
+
+    /// <summary>Places an arm shape that is not reused across selects (foreign channels, tasks).</summary>
+    /// <param name="descriptor">The descriptor.</param>
+    private void Place(ArmDescriptor descriptor)
+    {
+        if (armCount < arms.Count)
+        {
+            arms[armCount] = descriptor;
+        }
+        else
+        {
+            arms.Add(descriptor);
+        }
+
+        armCount++;
     }
 
     private void Begin(CancellationToken cancellationToken)

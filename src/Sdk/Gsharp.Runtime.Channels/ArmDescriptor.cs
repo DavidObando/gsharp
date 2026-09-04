@@ -20,8 +20,8 @@ internal abstract class ArmDescriptor : IDisposable
         Arm = arm;
     }
 
-    /// <summary>Gets the arm index.</summary>
-    internal int Arm { get; }
+    /// <summary>Gets the arm index; reset when a cached descriptor is retargeted (issue #3902 S4).</summary>
+    internal int Arm { get; private protected set; }
 
     /// <summary>Gets a value indicating whether the arm probes and registers under a shared gate (G# channels) rather than privately (timers) or lock-free (foreign channels, tasks).</summary>
     internal abstract bool RequiresGate { get; }
@@ -48,14 +48,25 @@ internal abstract class ArmDescriptor : IDisposable
 
     /// <summary>Removes the registration. Idempotent; takes whatever lock it needs.</summary>
     internal abstract void Deregister();
+
+    /// <summary>
+    /// Drops references to the select's participants so a thread-cached waiter
+    /// does not pin them (issue #3902 S4). Called after <see cref="Deregister"/>
+    /// when the select completes; the descriptor object itself is kept for the
+    /// next select in that slot.
+    /// </summary>
+    internal virtual void Release()
+    {
+    }
 }
 
 /// <summary>A receive arm over a runtime-owned selectable (a <see cref="Chan{T}"/> or a timer).</summary>
 /// <typeparam name="T">The element type.</typeparam>
-internal sealed class CoreReceiveArm<T> : ArmDescriptor
+internal sealed class CoreReceiveArm<T> : ArmDescriptor, IArmValue<T>
 {
-    private readonly ISelectableCore<T> selectable;
+    private ISelectableCore<T>? selectable;
     private SelectNode<T>? node;
+    private T? pending;
 
     /// <summary>Initializes a new instance of the <see cref="CoreReceiveArm{T}"/> class.</summary>
     /// <param name="selectable">The selectable.</param>
@@ -67,31 +78,65 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor
     }
 
     /// <inheritdoc/>
-    internal override bool RequiresGate => selectable.SelectGate is not null;
+    internal override bool RequiresGate => Selectable.SelectGate is not null;
 
     /// <inheritdoc/>
-    internal override object? Gate => selectable.SelectGate;
+    internal override object? Gate => Selectable.SelectGate;
 
     /// <inheritdoc/>
-    internal override long Order => selectable.SelectOrder;
+    internal override long Order => Selectable.SelectOrder;
+
+    // Read only between Retarget and Release, both driven by the waiter; a null
+    // here would mean the waiter walked a slot it had already released.
+    private ISelectableCore<T> Selectable => selectable!;
+
+    /// <inheritdoc/>
+    public T TakeArmValue()
+    {
+        var taken = pending;
+        pending = default;
+        return taken!;
+    }
+
+    /// <summary>Points a cached descriptor at a new select's participants (issue #3902 S4).</summary>
+    /// <param name="target">The selectable.</param>
+    /// <param name="arm">The arm index.</param>
+    internal void Retarget(ISelectableCore<T> target, int arm)
+    {
+        selectable = target;
+        Arm = arm;
+        node = null;
+        pending = default;
+    }
+
+    /// <inheritdoc/>
+    internal override void Release()
+    {
+        selectable = null;
+        node = null;
+        pending = default;
+    }
 
     /// <inheritdoc/>
     internal override bool TryProbe(SelectWaiter waiter, ref Completions completions)
     {
-        if (!selectable.TryReceiveLocked(out var value, out var ok, ref completions))
+        if (!Selectable.TryReceiveLocked(out var value, out var ok, ref completions))
         {
             return false;
         }
 
-        waiter.Deposit(value, ok, needsReprobe: false);
+        // The value stays here, typed (issue #3902 S4): the waiter records who
+        // holds it rather than taking it as object and boxing.
+        pending = value;
+        waiter.DepositFrom(this, ok);
         return true;
     }
 
     /// <inheritdoc/>
     internal override void Register(SelectWaiter waiter, long generation)
     {
-        node = new SelectNode<T>(waiter, generation, Arm, selectable, isSend: false, default);
-        selectable.RegisterReceiveLocked(node);
+        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: false, default!);
+        Selectable.RegisterReceiveLocked(node);
     }
 
     /// <inheritdoc/>
@@ -100,7 +145,7 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor
         if (node is { } registered)
         {
             node = null;
-            selectable.Deregister(registered);
+            Selectable.Deregister(registered);
         }
     }
 }
@@ -109,8 +154,8 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor
 /// <typeparam name="T">The element type.</typeparam>
 internal sealed class CoreSendArm<T> : ArmDescriptor
 {
-    private readonly ISendSelectableCore<T> selectable;
-    private readonly T value;
+    private ISendSelectableCore<T>? selectable;
+    private T value;
     private SelectNode<T>? node;
 
     /// <summary>Initializes a new instance of the <see cref="CoreSendArm{T}"/> class.</summary>
@@ -128,17 +173,40 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
     internal override bool RequiresGate => true;
 
     /// <inheritdoc/>
-    internal override object? Gate => selectable.SelectGate;
+    internal override object? Gate => Selectable.SelectGate;
 
     /// <inheritdoc/>
-    internal override long Order => selectable.SelectOrder;
+    internal override long Order => Selectable.SelectOrder;
+
+    // See CoreReceiveArm.
+    private ISendSelectableCore<T> Selectable => selectable!;
+
+    /// <summary>Points a cached descriptor at a new select's participants (issue #3902 S4).</summary>
+    /// <param name="target">The selectable.</param>
+    /// <param name="offered">The value the arm offers.</param>
+    /// <param name="arm">The arm index.</param>
+    internal void Retarget(ISendSelectableCore<T> target, T offered, int arm)
+    {
+        selectable = target;
+        value = offered;
+        Arm = arm;
+        node = null;
+    }
+
+    /// <inheritdoc/>
+    internal override void Release()
+    {
+        selectable = null;
+        value = default!;
+        node = null;
+    }
 
     /// <inheritdoc/>
     internal override bool TryProbe(SelectWaiter waiter, ref Completions completions)
     {
         try
         {
-            return selectable.TrySendLocked(value, ref completions);
+            return Selectable.TrySendLocked(value, ref completions);
         }
         catch (ChannelClosedException closed)
         {
@@ -151,8 +219,8 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
     /// <inheritdoc/>
     internal override void Register(SelectWaiter waiter, long generation)
     {
-        node = new SelectNode<T>(waiter, generation, Arm, selectable, isSend: true, value);
-        selectable.RegisterSendLocked(node);
+        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: true, value);
+        Selectable.RegisterSendLocked(node);
     }
 
     /// <inheritdoc/>
@@ -161,7 +229,7 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
         if (node is { } registered)
         {
             node = null;
-            selectable.Deregister(registered);
+            Selectable.Deregister(registered);
         }
     }
 }

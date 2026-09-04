@@ -17,7 +17,7 @@ namespace Gsharp.Concurrency;
 /// what protects a pooled waiter from ABA.
 /// </summary>
 /// <typeparam name="T">The element type of the arm's selectable.</typeparam>
-internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
+internal sealed class SelectNode<T> : WaiterNode<T>, IArmValue<T>, ISelectArm
 {
     private readonly SelectWaiter waiter;
     private readonly long generation;
@@ -26,6 +26,7 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
     private readonly bool isSend;
     private T? sendValue;
     private bool won;
+    private T? received;
 
     /// <summary>Initializes a new instance of the <see cref="SelectNode{T}"/> class.</summary>
     /// <param name="waiter">The shared waiter.</param>
@@ -51,6 +52,14 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
     public void Deregister() => selectable.Deregister(this);
 
     /// <inheritdoc/>
+    public T TakeArmValue()
+    {
+        var taken = received;
+        received = default;
+        return taken!;
+    }
+
+    /// <inheritdoc/>
     internal override bool TryCommitReceive(T value)
     {
         if (isSend || !waiter.TryClaim(generation, arm))
@@ -58,7 +67,10 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
             return false;
         }
 
-        waiter.Deposit(value, ok: true, needsReprobe: false);
+        // Issue #3902 S4: the value stays typed on the node; the waiter only
+        // records who holds it, so a value-typed element never boxes.
+        received = value;
+        waiter.DepositFrom(this, ok: true);
         won = true;
         return true;
     }
@@ -97,7 +109,8 @@ internal sealed class SelectNode<T> : WaiterNode<T>, ISelectArm
         else
         {
             // Go: a receive arm on a closed channel proceeds with the zero value.
-            waiter.Deposit(default(T)!, ok: false, needsReprobe: false);
+            received = default;
+            waiter.DepositFrom(this, ok: false);
         }
     }
 
