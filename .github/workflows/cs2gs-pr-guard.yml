@@ -1,0 +1,127 @@
+name: cs2gs-pr-guard
+
+# Issue #3836: the PR-time translation guard for the self-migration effort
+# (#3501).
+#
+# WHY THIS EXISTS
+#
+# build.yml COMPILES the repository's C# sources. The nightly
+# cs2gs-selfmig-nightly gate TRANSLATES them to G# and then compiles the
+# result. Those are different questions, so a fully CI-green PR can take the
+# gate down purely by existing — and the damage lands hours later, attributed
+# to whatever else merged nearby. Three times so far:
+#
+#   #3831  a new tools/cs2gs/Cs2Gs.Translator file did not translate;
+#          7 banked apps red, gate 43 -> 35.
+#   #3896  three untranslatable errors in #3882's new src/Core files;
+#          16 apps red, gate 44 -> 28.
+#   #3905  #3882's src/Sdk/Gsharp.Runtime.Channels crashed gsc with a stack
+#          overflow, blinding 11 apps.
+#
+# Each was found the slow way. All three are the same shape: a project most of
+# the corpus transitively references stopped surviving its own migration. This
+# job migrates exactly that hot core, on the PR, in minutes.
+#
+# WHAT IT IS NOT
+#
+# It is not the gate. It checks four projects, not fifty-three; it says
+# nothing about the readability ceilings or corpus-wide test parity. The job's
+# own output repeats that on every run, pass or fail, because a partial check
+# mistaken for a full one is worse than no check at all.
+#
+# It also does not currently cover src/Sdk/Gsharp.Runtime.Channels, so it
+# would NOT have caught #3905 as it stands. That project is red on main today
+# (#3907) and a guard that is red from day one gets disabled; the guarded set
+# is one line away from including it. See build/run-cs2gs-selfmig-pr-guard.sh.
+#
+# THE paths FILTER
+#
+# Scoped to exactly what the job can actually judge: the sources of the
+# guarded projects, plus the compiler and translator machinery that decides
+# how they translate, plus this job's own definition. #3836 suggested
+# `tools/cs2gs/**` alone — but #3896, the most expensive of the three
+# incidents, was a src/Core change, and src/Core is already inside the guarded
+# closure, so including it costs nothing extra to run and catches strictly
+# more.
+#
+# Note: `tools/cs2gs/**` is included in full even though only Cs2Gs.CodeModel
+# and Cs2Gs.Translator are guarded — a change to any part of cs2gs changes how
+# the guarded sources translate, which is the thing being measured.
+
+on:
+  pull_request:
+    paths:
+      # The guarded projects' own sources: a new file here is the #3831 /
+      # #3896 / #3905 hazard directly.
+      - 'src/Core/**'
+      - 'src/Analyzers/InternalAnalyzers/**'
+      # The translator: it decides what the guarded sources become.
+      - 'tools/cs2gs/**'
+      # The compiler and the SDK: they decide whether what it produces
+      # compiles. #3905 was a gsc crash, not a translation defect.
+      - 'src/Compiler/**'
+      - 'src/Sdk/Gsharp.NET.Sdk/**'
+      # The guard itself, so changes to it are exercised by it.
+      - 'build/run-cs2gs-selfmig-pr-guard.sh'
+      - '.github/workflows/cs2gs-pr-guard.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cs2gs-pr-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # See build.yml: parallel MSBuild nodes corrupt $GITHUB_ENV via
+  # Nerdbank.GitVersioning's GitBuildVersion* emission.
+  NBGV_SetCloudBuildVersionVars: false
+  SELFMIG_PR_GUARD_ROOT: /tmp/gsharp-cs2gs-pr-guard
+
+jobs:
+  guard:
+    name: hot-core translation guard
+    runs-on: ubuntu-latest
+    # The measured run is well under this; the headroom is for a gsc hang,
+    # which is a failure mode this job specifically exists to catch (#3905).
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Nerdbank.GitVersioning needs history to compute a version, and the
+          # migrated tree is restored as NuGet packages that carry it.
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln --locked-mode
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      # The script builds the solution itself (which repacks the
+      # Gsharp.NET.Sdk nupkg the compile stage consumes) and then migrates.
+      # That ordering is load-bearing: a freshly built gsc.dll alone is
+      # silently ignored by the packed-SDK compile path, and interleaving
+      # another `dotnet build` between the pack and the migrate is how MSB4236
+      # appears here. Do not add build steps above this one.
+      - name: Migrate and compile the hot core
+        run: ./build/run-cs2gs-selfmig-pr-guard.sh
+
+      - name: Upload guard artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs2gs-pr-guard
+          retention-days: 7
+          path: |
+            /tmp/gsharp-cs2gs-pr-guard/guard.log
+            /tmp/gsharp-cs2gs-pr-guard/runs/**/*.json
+            /tmp/gsharp-cs2gs-pr-guard/runs/**/report.html
+            /tmp/gsharp-cs2gs-pr-guard/runs/**/sdk.build.log
+            # The migrated .gs of the guarded projects, so a failure can be
+            # read at the source rather than reproduced locally.
+            /tmp/gsharp-cs2gs-pr-guard/migrated/**/*.gs
