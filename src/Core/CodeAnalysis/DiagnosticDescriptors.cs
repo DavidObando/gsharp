@@ -451,6 +451,13 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RetiredBuiltin = new("GS0566", DiagnosticSeverity.Error, "'{0}' has been retired (ADR-0174); {1}");
     internal static readonly DiagnosticDescriptor LegacyChanTypeClauseSyntax = new("GS0567", DiagnosticSeverity.Error, "The 'chan T' type-clause spelling has been removed; use 'chan[{0}]' instead (ADR-0174 D2).");
     internal static readonly DiagnosticDescriptor AmbiguousImportedTypeReference = new("GS0547", DiagnosticSeverity.Error, "Type '{0}' is ambiguous between imported '{1}' and imported '{2}'; it would bind '{3}' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).");
+
+    // ADR-0176 / issue #3897: `rethrow` emits ILOpCode.Rethrow, which the CLR
+    // only accepts lexically inside a catch handler, and not inside a `finally`
+    // nested between the rethrow and that handler (ECMA-335 III.4.24).
+    internal static readonly DiagnosticDescriptor RethrowOutsideCatchHandler = new("GS0570", DiagnosticSeverity.Error, "'rethrow' can only appear inside a 'catch' handler — there is no exception being handled here. Use 'throw <expr>' to raise a new exception (ADR-0176).");
+    internal static readonly DiagnosticDescriptor RethrowInsideNestedFinally = new("GS0571", DiagnosticSeverity.Error, "'rethrow' cannot appear in a 'finally' clause nested inside the enclosing 'catch' handler — the CLR has left the handler by then. Move the 'rethrow' into the 'catch' body, or 'throw' a captured exception instead (ADR-0176).");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

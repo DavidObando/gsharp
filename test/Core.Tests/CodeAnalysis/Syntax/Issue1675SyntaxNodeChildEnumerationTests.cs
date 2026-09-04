@@ -34,6 +34,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // as / typeof / nameof / throw statement
         "package p\nimport System\nfunc F(x any) {\n  let s = x as string\n  let t = typeof(int32)\n  let n = nameof(x)\n  throw Exception(\"boom\")\n}\n",
 
+        // rethrow statement (ADR-0176, issue #3897)
+        "package p\nimport System\nfunc R() {\n  try {\n    throw Exception(\"boom\")\n  } catch (e Exception) {\n    rethrow\n  }\n}\n",
+
         // throw expression
         "package p\nimport System\nfunc G(s string?) string {\n  return s ?? throw Exception(\"null\")\n}\n",
 

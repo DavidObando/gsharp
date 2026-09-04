@@ -563,6 +563,9 @@ internal static class DefiniteAssignmentAnalyzer
             case BoundThrowStatement th:
                 ProcessExpression(th.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;
+            case BoundRethrowStatement:
+                // ADR-0176: no operand, so nothing is read here.
+                break;
             case BoundConditionalGotoStatement cgs:
                 ProcessExpression(cgs.Condition, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;

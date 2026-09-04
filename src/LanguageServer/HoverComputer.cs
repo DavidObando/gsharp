@@ -2404,6 +2404,7 @@ public static class CompletionComputer
         yield return "try";
         yield return "catch";
         yield return "throw";
+        yield return "rethrow";
         yield return "async";
         yield return "suspend";
         yield return "await";

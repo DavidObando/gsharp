@@ -23,7 +23,7 @@ The reserved keywords may not be used as identifiers. The complete set is:
 - Control flow: `if`, `else`, `for`, `while`, `do`, `switch`, `case`, `default`, `fallthrough`, `break`, `continue`, `goto`, `guard`, `range`, `return`
 - Pattern and cast: `is`, `as`
 - Concurrency: `go`, `select`, `scope`, `defer`, `async`, `await`
-- Exceptions: `try`, `catch`, `finally`, `throw`
+- Exceptions: `try`, `catch`, `finally`, `throw`, `rethrow`
 - Access and inheritance modifiers: `public`, `internal`, `protected`, `private`, `open`, `override`, `sealed`
 - Literals: `true`, `false`, `nil`
 

@@ -442,6 +442,14 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitExpression(throwStmt.Expression);
                 this.il.OpCode(ILOpCode.Throw);
                 break;
+            case BoundRethrowStatement:
+                // ADR-0176 (#3897): `rethrow` re-raises the exception the
+                // enclosing CLR catch handler is processing. `rethrow` is not
+                // `throw <expr>`: it preserves the original StackTrace, where
+                // `throw` resets it to this site. The binder guarantees we are
+                // lexically inside a catch handler.
+                this.il.OpCode(ILOpCode.Rethrow);
+                break;
             case BoundPatternSwitchStatement ps:
                 this.EmitPatternSwitchStatement(ps);
                 break;
@@ -475,7 +483,7 @@ internal sealed partial class MethodBodyEmitter
         else if (statement is not BoundBlockStatement && this.il.Offset != startOffset)
         {
             this.currentPositionEndsInTerminator =
-                statement is BoundReturnStatement or BoundThrowStatement or BoundGotoStatement;
+                statement is BoundReturnStatement or BoundThrowStatement or BoundRethrowStatement or BoundGotoStatement;
         }
     }
 

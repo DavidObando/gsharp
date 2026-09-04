@@ -29,6 +29,21 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.TryWithoutCatchOrFinally);
 
     /// <summary>
+    /// Reports GS0570: a 'rethrow' with no enclosing 'catch' handler.
+    /// </summary>
+    /// <param name="location">The text location of the 'rethrow' keyword.</param>
+    public void ReportRethrowOutsideCatchHandler(TextLocation location)
+    => Report(location, DiagnosticDescriptors.RethrowOutsideCatchHandler);
+
+    /// <summary>
+    /// Reports GS0571: a 'rethrow' inside a 'finally' that is nested inside the
+    /// nearest enclosing 'catch' handler.
+    /// </summary>
+    /// <param name="location">The text location of the 'rethrow' keyword.</param>
+    public void ReportRethrowInsideNestedFinally(TextLocation location)
+    => Report(location, DiagnosticDescriptors.RethrowInsideNestedFinally);
+
+    /// <summary>
     /// Reports that a type used in a 'using' declaration does not implement IDisposable.
     /// </summary>
     /// <param name="location">The text location of the using keyword.</param>

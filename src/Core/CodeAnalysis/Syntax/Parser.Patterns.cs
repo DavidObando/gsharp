@@ -698,6 +698,15 @@ public partial class Parser
         return new ThrowStatementSyntax(syntaxTree, keyword, expression);
     }
 
+    // ADR-0176 / issue #3897: `rethrow` takes no operand. It is a statement
+    // only — there is no rethrow-expression, because a rethrow never produces
+    // a value and C# has no `throw;` in expression position either.
+    private StatementSyntax ParseRethrowStatement()
+    {
+        var keyword = MatchToken(SyntaxKind.RethrowKeyword);
+        return new RethrowStatementSyntax(syntaxTree, keyword);
+    }
+
     // Issue #1018: parses a throw-expression `throw <expr>` in value position.
     // The operand is parsed at full-expression precedence (greedy), matching
     // C#'s rule that `a ?? throw b ?? c` throws `(b ?? c)`. The throw-expression

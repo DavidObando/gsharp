@@ -1779,20 +1779,15 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GStatement TranslateThrow(ThrowStatementSyntax throwStatement)
         {
-            // C# `throw;` (re-throw) has no bare G# form (`throw` alone is GS0005);
-            // re-emit the innermost caught exception variable, which reproduces the
-            // exception type and message (ADR-0115 §B).
+            // ADR-0176 / issue #3897: C# `throw;` maps to G# `rethrow`, which
+            // emits ILOpCode.Rethrow and preserves the original throw site.
+            // The previous lowering re-threw the caught variable, which is the
+            // same exception object but resets its StackTrace. A C# `throw;` is
+            // only legal inside a catch handler, and cs2gs keeps it inside the
+            // translated catch body, so `rethrow` is always legal here.
             if (throwStatement.Expression == null)
             {
-                if (this.state.CurrentCatchVariable != null)
-                {
-                    return new ThrowStatement(new IdentifierExpression(this.state.CurrentCatchVariable));
-                }
-
-                this.context.ReportUnsupported(
-                    throwStatement,
-                    "a bare re-throw outside a named catch has no canonical G# form (G# has no bare 'throw'; ADR-0115 §B).");
-                return new ThrowStatement(new IdentifierExpression("nil"));
+                return new RethrowStatement();
             }
 
             return new ThrowStatement(this.TranslateExpression(throwStatement.Expression));
@@ -1936,9 +1931,14 @@ public sealed partial class CSharpToGSharpTranslator
                         }
 
                         BlockStatement filteredBody = this.TranslateBlock(catchClause.Block);
+
+                        // ADR-0176 / issue #3897: `rethrow` (not `throw ex`) so
+                        // an exception whose filter said "not mine" leaves the
+                        // try with its original throw site intact, as it would
+                        // in C# where the filter simply never caught it.
                         var rethrowIfFalse = new IfStatement(
                             new UnaryExpression("!", filter),
-                            new BlockStatement(new List<GStatement> { new ThrowStatement(new IdentifierExpression(variableName)) }));
+                            new BlockStatement(new List<GStatement> { new RethrowStatement() }));
                         var statements = new List<GStatement>(filterPrologue) { rethrowIfFalse };
                         statements.AddRange(filteredBody.Statements);
                         body = new BlockStatement(statements, filteredBody.IsUnsafe);
@@ -2021,7 +2021,10 @@ public sealed partial class CSharpToGSharpTranslator
             // Safety-net fallback: unreachable if the merged catch's declared
             // type is a supertype of every merged clause's type, since then the
             // last clause's `is` test always succeeds.
-            GStatement dispatch = new ThrowStatement(sharedBinderExpr);
+            // ADR-0176 / issue #3897: the fallthrough is C#'s "no clause
+            // matched", where the exception was never caught at all — so it must
+            // keep its original throw site. `rethrow`, not `throw binder`.
+            GStatement dispatch = new RethrowStatement();
 
             for (int i = node.Catches.Count - 1; i >= mergeStartIndex; i--)
             {

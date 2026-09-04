@@ -1666,6 +1666,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return;
                 case ReturnStatement:
                 case ThrowStatement:
+                case RethrowStatement:
                     counts.TryGetValue(statement, out int count);
                     counts[statement] = count + 1;
                     return;

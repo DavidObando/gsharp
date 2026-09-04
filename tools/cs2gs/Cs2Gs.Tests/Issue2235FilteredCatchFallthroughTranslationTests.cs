@@ -159,7 +159,7 @@ namespace Demo
 
         Assert.Contains("catch (ex InvalidOperationException)", printed);
         Assert.Contains("if !retryable", printed);
-        Assert.Contains("throw ex", printed);
+        Assert.Contains("rethrow", printed);
         Assert.DoesNotContain("is InvalidOperationException", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");

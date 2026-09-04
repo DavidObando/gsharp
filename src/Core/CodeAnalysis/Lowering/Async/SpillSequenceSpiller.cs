@@ -307,6 +307,7 @@ public static class SpillSequenceSpiller
                 // (AsyncExceptionHandlerRewriter, Lowerer, iterator rewriter).
                 case BoundLabelStatement:
                 case BoundGotoStatement:
+                case BoundRethrowStatement:
                 case BoundAwaitSequencePoint:
                 case BoundLocalFunctionDeclaration:
                     // Issue #1886: a generic local function's literal body is a

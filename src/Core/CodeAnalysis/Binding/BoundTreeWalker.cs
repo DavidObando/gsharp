@@ -106,6 +106,9 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.ThrowStatement:
                 VisitThrowStatement((BoundThrowStatement)node);
                 break;
+            case BoundNodeKind.RethrowStatement:
+                // ADR-0176: no operand to visit.
+                break;
             case BoundNodeKind.PatternSwitchStatement:
                 VisitPatternSwitchStatement((BoundPatternSwitchStatement)node);
                 break;

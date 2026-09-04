@@ -771,6 +771,7 @@ internal sealed partial class StatementBinder
         {
             case BoundReturnStatement:
             case BoundThrowStatement:
+            case BoundRethrowStatement:
             case BoundGotoStatement:
                 return null;
 
@@ -816,6 +817,7 @@ internal sealed partial class StatementBinder
         {
             case BoundReturnStatement:
             case BoundThrowStatement:
+            case BoundRethrowStatement:
             case BoundGotoStatement:
                 return false;
 
@@ -1198,6 +1200,7 @@ internal sealed partial class StatementBinder
 
             case BoundReturnStatement:
             case BoundThrowStatement:
+            case BoundRethrowStatement:
                 return true;
 
             case BoundGotoStatement:

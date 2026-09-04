@@ -1658,6 +1658,7 @@ public sealed class Lowerer : BoundTreeRewriter
         {
             case BoundReturnStatement:
             case BoundThrowStatement:
+            case BoundRethrowStatement:
             case BoundGotoStatement:
                 return true;
             case BoundFixedStatement fixedStatement:

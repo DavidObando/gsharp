@@ -1369,6 +1369,9 @@ public static class GSharpPrinter
             case ThrowStatement thrown:
                 return $"{pad}throw {RenderExpression(thrown.Expression, indent)}";
 
+            case RethrowStatement:
+                return $"{pad}rethrow";
+
             case IfStatement ifStatement:
                 return RenderIf(ifStatement, indent);
 
