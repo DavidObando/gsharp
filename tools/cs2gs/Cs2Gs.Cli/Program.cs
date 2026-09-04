@@ -208,6 +208,21 @@ internal static class Program
                     Console.WriteLine($"    -> {app.FailureCategory}: {artifact}");
                 }
             }
+
+            // Issue #3885 requirement 3: an app that is green ONLY because of
+            // the test-parity allow-list must say so in the same place its
+            // verdict is printed. An allow-list that is invisible on a passing
+            // run is the dangerous kind.
+            foreach (string allowed in app.AllowedTestFailures)
+            {
+                Console.WriteLine($"    ~> allow-listed test failure: {allowed}");
+            }
+
+            foreach (string stale in app.StaleAllowListEntries)
+            {
+                Console.WriteLine(
+                    $"    ~> allow-list entry no longer failing — remove from the allow-list: {stale}");
+            }
         }
 
         Console.WriteLine();
@@ -231,7 +246,8 @@ internal static class Program
             return helpRequested ? 0 : 1;
         }
 
-        (string corpus, List<string> appIds, PipelineOptions options, string baselinePath, bool baselineStrict, bool translateOnly) = parsed.Value;
+        (string corpus, List<string> appIds, PipelineOptions options, string baselinePath,
+            bool baselineStrict, bool translateOnly, string allowListPath) = parsed.Value;
 
         // Issue #3732: canonicalize, not merely absolutize. A root reached
         // through a symlink (`/tmp` and `$TMPDIR` are both links on macOS)
@@ -243,6 +259,20 @@ internal static class Program
         corpus = options.SourceRoot;
         options.OutputRoot = CanonicalRootPath.Resolve(options.OutputRoot);
         options.ArtifactRoot = CanonicalRootPath.Resolve(options.ArtifactRoot);
+
+        // Issue #3885: the test-parity failure allow-list, read from the source
+        // repository. A malformed list stops the run here — degrading to "allow
+        // nothing" would surface as an unrelated wall of parity failures.
+        try
+        {
+            options.TestParityAllowList = TestParityAllowList.LoadForRepository(
+                options.SourceRoot, allowListPath);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
+        {
+            Console.Error.WriteLine("cs2gs: " + ex.Message);
+            return 1;
+        }
 
         IReadOnlyList<CorpusApp> apps;
         if (options.OutputLayout == MigrationOutputLayout.Repository)
@@ -539,6 +569,7 @@ internal static class Program
         helpRequested = false;
         string corpus = null;
         string baselinePath = null;
+        string allowListPath = null;
         bool baselineStrict = false;
         bool translateOnly = false;
         var appIds = new List<string>();
@@ -587,6 +618,9 @@ internal static class Program
                     case "--baseline":
                         baselinePath = NextValue(args, ref i, arg);
                         break;
+                    case "--test-allowlist":
+                        allowListPath = NextValue(args, ref i, arg);
+                        break;
                     case "--baseline-strict":
                         baselineStrict = true;
                         break;
@@ -623,7 +657,8 @@ internal static class Program
             }
         }
 
-        return new MigrateArguments(corpus, appIds, options, baselinePath, baselineStrict, translateOnly);
+        return new MigrateArguments(
+            corpus, appIds, options, baselinePath, baselineStrict, translateOnly, allowListPath);
     }
 
     /// <summary>
@@ -710,6 +745,8 @@ internal static class Program
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");
         Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.");
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");
+        Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:");
+        Console.WriteLine("                    <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
         Console.WriteLine("  --via-sdk         Build emitted G# via 'dotnet build' + Gsharp.NET.Sdk (default).");
         Console.WriteLine("  --no-via-sdk      Use the legacy direct-gsc compile path.");
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
@@ -746,13 +783,15 @@ internal static class Program
     /// <param name="BaselinePath">The gap-ledger path, or <see langword="null"/>.</param>
     /// <param name="BaselineStrict">Whether stale ledger entries fail the gate.</param>
     /// <param name="TranslateOnly">Whether to run the translate stage only (issue #3668).</param>
+    /// <param name="AllowListPath">An explicit test-parity allow-list path, or <see langword="null"/> (issue #3885).</param>
     private readonly record struct MigrateArguments(
         string Corpus,
         List<string> AppIds,
         PipelineOptions Options,
         string BaselinePath,
         bool BaselineStrict,
-        bool TranslateOnly);
+        bool TranslateOnly,
+        string AllowListPath);
 
     /// <summary>
     /// Sentinel exception thrown by <see cref="NextValue"/> when an option's

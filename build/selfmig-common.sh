@@ -188,6 +188,39 @@ selfmig_apply_baseline() {
     fi
   fi
 
+  # Issue #3885: the test-parity failure allow-list. An app whose mirrored test
+  # failures are a SUBSET of its allow-list entries reports green — but the run
+  # must never be silent about it, or the list becomes the dangerous kind. Both
+  # halves are printed whatever the gate verdict:
+  #
+  #   * every allow-listed failure that actually occurred, so a green app that
+  #     is green only because of the list still says which tests it excused;
+  #   * every entry that did NOT fire in a completed run, i.e. the test now
+  #     passes and the entry is stale.
+  #
+  # Staleness is ADVISORY, deliberately. It is reported exactly as loudly as
+  # `greenApps` reports newly-green apps to bank, and like that report it does
+  # not set `status`: making it fatal would turn the PR that FIXES a test red,
+  # which is precisely the wrong incentive to build into a gate. The subset rule
+  # itself is what stays hard.
+  if [[ -n "$run_json" && -f "$run_json" ]]; then
+    local allowed stale
+    allowed=$(jq -r '[.apps[] | . as $app | (.allowedTestFailures // [])[]
+      | $app.appId + ": " + .] | .[]' "$run_json")
+    stale=$(jq -r '[.apps[] | . as $app | (.staleAllowListEntries // [])[]
+      | $app.appId + ": " + .] | .[]' "$run_json")
+
+    if [[ -n "$allowed" ]]; then
+      echo "self-migration: allow-listed test-parity failures (#3885) — these did NOT fail the gate:"
+      echo "$allowed" | sed 's/^/  ~ /'
+    fi
+
+    if [[ -n "$stale" ]]; then
+      echo "self-migration: allow-list entries no longer failing — remove from the allow-list:"
+      echo "$stale" | sed 's/^/  - /'
+    fi
+  fi
+
   if (( status == 0 )); then
     echo "Self-migration gate PASSED."
   fi

@@ -218,6 +218,22 @@ public sealed class StageExecutionContext
     /// identify a test project.
     /// </summary>
     public bool IsTestProject { get; set; }
+
+    /// <summary>
+    /// Gets the mirrored test failures that <see cref="PipelineOptions.TestParityAllowList"/>
+    /// covered in this app's run (issue #3885). Populated even when the app
+    /// still fails, and ALWAYS reported: an allow-list that silences its own
+    /// entries is the dangerous kind.
+    /// </summary>
+    public List<string> AllowedTestFailures { get; } = new List<string>();
+
+    /// <summary>
+    /// Gets the allow-list entries for this app whose test did NOT fail in a
+    /// completed run (issue #3885) — they should be removed. Advisory, mirroring
+    /// how <c>greenApps</c> reports newly-green apps to bank rather than failing
+    /// the run over them.
+    /// </summary>
+    public List<string> StaleTestAllowListEntries { get; } = new List<string>();
 }
 
 /// <summary>

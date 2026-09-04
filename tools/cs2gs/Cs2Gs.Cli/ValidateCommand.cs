@@ -44,6 +44,7 @@ internal static class ValidateCommand
         string corpus = null;
         string migrated = null;
         string manifests = null;
+        string allowListPath = null;
         int shardIndex = -1;
         int shardCount = 0;
         var appIds = new List<string>();
@@ -69,6 +70,9 @@ internal static class ValidateCommand
                     break;
                 case "--manifests":
                     manifests = Next(args, ref i, arg);
+                    break;
+                case "--test-allowlist":
+                    allowListPath = Next(args, ref i, arg);
                     break;
                 case "--app":
                     appIds.Add(Next(args, ref i, arg).Replace('\\', '/'));
@@ -124,6 +128,22 @@ internal static class ValidateCommand
             ? options.OutputRoot + ".cs2gs-runs"
             : CanonicalRootPath.Resolve(options.ArtifactRoot);
 
+        // Issue #3885: load the test-parity failure allow-list from the SOURCE
+        // repository (never the migrated mirror — the list is a statement about
+        // the migration, made by the repository being migrated). A malformed
+        // list stops the shard here rather than degrading to "allow nothing",
+        // which would read as an unrelated wall of parity failures.
+        try
+        {
+            options.TestParityAllowList = TestParityAllowList.LoadForRepository(
+                options.SourceRoot, allowListPath);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException || ex is IOException)
+        {
+            Console.Error.WriteLine("cs2gs: " + ex.Message);
+            return 1;
+        }
+
         manifests = string.IsNullOrEmpty(manifests)
             ? FindLatestRunDir(options.ArtifactRoot)
             : CanonicalRootPath.Resolve(manifests);
@@ -154,6 +174,14 @@ internal static class ValidateCommand
         Console.WriteLine(
             $"cs2gs validate: {selected.Count} of {allApps.Count} app(s) selected; " +
             $"migrated tree {options.OutputRoot}; manifests {manifests}.");
+        if (options.TestParityAllowList.Entries.Count > 0)
+        {
+            // Issue #3885: an allow-list in force is stated up front, not
+            // discovered afterwards from a green result.
+            Console.WriteLine(
+                $"cs2gs validate: test-parity failure allow-list active with " +
+                $"{options.TestParityAllowList.Entries.Count} entry/entries (#3885).");
+        }
 
         var pipeline = new MigrationPipeline(options, ValidationStages());
         RunResult result = await pipeline
@@ -320,5 +348,7 @@ internal static class ValidateCommand
         Console.WriteLine("  --config <name>    Build config used to find gsc and the SDK package (default: Release).");
         Console.WriteLine("  --gsc <path>       Override gsc.dll.");
         Console.WriteLine("  --gsgen <path>     Override gsgen.dll.");
+        Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:");
+        Console.WriteLine("                     <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.");
     }
 }

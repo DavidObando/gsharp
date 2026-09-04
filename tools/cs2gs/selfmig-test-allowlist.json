@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0",
+  "comment": "Issue #3885: the test-parity failure allow-list for the repo self-migration gate (build/run-cs2gs-selfmig.sh, stage 4). Each entry names ONE migrated test that is known to fail for a reason that is POLICY rather than defect; an app whose failing set is a SUBSET of its entries still reports green, and the run output still names every allow-listed failure that occurred. This is a hole in the gate by construction, so it is kept small on purpose. Rules, all enforced by Cs2Gs.Pipeline/TestParityAllowList.cs and not merely written down: (1) an entry names an individual test, at least 'Class.Method', with no wildcards — matching is anchored at the method, so a namespace or class prefix matches nothing and allow-listing a whole app or class is not expressible; (2) 'reason' is mandatory and substantive (>= 24 chars) and 'issue' is a '#<number>' reference where one exists — an unexplained entry fails to load, it is not silently honoured; (3) a failure NOT on this list still fails the app even when allow-listed failures are present alongside it, and a run whose named failures do not account for every failure the run summary counts refuses the allow-list outright; (4) the #3872/#3869 evidence that tests actually RAN is never waived — an app that executes zero tests, or fewer than its C# original's [Fact] count, fails regardless of what is listed here; (5) an entry whose test STOPS failing is reported as stale ('no longer failing — remove from the allow-list') on the next run, advisory rather than fatal so that fixing a test is never punished by a red gate. Deliberately NOT a section of selfmig-baseline.json: that file is a ratchet (greenFloor, greenApps, the ceilings) edited when a run banks a win, by the person who owns the ratchet; this is a policy register edited when a test's premise stops holding. Same directory, same contract, different lifecycles — and an allow-list PR must never conflict with a ratchet PR.\n\nWhat does NOT belong here: anything under investigation as a real defect. The parity failures in test/InternalAnalyzers.Tests, test/LanguageServer.Tests and test/GeneratorHost.Tests (#3848, #3849) are defects, not policy, and are deliberately absent.",
+  "entries": [
+    {
+      "app": "test/Sdk.Tests/Sdk.Tests.csproj",
+      "test": "SdkLayoutTests.Core_Targets_Pin_HotReload_Watch_Inputs_And_Serialized_Agent_Build",
+      "reason": "A test that asserts on its own repository's source layout is spelling-coupled to the toolchain that produced it. This one reads src/Sdk/Gsharp.HotReload.Runtime/HotReloadAgent.cs and asserts Contains(\"SemaphoreSlim updateGate\") — C# field-declaration syntax. The migrated mirror correctly holds HotReloadAgent.gs, which G# does not spell that way, so the test cannot pass there; relaxing the assertion would weaken a real guard on the HotReload agent's watch inputs in the unmigrated repository. Policy, not a translator defect.",
+      "issue": "#3885"
+    },
+    {
+      "app": "test/Sdk.Tests/Sdk.Tests.csproj",
+      "test": "SdkLayoutTests.Sdk_Csproj_Packs_As_MSBuildSdk",
+      "reason": "Reads src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj by its C# spelling. The mirrored SDK directory contains Gsharp.NET.Sdk.gsproj and no .csproj at all — which is exactly what a migrated repository should hold — so the read throws FileNotFoundException. Rewriting the test in terms of whichever extension its own toolchain uses would cost real assertion strength on SDK packaging wiring in the unmigrated repo. Policy, not a translator defect.",
+      "issue": "#3885"
+    },
+    {
+      "app": "test/Sdk.Tests/Sdk.Tests.csproj",
+      "test": "SdkLayoutTests.Sdk_Csproj_Uses_BuildOnly_HotReload_Runtime_Reference_And_Packs_Runtime",
+      "reason": "Same C#-spelling coupling as Sdk_Csproj_Packs_As_MSBuildSdk, and doubly so: beyond reading Gsharp.NET.Sdk.csproj it matches a ProjectReference Include ending in Gsharp.HotReload.Runtime\\Gsharp.HotReload.Runtime.csproj, which the mirror correctly retargets to .gsproj. Making it pass in the mirror means weakening the assertion in the unmigrated repo, where it is the actual guard on build-only referencing and runtime packing. Policy, not a translator defect.",
+      "issue": "#3885"
+    }
+  ]
+}

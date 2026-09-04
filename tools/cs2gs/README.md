@@ -168,6 +168,41 @@ triage artifact; later stages are reported as `skip`.
    `Gsharp.NET.Sdk`) and compares the passing/failing test set against the C#
    xUnit oracle. Failures → `test-parity-failure`.
 
+#### The test-parity failure allow-list (`selfmig-test-allowlist.json`, #3885)
+
+Some migrated tests cannot pass, and should not be made to. A test that asserts
+on its **own repository's source layout** is spelling-coupled to the toolchain
+that produced it: `test/Sdk.Tests` reads `Gsharp.NET.Sdk.csproj` and matches
+`Contains("SemaphoreSlim updateGate")`. The mirror correctly holds `.gsproj` and
+G# syntax, so those assertions fail there — and relaxing them would weaken a
+real guard in the *unmigrated* repository. That is a policy question, not a
+defect.
+
+`tools/cs2gs/selfmig-test-allowlist.json` names those tests individually. An app
+whose mirrored failures are a **subset** of its entries reports green; the run
+still names every allow-listed failure it excused. The rules are enforced by
+`Cs2Gs.Pipeline/TestParityAllowList.cs`, not merely written down:
+
+* an entry names **one test** (`Class.Method` at minimum, no wildcards), and
+  matching is anchored at the method — a namespace or class prefix matches
+  nothing, so allow-listing a whole app or class is *not expressible*;
+* `reason` is **mandatory** and substantive; `issue` must be `#<number>` when
+  present. An unexplained entry fails the load, it is not silently honoured;
+* a failure **not** on the list still fails the app, even alongside allow-listed
+  ones — and a run whose named failures do not account for every failure its own
+  summary counts refuses the allow-list outright;
+* the #3872/#3869 evidence that tests actually **ran** is never waived: an app
+  executing zero tests, or fewer than its C# original's `[Fact]` count, fails
+  whatever is listed;
+* an entry whose test **starts passing** is reported as stale (`no longer
+  failing — remove from the allow-list`) by the gate, advisory rather than fatal
+  so that fixing a test is never punished with a red gate.
+
+It is deliberately a separate file from `selfmig-baseline.json`: that one is a
+ratchet (`greenFloor`, `greenApps`, the ceilings) edited when a run banks a win;
+this is a policy register edited when a test's premise stops holding. Real
+defects under investigation do **not** belong here.
+
 A fifth category cuts across all four: a stage that throws an unhandled
 exception is a defect in `cs2gs` itself, not a property of the code being
 migrated, and is recorded as `pipeline-crash` (issue #3804) with the C# file
