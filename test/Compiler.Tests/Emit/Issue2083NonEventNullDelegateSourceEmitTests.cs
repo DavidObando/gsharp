@@ -24,6 +24,30 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue2083NonEventNullDelegateSourceEmitTests
 {
     [Fact]
+    public void NullableFunctionLocal_NullAtRuntime_AdaptsToNullableNamedDelegate()
+    {
+        var source = """
+            package Issue2083Pkg
+            import System
+
+            delegate Handler() void;
+
+            func UseHandler(h Handler?) {
+                h?()
+                Console.WriteLine("ok")
+            }
+
+            let missing (() -> void)? = nil
+            UseHandler(missing)
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRun(source);
+        Assert.Equal(0, exitCode);
+        Assert.Equal($"ok{Environment.NewLine}", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void NonEventNonNullableFieldSource_NullAtRuntime_ThrowsInsteadOfSilentlyNull()
     {
         var source = """

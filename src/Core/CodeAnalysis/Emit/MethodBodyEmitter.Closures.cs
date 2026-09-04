@@ -155,23 +155,20 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #2083: returns true when <paramref name="source"/> is a read of
-    /// a field-like event's compiler-synthesized backing field — the only
-    /// case, so far, where the emitter *knows* a statically non-nullable
-    /// delegate-typed source can genuinely be <c>null</c> at runtime (an
-    /// unsubscribed event's backing field is null even though the event's
-    /// declared type isn't nullable). Every other non-nullable source
-    /// (a plain local, parameter, or ordinary field) is expected to hold a
-    /// real delegate; if it doesn't, that is a null-safety bug the emitted
-    /// code should surface loudly rather than mask. Reached either through a
-    /// direct field access (<c>this.MyEvent</c>) or the implicit bare-name
-    /// field variable synthesized for in-class event reads (issue #1213);
-    /// both route through the same underlying <see cref="FieldSymbol"/>, and
-    /// smart-cast narrowing (<see cref="BoundFieldAccessExpression.NarrowedType"/>)
-    /// does not change which field is read.
+    /// Returns true when <paramref name="source"/> can legitimately contain a
+    /// null delegate: either its effective type is nullable, or it reads a
+    /// field-like event's compiler-synthesized backing field (which is null
+    /// before the first subscription despite its non-nullable declared type).
+    /// Smart-cast narrowing changes the effective type, so a guarded nullable
+    /// source remains on the branch-free non-null path.
     /// </summary>
     private static bool IsKnownLegitimateNullDelegateSource(BoundExpression source)
     {
+        if (source.Type is NullableTypeSymbol)
+        {
+            return true;
+        }
+
         return source switch
         {
             BoundFieldAccessExpression fieldAccess => fieldAccess.Field?.IsEventBackingField == true,
@@ -184,27 +181,20 @@ internal sealed partial class MethodBodyEmitter
     /// Issue #2066 / #2083: emits the shared <c>dup / ldvirtftn / newobj</c>
     /// delegate-to-delegate adaptation sequence.
     ///
-    /// When <see cref="IsKnownLegitimateNullDelegateSource"/> recognizes
-    /// <paramref name="source"/> as a case the emitter knows can legitimately
-    /// be <c>null</c> despite its non-nullable static type (currently: a
-    /// field-like event's backing field, e.g. an unsubscribed field-like
-    /// event snapshotted into a delegate-typed local), the sequence is
-    /// guarded so a <c>null</c> source flows through as <c>null</c> instead
-    /// of unconditionally rebuilding a delegate — without the guard,
+    /// When <see cref="IsKnownLegitimateNullDelegateSource"/> recognizes a
+    /// source that can legitimately be <c>null</c>, the sequence is guarded
+    /// so a <c>null</c> source flows through as <c>null</c> instead of
+    /// unconditionally rebuilding a delegate — without the guard,
     /// `ldvirtftn` resolves the (non-null) Invoke method pointer even over a
     /// `null` instance reference, and the subsequent `newobj` then throws
     /// <see cref="ArgumentException"/> at runtime ("Delegate to an instance
     /// method cannot have null 'this'") because the CLR delegate ctor
     /// requires a non-null target for an instance-method pointer.
     ///
-    /// For every other source, that same throw is the *desired* pre-#2079
-    /// fail-fast behavior: a plain non-nullable local/parameter/field that is
-    /// unexpectedly null at runtime indicates a null-safety bug (e.g. a
-    /// nullability escape via interop), and silently producing a null
-    /// delegate instead of throwing would mask it. So the guard is only
-    /// emitted for the known-legitimate-null sources; every other case emits
-    /// the plain (unguarded, branch-free) sequence, matching prior behavior
-    /// and avoiding the extra branch/label on the common non-nullable path.
+    /// For every other source, that same throw is the desired fail-fast
+    /// behavior: a non-nullable local/parameter/field that is unexpectedly
+    /// null at runtime indicates a null-safety bug. Every non-nullable case
+    /// therefore keeps the plain branch-free sequence.
     ///
     /// The null path (guarded case only) must not leave the un-adapted
     /// source value (statically typed as the *source* delegate type, e.g.
