@@ -2206,6 +2206,14 @@ implementation had to refine it.
     `ValueTask`-returning G# function is already writing against ADR-0174's
     breaking change. `CSharpConsumer_CallsTheDeclaredSignature_AndMayPassAContext`
     compiles a real C# program against a G# library and runs it.
+
+    Reflection is the one caller shape the "optional" half does not make
+    transparent: `MethodInfo.Invoke`'s default binder is strict about arity, so
+    `Invoke(null, null)` on a zero-parameter suspending function throws
+    `TargetParameterCountException`. The caller must pass the argument, either
+    a `Context` or `Type.Missing` under `BindingFlags.OptionalParamBinding`.
+    Measured, and now asserted by `e2etests/debugger-e2e.sh`, whose host had
+    been written before the parameter landed.
 25. **Two D7 cases the table leaves implicit.** An author who *declares* a
     `ctx Context` parameter gets exactly that — the signature is untouched and
     the operations park on their parameter (D7's "explicit" row, now also the

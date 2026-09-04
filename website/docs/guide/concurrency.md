@@ -322,7 +322,23 @@ either of you writing a parameter. Two cases are yours to steer:
 
 From C#, a G# suspending function is an ordinary `ValueTask`-returning method:
 call it as its signature reads, or pass a `Gsharp.Concurrency.Context` as the
-last argument to make it cancellable.
+last argument to make it cancellable. The compiler fills in the default for you
+— but reflection does not. `MethodInfo.Invoke`'s default binder is strict about
+arity, so a reflection caller has to pass the parameter, either as a context or
+as `Type.Missing` under `BindingFlags.OptionalParamBinding`:
+
+```csharp
+// Compiled call: the parameter is optional, so this is enough.
+var value = await GsLib.Pipe();
+
+// Reflection: say that the trailing optional is being defaulted.
+var pending = pipe.Invoke(
+    null,
+    BindingFlags.OptionalParamBinding,
+    binder: null,
+    new object[] { Type.Missing },
+    culture: null);
+```
 
 ### Debugging and hot reload through suspension
 

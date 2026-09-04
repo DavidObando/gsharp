@@ -182,11 +182,19 @@ verify_sample() {
 echo "==> Compiling and verifying golden samples from $SAMPLES_DIR"
 
 # Single-file samples: samples/*.gs with a sibling .golden.
+# A sample needs /r:Gsharp.Extensions when it names that namespace, and also
+# when it names Gsharp.Concurrency: ADR-0174 D9's `after`, `tick`, `merge` and
+# `chunks` are G#-authored and live in the Extensions assembly even though the
+# package is imported implicitly, so a caller never spells "Gsharp.Extensions".
+needs_extensions() {
+    grep -q -e "Gsharp.Extensions" -e "Gsharp.Concurrency" "$@"
+}
+
 for source in "$SAMPLES_DIR"/*.gs; do
     [[ -f "${source%.gs}.golden" ]] || continue
     name="$(basename "$source" .gs)"
     uses_extensions=no
-    grep -q "Gsharp.Extensions" "$source" && uses_extensions=yes
+    needs_extensions "$source" && uses_extensions=yes
     verify_sample "$name" "$uses_extensions" "$source"
 done
 
@@ -202,7 +210,7 @@ for dir in "$SAMPLES_DIR"/*/; do
     done < <(find "$dir" -maxdepth 1 -name '*.gs' | sort)
     [[ ${#sources[@]} -gt 0 ]] || continue
     uses_extensions=no
-    grep -q "Gsharp.Extensions" "${sources[@]}" && uses_extensions=yes
+    needs_extensions "${sources[@]}" && uses_extensions=yes
     verify_sample "$name" "$uses_extensions" "${sources[@]}"
 done
 

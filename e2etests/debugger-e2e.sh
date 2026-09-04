@@ -379,8 +379,19 @@ public static class Program
         var asm = Assembly.LoadFrom(Path.Combine(appDir, "GsLib2.dll"));
         var prog = asm.GetType("GsLib2.<Program>")!;
         var pipe = prog.GetMethod("Pipe", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
-        // An inferred-suspending function returns ValueTask<int>.
-        var pending = pipe.Invoke(null, null)!;
+        // An inferred-suspending function returns ValueTask<int> and carries the
+        // ADR-0174 D7 hidden `Context` as a trailing OPTIONAL parameter. A C#
+        // caller compiled against it lets the compiler fill the default; a
+        // reflection caller has to say so, because Invoke's default binder is
+        // strict about arity. Passing Type.Missing under OptionalParamBinding is
+        // exactly the "a caller that predates the parameter still binds" claim
+        // the ABI makes (ADR-0174 errata 24), so this asserts it.
+        var pending = pipe.Invoke(
+            null,
+            BindingFlags.OptionalParamBinding,
+            binder: null,
+            new object[] { Type.Missing },
+            culture: null)!;
         var task = (Task<int>)pending.GetType().GetMethod("AsTask")!.Invoke(pending, null)!;
         var result = task.GetAwaiter().GetResult();
         Console.WriteLine($"pipe={result}");
