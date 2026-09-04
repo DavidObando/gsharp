@@ -253,6 +253,22 @@ public sealed class CSharpTypeMapper
     public IReadOnlyList<TypeDeclaration> PendingAnonymousDataClasses => this.pendingAnonymousDataClasses;
 
     /// <summary>
+    /// The G# spelling of a C# predefined type keyword (ADR-0115 §B.12's
+    /// width-bearing primitive names), or <see langword="null"/> when the
+    /// special type has no predefined G# name.
+    ///
+    /// <para>
+    /// Exposed for issue #3797: the analyzer-snippet marker re-placer needs to
+    /// know the ONE lexical rename translation applies inside expression text,
+    /// so a <c>[|typeof(int) != type|]</c> marker can still be placed on the
+    /// translated <c>typeof(int32) != type</c> instead of being dropped.
+    /// </para>
+    /// </summary>
+    /// <param name="specialType">The C# special type.</param>
+    /// <returns>The G# predefined name, or <see langword="null"/>.</returns>
+    public static string GetPredefinedName(SpecialType specialType) => MapPredefinedName(specialType);
+
+    /// <summary>
     /// Records a G# namespace substituted for a Roslyn API namespace in
     /// analyzer translation mode (ADR-0169), so the compilation-unit import
     /// synthesis emits it even though no C# symbol carries it.

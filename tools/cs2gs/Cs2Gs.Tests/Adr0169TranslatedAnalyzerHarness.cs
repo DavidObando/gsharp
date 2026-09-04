@@ -40,14 +40,41 @@ public static class DiagnosticDescriptors
     /// <param name="workDirectory">The directory receiving the emitted dll.</param>
     /// <returns>The analyzer assembly path.</returns>
     public static string CompileTranslatedGsa0001(string workDirectory)
+        => CompileTranslatedAnalyzer(
+            workDirectory,
+            "StructFieldDefsReadAnalyzer.cs",
+            "TranslatedGsa0001",
+            Gsa0001Descriptors);
+
+    /// <summary>
+    /// Translates and compiles one REAL analyzer from
+    /// <c>src/Analyzers/InternalAnalyzers</c> into an analyzer assembly, using
+    /// the repository's own <c>DiagnosticDescriptors.cs</c> unless a stand-in
+    /// is supplied. Generalized for issue #3794 so GSA0003 and GSA0004 — the
+    /// two namespace-scoped rules whose migrated tests the snippet
+    /// package-split fixes — can be executed here, not merely translated.
+    /// </summary>
+    /// <param name="workDirectory">The directory receiving the emitted dll.</param>
+    /// <param name="analyzerFileName">The analyzer source file name.</param>
+    /// <param name="assemblyName">The emitted assembly name.</param>
+    /// <param name="descriptorSource">A descriptor stand-in, or null for the real table.</param>
+    /// <returns>The analyzer assembly path.</returns>
+    public static string CompileTranslatedAnalyzer(
+        string workDirectory,
+        string analyzerFileName,
+        string assemblyName,
+        string descriptorSource = null)
     {
-        string analyzerSource = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers", "StructFieldDefsReadAnalyzer.cs"));
+        string analyzerDirectory = Path.Combine(
+            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers");
+        string analyzerSource = File.ReadAllText(Path.Combine(analyzerDirectory, analyzerFileName));
+        string descriptors = descriptorSource
+            ?? File.ReadAllText(Path.Combine(analyzerDirectory, "DiagnosticDescriptors.cs"));
 
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
-            ("StructFieldDefsReadAnalyzer.cs", analyzerSource),
-            ("DiagnosticDescriptors.cs", Gsa0001Descriptors),
+            (analyzerFileName, analyzerSource),
+            ("DiagnosticDescriptors.cs", descriptors),
         });
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
         Assert.True(AnalyzerProjectDetector.IsAnalyzerProject(project.Compilation));
@@ -70,16 +97,16 @@ public static class DiagnosticDescriptors
         var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, trees.ToArray())
         {
             IsLibrary = true,
-            AssemblyName = "TranslatedGsa0001",
+            AssemblyName = assemblyName,
         };
 
-        string dllPath = Path.Combine(workDirectory, "TranslatedGsa0001.dll");
+        string dllPath = Path.Combine(workDirectory, assemblyName + ".dll");
         using (var peStream = File.Create(dllPath))
         {
-            var result = compilation.Emit(peStream, pdbStream: null, refStream: null, assemblyName: "TranslatedGsa0001");
+            var result = compilation.Emit(peStream, pdbStream: null, refStream: null, assemblyName: assemblyName);
             Assert.True(
                 result.Success,
-                "Translated GSA0001 should compile:\n" + string.Join("\n", result.Diagnostics.Where(d => d.IsError).Select(d => d.Message)));
+                $"Translated {assemblyName} should compile:\n" + string.Join("\n", result.Diagnostics.Where(d => d.IsError).Select(d => d.Message)));
         }
 
         return dllPath;

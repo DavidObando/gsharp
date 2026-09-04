@@ -138,7 +138,20 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.IParameterSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "ParameterSymbol"),
         ["Microsoft.CodeAnalysis.SymbolKind"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolKind"),
         ["Microsoft.CodeAnalysis.SymbolEqualityComparer"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolEqualityComparer"),
-        ["Microsoft.CodeAnalysis.IArrayTypeSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "ArrayTypeSymbol"),
+
+        // Issue #3794: the SLICE, not the fixed-length array. cs2gs translates
+        // C# `T[]` to G# `[]T`, which binds to `SliceTypeSymbol`;
+        // `ArrayTypeSymbol` is G#'s `[N]T`, a shape this translator never
+        // emits. Mapping to it made `type is IArrayTypeSymbol` false for every
+        // array the migration itself produced, so GSA0004's structural key
+        // walk stopped at a composite key's `TypeSymbol[]` field and reported
+        // nothing. Adapted fidelity: a migrated analyzer sees the shape
+        // migrated code has, and a hand-written G# `[N]T` is out of its reach —
+        // strictly better than the previous "matches nothing at all".
+        ["Microsoft.CodeAnalysis.IArrayTypeSymbol"] = new(
+            "GSharp.Core.CodeAnalysis.Symbols",
+            "SliceTypeSymbol",
+            "C# `T[]` translates to the G# slice `[]T`; G#'s ArrayTypeSymbol is the fixed-length `[N]T`."),
         ["Microsoft.CodeAnalysis.SyntaxReference"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "SyntaxNode",

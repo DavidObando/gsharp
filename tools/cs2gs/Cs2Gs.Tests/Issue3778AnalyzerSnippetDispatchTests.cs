@@ -235,14 +235,13 @@ class Holder
 
     /// <summary>
     /// A C# snippet spanning several namespaces cannot become one G# unit — G#
-    /// declares one package per compilation unit — so the declarations collapse
-    /// into the first namespace and a namespace-scoped rule then fires, or
-    /// fails to fire, on the wrong ones. Left unfixed (it needs a multi-unit
-    /// verifier), but it must be REPORTED: a negative test that passes because
-    /// its subject moved namespace is passing for the wrong reason.
+    /// declares one package per compilation unit. It used to collapse into the
+    /// first namespace, which made a namespace-scoped rule fire, or fail to
+    /// fire, on the wrong declarations; issue #3794 splits it into one unit per
+    /// package instead, and the verifier compiles the units together.
     /// </summary>
     [Fact]
-    public void MultiNamespaceSnippet_ReportsTheCollapse()
+    public void MultiNamespaceSnippet_SplitsIntoOneUnitPerPackage()
     {
         SnippetTranslationResult result = SnippetTranslator.Translate(@"
 namespace One
@@ -256,16 +255,25 @@ namespace Two
 }
 ");
 
+        // Issue #3794: the collapse is no longer REPORTED because it no longer
+        // HAPPENS. Each declared namespace becomes its own compilation unit,
+        // separated by SnippetTranslator.UnitSeparator, and the verifier
+        // compiles them together — so a namespace-scoped rule still judges the
+        // declarations the C# original meant.
         Assert.NotNull(result.GsWithMarkers);
-        Assert.Contains(
+        Assert.DoesNotContain(
             result.Diagnostics,
             d => d.DiagnosticId == SnippetTranslator.SnippetDiagnosticId
                 && d.Message.Contains("collapse", StringComparison.Ordinal));
 
-        // …and the collapse is real, so the report is not decorative.
         Assert.Equal(
-            1,
+            2,
             result.GsWithMarkers.Split("package ", StringSplitOptions.None).Length - 1);
+        Assert.Contains("package One", result.GsWithMarkers, StringComparison.Ordinal);
+        Assert.Contains("package Two", result.GsWithMarkers, StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            result.GsWithMarkers.Split(SnippetTranslator.UnitSeparator, StringSplitOptions.None).Length);
     }
 
     /// <summary>
