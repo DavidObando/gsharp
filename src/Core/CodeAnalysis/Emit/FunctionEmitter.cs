@@ -215,7 +215,11 @@ internal sealed class FunctionEmitter
             capturedAsyncStepping);
     }
 
-    internal MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
+    internal MethodDefinitionHandle EmitFunction(
+        FunctionSymbol function,
+        BoundBlockStatement body,
+        bool isEntryPoint,
+        bool isSynthesizedEntryPointStub = false)
     {
         // ADR-0086 / issue #727 + ADR-0092 / issue #758: P/Invoke functions
         // skip body emission. Classic @DllImport functions route through the
@@ -235,8 +239,8 @@ internal sealed class FunctionEmitter
         var bodySelection = this.SelectFunctionBody(function, body);
         var bodyEmission = this.EmitFunctionBody(function, bodySelection.Body, bodySelection.AsyncPlan, isEntryPoint);
         var signature = this.EncodeFunctionSignature(function, bodySelection.AsyncPlan, isEntryPoint);
-        var methodName = GetMethodMetadataName(function, isEntryPoint);
-        var methodAttributes = GetMethodAttributes(function, isEntryPoint);
+        var methodName = GetMethodMetadataName(function, isEntryPoint, isSynthesizedEntryPointStub);
+        var methodAttributes = GetMethodAttributes(function, isEntryPoint, isSynthesizedEntryPointStub);
         var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan);
         var handle = this.EmitMethodDefinition(
             function,
@@ -472,7 +476,10 @@ internal sealed class FunctionEmitter
         return sigBlob;
     }
 
-    private static string GetMethodMetadataName(FunctionSymbol function, bool isEntryPoint)
+    private static string GetMethodMetadataName(
+        FunctionSymbol function,
+        bool isEntryPoint,
+        bool isSynthesizedEntryPointStub = false)
     {
         // Synthesized entry point uses the C#-style mangled name; explicit Main / user funcs keep their source name.
         // ADR-0149: a method declared with an explicit-interface qualifier
@@ -487,7 +494,12 @@ internal sealed class FunctionEmitter
         // no clause of its own, so only the settable ExplicitInterfaceClauseTarget
         // (propagated from the owning PropertySymbol by
         // DeclarationBinder.ResolveExplicitInterfaceClauses) reflects it.
-        var methodName = isEntryPoint && function.Declaration is null
+        // Issue #3883: the synthesized stub that blocks on an authored async
+        // `Main` also takes the `<Main>$` metadata name — it must not collide
+        // with the authored `Main` (which is emitted alongside it, keeping its
+        // Task-returning signature), and csc names its equivalent stub the
+        // same way.
+        var methodName = isEntryPoint && (function.Declaration is null || isSynthesizedEntryPointStub)
             ? "<Main>$"
             : function.ExplicitInterfaceClauseTarget != null
                 ? ExplicitInterfaceMetadataNaming.GetMetadataName(function.Name, function.ExplicitInterfaceClauseTarget)
@@ -496,7 +508,10 @@ internal sealed class FunctionEmitter
         return methodName;
     }
 
-    private static MethodAttributes GetMethodAttributes(FunctionSymbol function, bool isEntryPoint)
+    private static MethodAttributes GetMethodAttributes(
+        FunctionSymbol function,
+        bool isEntryPoint,
+        bool isSynthesizedEntryPointStub = false)
     {
         // The synthesized entry point must remain Public so the runtime can find it.
         // ADR-0149: an explicit-interface qualifier clause member is ALWAYS
@@ -512,7 +527,7 @@ internal sealed class FunctionEmitter
         var effectiveAccessibility = function.ExplicitInterfaceClauseTarget != null
             ? Accessibility.Private
             : function.Accessibility;
-        var visibility = isEntryPoint && function.Declaration is null
+        var visibility = isEntryPoint && (function.Declaration is null || isSynthesizedEntryPointStub)
             ? MethodAttributes.Public
             : AccessibilityMap.ToMethodVisibility(effectiveAccessibility, AccessibilityMap.IsTopLevelProgramMember(function));
 

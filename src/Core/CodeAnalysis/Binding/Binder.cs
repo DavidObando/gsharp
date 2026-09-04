@@ -1521,7 +1521,20 @@ public sealed class Binder
         // synthesized <Main>$ in emit.
         var entryPointPackage = synthesizedEntryPointPackage
             ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
-        var entryPoint = ResolveEntryPoint(binder, functions, structs, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
+
+        // Issue #3883: a library has no entry point to resolve. Scanning for a
+        // user-declared static `Main` under /target:library used to pick one
+        // anyway, and the emitter then applied the CLR entry-point signature
+        // rewrite to it — erasing `Task<T>` from an `async func Main` in a DLL
+        // that can never be started as a process.
+        //
+        // TLS in a library is a different case and keeps its existing shape:
+        // ADR-0066 D4 reports GS0285 and then CONTINUES, so the synthesized
+        // `<Main>$` is still produced and downstream consumers see a complete
+        // bound tree (BinderEntryPointTests pins this).
+        var entryPoint = isLibrary && globalStatements.Length == 0
+            ? null
+            : ResolveEntryPoint(binder, functions, structs, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
         // ADR-0156 Phase 3c (#3176): an interactive submission never runs a
         // user-declared entry point — `func Main()` in a cell is an ordinary
