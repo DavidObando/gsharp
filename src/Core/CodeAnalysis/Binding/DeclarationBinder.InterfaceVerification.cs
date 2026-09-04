@@ -411,7 +411,7 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync))
+                if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, methodTypeParamMap, candidate.IsAsync, candidate.IsAsyncVoid))
                 {
                     signatureMatch = candidate;
                     break;
@@ -1319,7 +1319,7 @@ internal sealed partial class DeclarationBinder
                 {
                     foreach (var candidate in structSymbol.GetMethodsIncludingInherited(imethod.Name))
                     {
-                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, typeParamMap: null, candidate.IsAsync))
+                        if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, typeParamMap: null, candidate.IsAsync, candidate.IsAsyncVoid))
                         {
                             Diagnostics.ReportImplementerOverridesPrivateInterfaceMember(
                                 syntax.Identifier.Location,

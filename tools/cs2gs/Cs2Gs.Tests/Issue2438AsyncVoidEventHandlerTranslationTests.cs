@@ -25,26 +25,15 @@ namespace Cs2Gs.Tests;
 /// subscribed via method group to <c>EventHandler</c>/<c>EventHandler&lt;T&gt;</c>/a
 /// custom void delegate.
 /// <para>
-/// G# has no distinct "async void" shape (ADR-0023): every G# <c>async func</c>
-/// is Task-observable at its call site, so translating an <c>async void</c>
-/// handler as an ordinary async G# function/lambda leaves its method-group/lambda
-/// value typed <c>(args) -&gt; Task</c>, which cannot convert to the
-/// <c>(args) -&gt; void</c> event-delegate shape it originally subscribed with
-/// (GS0155). cs2gs now detects the EXACT Roslyn shape <c>IsAsync &amp;&amp;
-/// ReturnsVoid</c> (true ONLY for a genuine <c>async void</c> — an ordinary
-/// <c>async Task</c> method/lambda has <c>ReturnsVoid == false</c>) and rewrites
-/// it into a non-async, void-returning wrapper with the SAME name/identity (so
-/// <c>+=</c>/<c>-=</c> keep resolving to the same symbol/value) that fires the
-/// untouched original async body immediately and surfaces any unobserved fault
-/// via <c>SynchronizationContext.Current</c> (or a direct rethrow with no
-/// context) instead of silently discarding it.
+/// cs2gs translates the exact Roslyn <c>IsAsync &amp;&amp; ReturnsVoid</c>
+/// shape directly to G# <c>async func ... void</c>, preserving the original
+/// callable identity and delegating timing, exception propagation, and
+/// synchronization-context behavior to the CLR's
+/// <c>AsyncVoidMethodBuilder</c>.
 /// </para>
 /// <para>
-/// This is a translator-ONLY fix (no gsc/Core change): an ordinary
-/// <c>async Task</c> method group, a <c>Func&lt;Task&gt;</c>-targeted lambda, and a
-/// direct Task-returning method-group VALUE remain untouched and must still
-/// correctly fail GS0155 when assigned to a void delegate — the negative
-/// controls below confirm cs2gs never globally loosens that gsc rule.
+/// Ordinary Task-returning methods and lambdas remain Task-observable; the
+/// negative controls confirm they are never treated as void callables.
 /// </para>
 /// </summary>
 public class Issue2438AsyncVoidEventHandlerTranslationTests
@@ -59,7 +48,7 @@ public class Issue2438AsyncVoidEventHandlerTranslationTests
     /// to a plain <c>EventHandler</c> via method group in the constructor.
     /// </summary>
     [Fact]
-    public void InstanceMethod_AudibleClientShape_TranslatesToNonAsyncVoidWrapper()
+    public void InstanceMethod_AudibleClientShape_TranslatesToNativeAsyncVoid()
     {
         string printed = TranslateAndValidate(@"
 using System;
@@ -89,23 +78,17 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ContinueWith", printed, StringComparison.Ordinal);
-        Assert.Contains("OnlyOnFaulted", printed, StringComparison.Ordinal);
-        Assert.Contains("ExecuteSynchronously", printed, StringComparison.Ordinal);
-        Assert.Contains("SynchronizationContext", printed, StringComparison.Ordinal);
-
-        // The wrapper method itself is no longer declared `async` (it must be
-        // void-shaped, non-Task-observable, to convert to the EventHandler
-        // subscription it appears in unchanged, right above).
-        Assert.DoesNotContain("async func SettingsChangedSettings", printed, StringComparison.Ordinal);
-        Assert.Contains("func SettingsChangedSettings", printed, StringComparison.Ordinal);
+        Assert.Contains("async func SettingsChangedSettings", printed, StringComparison.Ordinal);
+        Assert.Contains("EventArgs) void", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gsAsyncVoid", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__asyncVoid_", printed, StringComparison.Ordinal);
 
         // `+=` still subscribes by the SAME method name — identity preserved.
         Assert.Contains("SettingsChanged += SettingsChangedSettings", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void GenericInstanceMethod_CopiesTypeParametersToAsyncBodyHelper()
+    public void GenericInstanceMethod_PreservesTypeParametersOnNativeAsyncVoid()
     {
         string printed = TranslateAndValidate(@"
 using System.Threading.Tasks;
@@ -121,9 +104,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func Handle[T](value T)", printed, StringComparison.Ordinal);
-        Assert.Contains("__asyncVoid_Handle[T](value)", printed, StringComparison.Ordinal);
-        Assert.Contains("private async func __asyncVoid_Handle[T](value T)", printed, StringComparison.Ordinal);
+        Assert.Contains("async func Handle[T](value T) void", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__asyncVoid_", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -132,7 +114,7 @@ namespace Demo
     /// <c>EventHandler&lt;T&gt;</c> via method group.
     /// </summary>
     [Fact]
-    public void LocalFunction_AaxFileConversionProgressUpdateShape_TranslatesToNonAsyncVoidWrapper()
+    public void LocalFunction_AaxFileConversionProgressUpdateShape_TranslatesToNativeAsyncVoid()
     {
         string printed = TranslateAndValidate(@"
 using System;
@@ -169,12 +151,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ContinueWith", printed, StringComparison.Ordinal);
-        Assert.Contains("let AaxFileConversionProgressUpdate = func", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("let AaxFileConversionProgressUpdate = async func", printed, StringComparison.Ordinal);
+        Assert.Contains("let AaxFileConversionProgressUpdate = async func", printed, StringComparison.Ordinal);
+        Assert.Contains("ConversionProgressEventArgs) void", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gsAsyncVoid", printed, StringComparison.Ordinal);
 
         // Both `+=` and `-=` reference the exact same identifier — the SAME
-        // `let`-bound wrapper value, so unsubscription is delegate-equal to
+        // `let`-bound function value, so unsubscription is delegate-equal to
         // the earlier subscription.
         Assert.Contains("Progress += AaxFileConversionProgressUpdate", printed, StringComparison.Ordinal);
         Assert.Contains("Progress -= AaxFileConversionProgressUpdate", printed, StringComparison.Ordinal);
@@ -188,7 +170,7 @@ namespace Demo
     /// rewrite.
     /// </summary>
     [Fact]
-    public void Lambda_AsyncVoidTargetingEventHandler_TranslatesToNonAsyncVoidWrapper()
+    public void Lambda_AsyncVoidTargetingEventHandler_TranslatesToNativeAsyncVoid()
     {
         string printed = TranslateAndValidate(@"
 using System;
@@ -202,8 +184,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ContinueWith", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("async (sender", printed, StringComparison.Ordinal);
+        Assert.Contains("async func (sender", printed, StringComparison.Ordinal);
+        Assert.Contains("EventArgs) void", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gsAsyncVoid", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -213,7 +196,7 @@ namespace Demo
     /// specific delegate type.
     /// </summary>
     [Fact]
-    public void Lambda_AsyncVoidTargetingCustomVoidDelegate_TranslatesToNonAsyncVoidWrapper()
+    public void Lambda_AsyncVoidTargetingCustomVoidDelegate_TranslatesToNativeAsyncVoid()
     {
         string printed = TranslateAndValidate(@"
 using System;
@@ -232,7 +215,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ContinueWith", printed, StringComparison.Ordinal);
+        Assert.Contains("async func (code int32) void", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gsAsyncVoid", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -240,7 +224,7 @@ namespace Demo
     /// rewritten identically to an instance method.
     /// </summary>
     [Fact]
-    public void StaticMethod_AsyncVoid_TranslatesToNonAsyncVoidWrapper()
+    public void StaticMethod_AsyncVoid_TranslatesToNativeAsyncVoid()
     {
         string printed = TranslateAndValidate(@"
 using System;
@@ -261,17 +245,14 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ContinueWith", printed, StringComparison.Ordinal);
-        Assert.Contains("let __gsAsyncVoidBody", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("async func OnChanged", printed, StringComparison.Ordinal);
+        Assert.Contains("async func OnChanged", printed, StringComparison.Ordinal);
+        Assert.Contains("EventArgs) void", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gsAsyncVoid", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// A LAMBDA capturing an outer local (issue's "captures" scenario) must
-    /// still forward its captured state correctly into the nested async
-    /// literal — the wrapper is a plain nested closure, so capture semantics
-    /// are unaffected by construction, but this locks in that the capture
-    /// reference survives the rewrite unchanged.
+    /// preserve the capture in the native async-void function literal.
     /// </summary>
     [Fact]
     public void Lambda_CapturingOuterLocal_PreservesCapture()
@@ -295,8 +276,9 @@ namespace Demo
     }
 }");
 
+        Assert.Contains("async func (sender", printed, StringComparison.Ordinal);
         Assert.Contains("Console.WriteLine(seed)", printed, StringComparison.Ordinal);
-        Assert.Contains("ContinueWith", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__gsAsyncVoid", printed, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------
@@ -305,7 +287,7 @@ namespace Demo
 
     /// <summary>
     /// An ordinary <c>async Task</c> instance method (NOT <c>async void</c>) is
-    /// untouched: it keeps its <c>async func</c> shape and gets no wrapper.
+    /// untouched: it keeps its Task-observable <c>async func</c> shape.
     /// </summary>
     [Fact]
     public void NegativeControl_AsyncTaskMethod_TranslationUnaffected()
@@ -387,14 +369,11 @@ namespace Demo
 
     /// <summary>
     /// The critical negative control the issue calls out explicitly: an
-    /// ordinary async G# method with no explicit return type (gsc's
-    /// <c>async func Handle(...) { ... }</c> — the SAME textual shape cs2gs
-    /// emits for a genuine C# <c>async Task Handle(...)</c>, since G# has no
-    /// distinct spelling for "async void" vs "async, no awaited result") is
-    /// STILL Task-observable at its call site (per gsc's
-    /// <c>MethodGroupObservableReturnType</c>, entirely UNTOUCHED by this
-    /// fix) and so must still fail to COMPILE when subscribed to a plain
-    /// VOID event delegate. This is deliberately raw G# (bypassing cs2gs
+    /// ordinary async G# method with no explicit return type
+    /// (<c>async func Handle(...) { ... }</c>) is still Task-observable and
+    /// must fail to compile when subscribed to a void event delegate. Native
+    /// async void requires the explicit <c>void</c> return clause. This is
+    /// deliberately raw G# (bypassing cs2gs
     /// entirely, since real C# has no valid source that would even reach
     /// cs2gs with this shape: `EventHandler h = anAsyncTaskMethod;` is
     /// already a C# CS0407 error before translation) — it locks in that gsc
@@ -443,7 +422,7 @@ class C {
     /// <summary>
     /// The exact Oahu <c>AudibleClient</c> shape end-to-end: subscribes,
     /// fires, and lets the non-faulting async body run to completion. Proves
-    /// (a) the wrapper compiles and (b) the immediate call returns
+    /// (a) the native async-void handler compiles and (b) the call returns
     /// synchronously (proving fire-and-forget dispatch) while the awaited
     /// continuation still completes normally (proving no swallowed/broken
     /// await).
@@ -528,7 +507,7 @@ namespace Demo
     /// a pre-compiled reference assembly for the subclass sidesteps that gap
     /// entirely (exactly how real Oahu code would consume a helper type from
     /// another already-compiled assembly) while still exercising the actual
-    /// translated <c>OnTick</c> wrapper end-to-end against a REAL captured
+    /// translated <c>OnTick</c> handler end-to-end against a real captured
     /// <see cref="SynchronizationContext"/>.
     /// </para>
     /// </remarks>
@@ -695,9 +674,9 @@ namespace Demo
     /// <summary>
     /// Two handlers subscribed to the same event, then ONE unsubscribed by
     /// name via <c>-=</c>: only the still-subscribed handler must fire on the
-    /// second raise — proves the wrapper preserves delegate-equality identity
+    /// second raise — proves the native method preserves delegate identity
     /// across <c>+=</c>/<c>-=</c> (the local-function/lambda `let` binding and
-    /// the method-group name both resolve to the identical wrapper value each
+    /// the method-group name both resolve to the identical function value each
     /// time they're referenced).
     /// </summary>
     [Fact]

@@ -181,6 +181,7 @@ internal sealed partial class DeclarationBinder
         var type = returnBinding.ReturnType;
         var typeIsValueTask = returnBinding.TypeIsValueTask;
         var returnRefKind = returnBinding.ReturnRefKind;
+        var isAsyncVoid = returnBinding.IsAsyncVoid;
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var functionAttributes = BindFunctionAttributes(syntax, type);
         BindFunctionParameterAttributes(syntax, parameterSymbolBySyntax, type);
@@ -340,6 +341,7 @@ internal sealed partial class DeclarationBinder
                 || (isAsyncIteratorReturnType(type)
                     && syntax.Body is { } functionBody
                     && IteratorDetection.ContainsYield(functionBody));
+            function.IsAsyncVoid = isAsyncVoid;
             function.SuspendingKind = syntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
             function.AsyncReturnsValueTask = typeIsValueTask || syntax.IsSuspend;
             function.IsUnsafe = syntax.IsUnsafe;
@@ -391,6 +393,7 @@ internal sealed partial class DeclarationBinder
         function.TypeParameters = typeParameters;
         function.IsAsync = syntax.IsAsync
             || (isAsyncIteratorReturnType(type) && syntax.Body is { } body && IteratorDetection.ContainsYield(body));
+        function.IsAsyncVoid = isAsyncVoid;
         function.SuspendingKind = syntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
         function.AsyncReturnsValueTask = typeIsValueTask || syntax.IsSuspend;
         function.IsUnsafe = syntax.IsUnsafe;
@@ -581,6 +584,7 @@ internal sealed partial class DeclarationBinder
             ? Binder.SubstituteType(externalOverrideContainingType, substitution)
             : null;
         specialized.IsAsync = function.IsAsync;
+        specialized.IsAsyncVoid = function.IsAsyncVoid;
         specialized.SuspendingKind = function.SuspendingKind;
         specialized.AsyncReturnsValueTask = function.AsyncReturnsValueTask;
         specialized.IsUnsafe = function.IsUnsafe;
@@ -641,7 +645,8 @@ internal sealed partial class DeclarationBinder
     private readonly record struct FunctionReturnBindingResult(
         TypeSymbol ReturnType,
         bool TypeIsValueTask,
-        RefKind ReturnRefKind);
+        RefKind ReturnRefKind,
+        bool IsAsyncVoid);
 
     /// <summary>
     /// Issue #2834: validates that a user-defined compound-assignment operator
@@ -790,6 +795,7 @@ internal sealed partial class DeclarationBinder
         // Issue #1918: unwrap an explicit `Task[T]` / `ValueTask[T]` async
         // return-type annotation to its awaited result, remembering which
         // wrapper was requested.
+        var isAsyncVoid = IsExplicitAsyncVoid(syntax, type);
         type = NormalizeAsyncDeclaredReturnType(type, syntax.IsAsync, out var typeIsValueTask);
 
         // Issue #490 (ADR-0060 follow-up): a `ref` return modifier on the declaration
@@ -816,8 +822,11 @@ internal sealed partial class DeclarationBinder
             }
         }
 
-        return new FunctionReturnBindingResult(type, typeIsValueTask, returnRefKind);
+        return new FunctionReturnBindingResult(type, typeIsValueTask, returnRefKind, isAsyncVoid);
     }
+
+    private static bool IsExplicitAsyncVoid(FunctionDeclarationSyntax syntax, TypeSymbol returnType)
+        => syntax.IsAsync && syntax.Type != null && ReferenceEquals(returnType, TypeSymbol.Void);
 
     private ImmutableArray<BoundAttribute> BindFunctionAttributes(
         FunctionDeclarationSyntax syntax,
@@ -1721,9 +1730,10 @@ internal sealed partial class DeclarationBinder
         TypeSymbol derivedReturnType,
         RefKind derivedReturnRefKind,
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap,
-        bool derivedIsAsync)
+        bool derivedIsAsync,
+        bool derivedIsAsyncVoid = false)
     {
-        if (!ReturnTypesMatch(baseMethod, derivedReturnType, derivedIsAsync, typeParamMap))
+        if (!ReturnTypesMatch(baseMethod, derivedReturnType, derivedIsAsync, derivedIsAsyncVoid, typeParamMap))
         {
             return false;
         }
@@ -1803,6 +1813,7 @@ internal sealed partial class DeclarationBinder
         FunctionSymbol baseMethod,
         TypeSymbol derivedReturnType,
         bool derivedIsAsync,
+        bool derivedIsAsyncVoid,
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap)
     {
         var baseIsAsync = baseMethod.IsAsync;
@@ -1810,6 +1821,15 @@ internal sealed partial class DeclarationBinder
             && AsyncIteratorDetection.IsAsyncIteratorReturnType(derivedReturnType))
         {
             return TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
+        }
+
+        if (baseMethod.IsAsyncVoid || derivedIsAsyncVoid)
+        {
+            var baseIsEffectivelyVoid = baseMethod.IsAsyncVoid
+                || (!baseIsAsync && ReferenceEquals(baseMethod.Type, TypeSymbol.Void));
+            var derivedIsEffectivelyVoid = derivedIsAsyncVoid
+                || (!derivedIsAsync && ReferenceEquals(derivedReturnType, TypeSymbol.Void));
+            return baseIsEffectivelyVoid && derivedIsEffectivelyVoid;
         }
 
         if (baseIsAsync == derivedIsAsync)
@@ -1951,7 +1971,7 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, typeParamMap, candidate.IsAsync))
+            if (SignaturesMatch(imethod, GetCallableParameters(candidate), candidate.Type, candidate.ReturnRefKind, typeParamMap, candidate.IsAsync, candidate.IsAsyncVoid))
             {
                 candidate.ExplicitInterfaceMember = imethod;
                 return candidate;

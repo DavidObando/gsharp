@@ -43,7 +43,7 @@ Use `scope` whenever a parent operation should not return before its children.
 
 ## `async func` and `await`
 
-`async func` declares a function that returns a `Task` or `Task[T]`. `await expr` suspends the surrounding async function until the awaited task completes and yields its result.
+`async func` returns `Task` when its return type is omitted or `Task[T]` when it declares `T`. Explicit `async func handler() void` is a fire-and-forget, non-awaitable event-handler shape matching C# `async void`. `await expr` suspends the surrounding async function until the awaited task completes and yields its result.
 
 ```gsharp title="AsyncBasics.gs"
 package GSharp.Tour.AsyncBasics

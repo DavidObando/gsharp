@@ -83,9 +83,8 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            // Issue #1502: an async lambda whose Task-wrapped delegate shape
-            // needs symbolic encoding (`Func<...,Task<TOutput>>`) is emitted
-            // through the reified TypeSpec ctor ref.
+            // Issue #1502: an async lambda whose delegate shape needs symbolic
+            // encoding is emitted through the reified TypeSpec ctor ref.
             if (literal.Function.IsAsync)
             {
                 FunctionSymbol planKey = literal.Function;
@@ -703,7 +702,8 @@ internal sealed partial class MethodBodyEmitter
     // `(object, IntPtr)` ctor.
     private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal)
     {
-        // For async lambdas, resolve the delegate type with the Task-wrapped return.
+        // For async lambdas, resolve the delegate type from the selected
+        // builder: Task-wrapped for ordinary async, void-shaped for async void.
         Type? asyncDelegateOverride = null;
         if (literal.Function.IsAsync)
         {

@@ -1414,39 +1414,7 @@ public sealed partial class CSharpToGSharpTranslator
                 });
             }
 
-            // Issue #2438: a genuine C# `async void` method (an event handler
-            // — the only C# shape with no awaitable result at all) has no G#
-            // "async void" counterpart: every G# `async func` is
-            // Task-observable at its call site, so translating it as an
-            // ordinary async G# method would leave its method-group value
-            // typed `(args) -> Task`, unable to convert to the `(args) ->
-            // void` event-delegate shape it originally subscribed with
-            // (GS0155). Rewrite it into a non-async, void-returning wrapper
-            // with the SAME name (so `+=`/`-=` subscription/unsubscription
-            // keep referring to the same symbol) that fires the untouched
-            // original body off as a nested async literal and surfaces any
-            // unobserved fault instead of silently discarding it — see
-            // BuildAsyncVoidHandlerWrapperBody for the exact shape/rationale.
-            bool isAsyncVoidHandler = body != null && IsCSharpAsyncVoidHandler(symbol);
-            if (isAsyncVoidHandler)
-            {
-                string instanceBodyName = null;
-                if (!symbol.IsStatic && symbol.ContainingType.TypeKind == TypeKind.Class)
-                {
-                    instanceBodyName = "__asyncVoid_" + this.EmittedName(symbol, symbol.Name);
-                    while (symbol.ContainingType.GetMembers(instanceBodyName).Length > 0)
-                    {
-                        instanceBodyName += "_";
-                    }
-                }
-
-                body = this.BuildAsyncVoidHandlerWrapperBody(
-                    parameters,
-                    body,
-                    node.GetLocation(),
-                    instanceBodyName,
-                    typeParameters);
-            }
+            bool isAsyncVoidHandler = IsCSharpAsyncVoidHandler(symbol);
 
             bool isOverride = symbol != null && symbol.IsOverride;
 
@@ -1505,7 +1473,7 @@ public sealed partial class CSharpToGSharpTranslator
             // A rewritten analyzer test harness (#3686) delegates to the
             // synchronous G# verifier: there is nothing left to await, and an
             // `async` func returning `Task` cannot `return` a value.
-            bool isEmittedAsync = !isAsyncVoidHandler && !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
+            bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
 
             var method = new MethodDeclaration(
                 this.EmittedName(symbol, node.Identifier.ValueText),

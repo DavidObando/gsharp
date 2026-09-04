@@ -1531,6 +1531,8 @@ internal sealed class StateMachineEmitter
                 // Capture-bearing async lambda: the closure's Invoke method is the kickoff.
                 kickoffFunction = closure.InvokeMethod;
                 kickoffFunction.IsAsync = true;
+                kickoffFunction.IsAsyncVoid = literal.Function.IsAsyncVoid;
+                kickoffFunction.AsyncReturnsValueTask = literal.Function.AsyncReturnsValueTask;
                 if (!this.lambdaBodies.TryGetValue(kickoffFunction, out body))
                 {
                     continue;

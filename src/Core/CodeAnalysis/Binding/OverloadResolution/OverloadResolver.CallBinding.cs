@@ -2478,7 +2478,7 @@ internal sealed partial class OverloadResolver
         if (substitution != null)
         {
             var returnType = substituteType(function.Type, substitution);
-            if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
+            if (function.IsAsync && !function.IsAsyncVoid && !isAsyncIteratorReturnType(function.Type))
             {
                 returnType = wrapAsTask(returnType, function.AsyncReturnsValueTask);
             }
@@ -2493,7 +2493,7 @@ internal sealed partial class OverloadResolver
             return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType, methodTypeArguments);
         }
 
-        if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
+        if (function.IsAsync && !function.IsAsyncVoid && !isAsyncIteratorReturnType(function.Type))
         {
             var asyncReturn = wrapAsTask(function.Type, function.AsyncReturnsValueTask);
             return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, asyncReturn, methodTypeArguments);

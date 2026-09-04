@@ -349,6 +349,14 @@ public sealed class FunctionSymbol : Symbol
     public bool IsAsync { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this function explicitly
+    /// declares <c>async ... void</c>. Such a function uses
+    /// <c>AsyncVoidMethodBuilder</c> and is observable as <c>void</c>, while an
+    /// async function whose return type is omitted remains Task-returning.
+    /// </summary>
+    public bool IsAsyncVoid { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether this async function's declared
     /// return-type clause explicitly spelled a <c>ValueTask</c> / <c>ValueTask[T]</c>
     /// wrapper (issue #1918) rather than the default (implicit or explicit

@@ -218,7 +218,7 @@ public sealed class Binder
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
             createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
-                method.IsAsyncOrSuspending && !IsAsyncIteratorReturnType(returnType)
+                method.IsAsyncOrSuspending && !method.IsAsyncVoid && !IsAsyncIteratorReturnType(returnType)
                     ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
                     : returnType,
             isLvalue: ExpressionBinder.IsLvalue,

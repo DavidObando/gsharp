@@ -45,11 +45,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
             import Avalonia.Controls
 
             open class MainWindow : Window {
-                protected override func OnOpened(e EventArgs) {
-                    __asyncVoid_OnOpened(e).GetAwaiter().GetResult()
-                }
-
-                private async func __asyncVoid_OnOpened(e EventArgs) {
+                protected override async func OnOpened(e EventArgs) void {
                     base.OnOpened(e)
                     await Task.CompletedTask
                     Console.WriteLine("async-opened")
@@ -63,12 +59,13 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
 
         var assembly = EmittedFixture.Load(result.OutputPath);
         var mainWindow = assembly.GetType("Oahu.App.Avalonia.MainWindow")!;
+        Assert.Equal(typeof(void), mainWindow.GetMethod("OnOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.ReturnType);
         Assert.Contains(
             mainWindow.GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly),
             method => method.Name.StartsWith("<>n__", StringComparison.Ordinal));
         Assert.Contains(
             mainWindow.GetNestedTypes(BindingFlags.NonPublic),
-            type => type.Name.Contains("<__asyncVoid_OnOpened>d__", StringComparison.Ordinal));
+            type => type.Name.Contains("<OnOpened>d__", StringComparison.Ordinal));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { fixture.LibraryPath });
     }
 
@@ -94,6 +91,33 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
         Assert.Equal($"base-opened{Environment.NewLine}sync-opened{Environment.NewLine}", fixture.Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { fixture.LibraryPath });
         AssertNoForwarder(result.OutputPath, "Issue2667.Sync.MainWindow");
+    }
+
+    [Fact]
+    public void CapturedAsyncVoidLiteral_InsideAsyncMethod_ILVerifiesAndRuns()
+    {
+        using var fixture = new Fixture();
+        var result = fixture.Compile("""
+            package Issue2667.CapturedLiteral
+            import System
+            import System.Threading.Tasks
+
+            async func Run() {
+                let seed = 7
+                let handler EventHandler = async func (sender object?, e EventArgs) void {
+                    await Task.Delay(1)
+                    Console.WriteLine(seed)
+                }
+
+                handler(nil, EventArgs.Empty)
+                await Task.Delay(100)
+            }
+
+            Run().Wait()
+            """);
+
+        Assert.Equal($"7{Environment.NewLine}", fixture.Run(result.OutputPath));
+        IlVerifier.Verify(result.OutputPath);
     }
 
     [Fact]

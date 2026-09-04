@@ -28,6 +28,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | partial type | `partial class` / `partial struct` / `partial interface` | Partial enums and partial members are not supported. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
+| `async void` | `async func ... void` | Intended for void delegate/event handlers; not awaitable. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
 | `lock` and tasks | `go`, `chan[T]`, `select`, `scope` | G# adds structured concurrency over .NET tasks and channels. |
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |

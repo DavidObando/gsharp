@@ -61,9 +61,10 @@ catch it (or let it bubble) just like any other exception.
 
 ## 2. Write an `async func`
 
-`async func` returns a `Task` (for `void`) or `Task[T]` (for a value
-return). Inside the body you can `await` any awaitable — most commonly
-a `Task` from the .NET BCL:
+`async func` with an omitted return type returns `Task`; declaring a value
+type returns `Task[T]`. Explicit `async func handler() void` is the C#
+`async void` event-handler shape and is not awaitable. Inside the body you
+can `await` any awaitable — most commonly a `Task` from the .NET BCL:
 
 ```gsharp title="AsyncTask.gs"
 package GSharp.Samples.AsyncTask

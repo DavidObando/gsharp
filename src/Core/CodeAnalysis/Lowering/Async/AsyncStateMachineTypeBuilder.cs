@@ -238,6 +238,11 @@ public static class AsyncStateMachineTypeBuilder
             return null;
         }
 
+        if (kickoff.IsAsyncVoid)
+        {
+            return typeof(void);
+        }
+
         // Issue #1918: honor an explicit `ValueTask` / `ValueTask[T]` async
         // return-type annotation by resolving the ValueTask wrapper instead
         // of the default Task wrapper.

@@ -7,7 +7,7 @@
 
 ## Context
 
-ADR-0023 establishes the rule that an `async func foo() R` declaration is callable as `Task[R]` (or `Task` when `R` is omitted). The `async` modifier is also legal on lambda expressions. In every other position the modifier was rejected by the parser (`Parser.cs:196`) — including type-clause positions — so users had to spell the wrapped `Task[T]` explicitly whenever they wrote a function-typed parameter, local, field, or generic argument:
+ADR-0023 establishes the rule that an `async func foo() R` declaration is callable as `Task[R]` (or `Task` when `R` is omitted). Its 2026-09-04 amendment adds explicit declaration/literal `async ... void`, but that does not change this ADR: an `async func(P) void` **type clause** remains a Task-shaped async function type, while a native async-void value has the ordinary `(P) -> void` delegate shape. The `async` modifier is also legal on lambda expressions. In every other position the modifier was rejected by the parser (`Parser.cs:196`) — including type-clause positions — so users had to spell the wrapped `Task[T]` explicitly whenever they wrote a function-typed parameter, local, field, or generic argument:
 
 ```gsharp
 // Before this ADR — the Task wrap leaks into the type clause.
