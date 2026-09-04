@@ -315,6 +315,14 @@ public sealed partial class CSharpToGSharpTranslator
 
                         return regions;
 
+                    case CatchFilterClauseSyntax catchFilter when catchFilter.FilterExpression == node:
+                        if (whenTrue && catchFilter.Parent is CatchClauseSyntax catchClause)
+                        {
+                            regions.Add(catchClause.Block);
+                        }
+
+                        return regions;
+
                     default:
                         return regions;
                 }

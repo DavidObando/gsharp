@@ -665,7 +665,7 @@ public static class MoveNextBodyRewriter
                 var needsCatchPatch = false;
                 foreach (var clause in result.CatchClauses)
                 {
-                    if (TryGetHoistedField(clause.Variable, out _))
+                    if (clause.Variable is { } variable && TryGetHoistedField(variable, out _))
                     {
                         needsCatchPatch = true;
                         break;
@@ -677,11 +677,11 @@ public static class MoveNextBodyRewriter
                     var patchedClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
                     foreach (var clause in result.CatchClauses)
                     {
-                        if (TryGetHoistedField(clause.Variable, out var field))
+                        if (clause.Variable is { } variable && TryGetHoistedField(variable, out var field))
                         {
                             var copyToField = Stmt(ctx.WriteField(
                                 field,
-                                new BoundVariableExpression(null, clause.Variable)));
+                                new BoundVariableExpression(null, variable)));
                             var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
                             stmts.Add(copyToField);
                             if (clause.Body is BoundBlockStatement block)
@@ -693,9 +693,10 @@ public static class MoveNextBodyRewriter
                                 stmts.Add(clause.Body);
                             }
 
-                            patchedClauses.Add(new BoundCatchClause(
-                                clause.ExceptionType,
-                                clause.Variable,
+                            // WithBody so the clause keeps its ADR-0177 `when`
+                            // filter (and ExitsThroughFinally) rather than
+                            // silently dropping them here.
+                            patchedClauses.Add(clause.WithBody(
                                 new BoundBlockStatement(null, stmts.ToImmutable())));
                         }
                         else

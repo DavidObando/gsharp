@@ -553,11 +553,23 @@ public static class BoundNodePrinter
             writer.WriteKeyword(SyntaxKind.CatchKeyword);
             writer.WriteSpace();
             writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
-            writer.WriteIdentifier(clause.Variable.Name);
-            writer.WriteSpace();
+            if (clause.Variable != null)
+            {
+                writer.WriteIdentifier(clause.Variable.Name);
+                writer.WriteSpace();
+            }
+
             writer.WriteIdentifier(clause.ExceptionType.Name);
             writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
             writer.WriteSpace();
+            if (clause.Filter != null)
+            {
+                writer.WriteIdentifier("when");
+                writer.WriteSpace();
+                clause.Filter.WriteTo(writer);
+                writer.WriteSpace();
+            }
+
             clause.Body.WriteTo(writer);
         }
 

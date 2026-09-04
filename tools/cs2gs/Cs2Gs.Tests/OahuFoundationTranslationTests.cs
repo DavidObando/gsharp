@@ -534,12 +534,12 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B: a bare catch-all `catch { }` (no declaration) has no G# form;
-    /// the translator synthesizes the required typed binder
-    /// `catch (__caught Exception) { }`.
+    /// ADR-0177: a bare catch-all `catch { }` is now legal G# and means
+    /// `catch (System.Exception)`, so it maps across verbatim instead of
+    /// growing a synthesized `__caught` binder (issue #3897 family 1).
     /// </summary>
     [Fact]
-    public void CatchAll_SynthesizesTypedBinder()
+    public void CatchAll_StaysBare()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -560,7 +560,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (__caught Exception)", printed);
+        Assert.Contains("} catch {", printed);
+        Assert.DoesNotContain("__caught", printed);
     }
 
     /// <summary>

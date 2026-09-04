@@ -18,16 +18,19 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Translation tests for issue #2235 (follow-up to #1724, ADR-0115 §B): a
 /// <c>catch ... when (filter)</c> clause with a later sibling catch whose
-/// type could also receive the exception used to block translation entirely
-/// (reported unsupported) because the per-clause rethrow-on-false-filter
-/// lowering would make the exception escape the whole <c>try</c> instead of
-/// falling through to that sibling, as C# requires.
+/// type could also receive the exception. C# requires a false filter to fall
+/// through to that sibling, which the per-clause rethrow-on-false-filter
+/// lowering could not express — so cs2gs used to merge the offending clause
+/// and every clause after it into ONE G# catch whose body manually replayed
+/// C#'s top-to-bottom type-then-filter matching over a synthetic binder.
 ///
-/// The fix merges the offending filtered clause and every clause after it
-/// into ONE G# catch, typed at a provably-safe common type, whose body
-/// manually replays C#'s top-to-bottom type-then-filter matching using
-/// ordinary <c>is</c> type tests (G#'s Kotlin-style smart cast narrows the
-/// shared binder inside each branch, ADR-0069) plus each clause's own filter.
+/// ADR-0177 gave G# native <c>catch (T) when …</c> clauses backed by real CLR
+/// filter regions, so top-to-bottom matching and fall-through-on-false-filter
+/// are the runtime's job again: every C# clause maps to exactly one G# clause
+/// and no <c>__caught</c> binder is invented (issue #3897 family 1).
+///
+/// The end-to-end expectations below are unchanged from the merge era — the
+/// same programs must still print the same answers.
 /// </summary>
 public class Issue2235FilteredCatchFallthroughTranslationTests
 {
@@ -35,7 +38,7 @@ public class Issue2235FilteredCatchFallthroughTranslationTests
     /// The issue's exact repro: two back-to-back filtered
     /// <c>OperationCanceledException when (...)</c> clauses, both of which
     /// must fall through to a later <c>catch (Exception)</c> when their own
-    /// filter is false. Proves the merge handles 2+ filtered clauses in a row.
+    /// filter is false. Proves 2+ filtered clauses in a row still chain.
     /// </summary>
     [Fact]
     public void TwoBackToBackFilteredClauses_FallThroughToLaterExceptionCatch()
@@ -69,9 +72,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (__caught Exception)", printed);
-        Assert.Contains("__caught is OperationCanceledException", printed);
-        Assert.Contains("ct.IsCancellationRequested", printed);
+        Assert.DoesNotContain("__caught", printed);
+        Assert.Contains("catch (OperationCanceledException) when ct.IsCancellationRequested", printed);
+        Assert.Contains("catch (OperationCanceledException) when !ct.IsCancellationRequested", printed);
+        Assert.Contains("catch (Exception)", printed);
         Assert.Contains("return 1", printed);
         Assert.Contains("return 2", printed);
         Assert.Contains("return 3", printed);
@@ -86,9 +90,9 @@ namespace Demo
 
     /// <summary>
     /// Simpler shape: a single filtered clause with one overlapping later
-    /// sibling. Runtime proof both branches of the merged dispatch are live:
-    /// a filter-true exception is caught by the first clause, a filter-false
-    /// one falls through to the sibling.
+    /// sibling. Runtime proof both clauses are live: a filter-true exception is
+    /// caught by the first clause, a filter-false one falls through to the
+    /// sibling.
     /// </summary>
     [Fact]
     public void SingleFilteredClause_WithOverlappingSibling_FallsThroughWhenFilterFalse()
@@ -117,21 +121,21 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (__caught Exception)", printed);
-        Assert.Contains("__caught is InvalidOperationException", printed);
+        Assert.DoesNotContain("__caught", printed);
+        Assert.Contains("catch (ex InvalidOperationException) when retryable", printed);
+        Assert.Contains("catch (Exception)", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "2");
     }
 
     /// <summary>
-    /// Regression guard for the EXISTING #1724 safe shape: a filtered clause
-    /// with no overlapping later sibling (disjoint types) must still use the
-    /// simple rethrow-if-false lowering, not the merge — no diagnostic, no
-    /// merged catch.
+    /// Disjoint sibling types used to select the "safe" rethrow-if-false
+    /// lowering instead of the merge. Neither path exists now: the clause
+    /// translates the same way whatever its siblings are.
     /// </summary>
     [Fact]
-    public void FilteredClause_WithDisjointSibling_StillUsesSimpleRethrowLowering()
+    public void FilteredClause_WithDisjointSibling_EmitsTheSameNativeFilter()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -157,23 +161,22 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("catch (ex InvalidOperationException)", printed);
-        Assert.Contains("if !retryable", printed);
-        Assert.Contains("rethrow", printed);
-        Assert.DoesNotContain("is InvalidOperationException", printed);
+        Assert.Contains("catch (ex InvalidOperationException) when retryable", printed);
+        Assert.Contains("catch (FormatException)", printed);
+        Assert.DoesNotContain("rethrow", printed);
+        Assert.DoesNotContain("__caught", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
     }
 
     /// <summary>
-    /// M2 regression guard: the merged branch must expose the SUBTYPE-only
-    /// member on the narrowed catch variable (not just the merged/base
-    /// type), proving the `ex is OriginalType` smart-cast narrowing (ADR-0069)
-    /// this merge relies on actually takes effect at runtime, not just that
-    /// the printed G# contains the `is` test.
+    /// M2 regression guard, now trivially satisfied: the handler reads a
+    /// SUBTYPE-only member off its own binder. The merge had to recover that
+    /// type through an `is` smart cast (ADR-0069); a native clause is simply
+    /// declared at the subtype, so the member is in scope directly.
     /// </summary>
     [Fact]
-    public void MergedBranch_AccessesSubtypeOnlyMember_OnNarrowedCatchVariable()
+    public void FilteredClause_AccessesSubtypeOnlyMember_OnItsOwnBinder()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -205,24 +208,22 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__caught is MyCustomException", printed);
+        Assert.Contains("catch (ex MyCustomException) when retryable", printed);
+        Assert.DoesNotContain("__caught", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "42");
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "-1");
     }
 
     /// <summary>
-    /// M1 regression guard: the ORIGINAL C# catch variable is named "ex" —
-    /// the exact case where the merge's shared binder used to ALSO be named
-    /// "ex", so the per-clause rebind was (bug) skipped and the closure below
-    /// would have captured the merged catch's declared (unnarrowed) type
-    /// instead of the smart-cast-narrowed subtype. Capturing the catch
-    /// variable in a closure and reading a subtype-only member from inside it
-    /// proves the compiler-generated shared-binder fix makes the narrowed
-    /// rebind unconditional and survive closure capture.
+    /// M1 regression guard: a closure inside a filtered handler captures the
+    /// catch variable and reads a subtype-only member from it. Under the merge
+    /// this was where a shared-binder name collision silently produced the
+    /// unnarrowed type; with one clause per source clause there is no shared
+    /// binder to collide with, and the capture is of the real catch variable.
     /// </summary>
     [Fact]
-    public void MergedBranch_ClosureCapturesNarrowedCatchVariable_NamedExSameAsSharedBinder()
+    public void FilteredClause_ClosureCapturesCatchVariable_ReadsSubtypeOnlyMember()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -255,14 +256,20 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__caught is MyCustomException", printed);
+        Assert.Contains("catch (ex MyCustomException) when retryable", printed);
+        Assert.DoesNotContain("__caught", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "99");
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "-1");
     }
 
+    /// <summary>
+    /// A method whose own parameter is literally named <c>__caught</c>: the merge
+    /// had to rename its synthetic binder around it. Nothing is synthesized now,
+    /// so the only <c>__caught</c> in the output is the user's own parameter.
+    /// </summary>
     [Fact]
-    public void MergedCatch_AvoidsOuterSourceName_AndNestedMergedCatchUsesUniqueBinder()
+    public void NestedFilteredCatches_InventNoBinder_AndLeaveASourceNamedCaughtAlone()
     {
         string printed = TranslateUnit("""
             using System;
@@ -301,17 +308,20 @@ namespace Demo
             }
             """);
 
-        Assert.Contains("catch (__caught_2 Exception)", printed);
-        Assert.Contains("__caught_2 is InvalidOperationException", printed);
-        Assert.Contains("catch (__caught_3 Exception)", printed);
-        Assert.Contains("__caught_3 is ArgumentException", printed);
-        Assert.Contains("__caught == \"outer\"", printed);
+        Assert.DoesNotContain("__caught_", printed);
+        Assert.Contains("catch (ex InvalidOperationException) when __caught == \"outer\"", printed);
+        Assert.Contains("catch (inner ArgumentException) when __caught == \"outer\"", printed);
+        Assert.Contains("catch (Exception)", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"outer\"))", "7");
     }
 
+    /// <summary>
+    /// A bare C# <c>catch</c> stays a bare G# <c>catch</c> (ADR-0177), so there is
+    /// no synthesized binder that could shadow the outer <c>ex</c> the body reads.
+    /// </summary>
     [Fact]
-    public void SynthesizedBareCatchBinder_DoesNotShadowOuterParameterNamedEx()
+    public void BareCatch_StaysBare_AndCannotShadowAnOuterNameCalledEx()
     {
         string printed = TranslateUnit("""
             using System;
@@ -335,14 +345,20 @@ namespace Demo
             }
             """);
 
-        Assert.Contains("catch (__caught Exception)", printed);
+        Assert.DoesNotContain("__caught", printed);
+        Assert.Contains("} catch {", printed);
         Assert.Contains("return ex.Length", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"outer\"))", "5");
     }
 
+    /// <summary>
+    /// C# <c>catch (Exception)</c> maps to the typed-but-unbound G# form of the
+    /// same shape (ADR-0177), so a local named <c>__caught</c> in the same method
+    /// keeps its meaning and the body still reads both outer locals.
+    /// </summary>
     [Fact]
-    public void SynthesizedTypedCatchBinder_DoesNotShadowOuterLocalNamedEx()
+    public void UnboundTypedCatch_BindsNothing_AndLeavesOuterLocalsAlone()
     {
         string printed = TranslateUnit("""
             using System;
@@ -368,14 +384,22 @@ namespace Demo
             }
             """);
 
-        Assert.Contains("catch (__caught_2 Exception)", printed);
+        Assert.DoesNotContain("__caught_", printed);
+        Assert.Contains("} catch (Exception) {", printed);
         Assert.Contains("return ex.Length", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run())", "12");
     }
 
+    /// <summary>
+    /// The merge used to synthesize binders here and had to number them around
+    /// the snippet's own <c>__caught</c> / <c>__caught_2</c> locals. Nothing is
+    /// synthesized now: the filter's <c>out</c> declaration stays inline in the
+    /// native <c>when</c>, the bare inner <c>catch</c> stays bare, and the only
+    /// <c>__caught</c> names in the output are the ones the author wrote.
+    /// </summary>
     [Fact]
-    public void NestedSynthesizedCatchBinders_AvoidCatchDeclarations_AndRemainUnique()
+    public void FilterWithOutDeclaration_StaysInline_AndInventsNoBinder()
     {
         string printed = TranslateUnit("""
             using System;
@@ -413,14 +437,20 @@ namespace Demo
             }
             """);
 
-        Assert.Contains("catch (__caught_3 Exception)", printed);
-        Assert.Contains("catch (__caught_4 Exception)", printed);
+        Assert.DoesNotContain("__caught_3", printed);
+        Assert.DoesNotContain("__caught_4", printed);
+        Assert.Contains("catch (Exception) when Bind(ex, out var __caught) {", printed);
+        Assert.Contains("} catch {", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(\"nested\"))", "6");
     }
 
+    /// <summary>
+    /// A nested type also named <c>Exception</c> must not capture the catch's
+    /// <c>System.Exception</c>: the clause keeps the aliased identity.
+    /// </summary>
     [Fact]
-    public void MergedCatch_InsideNestedExceptionHomonym_PreservesSystemExceptionIdentity()
+    public void UnboundCatch_InsideNestedExceptionHomonym_PreservesSystemExceptionIdentity()
     {
         string printed = TranslateUnit("""
             using System;
@@ -453,8 +483,8 @@ namespace Demo
             """);
 
         Assert.Contains("import SystemException_2 = System.Exception", printed);
-        Assert.Contains("catch (__caught SystemException_2)", printed);
-        Assert.DoesNotContain("catch (__caught Exception)", printed);
+        Assert.Contains("catch (SystemException_2)", printed);
+        Assert.DoesNotContain("__caught", printed);
 
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(true))", "1");
         CompileAndRun(printed, "System.Console.WriteLine(C().Run(false))", "2");
@@ -487,7 +517,7 @@ namespace Demo
     /// Compiles <paramref name="printed"/> (with <paramref name="callExpression"/>
     /// appended as a top-level entry statement) with the real <c>gsc</c> and runs
     /// it, asserting its stdout equals <paramref name="expectedOutput"/> — proving
-    /// the merged dispatch's runtime control flow (not just its shape) is correct.
+    /// the clause chain's runtime control flow (not just its shape) is correct.
     /// </summary>
     private static void CompileAndRun(string printed, string callExpression, string expectedOutput)
     {

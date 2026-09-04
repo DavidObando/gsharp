@@ -450,6 +450,11 @@ public abstract class BoundTreeWalker
         VisitStatement(node.TryBlock);
         foreach (var clause in node.CatchClauses)
         {
+            if (clause.Filter != null)
+            {
+                VisitExpression(clause.Filter);
+            }
+
             VisitStatement(clause.Body);
         }
 

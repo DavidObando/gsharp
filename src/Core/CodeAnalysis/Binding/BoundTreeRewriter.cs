@@ -284,14 +284,12 @@ public abstract class BoundTreeRewriter
         var clausesChanged = false;
         foreach (var clause in node.CatchClauses)
         {
+            var filter = clause.Filter == null ? null : RewriteExpression(clause.Filter);
             var body = RewriteStatement(clause.Body);
-            if (body == clause.Body)
+            var rewritten = clause.Update(filter, body);
+            rewrittenClauses.Add(rewritten);
+            if (!ReferenceEquals(rewritten, clause))
             {
-                rewrittenClauses.Add(clause);
-            }
-            else
-            {
-                rewrittenClauses.Add(clause.WithBody(body));
                 clausesChanged = true;
             }
         }

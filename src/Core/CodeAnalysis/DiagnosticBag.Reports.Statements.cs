@@ -44,6 +44,22 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.RethrowInsideNestedFinally);
 
     /// <summary>
+    /// Reports GS0572: an 'await' inside a 'catch' filter (ADR-0177).
+    /// </summary>
+    /// <param name="location">The text location of the await expression.</param>
+    public void ReportAwaitInsideCatchFilter(TextLocation location)
+    => Report(location, DiagnosticDescriptors.AwaitInsideCatchFilter);
+
+    /// <summary>
+    /// Reports GS0573: a 'catch' clause an earlier unfiltered clause already covers (ADR-0177).
+    /// </summary>
+    /// <param name="location">The text location of the unreachable clause.</param>
+    /// <param name="earlierType">The exception type caught by the earlier clause.</param>
+    /// <param name="thisType">The exception type named by this clause.</param>
+    public void ReportUnreachableCatchClause(TextLocation location, TypeSymbol earlierType, TypeSymbol thisType)
+    => Report(location, DiagnosticDescriptors.UnreachableCatchClause, earlierType, thisType);
+
+    /// <summary>
     /// Reports that a type used in a 'using' declaration does not implement IDisposable.
     /// </summary>
     /// <param name="location">The text location of the using keyword.</param>

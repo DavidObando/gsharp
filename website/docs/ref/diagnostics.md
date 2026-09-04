@@ -2175,6 +2175,20 @@ site. G# spells it with a dedicated keyword rather than C#'s bare `throw;`
 because G# statements are not newline-terminated: a bare `throw` followed by a
 statement on the next line would parse as `throw <that expression>`.
 
+## Catch clause filters and reachability (GS0572, GS0573)
+
+| ID | Severity | Meaning | Example |
+| --- | --- | --- | --- |
+| GS0572 | Error | An `await` appears in a `catch` clause's `when` filter. A filter runs during the CLR's *first pass*, on the throwing thread, before any unwinding — there is no suspension point available there, so the filter cannot be asynchronous. Move the `await` into the handler body, or compute the value before the `try`. | `catch (e Exception) when await IsTransient(e) { … }` |
+| GS0573 | Error | A `catch` clause can never run because an earlier, unfiltered clause already catches its exception type. Reorder the clauses so the more specific type comes first, or delete the shadowed clause. | `catch (e Exception) { … } catch (e FormatException) { … }` |
+
+Both come from [ADR-0177](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0177-catch-clause-parity.md) (issue #3897). A
+`when` filter is emitted as a real CLR filter region, so it is evaluated before
+any intervening `finally` and a false filter falls through to the next clause —
+the same ordering C# gives you. GS0573 only fires when the earlier clause is
+*unfiltered*: an earlier clause that carries a `when` may decline, so a later
+clause of the same type is genuinely reachable and is not reported.
+
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
 GS0511 marked stack-only (`ByRefLike`) CLR values the boxed-storage

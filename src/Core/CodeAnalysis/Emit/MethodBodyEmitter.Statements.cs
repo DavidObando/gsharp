@@ -350,6 +350,63 @@ internal sealed partial class MethodBodyEmitter
     {
         foreach (var clause in clauses)
         {
+            // ADR-0177 B: a `when` filter becomes a real CLR filter region, not
+            // a test at the top of the handler. That difference is observable:
+            // the filter runs in the exception system's *first* pass, so it sees
+            // the stack before any intervening `finally` unwinds it, and a false
+            // result declines this clause and resumes the search at the next
+            // sibling handler rather than swallowing-and-rethrowing.
+            //
+            // A filter region carries no type token — the CLR hands the filter
+            // the exception object and asks a yes/no question — so the type test
+            // the catch type would otherwise express has to be emitted inline,
+            // ahead of the user's condition:
+            //
+            //     filterStart:  isinst <catchType>
+            //                   dup
+            //                   brtrue  matched
+            //                   pop
+            //                   ldc.i4.0            ; wrong type: decline
+            //                   br      done
+            //     matched:      stloc   <variable>  ; or pop when unbound
+            //                   <filter expression>
+            //     done:         endfilter
+            //     handlerStart: pop                 ; CLR re-pushes the exception
+            //
+            // The handler always pops, because the filter already stored the
+            // exception into the clause variable on the matched path.
+            LabelHandle filterStart = default;
+            if (clause.Filter != null)
+            {
+                filterStart = this.il.DefineLabel();
+                this.il.MarkLabel(filterStart);
+
+                var matched = this.il.DefineLabel();
+                var done = this.il.DefineLabel();
+
+                this.il.OpCode(ILOpCode.Isinst);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(clause.ExceptionType));
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.Branch(ILOpCode.Brtrue, matched);
+                this.il.OpCode(ILOpCode.Pop);
+                this.il.OpCode(ILOpCode.Ldc_i4_0);
+                this.il.Branch(ILOpCode.Br, done);
+
+                this.il.MarkLabel(matched);
+                if (clause.Variable is null || !this.HasStorageSlot(clause.Variable))
+                {
+                    this.il.OpCode(ILOpCode.Pop);
+                }
+                else
+                {
+                    this.EmitStoreVariable(clause.Variable);
+                }
+
+                this.EmitExpression(clause.Filter);
+                this.il.MarkLabel(done);
+                this.il.OpCode(ILOpCode.Endfilter);
+            }
+
             var handlerStart = this.il.DefineLabel();
             var handlerEnd = this.il.DefineLabel();
 
@@ -371,7 +428,11 @@ internal sealed partial class MethodBodyEmitter
             // otherwise the handler starts with an unbalanced stack and the
             // generated IL becomes unverifiable. Defensively emit `pop` in
             // that case instead of dereferencing a null variable.
-            if (clause.Variable is null || !this.HasStorageSlot(clause.Variable))
+            //
+            // ADR-0177: an unbound `catch (Type)` / bare `catch` reaches the
+            // same `pop` by design rather than defensively, and so does every
+            // filtered clause, whose filter already did the store.
+            if (clause.Filter != null || clause.Variable is null || !this.HasStorageSlot(clause.Variable))
             {
                 this.il.OpCode(ILOpCode.Pop);
             }
@@ -383,6 +444,12 @@ internal sealed partial class MethodBodyEmitter
             this.EmitProtectedRegion((BoundBlockStatement)clause.Body);
             this.il.Branch(ILOpCode.Leave, leaveTarget);
             this.il.MarkLabel(handlerEnd);
+
+            if (clause.Filter != null)
+            {
+                this.ControlFlow.AddFilterRegion(tryStart, tryEnd, handlerStart, handlerEnd, filterStart);
+                continue;
+            }
 
             // Issue #421 (P2-6): user-defined exception classes have ClrType == null
             // at emit time, so fall back to the emitter's user-defined type registry

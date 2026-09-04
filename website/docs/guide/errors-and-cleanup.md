@@ -37,7 +37,41 @@ try {
 Console.WriteLine(caught)
 ```
 
-Catch clauses name a local and may specify a type. Prefer specific exception types at library boundaries and reserve broad catches for top-level reporting or cleanup.
+A catch clause takes one of four forms: `catch (name Type)` binds the exception
+to `name`, `catch (Type)` names the type it handles without binding anything,
+`catch` alone is `catch (Exception)` with no binder, and any of them may carry a
+`when` filter. Prefer specific exception types at library boundaries and reserve
+broad catches for top-level reporting or cleanup.
+
+```gsharp
+try {
+    process(request)
+} catch (e HttpRequestException) when e.StatusCode == 429 {
+    retryLater(request)
+} catch (OperationCanceledException) {
+    // The type is all this handler needs; no local is bound.
+    Console.WriteLine("cancelled")
+} catch {
+    Console.WriteLine("unexpected")
+}
+```
+
+A `when` filter must be a `bool` expression, and it is emitted as a real CLR
+filter region: it runs during the first pass — before any intervening `finally`
+unwinds the stack — and when it is false the exception falls through to the next
+clause exactly as it does in C#. A filter cannot `await` (`GS0572`) because there
+is no suspension point in the first pass, and a clause that an earlier
+*unfiltered* clause already covers can never run (`GS0573`).
+
+A pattern variable definitely assigned when the filter succeeds is visible
+throughout the handler:
+
+```gsharp
+catch (e InvalidOperationException)
+    when e.InnerException is ArgumentException arg {
+    Console.WriteLine(arg.ParamName)
+}
+```
 
 ```gsharp
 func requireName(name string?) string {

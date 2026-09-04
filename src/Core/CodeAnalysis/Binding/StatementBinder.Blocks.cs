@@ -318,8 +318,18 @@ internal sealed partial class StatementBinder
         }
 
         var catches = ImmutableArray.CreateBuilder<BoundCatchClause>();
+
+        // ADR-0177 D: exception types an earlier *unfiltered* clause already
+        // catches unconditionally. A filtered clause never covers its type,
+        // because the filter can decline at run time and hand the exception to
+        // a later sibling — which is exactly why C# only reports CS0160 for
+        // unfiltered predecessors.
+        var unfilteredCoverage = new List<TypeSymbol>();
+
         foreach (var catchSyntax in syntax.CatchClauses)
         {
+            // ADR-0177 A: a bare `catch { … }` carries no type clause and means
+            // `catch (System.Exception)`, exactly as in C#.
             var catchType = exceptionType;
             if (catchSyntax.TypeClause != null)
             {
@@ -330,13 +340,40 @@ internal sealed partial class StatementBinder
                 }
             }
 
+            foreach (var covered in unfilteredCoverage)
+            {
+                if (IsCaughtBy(catchType, covered))
+                {
+                    Diagnostics.ReportUnreachableCatchClause(
+                        (catchSyntax.TypeClause ?? (SyntaxNode)catchSyntax.CatchKeyword).Location,
+                        covered,
+                        catchType);
+                    break;
+                }
+            }
+
             scope = new BoundScope(scope);
-            var variable = bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
+
+            // ADR-0177 A: `catch (Type)` and bare `catch` bind nothing. The
+            // emitter pops the exception off the stack instead of storing it.
+            var variable = catchSyntax.Identifier == null
+                ? null
+                : bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
+
+            var filter = BindCatchFilter(catchSyntax);
+            var (filterWhenTrue, _) = PatternVariables.Classify(filter);
+
             exceptionHandlerRegions.Push(catchSyntax);
             BoundStatement body;
             try
             {
-                body = BindBlockStatement(catchSyntax.Body);
+                // The handler runs only when its filter returned true, so any
+                // pattern variables the filter definitely assigns on that path
+                // are in scope and assigned throughout the handler.
+                body = PatternVariables.BindInScope(
+                    binderCtx,
+                    filterWhenTrue,
+                    () => BindBlockStatement(catchSyntax.Body));
             }
             finally
             {
@@ -345,7 +382,12 @@ internal sealed partial class StatementBinder
 
             scope = scope.Pop();
 
-            catches.Add(new BoundCatchClause(catchType, variable, body));
+            if (filter == null)
+            {
+                unfilteredCoverage.Add(catchType);
+            }
+
+            catches.Add(new BoundCatchClause(catchType, variable, filter, body, exitsThroughFinally: false));
         }
 
         BoundStatement? finallyBlock = null;
@@ -386,6 +428,95 @@ internal sealed partial class StatementBinder
         }
 
         return new BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock);
+    }
+
+    /// <summary>
+    /// ADR-0177 B: binds a clause's <c>when</c> filter. The filter is emitted as
+    /// a CLR filter region, so it runs in the exception system's first pass —
+    /// before any intervening <c>finally</c>, and while the throw point's frame
+    /// is still on the stack. Two consequences fall out of that and are enforced
+    /// here: the filter is not a handler (so it is bound outside the enclosing
+    /// handler regions, making a <c>rethrow</c> inside it GS0570), and it cannot
+    /// suspend (so an <c>await</c> inside it is GS0572).
+    /// </summary>
+    /// <param name="catchSyntax">The catch clause being bound.</param>
+    /// <returns>The bound filter, or <c>null</c> when the clause has none or the filter is in error.</returns>
+    private BoundExpression? BindCatchFilter(CatchClauseSyntax catchSyntax)
+    {
+        if (catchSyntax.Filter is not { } filterSyntax)
+        {
+            return null;
+        }
+
+        var filter = OutsideExceptionHandlers(() => bindExpression(filterSyntax));
+        if (filter is BoundErrorExpression)
+        {
+            return null;
+        }
+
+        if (filter.Type != TypeSymbol.Bool)
+        {
+            Diagnostics.ReportCannotConvert(filterSyntax.Location, filter.Type, TypeSymbol.Bool);
+            return null;
+        }
+
+        foreach (var awaitLocation in AwaitFinder.Locations(filter))
+        {
+            Diagnostics.ReportAwaitInsideCatchFilter(awaitLocation);
+        }
+
+        return filter;
+    }
+
+    /// <summary>
+    /// ADR-0177 D: returns whether an unfiltered <c>catch (<paramref name="handler"/>)</c>
+    /// already catches everything a <c>catch (<paramref name="thrown"/>)</c> could,
+    /// which is true when <paramref name="thrown"/> is <paramref name="handler"/> or
+    /// derives from it. Interfaces are not walked: the CLR matches a handler by
+    /// class hierarchy, not by implemented interface.
+    /// </summary>
+    /// <param name="thrown">The exception type named by the later clause.</param>
+    /// <param name="handler">The exception type caught by the earlier clause.</param>
+    /// <returns><c>true</c> when the later clause can never run.</returns>
+    private static bool IsCaughtBy(TypeSymbol thrown, TypeSymbol handler)
+    {
+        for (var type = thrown; type != null; type = type.BaseType)
+        {
+            if (ReferenceEquals(type, handler)
+                || (type.ClrType != null && type.ClrType == handler.ClrType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-0177 D: collects the <c>await</c> expressions lexically inside a bound
+    /// expression, without descending into nested function bodies — a lambda
+    /// declared in a filter is not itself run by the filter region.
+    /// </summary>
+    private sealed class AwaitFinder : BoundTreeWalker
+    {
+        private readonly List<TextLocation> locations = new List<TextLocation>();
+
+        public static IReadOnlyList<TextLocation> Locations(BoundExpression expression)
+        {
+            var walker = new AwaitFinder();
+            walker.VisitExpression(expression);
+            return walker.locations;
+        }
+
+        protected override void VisitAwaitExpression(BoundAwaitExpression node)
+        {
+            if (node.Syntax is { } syntax)
+            {
+                this.locations.Add(syntax.Location);
+            }
+
+            base.VisitAwaitExpression(node);
+        }
     }
 
     /// <summary>

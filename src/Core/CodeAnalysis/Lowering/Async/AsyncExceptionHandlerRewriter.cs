@@ -271,12 +271,20 @@ public static class AsyncExceptionHandlerRewriter
             //
             // Catch clauses without await stay in-place.
             var newClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
-            var afterTryHandlers = new System.Collections.Generic.List<(BoundCatchClause Original, BoundStatement Body, LocalVariableSymbol Capture)>();
+            var afterTryHandlers = new System.Collections.Generic.List<(VariableSymbol Variable, BoundStatement Body, LocalVariableSymbol Capture)>();
 
-            foreach (var clause in catchClauses)
+            foreach (var rawClause in catchClauses)
             {
-                if (HasAwait(clause.Body))
+                if (HasAwait(rawClause.Body))
                 {
+                    // ADR-0177: an unbound `catch (Type)` / bare `catch` has no
+                    // variable, but every lift path below copies the caught
+                    // exception into a capture local and rebinds it after the
+                    // try. Give such a clause a synthesized variable to read.
+                    var clause = EnsureCatchVariable(rawClause);
+                    var caught = Invariant.Required(
+                        clause.Variable, "EnsureCatchVariable guarantees a bound catch variable");
+
                     // Per-clause capture local of nullable-of-original-type.
                     // A reference-type nullable shares the CLR representation,
                     // so this is a metadata-only annotation.
@@ -294,23 +302,29 @@ public static class AsyncExceptionHandlerRewriter
                         new BoundAssignmentExpression(
                             null,
                             captureLocal,
-                            new BoundVariableExpression(null, clause.Variable)));
+                            new BoundVariableExpression(null, caught)));
                     var assignPending = new BoundExpressionStatement(
                         null,
                         new BoundAssignmentExpression(
                             null,
                             pendingExLocal,
-                            new BoundVariableExpression(null, clause.Variable)));
+                            new BoundVariableExpression(null, caught)));
+
+                    // The trampoline keeps the clause's ADR-0177 `when` filter, so
+                    // the CLR still runs it in the first pass and a false filter
+                    // still declines to the next sibling handler.
                     var typedCatchClause = new BoundCatchClause(
                         clause.ExceptionType,
-                        clause.Variable,
-                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)));
+                        caught,
+                        clause.Filter,
+                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)),
+                        clause.ExitsThroughFinally);
                     newClauses.Add(typedCatchClause);
-                    afterTryHandlers.Add((clause, LiftRethrows(clause), captureLocal));
+                    afterTryHandlers.Add((caught, LiftRethrows(caught, clause), captureLocal));
                 }
                 else
                 {
-                    newClauses.Add(clause);
+                    newClauses.Add(rawClause);
                 }
             }
 
@@ -324,7 +338,7 @@ public static class AsyncExceptionHandlerRewriter
             //   endLabel:
             // The per-clause null check ensures the handler body only runs when
             // its specific catch fired.
-            foreach (var (original, body, captureLocal) in afterTryHandlers)
+            foreach (var (caughtVariable, body, captureLocal) in afterTryHandlers)
             {
                 var endLabel = MakeLabel("catch_end");
                 var captureRef = new BoundVariableExpression(null, captureLocal);
@@ -345,7 +359,7 @@ public static class AsyncExceptionHandlerRewriter
                 // Rebind the original catch variable: T e = capture_i;
                 var rebind = new BoundVariableDeclaration(
                     null,
-                    original.Variable,
+                    caughtVariable,
                     new BoundVariableExpression(null, captureLocal));
                 statements.Add(rebind);
 
@@ -414,12 +428,20 @@ public static class AsyncExceptionHandlerRewriter
             // remaining exceptions into pendingException so the finally can
             // run regardless.
             var innerClauses = ImmutableArray.CreateBuilder<BoundCatchClause>();
-            var liftedCatchHandlers = new System.Collections.Generic.List<(BoundCatchClause Original, BoundStatement Body, LocalVariableSymbol Capture)>();
+            var liftedCatchHandlers = new System.Collections.Generic.List<(VariableSymbol Variable, BoundStatement Body, LocalVariableSymbol Capture)>();
 
-            foreach (var clause in catchClauses)
+            foreach (var rawClause in catchClauses)
             {
-                if (HasAwait(clause.Body))
+                if (HasAwait(rawClause.Body))
                 {
+                    // ADR-0177: an unbound `catch (Type)` / bare `catch` has no
+                    // variable, but every lift path below copies the caught
+                    // exception into a capture local and rebinds it after the
+                    // try. Give such a clause a synthesized variable to read.
+                    var clause = EnsureCatchVariable(rawClause);
+                    var caught = Invariant.Required(
+                        clause.Variable, "EnsureCatchVariable guarantees a bound catch variable");
+
                     // Per-clause capture local of nullable-of-original-type.
                     var captureType = NullableTypeSymbol.Get(clause.ExceptionType);
                     var captureLocal = new LocalVariableSymbol(
@@ -435,23 +457,29 @@ public static class AsyncExceptionHandlerRewriter
                         new BoundAssignmentExpression(
                             null,
                             captureLocal,
-                            new BoundVariableExpression(null, clause.Variable)));
+                            new BoundVariableExpression(null, caught)));
                     var assignPending = new BoundExpressionStatement(
                         null,
                         new BoundAssignmentExpression(
                             null,
                             pendingExLocal,
-                            new BoundVariableExpression(null, clause.Variable)));
+                            new BoundVariableExpression(null, caught)));
+
+                    // The trampoline keeps the clause's ADR-0177 `when` filter, so
+                    // the CLR still runs it in the first pass and a false filter
+                    // still declines to the next sibling handler.
                     var typedCatchClause = new BoundCatchClause(
                         clause.ExceptionType,
-                        clause.Variable,
-                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)));
+                        caught,
+                        clause.Filter,
+                        new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)),
+                        clause.ExitsThroughFinally);
                     innerClauses.Add(typedCatchClause);
-                    liftedCatchHandlers.Add((clause, LiftRethrows(clause), captureLocal));
+                    liftedCatchHandlers.Add((caught, LiftRethrows(caught, clause), captureLocal));
                 }
                 else
                 {
-                    innerClauses.Add(clause);
+                    innerClauses.Add(rawClause);
                 }
             }
 
@@ -478,7 +506,7 @@ public static class AsyncExceptionHandlerRewriter
             // handlers in a try/catch so a rethrow (or a new exception from an
             // awaited handler) is captured until the lifted finally has run.
             var liftedHandlerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-            foreach (var (original, body, captureLocal) in liftedCatchHandlers)
+            foreach (var (caughtVariable, body, captureLocal) in liftedCatchHandlers)
             {
                 var endLabel = MakeLabel("liftcatch_end");
                 var captureRef = new BoundVariableExpression(null, captureLocal);
@@ -498,7 +526,7 @@ public static class AsyncExceptionHandlerRewriter
 
                 var rebind = new BoundVariableDeclaration(
                     null,
-                    original.Variable,
+                    caughtVariable,
                     new BoundVariableExpression(null, captureLocal));
                 liftedHandlerStatements.Add(rebind);
 
@@ -641,10 +669,30 @@ public static class AsyncExceptionHandlerRewriter
         /// real <c>rethrow</c>: <see cref="RethrowLifter"/> does not descend
         /// into nested catch bodies.
         /// </remarks>
+        /// <param name="caught">The variable holding the caught exception.</param>
         /// <param name="clause">The catch clause whose body is being lifted.</param>
         /// <returns>The handler body with its own rethrows converted.</returns>
-        private static BoundStatement LiftRethrows(BoundCatchClause clause)
-            => new RethrowLifter(clause.Variable, clause.ExceptionType).Lift(clause.Body);
+        private static BoundStatement LiftRethrows(VariableSymbol caught, BoundCatchClause clause)
+            => new RethrowLifter(caught, clause.ExceptionType).Lift(clause.Body);
+
+        /// <summary>
+        /// ADR-0177: returns a clause guaranteed to bind a variable. An unbound
+        /// <c>catch (Type)</c> or bare <c>catch</c> carries none, but the lift
+        /// paths in this pass all need somewhere to read the caught exception
+        /// from before copying it into a capture local. The synthesized variable
+        /// is invisible to user code — the lifted body never names it.
+        /// </summary>
+        /// <param name="clause">The clause about to be lifted.</param>
+        /// <returns>The clause itself, or a copy with a synthesized variable.</returns>
+        private BoundCatchClause EnsureCatchVariable(BoundCatchClause clause)
+            => clause.Variable != null
+                ? clause
+                : new BoundCatchClause(
+                    clause.ExceptionType,
+                    new LocalVariableSymbol($"<>catch_ex_{localOrdinal++}", isReadOnly: false, clause.ExceptionType),
+                    clause.Filter,
+                    clause.Body,
+                    clause.ExitsThroughFinally);
 
         /// <summary>
         /// Builds the lowered statement

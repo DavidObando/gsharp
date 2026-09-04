@@ -86,7 +86,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |
 | Patterns | Supported | Supported | Constant, relational, type, property, list/rest, discard, total `var name`, parenthesized, and `not` / `and` / `or` patterns work in switches and boolean `is`; type-plus-property patterns narrow composed `and` operands. A designation after a type, type-plus-property, property, or slice pattern (`value is string text`, `{ Length: > 0 } text`, `[..rest]`) introduces a read-only pattern variable scoped to the regions where the match is known to have happened. `var name` always matches and binds the exact static input type, including nullable values (ADR-0166). |
 | `fallthrough` | Not supported | Not supported | Reserved and diagnosed as `GS0168`. |
-| `try`, `catch`, `finally`, `throw` | Supported | Supported | CLR exception model. |
+| `try`, `catch`, `finally`, `throw` | Supported | Supported | CLR exception model. Catch clauses are at C# parity (ADR-0177): `catch (name T)`, type-only `catch (T)`, bare `catch`, and `when` filters emitted as real CLR filter regions. `rethrow` re-raises the handled exception (ADR-0176). |
 | `using` | Supported | Supported if lowered/bound disposable | Resource-scope variable declaration. |
 | `defer` | Supported by binding/lowering intent | Supported when lowered before evaluation | Binder requires a call expression. |
 | `goto` | Supported | Supported | `label: statement` and `goto label` support forward references and outward jumps; entering a nested block or exception handler is rejected. |

@@ -642,11 +642,13 @@ public sealed class CatchClause : GNode
     /// <param name="variableName">The bound exception variable name, when present.</param>
     /// <param name="exceptionType">The caught exception type, when present.</param>
     /// <param name="body">The handler block.</param>
-    public CatchClause(string variableName, GTypeReference exceptionType, BlockStatement body)
+    /// <param name="filter">The <c>when</c> filter expression, when present (ADR-0177).</param>
+    public CatchClause(string variableName, GTypeReference exceptionType, BlockStatement body, GExpression filter = null)
     {
         VariableName = variableName;
         ExceptionType = exceptionType;
         Body = body;
+        Filter = filter;
     }
 
     /// <summary>Gets the bound exception variable name, or <see langword="null"/>.</summary>
@@ -657,6 +659,13 @@ public sealed class CatchClause : GNode
 
     /// <summary>Gets the handler block.</summary>
     public BlockStatement Body { get; }
+
+    /// <summary>
+    /// Gets the <c>when</c> filter expression, or <see langword="null"/> when the
+    /// clause has none. ADR-0177 gave G# native filters, so a C# filter maps
+    /// straight across instead of being lowered into the handler body.
+    /// </summary>
+    public GExpression Filter { get; }
 }
 
 /// <summary>
