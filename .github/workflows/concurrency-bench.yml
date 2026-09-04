@@ -43,7 +43,13 @@ jobs:
     timeout-minutes: 90
 
     steps:
+      # Nerdbank.GitVersioning walks history to compute the version height, so
+      # a shallow clone fails the build outright ("Shallow clone lacks the
+      # objects required to calculate version height"). Every other workflow
+      # here that builds the solution already passes fetch-depth: 0.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
