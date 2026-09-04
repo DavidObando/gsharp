@@ -162,4 +162,64 @@ This matches exactly what a C# `public event Action<object, EventArgs> Click;` p
 - `delegate MyHandler(…) ` syntax for named delegate types;
 - Thread-safe field-like event accessors (Interlocked.CompareExchange pattern)
 - `raise` accessor support (C#-style, rarely used)
-- Static events on user types
+- ~~Static events on user types~~ — **superseded, see the amendment below.**
+
+## Amendment (2026-09-04, issues #3911 / #3907): static events are supported
+
+**Static events on user types are no longer out of scope.** The entry above is
+struck; this section is now authoritative for them.
+
+A static event is declared in a `shared` block, with the same grammar,
+accessibility surface and accessor forms as an instance event:
+
+```gsharp
+class GsharpRuntime {
+    shared {
+        event DeferGraceExpired EventHandler[DeferGraceExpiredEventArgs]?
+
+        func RaiseDeferGraceExpired(budget TimeSpan) {
+            DeferGraceExpired?(nil, DeferGraceExpiredEventArgs(budget))
+        }
+    }
+}
+
+GsharpRuntime.DeferGraceExpired += func(sender object?, e DeferGraceExpiredEventArgs) { … }
+```
+
+### What is supported
+
+Everything the instance form supports, with identical semantics:
+
+- **Declaration** — field-like and explicit-accessor (`add` / `remove` / `raise`), in a `shared` block.
+- **Subscription** — `Type.Event += handler` / `-= handler` from outside, and the bare
+  `Event += handler` spelling inside the declaring type's own members.
+- **Reading and raising** — the event's name resolves inside the declaring type's members
+  to its backing delegate field, so `Event?(sender, args)`, `let h = Event`, and
+  `if Event != nil` all work. This mirrors C#, where a field-like event access
+  *within the program text of the declaring type* is an access to the backing field.
+- **Metadata** — an `EventDefinition` row, `add_`/`remove_`/`raise_` specialname
+  static methods and `MethodSemantics` rows, so C# consumers subscribe with
+  ordinary `+=` / `-=`.
+- **Thread safety** — the generated field-like `add`/`remove` accessors use the
+  same `Interlocked.CompareExchange` loop as the instance form (issue #256).
+- **Nil handlers** — `Event += nil` is a silent no-op, as in C#, because the
+  static path binds its handler through the same conversion the instance path
+  uses (issue #3775 / PR #3793). It is not a conversion error and not a throw.
+
+### History, and why the entry was stale
+
+Most of this shipped with issue #263 (`shared`-block static events: declaration,
+accessors, metadata emission, `Type.Event += handler`). What was never wired up
+was the *bare-name* half — reading, raising, and the bare `Event += handler`
+form inside the declaring type — because the binder's static bare-name exposure
+covered static fields, const fields and static properties but not static events'
+backing fields, and the bare `+=`/`-=` path walked instance events only. So a
+static event could be declared and subscribed to but never read or raised, which
+is what issue #3911 reported: `Static?(nil, args)` failed with `GS0130` while the
+identical instance event worked. Issue #3907 fixed both halves.
+
+### Still deferred
+
+Unchanged from the list above, and orthogonal to static-ness: the `delegate`
+keyword for named handler types, and custom (non-`Action`/`Func`/`EventHandler`)
+delegate declarations. Static events reach these exactly as instance events do.

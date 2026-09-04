@@ -206,7 +206,21 @@ public sealed partial class CSharpToGSharpTranslator
                     // whose uses prove it nullable needs an explicit `T?`.
                     // Otherwise G# may re-infer a non-null type from `e`, making a
                     // later nil check fail GS0129.
-                    type = MakeNullable(this.typeMapper.Map(
+                    //
+                    // Issue #3907: map through MapEventType, not Map. The C#
+                    // author wrote no type here at all — the clause exists only
+                    // to carry the `?` — so the spelling must be one G# accepts
+                    // for the initializer's own type. `Map` erases a DELEGATE to
+                    // its structural arrow type (`EventHandler<T>` becomes
+                    // `(object?, T) -> void`), and in G# those are different
+                    // types: the conversion between them exists but is
+                    // EXPLICIT, so the emitted `let h ((object?, T) -> void)? =
+                    // <delegate>` failed with GS0156. MapEventType keeps the
+                    // nominal delegate name for exactly the reason it already
+                    // documents — structurally equivalent delegates are not
+                    // interchangeable — and falls through to Map unchanged for
+                    // every non-delegate type, so only this shape moves.
+                    type = MakeNullable(this.typeMapper.MapEventType(
                         inferredLocal.Type, this.context, declaration.Type.GetLocation()));
                 }
 

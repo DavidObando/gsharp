@@ -1282,6 +1282,32 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #3907 / #3911: the STATIC counterpart of the walk above — a
+        // bare `Ticked += handler` inside the declaring type's own members,
+        // where `Ticked` is declared in a `shared` block. This must be checked
+        // BEFORE the compound-assignment fallback below, because Binder.cs now
+        // also exposes a field-like static event's backing field as a bare
+        // name (so the event can be READ and raised). Without this branch that
+        // exposure would capture `+=` and turn a subscription into a delegate
+        // compound assignment on the backing field, which is a different
+        // operation: it bypasses the add/remove accessors and their
+        // Interlocked.CompareExchange loop (issue #256), so a concurrent
+        // subscribe could be lost.
+        //
+        // The handler goes through the same BindEventSubscriptionHandler the
+        // instance and `Type.Event += handler` paths use, which is what keeps
+        // issue #3775's nil-tolerance (`e += nil` is a silent no-op in C#, not
+        // a conversion error) identical on the static path.
+        if (isEventOperator
+            && (function?.StaticOwnerType as StructSymbol ?? function?.ReceiverType as StructSymbol) is StructSymbol staticOwner
+            && TypeMemberModel.TryGetStaticEventIncludingInherited(staticOwner, name, out var staticEv, out var staticEventOwner))
+        {
+            var staticEventType = staticEventOwner.SubstituteMemberType(staticEv.Type);
+            var staticHandler = BindEventSubscriptionHandler(syntax.Value, staticEventType);
+            return new BoundEventSubscriptionExpression(
+                null, receiver: null, staticEventOwner, staticEv, staticHandler, isAdd, staticEventType);
+        }
+
         // Not an event: fall back to compound assignment semantics.
         // Reconstruct `name = name +/- rhs` as the parser used to do.
         var variable = BindVariableReference(name, bareName.IdentifierToken.Location, suppressNotAVariable: false, suppressUndefinedVariable: true);
