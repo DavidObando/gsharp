@@ -633,6 +633,52 @@ public sealed class Binder
                         }
                     }
                 }
+
+                // Issue #3907 / #3911: expose a field-like STATIC event of the
+                // enclosing type as a bare name, bound to its backing delegate
+                // field — the exact static counterpart of the instance
+                // exposure above (issues #1213 / #1221), and what makes the
+                // canonical raise pattern
+                //
+                //     shared { event Ticked EventHandler? }
+                //     shared func Raise() { Ticked?(nil, EventArgs.Empty) }
+                //
+                // resolve, precisely as C# compiles a field-like event access
+                // inside its declaring type to a read of the backing field.
+                //
+                // Static events were fully implemented by issue #263 —
+                // declaration, accessor emission with the #256
+                // Interlocked.CompareExchange loop, EventDef/MethodSemantics
+                // metadata, and `Type.Event += handler` subscription all work.
+                // This ONE lookup step was the omission, so a static event
+                // could be declared and subscribed to but never read or raised.
+                // ADR-0052's "Static events on user types" follow-up entry is
+                // amended accordingly.
+                //
+                // Scoped to the enclosing type with no base-class walk, which
+                // is what every other static path here does (see the note on
+                // the static-field block above). A bare `Ticked += handler`
+                // still routes to the event-subscription path, which
+                // BindBareEventOrCompoundAssignment checks before it consults
+                // this variable.
+                if (!ownerStruct.StaticEvents.IsDefaultOrEmpty)
+                {
+                    foreach (var evt in ownerStruct.StaticEvents)
+                    {
+                        if (!evt.IsFieldLike
+                            || evt.BackingField == null
+                            || paramNames.Contains(evt.Name)
+                            || seenMembers.Contains(evt.Name))
+                        {
+                            continue;
+                        }
+
+                        if (seenMembers.Add(evt.Name))
+                        {
+                            scope.TryDeclareVariable(new ImplicitStaticFieldVariableSymbol(ownerStruct, evt.BackingField));
+                        }
+                    }
+                }
             }
 
             // ADR-0089 / issue #1030: expose interface static *state* by bare
@@ -4511,6 +4557,74 @@ public sealed class Binder
         if (syntax.HasOuterSegmentTypeArguments)
         {
             return BindPerSegmentClrQualifiedTypeName(syntax, segmentTexts);
+        }
+
+        // Issue #3907: a SOURCE declaration outranks an imported one carrying
+        // the same fully-qualified name. The greedy reflection walk below only
+        // sees types with a CLR representation, and a same-compilation type has
+        // none while binding — so whenever the reference set happens to contain
+        // `Pkg.Name` too, the walk bound the METADATA type and the source
+        // declaration was never consulted. That is backwards from C#, which
+        // resolves the collision in favour of source (Roslyn reports CS0436 and
+        // uses the source type).
+        //
+        // It bites hardest when an assembly is compiled against a build of
+        // ITSELF, which is the normal state for `Gsharp.Runtime.Channels`: gsc
+        // appends the bundled channel runtime to every reference set
+        // (ReferenceResolver.FindBundledChannelsRuntimePath), so while compiling
+        // the runtime's own sources every `Gsharp.Concurrency.X` in a base
+        // clause resolved to the PREVIOUS build's `X`. `class TaskArm[T] :
+        // Gsharp.Concurrency.TaskArm` therefore linked its base to another
+        // assembly's `TaskArm`, and the three diagnostics that followed —
+        // GS0214 (no accessible 2-arg base constructor), GS0185 (override does
+        // not match the base), GS0155 (`TaskArm[T]` is not an `ArmDescriptor`)
+        // — were all one wrong base link. The bare-name spelling was already
+        // correct, which is why only the QUALIFIED spelling failed.
+        //
+        // Scoped tightly on purpose, in TWO ways.
+        //
+        // First (see TryLookupSourceTypeInPackage): the qualifier must exactly
+        // name a package this compilation declares, and that package must
+        // declare this name at this arity.
+        //
+        // Second, and just as important: there must ACTUALLY BE an imported
+        // homonym to beat. This rule is only about a source-vs-metadata
+        // collision — C#'s CS0436 — so it must not reorder a source-vs-SOURCE
+        // question, which is governed by ordinary scope shadowing and not by
+        // this probe. Issue #3466 is the case that pins it down: inside
+        // `Holder`, which declares a nested `Target`, the name
+        // `Demo.Target` has no CLR type at all, so the walk below and the
+        // simple-name fallback under it keep resolving it exactly as they did.
+        // Without this second condition the type clause started disagreeing
+        // with the construction expression beside it — the type resolved to the
+        // top-level `Demo.Target` while `Demo.Target()` still resolved to
+        // `Holder.Target`, giving `GS0155 Cannot convert 'Holder.Target' to
+        // 'Target'`. (That disagreement is a real pre-existing gap in the
+        // QUALIFIED-construction path, which resolves a package-qualified name
+        // by inner-scope simple name; it is reported separately rather than
+        // widened into here.)
+        if (scope.TryLookupSourceTypeInPackage(
+                string.Join(".", segmentTexts, 0, totalSegments - 1),
+                segmentTexts[totalSegments - 1],
+                targetArity,
+                out var packageQualifiedSourceType)
+            && TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != null)
+        {
+            if (targetArity == 0)
+            {
+                return packageQualifiedSourceType;
+            }
+
+            var constructedSourceType = BindAndConstructUserGenericSegment(
+                syntax,
+                packageQualifiedSourceType,
+                Invariant.Required(qualifiedTypeArguments, "targetArity != 0 implies HasTypeArguments was true, so TypeArguments is non-null"),
+                qualifiedIdentifier.Location,
+                syntax.DottedName);
+            if (constructedSourceType != null)
+            {
+                return constructedSourceType;
+            }
         }
 
         // Greedy: prefer the longest outer prefix that resolves to a real type,

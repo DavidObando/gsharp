@@ -919,6 +919,86 @@ public sealed class BoundScope
     }
 
     /// <summary>
+    /// Issue #3907: resolves a package-qualified name — <c>Pkg.Sub.Name</c> —
+    /// to a type <em>declared in this compilation</em>, in the package the
+    /// qualifier segments spell, at the requested generic arity.
+    /// </summary>
+    /// <remarks>
+    /// <para>This exists so a source declaration can be preferred over an
+    /// imported one carrying the same fully-qualified name. C# resolves such a
+    /// collision in favour of source (Roslyn reports <c>CS0436</c> and uses the
+    /// source type); gsc's dotted-name binder used to reach the reflection
+    /// prefix walk first and therefore chose the metadata type, silently
+    /// re-pointing a base clause at another assembly's same-named type.</para>
+    /// <para>Deliberately strict: the qualifier must match the candidate's
+    /// declaring package EXACTLY, the simple name must match the candidate's
+    /// containing-type-qualified name, and the arity must match. Two source
+    /// candidates for the same qualified name yield no match rather than a
+    /// guess, leaving the caller's existing resolution and diagnostics
+    /// untouched.</para>
+    /// </remarks>
+    /// <param name="packageName">The qualifier segments, dot-joined.</param>
+    /// <param name="name">The final segment.</param>
+    /// <param name="preferredArity">The requested generic arity, or -1/0 for none.</param>
+    /// <param name="type">The matching source type, when unambiguous.</param>
+    /// <returns>Whether exactly one source type matches.</returns>
+    public bool TryLookupSourceTypeInPackage(
+        string packageName,
+        string name,
+        int preferredArity,
+        [NotNullWhen(true)] out TypeSymbol? type)
+    {
+        type = null;
+        if (string.IsNullOrEmpty(packageName) || string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        var wantedArity = preferredArity > 0 ? preferredArity : 0;
+        TypeSymbol? match = null;
+        var seen = new HashSet<TypeSymbol>();
+        foreach (var pair in EnumerateTypeAliasesInChain())
+        {
+            var candidate = TypeDefinition(pair.Value);
+            if (!seen.Add(candidate))
+            {
+                continue;
+            }
+
+            if (GetTypeAliasArity(candidate) != wantedArity)
+            {
+                continue;
+            }
+
+            // A type declared in a file with no `package` declaration lands in
+            // the implicit package; it is not addressable by a qualified name,
+            // so it must not answer one.
+            if (IsDeclaredInImplicitPackage(candidate))
+            {
+                continue;
+            }
+
+            var candidatePackage = TypePackageName(candidate);
+            if (string.IsNullOrEmpty(candidatePackage)
+                || !string.Equals(candidatePackage, packageName, System.StringComparison.Ordinal)
+                || !string.Equals(QualifiedTypeName(candidate), name, System.StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (match != null && !ReferenceEquals(match, candidate))
+            {
+                return false;
+            }
+
+            match = candidate;
+        }
+
+        type = match;
+        return match != null;
+    }
+
+    /// <summary>
     /// Resolves an explicit import alias whose target is a same-compilation
     /// source type rather than a CLR type.
     /// </summary>

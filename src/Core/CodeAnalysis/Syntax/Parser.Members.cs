@@ -992,6 +992,39 @@ public partial class Parser
     // arrow's source position so diagnostics and spans stay anchored at the
     // member. G# spells this arrow `->` (RightArrowToken); the C# fat arrow `=>`
     // is never accepted.
+
+    /// <summary>
+    /// Issue #3907: whether an <c>async</c> function's return-type clause names
+    /// the void-result await envelope — a bare <c>Task</c> or <c>ValueTask</c>
+    /// with no type arguments — so an arrow body is an expression statement
+    /// rather than a return.
+    /// </summary>
+    /// <remarks>
+    /// The test is deliberately syntactic and deliberately narrow: only
+    /// <c>async</c> declarations are considered, only the two envelope names
+    /// issue #1918 recognises, and only the unqualified, non-generic,
+    /// non-nullable spelling. <c>Task[T]</c> / <c>ValueTask[T]</c> carry a
+    /// result and keep their return; a nullable or qualified spelling is left
+    /// alone rather than guessed at. A non-async function named the same way
+    /// really does return a task value, so it is untouched.
+    /// </remarks>
+    /// <param name="asyncModifier">The <c>async</c> modifier token, if present.</param>
+    /// <param name="type">The return-type clause.</param>
+    /// <returns>Whether the arrow body should lower to an expression statement.</returns>
+    private static bool IsAsyncVoidResultEnvelope(SyntaxToken? asyncModifier, TypeClauseSyntax type)
+    {
+        if (asyncModifier == null
+            || type.HasTypeArguments
+            || type.HasQualifier
+            || type.IsNullable
+            || type.Identifier is not { } identifier)
+        {
+            return false;
+        }
+
+        return identifier.Text is "Task" or "ValueTask";
+    }
+
     private BlockStatementSyntax ParseArrowExpressionBody(bool asReturn)
     {
         var arrowToken = MatchToken(SyntaxKind.RightArrowToken);
@@ -1211,7 +1244,23 @@ public partial class Parser
             // binder infers the return type from the literal, narrowing it at a
             // public/protected boundary per ADR-0146's "Kotlin visibility narrowing" section.
             // Every other omitted-type arrow body keeps the existing void behavior.
-            body = ParseArrowExpressionBody(asReturn: type != null || IsAnonymousClassLiteralStartAfterArrow());
+            // Issue #3907: an `async` function whose return-type clause spells
+            // the VOID-RESULT envelope — `async func F() ValueTask -> Deposit(…)`
+            // — is a void function that happens to have a type clause, so its
+            // arrow body is an expression STATEMENT like every other void
+            // arrow. Issue #1918 lets an async function name its envelope
+            // (`Task` / `ValueTask` / `Task[T]` / `ValueTask[T]`) instead of the
+            // bare awaited result, and DeclarationBinder unwraps it — but the
+            // `type != null` test here runs before any of that and lowered the
+            // body to `{ return <void expr> }`, which the binder then rejected
+            // with GS0122 + GS0124. Both neighbouring spellings were already
+            // right: `func F() -> voidExpr` and `async func F() -> voidExpr`
+            // (no clause) both produce a statement. This is the C# shape
+            // `public async ValueTask M<T>(…) => VoidCall();`, which is what
+            // `AsyncLetCell.Run` is written as.
+            body = ParseArrowExpressionBody(
+                asReturn: (type != null && !IsAsyncVoidResultEnvelope(asyncModifier, type))
+                    || IsAnonymousClassLiteralStartAfterArrow());
         }
         else
         {
