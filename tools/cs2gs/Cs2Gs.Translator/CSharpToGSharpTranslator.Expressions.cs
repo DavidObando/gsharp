@@ -2175,8 +2175,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #3896: a dominating null-check guard removes the need for an
+            // assertion only when gsc will actually smart-cast the guarded
+            // storage — and gsc (by design, Kotlin-style) smart-casts LOCALS and
+            // PARAMETERS, not fields/properties. Suppressing the assertion for a
+            // guarded FIELD/PROPERTY key made this path contradict the ordinary
+            // argument path, which asserts exactly that shape via
+            // ReceiverNeedsNullForgiveness' #2202 rule: in the same method,
+            // `if (n.Syntax != null && map.TryGetValue(n.Syntax, out i))` was
+            // translated with `n.Syntax!!` while `map[n.Syntax] = i` under
+            // `if (n.Syntax != null)` was left bare and failed to compile
+            // (GS0155). Scope the suppression to the symbol kinds gsc narrows
+            // and let the field/property case fall through to the shared rules.
             ISymbol valueSymbol = this.context.GetSymbolInfo(value).Symbol;
-            if (valueSymbol != null && this.IsDominatedByNullCheckGuard(value, valueSymbol))
+            if (valueSymbol is ILocalSymbol or IParameterSymbol
+                && this.IsDominatedByNullCheckGuard(value, valueSymbol))
             {
                 return false;
             }

@@ -119,6 +119,13 @@ internal sealed partial class DeclarationBinder
     // scope and the enclosing type's static-member scope before binding.
     private readonly List<Action> pendingFieldInitializerBindings = new List<Action>();
 
+    // Issue #3896: const initializers a type's own #1193 fixpoint could not
+    // fold, because the const they reference belongs to a type bound later.
+    // BindPendingFieldInitializers retries these across the whole compilation
+    // once every type's initializers are bound, and reports GS0376 for whatever
+    // still cannot fold.
+    private readonly List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)> pendingCrossTypeConstFolds = new();
+
     // Issue #1069: nested struct/class and interface type-name shells declared in
     // phase 1 (DeclareNestedTypeShells) so a sibling member signature can
     // forward-reference a nested type by name. The recorded shells are reused in

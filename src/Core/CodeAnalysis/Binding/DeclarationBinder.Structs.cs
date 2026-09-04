@@ -3589,6 +3589,51 @@ internal sealed partial class DeclarationBinder
         }
 
         pendingFieldInitializerBindings.Clear();
+        FoldCrossTypeConstInitializers();
+    }
+
+    /// <summary>
+    /// Issue #3896: the compilation-wide const fixpoint. Every const initializer
+    /// that its own type's fixpoint (#1193) could not fold lands here, because
+    /// the value it references may live in a type whose initializers were bound
+    /// later. Retrying across all types makes `const` references order
+    /// independent between types exactly as they already are within one; only a
+    /// const still unfolded after this pass is genuinely non-constant (or part
+    /// of a cycle) and reported with GS0376.
+    /// </summary>
+    private void FoldCrossTypeConstInitializers()
+    {
+        var pending = new List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)>(pendingCrossTypeConstFolds);
+        pendingCrossTypeConstFolds.Clear();
+
+        var progress = true;
+        while (progress && pending.Count > 0)
+        {
+            progress = false;
+            var stillPending = new List<(FieldSymbol Field, BoundExpression Bound, TextLocation Location)>();
+            foreach (var item in pending)
+            {
+                if (ConstantExpressionEvaluator.TryFold(item.Bound, item.Field.Type, out var constantValue))
+                {
+                    item.Field.SetConstantValue(constantValue);
+                    progress = true;
+                }
+                else
+                {
+                    stillPending.Add(item);
+                }
+            }
+
+            pending = stillPending;
+        }
+
+        foreach (var (constField, bound, location) in pending)
+        {
+            if (bound is not BoundErrorExpression)
+            {
+                Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name);
+            }
+        }
     }
 
     /// <summary>
@@ -3647,15 +3692,16 @@ internal sealed partial class DeclarationBinder
             pendingConstFolds = stillPending;
         }
 
-        // Report diagnostics for any const that still cannot fold (a genuinely
-        // non-constant initializer or an unresolved cycle).
-        foreach (var (constField, bound, location) in pendingConstFolds)
-        {
-            if (bound is not BoundErrorExpression)
-            {
-                Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name);
-            }
-        }
+        // Issue #3896: what is still pending here may be waiting on a const in
+        // ANOTHER type that has not been folded yet — the per-type fixpoint
+        // above cannot see it, and this method runs once per type in
+        // declaration order, so `class B { const X = A.Y }` failed with GS0376
+        // whenever A's initializers were bound after B's. Const references are
+        // order independent in C# and in G#, so the leftovers are handed to a
+        // compilation-wide fixpoint that BindPendingFieldInitializers runs once
+        // every type's initializers are bound; that pass, not this one, reports
+        // the const that genuinely cannot fold.
+        pendingCrossTypeConstFolds.AddRange(pendingConstFolds);
 
         // Bind `shared` static field initializers.
         if (staticFieldInitializers.Count > 0 || zeroValueStaticFields.Count > 0)

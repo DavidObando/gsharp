@@ -5686,6 +5686,26 @@ internal sealed class MemberLookup
         return null;
     }
 
+    /// <summary>
+    /// Issue #3896: folds the bounds recovered from delegate PARAMETER
+    /// positions into the main vector without letting them widen it. A
+    /// delegate parameter constrains the type argument from above, so it may
+    /// fill an empty slot but must never generalise a bound the covariant
+    /// (value) positions already established.
+    /// </summary>
+    /// <param name="result">The main per-ordinal vector, updated in place.</param>
+    /// <param name="contravariant">Bounds recovered from delegate parameters.</param>
+    private static void MergeContravariantBounds(TypeSymbol?[] result, TypeSymbol?[] contravariant)
+    {
+        for (var slot = 0; slot < result.Length && slot < contravariant.Length; slot++)
+        {
+            if (contravariant[slot] != null)
+            {
+                result[slot] = MergeRecoveredTypeArgument(result[slot], contravariant[slot], allowBaseWidening: false);
+            }
+        }
+    }
+
     private static void UnifyForMethodTypeArgs(Type? openClr, TypeSymbol? actual, MethodInfo openMethod, TypeSymbol?[] result)
     {
         if (openClr == null || actual == null)
@@ -5900,14 +5920,21 @@ internal sealed class MemberLookup
                     && invokeParameters != null
                     && invokeParameters.Length == namedDelegateFunction.ParameterTypes.Length)
                 {
+                    // Issue #3896: a delegate PARAMETER is a contravariant
+                    // position — an upper bound. Collect it apart from the
+                    // covariant bounds so the base-class widening below never
+                    // sees it (see MergeRecoveredTypeArgument).
+                    var contravariant = new TypeSymbol?[result.Length];
                     for (var j = 0; j < invokeParameters.Length; j++)
                     {
                         UnifyForMethodTypeArgs(
                             invokeParameters[j].ParameterType,
                             namedDelegateFunction.ParameterTypes[j],
                             openMethod,
-                            result);
+                            contravariant);
                     }
+
+                    MergeContravariantBounds(result, contravariant);
 
                     if (!FunctionTypeSymbol.IsVoidReturn(namedDelegateFunction.ReturnType)
                         && !invoke.ReturnType.IsSameAs(typeof(void)))
@@ -5938,10 +5965,16 @@ internal sealed class MemberLookup
                 var expectedArgs = fnVoid ? fn.ParameterTypes.Length : fn.ParameterTypes.Length + 1;
                 if (openArgs.Length == expectedArgs)
                 {
+                    // Issue #3896: contravariant (delegate-parameter) bounds are
+                    // collected apart from the covariant ones; only the latter
+                    // widen toward a common base.
+                    var contravariant = new TypeSymbol?[result.Length];
                     for (int j = 0; j < fn.ParameterTypes.Length; j++)
                     {
-                        UnifyForMethodTypeArgs(openArgs[j], fn.ParameterTypes[j], openMethod, result);
+                        UnifyForMethodTypeArgs(openArgs[j], fn.ParameterTypes[j], openMethod, contravariant);
                     }
+
+                    MergeContravariantBounds(result, contravariant);
 
                     if (!fnVoid)
                     {
@@ -6032,7 +6065,10 @@ internal sealed class MemberLookup
         return t;
     }
 
-    private static TypeSymbol? MergeRecoveredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
+    private static TypeSymbol? MergeRecoveredTypeArgument(
+        TypeSymbol? existing,
+        TypeSymbol? incoming,
+        bool allowBaseWidening = true)
     {
         if (existing == null)
         {
@@ -6186,11 +6222,85 @@ internal sealed class MemberLookup
             return TupleTypeSymbol.Get(merged.MoveToImmutable(), mergedNames);
         }
 
+        // Issue #3896: C# type-argument fixing (§12.6.3.11) resolves a type
+        // parameter to the bound every other bound converts to. The CLR-side
+        // unification already does that ("promote toward the common base: keep
+        // the more general type when one is assignable from the other", in
+        // ClrOverloadResolution.UnifyForInference), but a SAME-COMPILATION
+        // class is erased to `object` in the closed CLR method, so its bounds
+        // only ever meet here — and this merge kept whichever bound arrived
+        // first. `ImmutableArray.Create(BoundLiteralExpression(…), boundExpr)`
+        // therefore recovered `ImmutableArray[BoundLiteralExpression]` while
+        // the same call with the arguments swapped recovered
+        // `ImmutableArray[BoundExpression]`: an argument-ORDER-dependent
+        // inference that made a correct call unbindable (GS0154). Promote
+        // toward the base class, matching the CLR path.
+        // <para>Only bounds from covariant (value) positions widen —
+        // <paramref name="allowBaseWidening"/> is false for a bound recovered
+        // from a DELEGATE PARAMETER, which is an upper bound, not a lower one.
+        // `interfaces.Where(isUserNested)` over an `ImmutableArray[Interface&#173;Symbol]`
+        // whose predicate is a `func(TypeSymbol) bool` must stay
+        // `Where[InterfaceSymbol]`; widening it to `TypeSymbol` binds fine and
+        // emits a MethodSpec whose receiver no longer matches — IL that gsc
+        // accepts and ILVerify rejects (StackUnexpected).</para>
+        // `object` is excluded on both sides: it is what CLR erasure produces
+        // for a same-compilation type, not evidence of a real `object` bound.
+        // The rule at the top of this method already prefers the symbolic side
+        // in the mirror-image order, and widening to `object` here would undo
+        // it.
+        if (allowBaseWidening
+            && existing.ClrType?.IsSameAs(typeof(object)) != true
+            && incoming.ClrType?.IsSameAs(typeof(object)) != true)
+        {
+            if (IsBaseTypeOf(existing, incoming))
+            {
+                return existing;
+            }
+
+            if (IsBaseTypeOf(incoming, existing))
+            {
+                return incoming;
+            }
+        }
+
         return !TypeSymbol.ContainsReferenceNullableAnnotation(existing)
             && TypeSymbol.ContainsReferenceNullableAnnotation(incoming)
             && DeclarationBinder.TypeSignaturesEquivalent(existing, incoming)
                 ? incoming
                 : existing;
+    }
+
+    /// <summary>
+    /// Issue #3896: whether <paramref name="candidateBase"/> is a (transitive)
+    /// base type of <paramref name="derived"/>. Used by inference-bound merging
+    /// to fix a type parameter at the more general of two class bounds, the way
+    /// C# fixing does. Only base CLASSES are walked: an interface bound is not a
+    /// unique fixing candidate (a type may implement several), so widening to
+    /// one would be an arbitrary choice.
+    /// </summary>
+    /// <param name="candidateBase">The candidate base type.</param>
+    /// <param name="derived">The candidate derived type.</param>
+    /// <returns><see langword="true"/> when the chain reaches the candidate base.</returns>
+    private static bool IsBaseTypeOf(TypeSymbol? candidateBase, TypeSymbol? derived)
+    {
+        if (candidateBase == null || derived == null)
+        {
+            return false;
+        }
+
+        // A malformed hierarchy must not hang the binder; the depth cap is far
+        // above any real inheritance chain.
+        const int MaxDepth = 64;
+        var current = derived.BaseType;
+        for (var depth = 0; current != null && depth < MaxDepth; depth++, current = current.BaseType)
+        {
+            if (DeclarationBinder.TypeSignaturesEquivalent(current, candidateBase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static TypeSymbol? TryGetElementType(TypeSymbol t)
