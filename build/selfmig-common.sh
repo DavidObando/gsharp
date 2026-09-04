@@ -92,6 +92,17 @@ selfmig_hash_tree() {
 
 # Computes the four readability metrics over a migrated tree, into the caller's
 # `labels`, `lifts`, `long_lines` and `bangs` variables.
+#
+# Issue #3895: `bangs` is a function of the TREE, and a tree has two distinct
+# states in this pipeline. The migrate job measures the freshly-TRANSLATED tree;
+# the gate job measures it again after the validate shards' `!!` polish deltas
+# are replayed, and the polish strips whatever gsc reported as GS0536, so a gsc
+# change moves the second number without moving the first. The two numbers are
+# therefore NOT comparable with each other — only migrate-vs-migrate or
+# gate-vs-gate is. A `!!`-only diff across many otherwise-unrelated files is the
+# signature of comparing across that boundary, not of a nondeterministic
+# translator: five whole-repository `migrate --translate-only` passes over one
+# commit produce byte-identical trees (measured on #3895).
 selfmig_measure() {
   local migrated_dir=$1
   labels=$(selfmig_code_grep "$migrated_dir" '__(switchExit|iteratorExit|gotoCase|gotoDefault|patternGuardEnd)')
