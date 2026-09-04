@@ -8,11 +8,17 @@
     "self-migration corpus uses. Do not hand-write a number here: a budget that",
     "was not measured is worse than no budget, because it looks like evidence.",
     "",
+    "Each scenario carries two budgets. The top-level numbers are the pinned-tier",
+    "JIT mode -- what a deployed G# program does at steady state. The nested",
+    "'aot' object is the NativeAOT mode, which is what compares like-for-like",
+    "with Go's ahead-of-time binary. They regress for different reasons, so",
+    "neither ceiling is allowed to stand in for the other.",
+    "",
     "target_vs_go is the ADR's aspiration; target_status stays 'provisional'",
     "until the ratio has met it on three separate nights on the same hardware",
     "class."
   ],
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "hardwareClass": null,
   "toolchain": {
     "dotnet": null,
@@ -28,7 +34,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "rendezvous": {
       "median_ns": null,
@@ -37,7 +49,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "closed-recv": {
       "median_ns": null,
@@ -46,7 +64,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "spawn": {
       "median_ns": null,
@@ -55,7 +79,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "select-ready": {
       "median_ns": null,
@@ -64,7 +94,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "select-park": {
       "median_ns": null,
@@ -73,7 +109,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "chunk64": {
       "median_ns": null,
@@ -82,7 +124,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     },
     "chunk1k": {
       "median_ns": null,
@@ -91,7 +139,13 @@
       "go_median_ns": null,
       "target_vs_go": null,
       "target_status": "provisional",
-      "history": []
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     }
   }
 }

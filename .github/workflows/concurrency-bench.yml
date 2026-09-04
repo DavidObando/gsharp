@@ -14,6 +14,11 @@ name: concurrency-bench
 #   G# versus Go   — informational. It moves with the Go toolchain and the
 #                    machine, so it is reported and never gates.
 #
+# The G# side is measured twice: pinned-tier JIT (what a deployed program does)
+# and NativeAOT (what compares like-for-like with Go's ahead-of-time binary).
+# Each carries its own budget, because they regress for different reasons. See
+# the runner's docstring and issues #3901/#3902 for why the tier is pinned.
+#
 # Nightly by default. A PR can opt in with the `bench:concurrency` label when it
 # touches the runtime or the lowering; that run reports and does not gate,
 # because a shared CI runner is too noisy to fail a PR on.
@@ -61,6 +66,15 @@ jobs:
         with:
           go-version-file: bench/concurrency/go/go.mod
 
+      # ILC emits an object file and hands it to the platform linker, so the
+      # AOT row needs a toolchain the JIT row does not. Present on the current
+      # ubuntu image, installed explicitly so an image change fails loudly here
+      # rather than three steps later inside `dotnet publish`.
+      - name: Install NativeAOT prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
       - name: Restore
         run: dotnet restore GSharp.sln --locked-mode
 
@@ -81,6 +95,7 @@ jobs:
           python3 build/run-concurrency-bench.py \
             --launches "${{ github.event.inputs.launches || '7' }}" \
             --go \
+            --aot \
             --json "$RUNNER_TEMP/concurrency.json" \
             --check-baseline bench/concurrency/baseline.json
         # A PR run reports; only the nightly gates.

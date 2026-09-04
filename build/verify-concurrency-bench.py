@@ -7,7 +7,11 @@ seconds rather than at 05:23 in a nightly nobody is watching.
 
 `--smoke` checks the pieces without measuring anything: the registry parses and
 every scenario it names is one the G# program knows; the baseline has an entry
-per scenario; the runner imports.
+per scenario in both measurement modes; the runner imports; the NativeAOT shim
+project is present and still substitutes the emitted assembly.
+
+Deliberately does not publish the AOT binary. That takes minutes, and this
+script runs on every PR.
 """
 
 from __future__ import annotations
@@ -44,8 +48,23 @@ def smoke() -> int:
 
     baseline = json.loads((BENCH / "baseline.json").read_text())
     for scenario in scenarios:
-        if scenario["name"] not in baseline["scenarios"]:
+        entry = baseline["scenarios"].get(scenario["name"])
+        if entry is None:
             failures.append(f"baseline.json has no entry for '{scenario['name']}'")
+        elif "aot" not in entry:
+            # Every scenario carries a budget per measurement mode; a missing
+            # one would silently stop gating that mode rather than fail.
+            failures.append(f"baseline.json has no 'aot' budget for '{scenario['name']}'")
+
+    aot_project = BENCH / "aot" / "BenchAot.csproj"
+    if not aot_project.exists():
+        failures.append("bench/concurrency/aot/BenchAot.csproj is missing; --aot cannot run")
+    else:
+        shim = aot_project.read_text()
+        # The whole mechanism is this one substitution: without it the AOT row
+        # would measure the placeholder Main and report nothing at all.
+        if "SubstituteGsharpBench" not in shim or "IntermediateAssembly" not in shim:
+            failures.append("BenchAot.csproj no longer substitutes the gsc-emitted assembly")
 
     runner = (REPO / "build" / "run-concurrency-bench.py").read_text()
     compile(runner, "run-concurrency-bench.py", "exec")
@@ -56,7 +75,10 @@ def smoke() -> int:
     if failures:
         return 1
 
-    print(f"concurrency benchmark harness OK: {len(scenarios)} scenarios, registry, baseline and runner agree.")
+    print(
+        f"concurrency benchmark harness OK: {len(scenarios)} scenarios, registry, "
+        "baseline (jit + aot), AOT shim and runner agree."
+    )
     return 0
 
 

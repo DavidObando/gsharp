@@ -2439,6 +2439,53 @@ implementation had to refine it.
     `chunks(ch, n)`: that is the shape D10 exists to encourage, so it is the
     likeliest way to reach the degenerate case.
 
+33. **D11 measures two modes, and the JIT tier is pinned (Phase 5-2, revised).**
+    The harness as first shipped reported a number that depended on whether a
+    100 ms timer happened to elapse. The runtime's call-counting delay restarts
+    on every new JIT compilation, and a bench process that keeps first-calling
+    methods can exit before counting begins — so the scenario's own loop is
+    promoted by on-stack replacement while every method it calls stays at
+    Tier0. Measured on `linux-x86_64-20`: a default launch performs exactly
+    **one** Tier1 compilation in the whole process, that OSR; with
+    `DOTNET_TC_CallCountingDelayMs=0` it performs 132, and every row moves
+    1.5–3× (`closed-recv` 61 → 25 ns, `select-ready` 594 → 175, `chunk1k`
+    45 → 18). This is what produced the 3.4× session-to-session swing recorded
+    in issue #3901, and it means the D11 rows quoted before this change
+    described an unpromoted process rather than G# at steady state.
+
+    The runner therefore pins the delay for the JIT mode. `TieredCompilation=0`
+    was rejected: it also discards dynamic PGO, which is worth a consistent
+    ~28% on `select-ready` (177 vs 227 ns, both tightly clustered) — though not
+    the 5–8× a first analysis claimed, which did not reproduce outside a
+    synthetic C# probe.
+
+    A second mode, `--aot`, measures a NativeAOT build of **the same emitted
+    assembly**: `bench/concurrency/aot` borrows the SDK's `PublishAot` pipeline
+    and substitutes gsc's output for csc's after `CoreCompile`, so ILC compiles
+    G#'s own IL. ILC accepts it unmodified and with no trim or AOT warnings from
+    the bench, `Gsharp.Extensions` or the channel runtime — itself a result
+    worth recording, since nothing in the toolchain had been AOT-compiled
+    before. The G# entry point is `<Program>.Main`, unnameable from C#, which
+    does not matter: ILC reads it from metadata.
+
+    Neither mode is *the* number, and the ADR should stop implying there is one.
+    The JIT row is what a deployed G# program does; the AOT row is what the
+    language does once compilation is out of the way, and it is the only mode
+    that compares like-for-like with Go's ahead-of-time binary. They differ per
+    scenario rather than by a constant — AOT is markedly better on the parking
+    rows (`select-park` ~950 vs ~1080 ns, `rendezvous` ~800–970 vs ~1000–1130)
+    and slightly worse on `select-ready`, where dynamic PGO wins. Each carries
+    its own ceiling in `baseline.json` (`schemaVersion: 2`), because a JIT
+    regression and an AOT regression mean different things and neither should
+    mask the other.
+
+    Consequences for the gates: **G3, G5, G6 and G7 must be resolved against
+    pinned measurements**, not against anything recorded before this change.
+    The ranked plan for the remaining Go gap, including a working G6
+    inline-continuation prototype and the finding that `rendezvous`,
+    `select-ready` and `spawn` compare unequal work to their Go counterparts, is
+    issue #3902.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

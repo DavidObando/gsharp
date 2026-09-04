@@ -32,6 +32,7 @@ errata 12.
 | `gsharp/Bench.gs` | **The G# side.** Eight scenarios in the language itself, three in-process warm-up rounds, one `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
 | `scenarios.json` | The registry: which G# scenario pairs with which Go row, and what each one measures. |
 | `baseline.json` | The recorded medians, ceilings and Go ratios. Written only by `--update-baseline`, never by hand. |
+| `aot/` | The NativeAOT measurement mode. Compiles no G# and holds no benchmark logic: it borrows the SDK's `PublishAot` pipeline and points ILC at the assembly gsc already emitted, so the AOT and JIT rows run byte-identical IL. |
 | `clr/` | C# baseline. Reproduces the exact call sequences the G# emitter produces today (`gs-*` rows), plus the CLR primitives ADR-0174 proposes (`best-*` rows). Kept as the spike reference now that the G# side exists. |
 | `go/` | Go baseline for the same scenarios. |
 
@@ -40,8 +41,9 @@ errata 12.
 ```sh
 # The paired run: builds the G# program, launches both sides several times,
 # reports medians with a bootstrap confidence interval, and checks the gate.
-python3 build/run-concurrency-bench.py --go --check-baseline bench/concurrency/baseline.json
+python3 build/run-concurrency-bench.py --go --aot --check-baseline bench/concurrency/baseline.json
 
+# Drop --aot while iterating: it adds a NativeAOT publish (minutes) per run.
 # One scenario, fewer launches, while iterating
 python3 build/run-concurrency-bench.py --scenario rendezvous --launches 3
 
@@ -68,15 +70,30 @@ These are not optional. ADR-0174 §D11 makes them normative because ignoring
 any one of them produced a wrong conclusion at least once during the original
 spike:
 
-1. **Warm up.** Tiered JIT depresses cold CLR numbers by **2–3×**. The CLR
-   harness runs three rounds and only round 3 is reportable. A CLR-vs-Go
-   comparison taken from round 1 is invalid.
+1. **Warm up, and pin the JIT tier.** Tiered JIT depresses cold CLR numbers by
+   **2–3×**. The harness runs three rounds and only round 3 is reportable — but
+   rounds are not sufficient on their own. The runtime's call-counting delay is
+   100 ms and restarts on every new JIT compilation, so a bench process that
+   keeps first-calling methods can exit before counting ever begins: the
+   scenario's own loop gets promoted by on-stack replacement while every method
+   it calls stays at Tier0. That is a real measurement this harness reported for
+   weeks, and it moved `select-ready` by **3.4×** between launches of an
+   unchanged binary (issue #3901). The runner therefore sets
+   `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode. Do not remove it, and do
+   not substitute `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
 2. **Release build, both sides.**
 3. **Multiple process launches.** In-process repetition alone understates
    variance. Report a confidence interval, not a single number.
 4. **Pin and record both toolchains and the hardware class.** The reference
    numbers in ADR-0174 are .NET 10.0.11 / Go 1.27.0, Apple silicon, 18 cores.
-5. **Separate the two gates.** Within-runtime regression (G# against its own
+5. **Measure the G# side in both modes.** `--aot` adds a NativeAOT row beside
+   the pinned-tier JIT row. Neither is "the" number: the JIT row is what a
+   deployed G# program does, the AOT row is what the language does once
+   compilation is out of the way, and it is the only mode that compares
+   like-for-like with Go's ahead-of-time binary. They differ per scenario rather
+   than by a constant, which is exactly why reporting one alone misleads. Each
+   carries its own ceiling in `baseline.json`.
+6. **Separate the two gates.** Within-runtime regression (G# against its own
    last recorded number) is stable and can gate a PR. The G#-vs-Go ratio
    depends on the Go toolchain and the machine and must stay informational.
    The runner enforces this: a scenario fails only when its median is above the

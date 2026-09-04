@@ -232,6 +232,10 @@ def concurrency_metrics(results: Path | None) -> dict | None:
     ceiling is still null has never been measured on a nightly; it is reported
     as such rather than silently omitted, because "no budget yet" is itself the
     status the ADR tracks.
+
+    Two G# numbers per scenario, never one: pinned-tier JIT and NativeAOT. A
+    single figure would have to pick which of those "G#" means, and the point of
+    measuring both is that the honest answer differs by row.
     """
     if results is None or not results.exists():
         return None
@@ -246,7 +250,9 @@ def concurrency_metrics(results: Path | None) -> dict | None:
     for scenario in registry:
         name = scenario["name"]
         gsharp = measured.get("gsharp", {}).get(scenario["gsharp"])
+        aot = measured.get("gsharp_aot", {}).get(scenario["gsharp"])
         recorded = baseline.get("scenarios", {}).get(name, {})
+        recorded_aot = recorded.get("aot", {})
         go_row = scenario.get("go")
         go = measured.get("go", {}).get(go_row) if go_row else None
         rows.append(
@@ -256,8 +262,12 @@ def concurrency_metrics(results: Path | None) -> dict | None:
                 "medianNs": gsharp["median_ns"] if gsharp else None,
                 "ci95Ns": gsharp["ci95_ns"] if gsharp else None,
                 "ceilingNs": recorded.get("ceiling_ns"),
+                "aotMedianNs": aot["median_ns"] if aot else None,
+                "aotCi95Ns": aot["ci95_ns"] if aot else None,
+                "aotCeilingNs": recorded_aot.get("ceiling_ns"),
                 "goMedianNs": go["median_ns"] if go else None,
                 "ratioVsGo": round(gsharp["median_ns"] / go["median_ns"], 2) if gsharp and go else None,
+                "aotRatioVsGo": round(aot["median_ns"] / go["median_ns"], 2) if aot and go else None,
                 "targetVsGo": recorded.get("target_vs_go"),
                 "targetStatus": recorded.get("target_status", "provisional"),
             }

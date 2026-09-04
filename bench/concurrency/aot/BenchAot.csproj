@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ADR-0174 D11: the NativeAOT measurement mode.
+
+    This project compiles no G# and contains no benchmark logic. It exists only
+    to borrow the supported `PublishAot` pipeline — ILCompiler restore, the
+    NativeAOT runtime pack, and the platform linker invocation — and point it at
+    the assembly gsc already emitted. Hand-rolling the `ilc` command line and the
+    link step would mean re-deriving a 250-line response file on every .NET
+    bump; this way the SDK owns it.
+
+    The substitution below replaces csc's output with the gsc-emitted assembly
+    after CoreCompile, so ILC compiles G#'s own IL — byte-identical to what the
+    JIT mode runs, which is the whole point of having both rows.
+
+    Invoked only by build/run-concurrency-bench.py with the AOT flag set.
+    Deliberately not in GSharp.sln and not in the PR gate; see README.md.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- The gsc-emitted assembly is named Bench; the identity written into the
+         file must match the name ILC is handed, so AssemblyName follows it. -->
+    <AssemblyName>Bench</AssemblyName>
+
+    <!-- Tooling project (see ../../../Directory.Build.props). -->
+    <Nullable>annotations</Nullable>
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+
+    <!-- The ILCompiler and NativeAOT runtime-pack versions are chosen by the
+         SDK from the pinned runtime version, not written here. A lock file
+         would add a second place to update on every SDK bump and would fail the
+         nightly silently when it went stale, so this project does not keep one. -->
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Resolved from the directory holding the emitted program, so the AOT and
+         JIT rows link the same runtime build. -->
+    <Reference Include="$(GsharpRuntimeDir)/Gsharp.Extensions.dll" />
+    <Reference Include="$(GsharpRuntimeDir)/Gsharp.Runtime.Channels.dll" />
+  </ItemGroup>
+
+  <Target Name="SubstituteGsharpBench" AfterTargets="CoreCompile"
+          Condition="'$(BenchAssembly)' != ''">
+    <Copy SourceFiles="$(BenchAssembly)" DestinationFiles="@(IntermediateAssembly)" />
+  </Target>
+
+  <Target Name="RequireBenchAssembly" BeforeTargets="CoreCompile"
+          Condition="'$(BenchAssembly)' == ''">
+    <Error Text="Set -p:BenchAssembly=&lt;path to the gsc-emitted Bench.dll&gt;. This project is driven by build/run-concurrency-bench.py --aot, not built directly." />
+  </Target>
+
+</Project>
